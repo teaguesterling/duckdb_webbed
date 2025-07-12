@@ -1,0 +1,72 @@
+# name: test/sql/xml_basic.test
+# description: Test basic XML extension functionality
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT xml_valid('<test>valid</test>');
+----
+Catalog Error: Scalar Function with name xml_valid does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require xml
+
+# Test xml_valid function with valid XML
+query I
+SELECT xml_valid('<test>valid</test>');
+----
+true
+
+# Test xml_valid function with invalid XML
+query I
+SELECT xml_valid('<invalid><unclosed>');
+----
+false
+
+# Test xml_well_formed function
+query I
+SELECT xml_well_formed('<root><child>text</child></root>');
+----
+true
+
+query I
+SELECT xml_well_formed('<invalid><mismatched></wrong>');
+----
+false
+
+# Test xml_extract_text function
+query I
+SELECT xml_extract_text('<books><book><title>Test Book</title></book></books>', '//title');
+----
+Test Book
+
+# Test xml_extract_all_text function
+query I
+SELECT xml_extract_all_text('<root><a>Hello</a><b>World</b></root>');
+----
+HelloWorld
+
+# Test xml_extract_elements function (returns JSON-like string)
+query I
+SELECT length(xml_extract_elements('<books><book id="1"><title>Test</title></book></books>', '//book')) > 0;
+----
+true
+
+# Test with more complex XML
+statement ok
+CREATE TABLE xml_test AS SELECT '<books><book id="1"><title>Database Systems</title><author>John Smith</author></book></books>' as xml_content;
+
+query I
+SELECT xml_valid(xml_content) FROM xml_test;
+----
+true
+
+query I
+SELECT xml_extract_text(xml_content, '//title') FROM xml_test;
+----
+Database Systems
+
+query I
+SELECT xml_extract_text(xml_content, '//author') FROM xml_test;
+----
+John Smith

@@ -1,0 +1,41 @@
+# name: test/sql/xml_table_functions.test
+# description: Test XML table functions (read_xml_objects, read_xml)
+# group: [sql]
+
+require xml
+
+# Test read_xml_objects function with test files
+query II
+SELECT filename, length(content) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml');
+----
+test/xml/simple.xml	true
+
+# Test that the content is valid XML
+query I
+SELECT xml_valid(content) FROM read_xml_objects('test/xml/simple.xml');
+----
+true
+
+# Test read_xml_objects with invalid XML (should fail without ignore_errors)
+statement error
+SELECT * FROM read_xml_objects('test/xml/invalid.xml');
+----
+contains invalid XML
+
+# Test read_xml_objects with invalid XML and ignore_errors=true
+query I
+SELECT count(*) FROM read_xml_objects('test/xml/invalid.xml', ignore_errors := true);
+----
+0
+
+# Test read_xml function (should work the same as read_xml_objects for now)
+query II
+SELECT filename, length(content) > 0 as has_content FROM read_xml('test/xml/simple.xml');
+----
+test/xml/simple.xml	true
+
+# Test file glob pattern
+query I
+SELECT count(*) >= 1 FROM read_xml_objects('test/xml/*.xml', ignore_errors := true);
+----
+true

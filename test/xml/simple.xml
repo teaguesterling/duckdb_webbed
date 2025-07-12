@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<books>
+  <book id="1" available="true">
+    <title>Database Systems</title>
+    <author>John Smith</author>
+    <price>49.99</price>
+    <published>2024-01-15</published>
+  </book>
+  <book id="2" available="false">
+    <title>XML Processing</title>
+    <author>Jane Doe</author>
+    <price>39.95</price>
+    <published>2023-12-01</published>
+  </book>
+</books>

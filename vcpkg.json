@@ -1,6 +1,8 @@
 {
+        "name": "duckdb-xml",
+        "version": "0.1.0",
         "dependencies": [
-                "openssl"
+                "libxml2"
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [

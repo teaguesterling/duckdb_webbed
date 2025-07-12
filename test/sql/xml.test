@@ -1,0 +1,23 @@
+# name: test/sql/xml.test
+# description: test xml extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT xml('Sam');
+----
+Catalog Error: Scalar Function with name xml does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require xml
+
+# Confirm the extension works
+query I
+SELECT xml('Sam');
+----
+Xml Sam 🐥
+
+query I
+SELECT xml_libxml2_version('Michael') ILIKE 'Xml Michael, my linked libxml2 version is%';
+----
+true
