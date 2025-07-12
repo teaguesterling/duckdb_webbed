@@ -74,6 +74,10 @@ public:
 	static std::vector<XMLColumnInfo> InferSchema(const std::string& xml_content, 
 	                                               const XMLSchemaOptions& options = XMLSchemaOptions{});
 	
+	// Extract structured data according to inferred schema
+	static std::vector<std::vector<Value>> ExtractData(const std::string& xml_content,
+	                                                     const XMLSchemaOptions& options = XMLSchemaOptions{});
+	
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string& xml_content,
 	                                                             const XMLSchemaOptions& options);
@@ -101,6 +105,8 @@ private:
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType>& types);
 	
 	static std::string CleanTextContent(const std::string& text);
+	
+	static Value ConvertToValue(const std::string& text, const LogicalType& target_type);
 };
 
 } // namespace duckdb

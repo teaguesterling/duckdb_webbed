@@ -138,9 +138,106 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
                                                            vector<LogicalType> &return_types, vector<string> &names) {
-	// TODO: Implement proper schema inference here
-	// For now, fallback to simple schema
-	return ReadXMLObjectsBind(context, input, return_types, names);
+	auto result = make_uniq<XMLReadFunctionData>();
+	
+	// Get file pattern from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("read_xml requires at least one argument (file pattern)");
+	}
+	
+	auto file_pattern = input.inputs[0].ToString();
+	
+	// Expand file pattern using file system
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto glob_result = fs.Glob(file_pattern, nullptr);
+	
+	// Extract file paths from OpenFileInfo results
+	for (const auto &file_info : glob_result) {
+		result->files.push_back(file_info.path);
+	}
+	
+	if (result->files.empty()) {
+		throw InvalidInputException("No files found matching pattern: %s", file_pattern);
+	}
+	
+	// Handle optional parameters with schema inference defaults
+	XMLSchemaOptions schema_options;
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "maximum_file_size") {
+			result->max_file_size = kv.second.GetValue<idx_t>();
+			schema_options.maximum_file_size = result->max_file_size;
+		} else if (kv.first == "root_element") {
+			schema_options.root_element = kv.second.ToString();
+		} else if (kv.first == "include_attributes") {
+			schema_options.include_attributes = kv.second.GetValue<bool>();
+		} else if (kv.first == "auto_detect") {
+			schema_options.auto_detect = kv.second.GetValue<bool>();
+		} else if (kv.first == "schema_depth") {
+			schema_options.schema_depth = kv.second.GetValue<int32_t>();
+		}
+	}
+	
+	// Perform schema inference on the first file(s)
+	try {
+		auto first_file = result->files[0];
+		auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
+		auto file_size = fs.GetFileSize(*file_handle);
+		
+		if (file_size > result->max_file_size) {
+			if (!result->ignore_errors) {
+				throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
+				                           first_file, result->max_file_size);
+			}
+			// Fallback to simple schema
+			return_types.push_back(XMLTypes::XMLType());
+			names.push_back("xml");
+			return std::move(result);
+		}
+		
+		// Read file content for schema inference
+		string content;
+		content.resize(file_size);
+		file_handle->Read((void*)content.data(), file_size);
+		
+		// Validate XML
+		if (!XMLUtils::IsValidXML(content)) {
+			if (!result->ignore_errors) {
+				throw InvalidInputException("File %s contains invalid XML", first_file);
+			}
+			// Fallback to simple schema
+			return_types.push_back(XMLTypes::XMLType());
+			names.push_back("xml");
+			return std::move(result);
+		}
+		
+		// Perform schema inference
+		auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+		
+		// Convert to DuckDB schema
+		for (const auto& col_info : inferred_columns) {
+			return_types.push_back(col_info.type);
+			names.push_back(col_info.name);
+		}
+		
+	} catch (const Exception &e) {
+		if (!result->ignore_errors) {
+			throw;
+		}
+		// Fallback to simple schema on any error
+		return_types.push_back(XMLTypes::XMLType());
+		names.push_back("xml");
+	}
+	
+	// Ensure we have at least one column
+	if (return_types.empty()) {
+		return_types.push_back(XMLTypes::XMLType());
+		names.push_back("xml");
+	}
+	
+	return std::move(result);
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadXMLInit(ClientContext &context, TableFunctionInitInput &input) {
@@ -158,6 +255,10 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
+	
+	// Set up schema inference options (matching what was used in bind)
+	XMLSchemaOptions schema_options;
+	// TODO: Get these from bind_data if we store them there
 	
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
 		const auto &filename = gstate.files[gstate.file_index++];
@@ -181,8 +282,7 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 			file_handle->Read((void*)content.data(), file_size);
 			
 			// Validate XML 
-			bool is_valid = XMLUtils::IsValidXML(content);
-			if (!is_valid) {
+			if (!XMLUtils::IsValidXML(content)) {
 				if (bind_data.ignore_errors) {
 					continue; // Skip this invalid file
 				} else {
@@ -190,17 +290,32 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 				}
 			}
 			
-			// TODO: For now, just return filename and content like read_xml_objects
-			// Full schema inference extraction will be implemented next
-			output.data[0].SetValue(output_idx, Value(filename));
-			output.data[1].SetValue(output_idx, Value(content));
-			output_idx++;
+			// Extract structured data using schema inference
+			auto extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+			
+			// Fill output vectors with extracted data
+			for (const auto& row : extracted_rows) {
+				if (output_idx >= STANDARD_VECTOR_SIZE) {
+					break;
+				}
+				
+				// Set values for each column in the row
+				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
+					output.data[col_idx].SetValue(output_idx, row[col_idx]);
+				}
+				output_idx++;
+			}
 			
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
 			}
 			// Skip this file and continue
+		}
+		
+		// If we filled up the output, break
+		if (output_idx >= STANDARD_VECTOR_SIZE) {
+			break;
 		}
 	}
 	
@@ -243,6 +358,14 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	// Register read_xml table function with schema inference
 	TableFunction read_xml_function("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, 
 	                                 ReadXMLBind, ReadXMLInit);
+	read_xml_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_xml_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	
+	// Schema inference parameters
+	read_xml_function.named_parameters["root_element"] = LogicalType::VARCHAR;
+	read_xml_function.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
+	read_xml_function.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	read_xml_function.named_parameters["schema_depth"] = LogicalType::INTEGER;
 	
 	ExtensionUtil::RegisterFunction(db, read_xml_function);
 }

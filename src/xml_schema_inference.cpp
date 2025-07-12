@@ -322,4 +322,131 @@ std::string XMLSchemaInference::CleanTextContent(const std::string& text) {
 	return cleaned;
 }
 
+std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::string& xml_content,
+                                                                const XMLSchemaOptions& options) {
+	std::vector<std::vector<Value>> rows;
+	
+	// First, infer the schema to know what columns we need to extract
+	auto schema = InferSchema(xml_content, options);
+	
+	if (schema.empty()) {
+		return rows; // No data to extract
+	}
+	
+	// Parse XML document
+	XMLDocRAII doc(xml_content);
+	if (!doc.IsValid()) {
+		return rows; // Invalid XML
+	}
+	
+	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
+	if (!root) {
+		return rows; // No root element
+	}
+	
+	// Find the repeating element pattern (e.g., "employee" elements in the employees.xml)
+	// For now, assume the first child elements are the records
+	xmlNodePtr current = root->children;
+	
+	while (current) {
+		if (current->type == XML_ELEMENT_NODE) {
+			// Extract data for this record
+			std::vector<Value> row;
+			
+			for (const auto& column : schema) {
+				Value value;
+				
+				if (column.is_attribute) {
+					// Extract attribute value
+					std::string attr_name = column.name;
+					// Remove element prefix if present (e.g., "employee_id" -> "id")
+					size_t underscore_pos = attr_name.find('_');
+					if (underscore_pos != std::string::npos) {
+						attr_name = attr_name.substr(underscore_pos + 1);
+					}
+					
+					xmlChar* attr_value = xmlGetProp(current, (const xmlChar*)attr_name.c_str());
+					if (attr_value) {
+						std::string str_value = (const char*)attr_value;
+						value = ConvertToValue(str_value, column.type);
+						xmlFree(attr_value);
+					} else {
+						value = Value(); // NULL
+					}
+				} else {
+					// Extract element text content
+					xmlNodePtr child = current->children;
+					std::string element_text;
+					
+					while (child) {
+						if (child->type == XML_ELEMENT_NODE && 
+						    xmlStrcmp(child->name, (const xmlChar*)column.name.c_str()) == 0) {
+							xmlChar* text_content = xmlNodeGetContent(child);
+							if (text_content) {
+								element_text = CleanTextContent((const char*)text_content);
+								xmlFree(text_content);
+								break;
+							}
+						}
+						child = child->next;
+					}
+					
+					value = ConvertToValue(element_text, column.type);
+				}
+				
+				row.push_back(value);
+			}
+			
+			rows.push_back(row);
+		}
+		current = current->next;
+	}
+	
+	return rows;
+}
+
+Value XMLSchemaInference::ConvertToValue(const std::string& text, const LogicalType& target_type) {
+	if (text.empty()) {
+		return Value(); // NULL value
+	}
+	
+	try {
+		switch (target_type.id()) {
+			case LogicalTypeId::BOOLEAN: {
+				std::string lower = text;
+				std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+				if (lower == "true" || lower == "yes" || lower == "1" || lower == "on") {
+					return Value::BOOLEAN(true);
+				} else if (lower == "false" || lower == "no" || lower == "0" || lower == "off") {
+					return Value::BOOLEAN(false);
+				}
+				return Value(); // NULL for unrecognized boolean
+			}
+			case LogicalTypeId::INTEGER:
+				return Value::INTEGER(std::stoi(text));
+			case LogicalTypeId::BIGINT:
+				return Value::BIGINT(std::stoll(text));
+			case LogicalTypeId::DOUBLE:
+				return Value::DOUBLE(std::stod(text));
+			case LogicalTypeId::DATE: {
+				// Try to parse date - simplified for now
+				if (text.length() == 10 && text[4] == '-' && text[7] == '-') {
+					return Value::DATE(Date::FromString(text));
+				}
+				return Value(text); // Fallback to string
+			}
+			case LogicalTypeId::TIMESTAMP: {
+				// Try to parse timestamp
+				return Value::TIMESTAMP(Timestamp::FromString(text));
+			}
+			case LogicalTypeId::VARCHAR:
+			default:
+				return Value(text);
+		}
+	} catch (...) {
+		// If conversion fails, return as VARCHAR
+		return Value(text);
+	}
+}
+
 } // namespace duckdb
