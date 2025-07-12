@@ -31,6 +31,11 @@ struct XMLReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool ignore_errors = false;
 	idx_t max_file_size = 16777216; // 16MB default
+	
+	// Explicit schema information (when columns parameter is provided)
+	bool has_explicit_schema = false;
+	vector<string> column_names;
+	vector<LogicalType> column_types;
 };
 
 struct XMLReadGlobalState : public GlobalTableFunctionState {

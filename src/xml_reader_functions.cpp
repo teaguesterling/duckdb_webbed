@@ -209,6 +209,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				throw BinderException("read_xml \"columns\" parameter needs at least one column.");
 			}
 			
+			// Store explicit schema in function data
+			result->has_explicit_schema = true;
+			result->column_names = names;
+			result->column_types = return_types;
+			
 			has_explicit_columns = true;
 		}
 	}
@@ -325,8 +330,17 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 				}
 			}
 			
-			// Extract structured data using schema inference
-			auto extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+			// Extract structured data using appropriate method
+			std::vector<std::vector<Value>> extracted_rows;
+			
+			if (bind_data.has_explicit_schema) {
+				// Use explicit schema for extraction
+				extracted_rows = XMLSchemaInference::ExtractDataWithSchema(
+					content, bind_data.column_names, bind_data.column_types, schema_options);
+			} else {
+				// Use schema inference
+				extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+			}
 			
 			// Fill output vectors with extracted data
 			for (const auto& row : extracted_rows) {

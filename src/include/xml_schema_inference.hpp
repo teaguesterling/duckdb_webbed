@@ -92,6 +92,12 @@ public:
 	static std::vector<std::vector<Value>> ExtractData(const std::string& xml_content,
 	                                                     const XMLSchemaOptions& options = XMLSchemaOptions{});
 	
+	// Extract structured data according to explicit schema
+	static std::vector<std::vector<Value>> ExtractDataWithSchema(const std::string& xml_content,
+	                                                              const std::vector<std::string>& column_names,
+	                                                              const std::vector<LogicalType>& column_types,
+	                                                              const XMLSchemaOptions& options = XMLSchemaOptions{});
+	
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string& xml_content,
 	                                                             const XMLSchemaOptions& options);
@@ -126,6 +132,11 @@ private:
 	static std::string CleanTextContent(const std::string& text);
 	
 	static Value ConvertToValue(const std::string& text, const LogicalType& target_type);
+	
+	// Recursive extraction helpers for complex types
+	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType& target_type);
+	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType& struct_type);
+	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType& list_type);
 };
 
 } // namespace duckdb
