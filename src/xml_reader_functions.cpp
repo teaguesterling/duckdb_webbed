@@ -162,6 +162,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	bool has_explicit_columns = false;
+	
 	for (auto &kv : input.named_parameters) {
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
@@ -177,64 +179,97 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "schema_depth") {
 			schema_options.schema_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "columns") {
+			// Handle explicit column schema specification (like JSON extension)
+			auto &child_type = kv.second.type();
+			if (child_type.id() != LogicalTypeId::STRUCT) {
+				throw BinderException("read_xml \"columns\" parameter requires a struct as input.");
+			}
+			auto &struct_children = StructValue::GetChildren(kv.second);
+			D_ASSERT(StructType::GetChildCount(child_type) == struct_children.size());
+			
+			for (idx_t i = 0; i < struct_children.size(); i++) {
+				auto &name = StructType::GetChildName(child_type, i);
+				auto &val = struct_children[i];
+				if (val.IsNull()) {
+					throw BinderException("read_xml \"columns\" parameter type specification cannot be NULL.");
+				}
+				if (val.type().id() != LogicalTypeId::VARCHAR) {
+					throw BinderException("read_xml \"columns\" parameter type specification must be VARCHAR.");
+				}
+				
+				// Parse the type string using DuckDB's type parser
+				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
+				
+				return_types.push_back(logical_type);
+				names.push_back(name);
+			}
+			
+			if (return_types.empty()) {
+				throw BinderException("read_xml \"columns\" parameter needs at least one column.");
+			}
+			
+			has_explicit_columns = true;
 		}
 	}
 	
-	// Perform schema inference on the first file(s)
-	try {
-		auto first_file = result->files[0];
-		auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
-		auto file_size = fs.GetFileSize(*file_handle);
-		
-		if (file_size > result->max_file_size) {
-			if (!result->ignore_errors) {
-				throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
-				                           first_file, result->max_file_size);
+	// Perform schema inference only if no explicit columns were provided
+	if (!has_explicit_columns) {
+		try {
+			auto first_file = result->files[0];
+			auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+			
+			if (file_size > result->max_file_size) {
+				if (!result->ignore_errors) {
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
+					                           first_file, result->max_file_size);
+				}
+				// Fallback to simple schema
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+				return std::move(result);
 			}
-			// Fallback to simple schema
+			
+			// Read file content for schema inference
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void*)content.data(), file_size);
+			
+			// Validate XML
+			if (!XMLUtils::IsValidXML(content)) {
+				if (!result->ignore_errors) {
+					throw InvalidInputException("File %s contains invalid XML", first_file);
+				}
+				// Fallback to simple schema
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+				return std::move(result);
+			}
+			
+			// Perform schema inference
+			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+			
+			// Convert to DuckDB schema
+			for (const auto& col_info : inferred_columns) {
+				return_types.push_back(col_info.type);
+				names.push_back(col_info.name);
+			}
+			
+		} catch (const Exception &e) {
+			if (!result->ignore_errors) {
+				throw;
+			}
+			// Fallback to simple schema on any error
 			return_types.push_back(XMLTypes::XMLType());
 			names.push_back("xml");
-			return std::move(result);
 		}
 		
-		// Read file content for schema inference
-		string content;
-		content.resize(file_size);
-		file_handle->Read((void*)content.data(), file_size);
-		
-		// Validate XML
-		if (!XMLUtils::IsValidXML(content)) {
-			if (!result->ignore_errors) {
-				throw InvalidInputException("File %s contains invalid XML", first_file);
-			}
-			// Fallback to simple schema
+		// Ensure we have at least one column if inference failed
+		if (return_types.empty()) {
 			return_types.push_back(XMLTypes::XMLType());
 			names.push_back("xml");
-			return std::move(result);
 		}
-		
-		// Perform schema inference
-		auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
-		
-		// Convert to DuckDB schema
-		for (const auto& col_info : inferred_columns) {
-			return_types.push_back(col_info.type);
-			names.push_back(col_info.name);
-		}
-		
-	} catch (const Exception &e) {
-		if (!result->ignore_errors) {
-			throw;
-		}
-		// Fallback to simple schema on any error
-		return_types.push_back(XMLTypes::XMLType());
-		names.push_back("xml");
-	}
-	
-	// Ensure we have at least one column
-	if (return_types.empty()) {
-		return_types.push_back(XMLTypes::XMLType());
-		names.push_back("xml");
 	}
 	
 	return std::move(result);
@@ -366,6 +401,9 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_xml_function.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
 	read_xml_function.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_function.named_parameters["schema_depth"] = LogicalType::INTEGER;
+	
+	// Explicit schema specification (like JSON extension)
+	read_xml_function.named_parameters["columns"] = LogicalType::ANY;
 	
 	ExtensionUtil::RegisterFunction(db, read_xml_function);
 }
