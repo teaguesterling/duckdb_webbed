@@ -20,6 +20,7 @@ set(EXTENSION_SOURCES
     src/xml_utils.cpp
     src/xml_scalar_functions.cpp
     src/xml_reader_functions.cpp
+    src/xml_schema_inference.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
