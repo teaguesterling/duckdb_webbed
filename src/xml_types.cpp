@@ -8,8 +8,13 @@
 namespace duckdb {
 
 LogicalType XMLTypes::XMLType() {
-	// XML type is essentially a VARCHAR with special semantics
-	return LogicalType::VARCHAR;
+	auto xml_type = LogicalType(LogicalTypeId::VARCHAR);
+	xml_type.SetAlias("xml");
+	return xml_type;
+}
+
+bool XMLTypes::IsXMLType(const LogicalType& type) {
+	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xml";
 }
 
 bool XMLTypes::XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {

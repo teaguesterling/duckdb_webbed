@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+    <book id="1" genre="fiction" published="2023-01-15">
+        <title>The Great Adventure</title>
+        <author>John Smith</author>
+        <price>19.99</price>
+        <pages>350</pages>
+        <isbn>978-0123456789</isbn>
+        <available>true</available>
+    </book>
+    <book id="2" genre="mystery" published="2022-11-03">
+        <title>Mystery of the Lost Key</title>
+        <author>Jane Doe</author>
+        <price>24.50</price>
+        <pages>287</pages>
+        <isbn>978-9876543210</isbn>
+        <available>false</available>
+    </book>
+    <book id="3" genre="sci-fi" published="2023-05-20">
+        <title>Future Worlds</title>
+        <author>Bob Johnson</author>
+        <price>29.99</price>
+        <pages>425</pages>
+        <isbn>978-1122334455</isbn>
+        <available>true</available>
+    </book>
+</catalog>

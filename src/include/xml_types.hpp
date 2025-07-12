@@ -7,6 +7,7 @@ namespace duckdb {
 class XMLTypes {
 public:
 	static LogicalType XMLType();
+	static bool IsXMLType(const LogicalType& type);
 	static void Register(DatabaseInstance &db);
 	
 private:

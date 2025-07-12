@@ -28,9 +28,9 @@ SELECT count(*) FROM read_xml_objects('test/xml/invalid.xml', ignore_errors := t
 ----
 0
 
-# Test read_xml function (should work the same as read_xml_objects for now)
+# Test read_xml_objects function for raw content access
 query II
-SELECT filename, length(content) > 0 as has_content FROM read_xml('test/xml/simple.xml');
+SELECT filename, length(content) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml');
 ----
 test/xml/simple.xml	true
 

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<employees>
+    <employee id="1001" department="Engineering" active="true">
+        <name>Alice Johnson</name>
+        <email>alice@company.com</email>
+        <salary>95000</salary>
+        <hire_date>2020-03-15</hire_date>
+        <performance_rating>4.8</performance_rating>
+    </employee>
+    <employee id="1002" department="Marketing" active="true">
+        <name>Bob Smith</name>
+        <email>bob@company.com</email>
+        <salary>75000</salary>
+        <hire_date>2021-06-01</hire_date>
+        <performance_rating>4.2</performance_rating>
+    </employee>
+    <employee id="1003" department="Sales" active="false">
+        <name>Carol Davis</name>
+        <email>carol@company.com</email>
+        <salary>68000</salary>
+        <hire_date>2019-01-10</hire_date>
+        <performance_rating>3.9</performance_rating>
+    </employee>
+</employees>
