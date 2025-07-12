@@ -8,6 +8,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/extension_util.hpp"
+#include "duckdb/main/config.hpp"
 
 namespace duckdb {
 
@@ -23,6 +24,10 @@ static void LoadInternal(DatabaseInstance &instance) {
 	
 	// Register table functions
 	XMLReaderFunctions::Register(instance);
+	
+	// Register replacement scan for direct file querying (FROM 'file.xml')
+	auto &config = DBConfig::GetConfig(instance);
+	config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
 }
 
 void XmlExtension::Load(DuckDB &db) {

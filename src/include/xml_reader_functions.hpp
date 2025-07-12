@@ -8,6 +8,10 @@ class XMLReaderFunctions {
 public:
 	static void Register(DatabaseInstance &db);
 	
+	// Replacement scan function for direct file querying
+	static unique_ptr<TableRef> ReadXMLReplacement(ClientContext &context, ReplacementScanInput &input,
+	                                                optional_ptr<ReplacementScanData> data);
+	
 private:
 	// Table functions for reading XML files
 	static void ReadXMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);

@@ -1,0 +1,41 @@
+# name: test/sql/xml_replacement_scan.test  
+# description: Test XML replacement scan functionality (direct file querying)
+# group: [sql]
+
+require xml
+
+# Test basic replacement scan - direct file querying
+query II
+SELECT filename, length(content) > 0 as has_content FROM 'test/xml/simple.xml';
+----
+test/xml/simple.xml	true
+
+# Test replacement scan with XML validation
+query II
+SELECT filename, xml_valid(content) as is_valid FROM 'test/xml/simple.xml';
+----
+test/xml/simple.xml	true
+
+# Test replacement scan with XPath extraction
+query I
+SELECT xml_extract_text(content, '//title') as book_title FROM 'test/xml/simple.xml';
+----
+Database Systems
+
+# Test that alias is set correctly for single files (should use base filename)
+query I
+SELECT simple.filename FROM 'test/xml/simple.xml' as simple;
+----
+test/xml/simple.xml
+
+# Test replacement scan recognizes .xml extension
+query I
+SELECT count(*) FROM 'test/xml/simple.xml';
+----
+1
+
+# Test that non-XML files are not handled by our replacement scan
+statement error
+SELECT * FROM 'test/xml/nonexistent.txt';
+----
+Catalog Error

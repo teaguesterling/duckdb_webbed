@@ -4,6 +4,10 @@
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/replacement_scan.hpp"
+#include "duckdb/parser/tableref/table_function_ref.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 
 namespace duckdb {
 
@@ -133,6 +137,30 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	// For now, use the same implementation as read_xml_objects
 	// Schema inference will be added later
 	ReadXMLObjectsFunction(context, data_p, output);
+}
+
+unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &context, ReplacementScanInput &input,
+                                                          optional_ptr<ReplacementScanData> data) {
+	auto table_name = ReplacementScan::GetFullPath(input);
+	
+	// Check if this file can be handled by the XML extension
+	if (!ReplacementScan::CanReplace(table_name, {"xml"})) {
+		return nullptr;
+	}
+	
+	// Create table function reference that calls read_xml
+	auto table_function = make_uniq<TableFunctionRef>();
+	vector<unique_ptr<ParsedExpression>> children;
+	children.push_back(make_uniq<ConstantExpression>(Value(table_name)));
+	table_function->function = make_uniq<FunctionExpression>("read_xml", std::move(children));
+	
+	// Set alias for non-glob patterns
+	if (!FileSystem::HasGlob(table_name)) {
+		auto &fs = FileSystem::GetFileSystem(context);
+		table_function->alias = fs.ExtractBaseName(table_name);
+	}
+	
+	return std::move(table_function);
 }
 
 void XMLReaderFunctions::Register(DatabaseInstance &db) {
