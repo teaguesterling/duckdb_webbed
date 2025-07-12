@@ -62,8 +62,22 @@ struct ElementPattern {
 	bool has_children = false;          // Has child elements
 	bool has_text = false;              // Has text content
 	
+	// Enhanced nested structure tracking
+	std::unordered_map<std::string, int32_t> child_element_counts; // Child element frequency
+	std::vector<std::unordered_map<std::string, std::string>> child_structures; // Sample child structures
+	bool appears_in_array = false;      // This element appears multiple times with same parent
+	bool has_homogeneous_structure = true; // All instances have same structure
+	
 	double GetFrequency(int32_t total_samples) const {
 		return total_samples > 0 ? static_cast<double>(occurrence_count) / total_samples : 0.0;
+	}
+	
+	bool IsListCandidate() const {
+		return appears_in_array && has_homogeneous_structure;
+	}
+	
+	bool IsStructCandidate() const {
+		return has_children && !has_text && child_element_counts.size() > 0;
 	}
 };
 
@@ -85,6 +99,11 @@ public:
 	// Infer type from sample values
 	static LogicalType InferTypeFromSamples(const std::vector<std::string>& samples,
 	                                         const XMLSchemaOptions& options);
+	
+	// Detect nested structures (LIST and STRUCT types)
+	static LogicalType InferNestedType(const ElementPattern& pattern,
+	                                    const std::unordered_map<std::string, ElementPattern>& all_patterns,
+	                                    const XMLSchemaOptions& options);
 	
 	// Type detection helpers
 	static bool IsBoolean(const std::string& value);

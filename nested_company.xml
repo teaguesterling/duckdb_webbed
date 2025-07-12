@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<company>
+    <employee id="1001" department="Engineering">
+        <name>Alice Johnson</name>
+        <email>alice@company.com</email>
+        <salary>95000</salary>
+        <hire_date>2020-03-15</hire_date>
+        <addresses>
+            <address type="home">
+                <street>123 Main St</street>
+                <city>San Francisco</city>
+                <zip>94102</zip>
+            </address>
+            <address type="work">
+                <street>456 Tech Blvd</street>
+                <city>Palo Alto</city>
+                <zip>94301</zip>
+            </address>
+        </addresses>
+        <skills>
+            <skill level="expert">Python</skill>
+            <skill level="intermediate">JavaScript</skill>
+            <skill level="expert">SQL</skill>
+        </skills>
+        <projects>
+            <project status="active">
+                <name>Database Engine</name>
+                <budget>500000</budget>
+                <deadline>2024-12-31</deadline>
+            </project>
+            <project status="completed">
+                <name>Query Optimizer</name>
+                <budget>300000</budget>
+                <deadline>2023-08-15</deadline>
+            </project>
+        </projects>
+    </employee>
+    <employee id="1002" department="Marketing">
+        <name>Bob Smith</name>
+        <email>bob@company.com</email>
+        <salary>75000</salary>
+        <hire_date>2021-06-01</hire_date>
+        <addresses>
+            <address type="home">
+                <street>789 Oak Ave</street>
+                <city>Berkeley</city>
+                <zip>94710</zip>
+            </address>
+        </addresses>
+        <skills>
+            <skill level="expert">Marketing</skill>
+            <skill level="intermediate">Analytics</skill>
+        </skills>
+        <projects>
+            <project status="active">
+                <name>Brand Campaign</name>
+                <budget>150000</budget>
+                <deadline>2024-06-30</deadline>
+            </project>
+        </projects>
+    </employee>
+</company>
