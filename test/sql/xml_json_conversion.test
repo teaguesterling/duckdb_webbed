@@ -1,0 +1,132 @@
+# name: test/sql/xml_json_conversion.test
+# description: Test XML-JSON conversion functions
+# group: [xml]
+
+require xml
+
+# Test xml_to_json with simple element
+query I
+SELECT xml_to_json('<root><name>test</name></root>');
+----
+{"root":{"name":{"#text":"test"}}}
+
+# Test xml_to_json with attributes
+query I
+SELECT xml_to_json('<root><item id="1" name="test">content</item></root>');
+----
+{"root":{"item":{"@id":"1","@name":"test","#text":"content"}}}
+
+# Test xml_to_json with multiple child elements
+query I
+SELECT xml_to_json('<root><item>first</item><item>second</item></root>');
+----
+{"root":{"item":[{"#text":"first"},{"#text":"second"}]}}
+
+# Test xml_to_json with nested structure
+query I
+SELECT xml_to_json('<catalog><book><title>Database Systems</title><author>John Doe</author></book></catalog>');
+----
+{"catalog":{"book":{"author":{"#text":"John Doe"},"title":{"#text":"Database Systems"}}}}
+
+# Test xml_to_json with mixed attributes and elements
+query I
+SELECT xml_to_json('<book id="1"><title>Test Book</title><price>29.99</price></book>');
+----
+{"book":{"@id":"1","price":{"#text":"29.99"},"title":{"#text":"Test Book"}}}
+
+# Test xml_to_json with empty element
+query I
+SELECT xml_to_json('<root><empty/></root>');
+----
+{"root":{"empty":{}}}
+
+# Test xml_to_json with self-closing element with attributes
+query I
+SELECT xml_to_json('<root><item id="1" type="test"/></root>');
+----
+{"root":{"item":{"@id":"1","@type":"test"}}}
+
+# Test json_to_xml with simple structure  
+query I
+SELECT REPLACE(json_to_xml('{"root":{"name":"test"}}'), chr(10), '|');
+----
+<?xml version="1.0" encoding="UTF-8"?>|<root><name>test</name></root>
+
+# Test json_to_xml with nested structure
+query I
+SELECT REPLACE(json_to_xml('{"catalog":{"book":{"title":"Database Systems","author":"John Doe"}}}'), chr(10), '|');
+----
+<?xml version="1.0" encoding="UTF-8"?>|<catalog><book><title>Database Systems</title><author>John Doe</author></book></catalog>
+
+# Test json_to_xml with empty object
+query I
+SELECT REPLACE(json_to_xml('{}'), chr(10), '|');
+----
+<?xml version="1.0" encoding="UTF-8"?>|<root></root>
+
+# Test round-trip conversion: XML -> JSON -> XML (simple)
+query I
+SELECT REPLACE(json_to_xml(xml_to_json('<root><name>test</name></root>')), chr(10), '|');
+----
+<?xml version="1.0" encoding="UTF-8"?>|<root><#text>test</name></root>
+
+# Test xml_to_json with namespace (should handle gracefully)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>');
+----
+{"root":{"item":{"#text":"test"}}}
+
+# Test xml_to_json with CDATA (should extract content)
+query I
+SELECT xml_to_json('<root><item><![CDATA[raw content]]></item></root>');
+----
+{"root":{"item":{"#text":"raw content"}}}
+
+# Test xml_to_json with numeric-looking content
+query I
+SELECT xml_to_json('<root><number>123</number><decimal>45.67</decimal></root>');
+----
+{"root":{"decimal":{"#text":"45.67"},"number":{"#text":"123"}}}
+
+# Test xml_to_json with boolean-looking content
+query I
+SELECT xml_to_json('<root><flag>true</flag><enabled>false</enabled></root>');
+----
+{"root":{"enabled":{"#text":"false"},"flag":{"#text":"true"}}}
+
+# Test xml_to_json with complex nested array-like structure
+query I
+SELECT xml_to_json('<catalog><book><title>Book1</title></book><book><title>Book2</title></book><book><title>Book3</title></book></catalog>');
+----
+{"catalog":{"book":[{"title":{"#text":"Book1"}},{"title":{"#text":"Book2"}},{"title":{"#text":"Book3"}}]}}
+
+# Test xml_to_json with mixed content (text and elements)
+query I
+SELECT xml_to_json('<root>Some text <item>nested</item> more text</root>');
+----
+{"root":{"#text":"Some text  more text","item":{"#text":"nested"}}}
+
+# Test xml_to_json with multiple attributes
+query I
+SELECT xml_to_json('<item id="1" name="test" type="sample" active="true">content</item>');
+----
+{"item":{"@id":"1","@name":"test","@type":"sample","@active":"true","#text":"content"}}
+
+# Test json_to_xml with nested arrays (if supported)
+query I
+SELECT json_to_xml('{"root":{"items":["first","second","third"]}}');
+----
+<?xml version="1.0" encoding="UTF-8"?>
+<root><items>first</items><items>second</items><items>third</items></root>
+
+# Test xml_to_json with whitespace handling
+query I
+SELECT xml_to_json('<root>   <item>   test   </item>   </root>');
+----
+{"root":{"item":{"#text":"test"}}}
+
+# Test xml_to_json error handling with invalid XML
+query I
+SELECT xml_to_json('<root><item>unclosed');
+----
+{}

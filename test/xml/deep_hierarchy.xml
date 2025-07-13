@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<organization xmlns:dept="http://org.dept.com" xmlns:emp="http://org.employee.com">
+  <dept:division id="DIV001" region="North America">
+    <name>Technology Division</name>
+    <dept:department id="DEPT001" budget="5000000">
+      <name>Software Engineering</name>
+      <dept:team id="TEAM001" project="Alpha">
+        <name>Backend Development Team</name>
+        <emp:manager id="MGR001">
+          <name>Sarah Chen</name>
+          <title>Senior Engineering Manager</title>
+          <emp:details>
+            <hire_date>2019-03-15</hire_date>
+            <salary currency="USD">145000</salary>
+            <performance_rating>4.8</performance_rating>
+            <emp:skills>
+              <skill level="expert">Python</skill>
+              <skill level="expert">Go</skill>
+              <skill level="advanced">Kubernetes</skill>
+              <skill level="intermediate">Machine Learning</skill>
+            </emp:skills>
+          </emp:details>
+        </emp:manager>
+        <emp:employees>
+          <emp:employee id="EMP001" level="senior">
+            <name>Alex Rodriguez</name>
+            <title>Senior Software Engineer</title>
+            <emp:details>
+              <hire_date>2020-08-10</hire_date>
+              <salary currency="USD">125000</salary>
+              <performance_rating>4.6</performance_rating>
+              <emp:projects>
+                <project id="PROJ001" status="active" priority="high">
+                  <name>Microservices Architecture</name>
+                  <deadline>2024-06-30</deadline>
+                  <tasks>
+                    <task id="TASK001" status="completed" assignee="EMP001">
+                      <description>Design API Gateway</description>
+                      <estimated_hours>40</estimated_hours>
+                      <actual_hours>38</actual_hours>
+                      <subtasks>
+                        <subtask id="SUB001" status="completed">
+                          <description>Research API Gateway solutions</description>
+                          <notes>Evaluated Kong, Ambassador, and Istio</notes>
+                          <time_spent>8</time_spent>
+                        </subtask>
+                        <subtask id="SUB002" status="completed">
+                          <description>Create architecture diagram</description>
+                          <notes>Used draw.io for visualization</notes>
+                          <time_spent>6</time_spent>
+                        </subtask>
+                        <subtask id="SUB003" status="completed">
+                          <description>Write technical specification</description>
+                          <notes>Comprehensive 15-page document</notes>
+                          <time_spent>24</time_spent>
+                        </subtask>
+                      </subtasks>
+                    </task>
+                    <task id="TASK002" status="in_progress" assignee="EMP001">
+                      <description>Implement Authentication Service</description>
+                      <estimated_hours>60</estimated_hours>
+                      <actual_hours>32</actual_hours>
+                      <dependencies>
+                        <dependency task_id="TASK001" type="blocks"/>
+                      </dependencies>
+                    </task>
+                  </tasks>
+                </project>
+              </emp:projects>
+            </emp:details>
+          </emp:employee>
+          
+          <emp:employee id="EMP002" level="mid">
+            <name>Maria Gonzalez</name>
+            <title>Software Engineer</title>
+            <emp:details>
+              <hire_date>2021-11-22</hire_date>
+              <salary currency="USD">95000</salary>
+              <performance_rating>4.4</performance_rating>
+              <emp:training>
+                <course id="COURSE001" status="completed">
+                  <name>Advanced Kubernetes</name>
+                  <provider>Cloud Academy</provider>
+                  <completion_date>2023-09-15</completion_date>
+                  <score>92</score>
+                  <modules>
+                    <module id="MOD001" duration="4h">
+                      <name>Kubernetes Architecture</name>
+                      <topics>
+                        <topic weight="0.3">Pods and Services</topic>
+                        <topic weight="0.25">Deployments</topic>
+                        <topic weight="0.2">ConfigMaps and Secrets</topic>
+                        <topic weight="0.15">Networking</topic>
+                        <topic weight="0.1">Storage</topic>
+                      </topics>
+                    </module>
+                    <module id="MOD002" duration="6h">
+                      <name>Advanced Scheduling</name>
+                      <topics>
+                        <topic weight="0.4">Node Affinity</topic>
+                        <topic weight="0.3">Taints and Tolerations</topic>
+                        <topic weight="0.3">Custom Schedulers</topic>
+                      </topics>
+                    </module>
+                  </modules>
+                </course>
+              </emp:training>
+            </emp:details>
+          </emp:employee>
+        </emp:employees>
+      </dept:team>
+      
+      <dept:team id="TEAM002" project="Beta">
+        <name>Frontend Development Team</name>
+        <emp:manager id="MGR002">
+          <name>David Kim</name>
+          <title>Frontend Engineering Manager</title>
+          <emp:details>
+            <hire_date>2018-07-01</hire_date>
+            <salary currency="USD">140000</salary>
+            <performance_rating>4.9</performance_rating>
+          </emp:details>
+        </emp:manager>
+        <emp:employees>
+          <emp:employee id="EMP003" level="senior">
+            <name>Lisa Wang</name>
+            <title>Senior Frontend Engineer</title>
+            <emp:details>
+              <hire_date>2020-02-14</hire_date>
+              <salary currency="USD">120000</salary>
+              <performance_rating>4.7</performance_rating>
+              <emp:certifications>
+                <certification id="CERT001" valid_until="2025-12-31">
+                  <name>AWS Certified Solutions Architect</name>
+                  <issuer>Amazon Web Services</issuer>
+                  <issued_date>2023-01-15</issued_date>
+                  <verification_url>https://aws.amazon.com/verification/XXXXX</verification_url>
+                </certification>
+              </emp:certifications>
+            </emp:details>
+          </emp:employee>
+        </emp:employees>
+      </dept:team>
+    </dept:department>
+    
+    <dept:department id="DEPT002" budget="3000000">
+      <name>Data Science</name>
+      <dept:team id="TEAM003" project="Analytics">
+        <name>Machine Learning Team</name>
+        <emp:manager id="MGR003">
+          <name>Dr. Priya Patel</name>
+          <title>Principal Data Scientist</title>
+          <emp:details>
+            <hire_date>2017-09-30</hire_date>
+            <salary currency="USD">165000</salary>
+            <performance_rating>4.9</performance_rating>
+            <emp:publications>
+              <publication id="PUB001">
+                <title>Deep Learning for Time Series Forecasting</title>
+                <journal>Journal of Machine Learning Research</journal>
+                <year>2023</year>
+                <citations>127</citations>
+                <coauthors>
+                  <author affiliation="MIT">Dr. James Wilson</author>
+                  <author affiliation="Stanford">Dr. Emily Chen</author>
+                </coauthors>
+              </publication>
+            </emp:publications>
+          </emp:details>
+        </emp:manager>
+      </dept:team>
+    </dept:department>
+  </dept:division>
+  
+  <dept:division id="DIV002" region="Europe">
+    <name>Operations Division</name>
+    <dept:department id="DEPT003" budget="2000000">
+      <name>Customer Support</name>
+      <!-- Continuing the deep hierarchy pattern... -->
+    </dept:department>
+  </dept:division>
+</organization>

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns:meta="http://catalog.meta.com" xmlns:product="http://catalog.product.com">
+  <!-- Large catalog with 1000+ products for performance testing -->
+  <meta:info>
+    <created>2024-01-15T10:30:00Z</created>
+    <version>2.1.0</version>
+    <total_products>1000</total_products>
+  </meta:info>
+  
+  <categories>
+    <category id="electronics" priority="1">
+      <name>Electronics</name>
+      <description>Electronic devices and gadgets</description>
+    </category>
+    <category id="books" priority="2">
+      <name>Books</name>
+      <description>Physical and digital books</description>
+    </category>
+    <category id="clothing" priority="3">
+      <name>Clothing</name>
+      <description>Apparel and accessories</description>
+    </category>
+  </categories>
+  
+  <products>
+    <!-- Generate products programmatically - this is a sample of what would be a large file -->
+    <product:item id="PROD_001" category="electronics" featured="true" stock="50">
+      <name>Wireless Headphones Pro</name>
+      <description><![CDATA[High-quality wireless headphones with noise cancellation and 30-hour battery life.]]></description>
+      <price currency="USD">299.99</price>
+      <dimensions unit="cm">
+        <width>15.2</width>
+        <height>8.5</height>
+        <depth>18.7</depth>
+        <weight unit="g">290</weight>
+      </dimensions>
+      <specifications>
+        <battery_life>30</battery_life>
+        <frequency_response>20Hz-40kHz</frequency_response>
+        <impedance>32</impedance>
+        <wireless_range unit="m">10</wireless_range>
+      </specifications>
+      <reviews count="847" average_rating="4.7">
+        <review id="REV_001" rating="5">
+          <reviewer>Sarah M.</reviewer>
+          <date>2024-01-10</date>
+          <title>Excellent sound quality!</title>
+          <content>These headphones exceeded my expectations. The noise cancellation is superb.</content>
+        </review>
+        <review id="REV_002" rating="4">
+          <reviewer>John D.</reviewer>
+          <date>2024-01-08</date>
+          <title>Great value for money</title>
+          <content>Good quality headphones at a reasonable price point.</content>
+        </review>
+      </reviews>
+      <tags>
+        <tag>wireless</tag>
+        <tag>noise-cancelling</tag>
+        <tag>premium</tag>
+        <tag>electronics</tag>
+      </tags>
+      <availability>
+        <in_stock>true</in_stock>
+        <stock_count>50</stock_count>
+        <restock_date>2024-02-01</restock_date>
+        <warehouses>
+          <warehouse id="WH_001" location="New York">25</warehouse>
+          <warehouse id="WH_002" location="California">15</warehouse>
+          <warehouse id="WH_003" location="Texas">10</warehouse>
+        </warehouses>
+      </availability>
+    </product:item>
+    
+    <product:item id="PROD_002" category="books" featured="false" stock="200">
+      <name>Advanced Database Systems</name>
+      <description>Comprehensive guide to modern database technologies and architectures.</description>
+      <price currency="USD">89.99</price>
+      <dimensions unit="cm">
+        <width>21.0</width>
+        <height>27.5</height>
+        <depth>3.2</depth>
+        <weight unit="g">1200</weight>
+      </dimensions>
+      <specifications>
+        <pages>856</pages>
+        <publisher>Tech Publications</publisher>
+        <edition>3rd</edition>
+        <isbn>978-1234567890</isbn>
+        <language>English</language>
+      </specifications>
+      <authors>
+        <author primary="true">
+          <name>Dr. Jane Smith</name>
+          <affiliation>MIT</affiliation>
+          <bio>Professor of Computer Science specializing in database systems</bio>
+        </author>
+        <author primary="false">
+          <name>Dr. Bob Johnson</name>
+          <affiliation>Stanford</affiliation>
+          <bio>Research scientist in distributed systems</bio>
+        </author>
+      </authors>
+      <topics>
+        <topic weight="0.3">SQL</topic>
+        <topic weight="0.2">NoSQL</topic>
+        <topic weight="0.15">Distributed Systems</topic>
+        <topic weight="0.15">Performance Optimization</topic>
+        <topic weight="0.1">Security</topic>
+        <topic weight="0.1">Cloud Databases</topic>
+      </topics>
+    </product:item>
+    
+    <product:item id="PROD_003" category="clothing" featured="true" stock="75">
+      <name>Professional Business Jacket</name>
+      <description>Premium wool blend business jacket with modern fit.</description>
+      <price currency="USD">459.99</price>
+      <dimensions unit="cm">
+        <chest>102</chest>
+        <shoulder>45</shoulder>
+        <sleeve>64</sleeve>
+        <length>74</length>
+      </dimensions>
+      <specifications>
+        <material>65% Wool, 30% Polyester, 5% Elastane</material>
+        <care_instructions>Dry clean only</care_instructions>
+        <country_of_origin>Italy</country_of_origin>
+        <season>All Season</season>
+      </specifications>
+      <sizes available="5">
+        <size code="S" chest="96-100" stock="10">Small</size>
+        <size code="M" chest="100-104" stock="20">Medium</size>
+        <size code="L" chest="104-108" stock="25">Large</size>
+        <size code="XL" chest="108-112" stock="15">Extra Large</size>
+        <size code="XXL" chest="112-116" stock="5">Double Extra Large</size>
+      </sizes>
+      <colors>
+        <color code="BLK" hex="#000000" stock="30">Black</color>
+        <color code="NVY" hex="#1B2951" stock="25">Navy</color>
+        <color code="GRY" hex="#6C757D" stock="20">Charcoal Grey</color>
+      </colors>
+    </product:item>
+  </products>
+  
+  <!-- For performance testing, imagine this continues with hundreds more products -->
+  <summary>
+    <total_items>3</total_items>
+    <categories_covered>3</categories_covered>
+    <average_price>283.32</average_price>
+    <last_updated>2024-01-15T14:45:30Z</last_updated>
+  </summary>
+</catalog>

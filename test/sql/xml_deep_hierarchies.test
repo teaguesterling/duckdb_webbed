@@ -1,0 +1,152 @@
+# name: test/sql/xml_deep_hierarchies.test
+# description: Test XML extension with deep hierarchical structures
+# group: [xml]
+
+require xml
+
+# Test loading deep hierarchy file
+query I
+SELECT xml_valid(xml::VARCHAR) FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting from deep hierarchy: organization name  
+query I
+SELECT xml_extract_text(xml::VARCHAR, '//*[local-name()="division"]/*[local-name()="name"]')
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+Technology Division
+
+# Test deep nesting: extract manager details from 5+ levels deep
+query II
+SELECT 
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="name"]'),
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="title"]')
+FROM read_xml_objects('test/xml/deep_hierarchy.xml') LIMIT 1;
+----
+Sarah Chen	Senior Engineering Manager
+
+# Test extracting from maximum depth: subtask details
+query II
+SELECT 
+    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/description'),
+    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/time_spent')
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+Research API Gateway solutions	8
+
+# Test stats on deep hierarchy document
+query I
+SELECT (xml_stats(xml::VARCHAR)).max_depth >= 10
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test namespace handling in deep hierarchy
+query I
+SELECT length(xml_namespaces(xml::VARCHAR)) >= 2
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting all employee names across hierarchy levels
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="employee"]/*[local-name()="name"]')) >= 2
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test complex XPath: find all completed tasks
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//task[@status="completed"]')) >= 1
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test deep attribute extraction: all IDs at various levels
+query I
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[@id]', 'id')) >= 10
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting training module topics (deeply nested structure)
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//modules/module/topics/topic')) >= 2
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test performance with deep hierarchy JSON conversion
+query I
+SELECT length(xml_to_json(xml::VARCHAR)) > 2000
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting salary information across all hierarchy levels
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//salary[@currency="USD"]')) >= 3
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test deep XPath with predicates: high priority projects
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//project[@priority="high"]')) >= 1
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting publication information (deeply nested academic data)
+query II
+SELECT 
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="title"]'),
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="citations"]')
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+Deep Learning for Time Series Forecasting	127
+
+# Test complex hierarchy traversal: find all authors in publications
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//coauthors/author')) >= 2
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test deep hierarchy element count
+query I
+SELECT (xml_stats(xml::VARCHAR)).element_count >= 50
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting dependency information from deeply nested tasks
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//dependencies/dependency')) >= 1
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test memory efficiency with deep hierarchy pretty print
+query I
+SELECT length(xml_pretty_print(xml::VARCHAR)) > length(xml::VARCHAR)
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test extracting weight attributes from nested topics
+query I
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//topics/topic[@weight]', 'weight')) >= 3
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true
+
+# Test complex multi-level aggregation: count all tasks and subtasks
+query I
+SELECT 
+    length(xml_extract_elements(xml::VARCHAR, '//task')) + 
+    length(xml_extract_elements(xml::VARCHAR, '//subtask')) >= 4
+FROM read_xml_objects('test/xml/deep_hierarchy.xml');
+----
+true

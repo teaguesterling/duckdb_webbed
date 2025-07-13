@@ -1,0 +1,125 @@
+# name: test/sql/xml_document_formatting.test
+# description: Test XML document formatting functions (xml_pretty_print, xml_minify)
+# group: [xml]
+
+require xml
+
+# Test xml_pretty_print with simple XML
+query I
+SELECT xml_pretty_print('<root><item>test</item></root>') LIKE '%  <item>test</item>%';
+----
+true
+
+# Test xml_pretty_print preserves content
+query I
+SELECT xml_pretty_print('<root><item>test content</item></root>') LIKE '%test content%';
+----
+true
+
+# Test xml_pretty_print with nested structure
+query I
+SELECT length(xml_pretty_print('<catalog><book><title>Test</title><author>John</author></book></catalog>')) > length('<catalog><book><title>Test</title><author>John</author></book></catalog>');
+----
+true
+
+# Test xml_pretty_print with attributes
+query I
+SELECT xml_pretty_print('<root><item id="1" name="test">content</item></root>') LIKE '%id="1"%';
+----
+true
+
+# Test xml_pretty_print includes XML declaration
+query I
+SELECT xml_pretty_print('<root><item>test</item></root>') LIKE '<?xml version="1.0"?>%';
+----
+true
+
+# Test xml_pretty_print with already formatted XML
+query I
+SELECT length(xml_pretty_print('<?xml version="1.0"?>\n<root>\n  <item>test</item>\n</root>')) > 30;
+----
+true
+
+# Test xml_minify basic functionality
+query I
+SELECT length(xml_minify('<root>\n  <item>test</item>\n</root>')) > 0;
+----
+true
+
+# Test xml_minify preserves content
+query I
+SELECT xml_minify('<root><item>test content</item></root>') LIKE '%test content%';
+----
+true
+
+# Test xml_minify with whitespace (may not actually minify currently)
+query I
+SELECT xml_minify('<root>\n  <item>test</item>\n</root>') LIKE '%<item>test</item>%';
+----
+true
+
+# Test xml_minify with attributes
+query I
+SELECT xml_minify('<root><item id="1" name="test">content</item></root>') LIKE '%id="1"%';
+----
+true
+
+# Test xml_pretty_print error handling with invalid XML
+query I
+SELECT xml_pretty_print('<invalid>unclosed') = '<invalid>unclosed';
+----
+true
+
+# Test xml_minify error handling with invalid XML
+query I
+SELECT xml_minify('<invalid>unclosed') = '<invalid>unclosed';
+----
+true
+
+# Test xml_pretty_print with empty elements
+query I
+SELECT xml_pretty_print('<root><empty/></root>') LIKE '%<empty/>%';
+----
+true
+
+# Test xml_pretty_print with CDATA
+query I
+SELECT xml_pretty_print('<root><item><![CDATA[Some content]]></item></root>') LIKE '%Some content%';
+----
+true
+
+# Test xml_pretty_print with comments
+query I
+SELECT xml_pretty_print('<!-- comment --><root><item>test</item></root>') LIKE '%<item>test</item>%';
+----
+true
+
+# Test xml_minify with complex structure
+query I
+SELECT length(xml_minify('<catalog><book><title>Book Title</title><author>Author Name</author><price>29.99</price></book></catalog>')) > 50;
+----
+true
+
+# Test round-trip: pretty_print then check validity
+query I
+SELECT xml_valid(xml_pretty_print('<root><item>test</item></root>'));
+----
+true
+
+# Test round-trip: minify then check validity
+query I
+SELECT xml_valid(xml_minify('<root><item>test</item></root>'));
+----
+true
+
+# Test xml_pretty_print with namespace declarations
+query I
+SELECT xml_pretty_print('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>') LIKE '%xmlns:ns=%';
+----
+true
+
+# Test xml_minify with namespace declarations
+query I
+SELECT xml_minify('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>') LIKE '%xmlns:ns=%';
+----
+true

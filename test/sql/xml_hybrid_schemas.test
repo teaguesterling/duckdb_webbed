@@ -1,0 +1,191 @@
+# name: test/sql/xml_hybrid_schemas.test
+# description: Test hybrid schemas with mixed flattened DuckDB columns and XML columns
+# group: [xml]
+
+require xml
+
+# Test hybrid approach: extract some fields as columns, keep complex parts as XML
+query IIIII
+SELECT 
+    xml_extract_text(xml_data, '//product/@id') as product_id,
+    xml_extract_text(xml_data, '//name') as product_name,
+    xml_extract_text(xml_data, '//price')::DECIMAL(10,2) as price,
+    xml_extract_text(xml_data, '//category') as category,
+    xml_extract_elements(xml_data, '//specifications')[1] as specs_xml
+FROM (
+    SELECT '<product id="P001"><name>Laptop</name><price>999.99</price><category>electronics</category><specifications><cpu>Intel i7</cpu><ram>16GB</ram><storage>512GB SSD</storage></specifications></product>'::XML as xml_data
+);
+----
+P001	Laptop	999.99	electronics	<specifications><cpu>Intel i7</cpu><ram>16GB</ram><storage>512GB SSD</storage></specifications>
+
+# Test querying hybrid data: filter on extracted column, analyze XML column
+query II
+SELECT 
+    xml_extract_text(xml_data, '//name') as name,
+    xml_extract_text(specs_xml, '//cpu') as cpu_info
+FROM (
+    SELECT 
+        '<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>'::XML as xml_data,
+        xml_extract_elements('<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>', '//specifications')[1] as specs_xml
+) 
+WHERE xml_extract_text(xml_data, '//price')::DECIMAL > 1000;
+----
+Desktop	AMD Ryzen 9
+
+# Test hybrid with arrays: flatten some arrays, keep complex ones as XML
+query III
+SELECT 
+    unnest(xml_extract_attributes(xml_data, '//tag', 'name')) as tag_name,
+    xml_extract_text(xml_data, '//product_name') as product,
+    xml_extract_elements(xml_data, '//reviews')[1] as reviews_xml
+FROM (
+    SELECT '<item><product_name>Widget</product_name><tags><tag name="popular"/><tag name="new"/></tags><reviews><review rating="5">Great!</review><review rating="4">Good</review></reviews></item>'::XML as xml_data
+);
+----
+popular	Widget	<reviews><review rating="5">Great!</review><review rating="4">Good</review></reviews>
+new	Widget	<reviews><review rating="5">Great!</review><review rating="4">Good</review></reviews>
+
+# Test hybrid aggregation: group by flattened column, aggregate XML content
+query III
+SELECT 
+    category,
+    count(*) as product_count,
+    avg(price) as avg_price,
+FROM (
+    SELECT 
+        xml_extract_text(product_xml, '//category') as category,
+        xml_extract_text(product_xml, '//price')::DECIMAL as price
+    FROM (
+        VALUES 
+            ('<product><category>laptop</category><price>999</price><specifications><cpu>Intel i5</cpu></specifications></product>'::XML),
+            ('<product><category>laptop</category><price>1299</price><specifications><cpu>Intel i7</cpu></specifications></product>'::XML),
+            ('<product><category>desktop</category><price>899</price><specifications><cpu>AMD Ryzen 5</cpu></specifications></product>'::XML)
+    ) as t(product_xml)
+)
+GROUP BY category
+ORDER BY category;
+----
+desktop	1	899.0
+laptop	2	1149.0
+
+# Test temporal data in hybrid schema: extract dates as columns, keep events as XML
+query IIII
+SELECT 
+    xml_extract_text(record_xml, '//user_id')::INTEGER as user_id,
+    xml_extract_text(record_xml, '//login_time')::TIMESTAMP as login_time,
+    xml_extract_text(record_xml, '//session_duration')::INTEGER as duration_minutes,
+    xml_extract_elements(record_xml, '//activities')[1] as activities_xml
+FROM (
+    SELECT '<session><user_id>123</user_id><login_time>2024-01-15T09:30:00</login_time><session_duration>45</session_duration><activities><activity type="view" page="/dashboard"/><activity type="click" element="button_save"/></activities></session>'::XML as record_xml
+);
+----
+123	2024-01-15 09:30:00	45	<activities><activity type="view" page="/dashboard"/><activity type="click" element="button_save"/></activities>
+
+# Test hybrid schema with namespaces: flatten namespaced fields, preserve complex namespaced XML
+query IIII
+SELECT 
+    xml_extract_text(doc_xml, '//meta:id') as document_id,
+    xml_extract_text(doc_xml, '//meta:title') as title,
+    xml_extract_text(doc_xml, '//meta:created')::DATE as created_date,
+    xml_extract_elements(doc_xml, '//content:body')[1] as content_xml
+FROM (
+    SELECT '<document xmlns:meta="http://meta.com" xmlns:content="http://content.com"><meta:id>DOC001</meta:id><meta:title>Test Document</meta:title><meta:created>2024-01-01</meta:created><content:body><content:section><content:paragraph>Text here</content:paragraph></content:section></content:body></document>'::XML as doc_xml
+);
+----
+DOC001	Test Document	2024-01-01	<content:body xmlns:content="http://content.com"><content:section><content:paragraph>Text here</content:paragraph></content:section></content:body>
+
+# Test hybrid performance: mix indexed columns with XML analysis
+query IIIII
+SELECT 
+    product_id,
+    product_name,
+    price,
+    (xml_stats(full_xml)).element_count as xml_complexity,
+    length(xml_namespaces(full_xml)) as namespace_count
+FROM (
+    SELECT 
+        xml_extract_text(product_data, '//@id') as product_id,
+        xml_extract_text(product_data, '//name') as product_name,
+        xml_extract_text(product_data, '//price')::DECIMAL as price,
+        product_data::VARCHAR as full_xml
+    FROM (
+        VALUES ('<product id="P001"><name>Item1</name><price>100</price><details><spec>A</spec></details></product>'::XML)
+    ) as t(product_data)
+);
+----
+P001	Item1	100.0	4	0
+
+# Test hybrid with JSON conversion: flatten key fields, convert complex parts to JSON
+query IIII
+SELECT 
+    xml_extract_text(order_xml, '//order_id') as order_id,
+    xml_extract_text(order_xml, '//total')::DECIMAL as total,
+    xml_extract_text(order_xml, '//status') as status,
+    length(xml_to_json(xml_extract_elements(order_xml, '//items')[1])) > 10 as has_items_json
+FROM (
+    SELECT '<order><order_id>ORD123</order_id><total>299.99</total><status>shipped</status><items><item><name>Book</name><qty>2</qty></item><item><name>Pen</name><qty>5</qty></item></items></order>'::XML as order_xml
+);
+----
+ORD123	299.99	shipped	true
+
+# Test error handling in hybrid schema: graceful handling of missing fields
+query III
+SELECT 
+    coalesce(xml_extract_text(data_xml, '//id'), 'MISSING') as id,
+    coalesce(xml_extract_text(data_xml, '//name'), 'UNKNOWN') as name,
+    length(xml_extract_elements(data_xml, '//details')) as details_count
+FROM (
+    VALUES 
+        ('<record><id>R001</id><name>Complete</name><details><item>A</item></details></record>'::XML),
+        ('<record><name>Partial</name></record>'::XML),
+        ('<record><id>R003</id></record>'::XML)
+) as t(data_xml);
+----
+R001	Complete	1
+MISSING	Partial	0
+R003	UNKNOWN	0
+
+# Test hybrid indexing scenario: searchable columns + rich XML content
+query IIIII
+SELECT 
+    category,
+    title,
+    author,
+    published_year,
+    xml_extract_elements(metadata_xml, '//subjects')[1] as subjects_xml
+FROM (
+    SELECT 
+        xml_extract_text(book_xml, '//category') as category,
+        xml_extract_text(book_xml, '//title') as title,
+        xml_extract_text(book_xml, '//author') as author,
+        xml_extract_text(book_xml, '//year')::INTEGER as published_year,
+        xml_extract_elements(book_xml, '//metadata')[1] as metadata_xml
+    FROM (
+        SELECT '<book><category>fiction</category><title>Test Novel</title><author>Jane Doe</author><year>2023</year><metadata><subjects><subject>literature</subject><subject>drama</subject></subjects><awards><award>Best Fiction 2023</award></awards></metadata></book>'::XML as book_xml
+    )
+)
+WHERE published_year >= 2020;
+----
+fiction	Test Novel	Jane Doe	2023	<subjects><subject>literature</subject><subject>drama</subject></subjects>
+
+# Test hybrid with computed columns: derive values from XML, store alongside XML
+query IIIII
+SELECT 
+    product_code,
+    base_price,
+    discounted_price,
+    discount_percentage,
+    pricing_xml
+FROM (
+    SELECT 
+        xml_extract_text(product_xml, '//code') as product_code,
+        xml_extract_text(product_xml, '//base_price')::DECIMAL as base_price,
+        xml_extract_text(product_xml, '//discounted_price')::DECIMAL as discounted_price,
+        round((1 - xml_extract_text(product_xml, '//discounted_price')::DECIMAL / xml_extract_text(product_xml, '//base_price')::DECIMAL) * 100, 1) as discount_percentage,
+        xml_extract_elements(product_xml, '//pricing')[1] as pricing_xml
+    FROM (
+        SELECT '<product><code>SKU123</code><pricing><base_price>100.00</base_price><discounted_price>80.00</discounted_price><currency>USD</currency><valid_until>2024-12-31</valid_until></pricing></product>'::XML as product_xml
+    )
+);
+----
+SKU123	100.00	80.00	20.0	<pricing><base_price>100.00</base_price><discounted_price>80.00</discounted_price><currency>USD</currency><valid_until>2024-12-31</valid_until></pricing>

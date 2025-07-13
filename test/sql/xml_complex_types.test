@@ -1,0 +1,183 @@
+# name: test/sql/xml_complex_types.test
+# description: Test complex type mappings between DuckDB types and XML content
+# group: [xml]
+
+require xml
+
+# Test INTEGER type mapping from XML
+query I
+SELECT xml_extract_text('<root><count>42</count></root>', '//count')::INTEGER;
+----
+42
+
+# Test DECIMAL/NUMERIC type mapping from XML
+query R
+SELECT xml_extract_text('<root><price>123.45</price></root>', '//price')::DECIMAL(10,2);
+----
+123.45
+
+# Test BOOLEAN type mapping from XML
+query I
+SELECT xml_extract_text('<root><active>true</active></root>', '//active')::BOOLEAN;
+----
+true
+
+# Test DATE type mapping from XML
+query I
+SELECT xml_extract_text('<root><date>2024-01-15</date></root>', '//date')::DATE;
+----
+2024-01-15
+
+# Test TIMESTAMP type mapping from XML
+query I
+SELECT xml_extract_text('<root><created>2024-01-15T10:30:00Z</created></root>', '//created')::TIMESTAMP;
+----
+2024-01-15 10:30:00
+
+# Test LIST type mapping: extract multiple elements as array
+query I
+SELECT length(xml_extract_elements('<root><item>A</item><item>B</item><item>C</item></root>', '//item')) = 3;
+----
+true
+
+# Test STRUCT-like access via XPath with multiple fields
+query III
+SELECT 
+    xml_extract_text('<person><name>John</name><age>30</age><city>NYC</city></person>', '//name'),
+    xml_extract_text('<person><name>John</name><age>30</age><city>NYC</city></person>', '//age')::INTEGER,
+    xml_extract_text('<person><name>John</name><age>30</age><city>NYC</city></person>', '//city');
+----
+John	30	NYC
+
+# Test handling NULL values in XML
+query I
+SELECT xml_extract_text('<root><empty></empty></root>', '//empty') IS NULL;
+----
+false
+
+# Test handling missing elements (should return empty)
+query I
+SELECT length(xml_extract_text('<root><present>value</present></root>', '//missing')) = 0;
+----
+true
+
+# Test complex nested structure as JSON (preserving XML structure)
+query I
+SELECT xml_to_json('<catalog><book id="1"><title>Test</title><authors><author>John</author><author>Jane</author></authors></book></catalog>');
+----
+{"catalog":{"book":{"@id":"1","authors":{"author":[{"#text":"John"},{"#text":"Jane"}]},"title":{"#text":"Test"}}}}
+
+# Test XML type preservation: keeping complex XML as VARCHAR
+query I
+SELECT xml_valid('<complex><nested><deep>value</deep></nested></complex>');
+----
+true
+
+# Test mixed type scenario: some fields as DuckDB types, others as XML
+query III
+SELECT 
+    xml_extract_text('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//id')::INTEGER as product_id,
+    xml_extract_text('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//name') as product_name,
+    xml_extract_elements('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//specs')[1] as specs_xml;
+----
+123	Widget	<specs><weight>1.5kg</weight><color>blue</color></specs>
+
+# Test ARRAY mapping: extracting attribute values as array
+query I
+SELECT length(xml_extract_attributes('<items><item id="1"/><item id="2"/><item id="3"/></items>', '//item', 'id')) = 3;
+----
+true
+
+# Test handling special characters and encoding
+query I
+SELECT xml_extract_text('<root><text>Special chars: &lt;&gt;&amp;</text></root>', '//text') = 'Special chars: <>&';
+----
+true
+
+# Test CDATA preservation
+query I
+SELECT length(xml_extract_cdata('<root><![CDATA[Raw content with <tags>]]></root>')) > 0;
+----
+true
+
+# Test complex numeric types: scientific notation
+query R
+SELECT xml_extract_text('<root><value>1.23E+02</value></root>', '//value')::DOUBLE;
+----
+123.0
+
+# Test handling XML namespaces with type mapping
+query II
+SELECT 
+    xml_extract_text('<root xmlns:ns="http://example.com"><ns:id>456</ns:id><ns:name>Test</ns:name></root>', '//ns:id')::INTEGER,
+    xml_extract_text('<root xmlns:ns="http://example.com"><ns:id>456</ns:id><ns:name>Test</ns:name></root>', '//ns:name');
+----
+456	Test
+
+# Test large number handling
+query I
+SELECT xml_extract_text('<root><big>9223372036854775807</big></root>', '//big')::BIGINT;
+----
+9223372036854775807
+
+# Test floating point precision
+query R
+SELECT xml_extract_text('<root><precise>3.141592653589793</precise></root>', '//precise')::DOUBLE;
+----
+3.141592653589793
+
+# Test JSON roundtrip: XML -> JSON -> verify structure
+query I
+SELECT xml_to_json('<person><name>Alice</name><age>25</age></person>');
+----
+{"person":{"age":{"#text":"25"},"name":{"#text":"Alice"}}}
+
+# Test hybrid table structure: mix of flattened and XML columns
+query IIII
+SELECT 
+    xml_extract_text(xml_content, '//id')::INTEGER as id,
+    xml_extract_text(xml_content, '//name') as name,
+    xml_extract_text(xml_content, '//active')::BOOLEAN as is_active,
+    xml_content::VARCHAR as full_xml
+FROM (
+    SELECT '<record><id>100</id><name>Test Record</name><active>true</active><metadata><created>2024-01-01</created><tags><tag>important</tag></tags></metadata></record>'::XML as xml_content
+);
+----
+100	Test Record	true	<record><id>100</id><name>Test Record</name><active>true</active><metadata><created>2024-01-01</created><tags><tag>important</tag></tags></metadata></record>
+
+# Test error handling: invalid type conversion
+statement error
+SELECT xml_extract_text('<root><text>not_a_number</text></root>', '//text')::INTEGER;
+
+# Test UUID-like string handling
+query I
+SELECT length(xml_extract_text('<root><uuid>550e8400-e29b-41d4-a716-446655440000</uuid></root>', '//uuid')) = 36;
+----
+true
+
+# Test complex nested array extraction
+query I
+SELECT length(xml_extract_elements('<matrix><row><col>1</col><col>2</col></row><row><col>3</col><col>4</col></row></matrix>', '//col')) = 4;
+----
+true
+
+# Test performance: type conversion on multiple elements
+query I
+SELECT sum(xml_extract_text(elem, '.')::INTEGER) = 6
+FROM (
+    SELECT unnest(xml_extract_elements('<numbers><num>1</num><num>2</num><num>3</num></numbers>', '//num')) as elem
+);
+----
+true
+
+# Test varchar length handling
+query I
+SELECT length(xml_extract_text('<root><long_text>' || repeat('A', 1000) || '</long_text></root>', '//long_text')) = 1000;
+----
+true
+
+# Test binary-like data in XML (base64 encoded)
+query I
+SELECT length(xml_extract_text('<root><data>SGVsbG8gV29ybGQ=</data></root>', '//data')) > 0;
+----
+true

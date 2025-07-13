@@ -1,0 +1,143 @@
+# name: test/sql/xml_xpath_extraction.test
+# description: Test XPath-based XML extraction functions
+# group: [xml]
+
+require xml
+
+# Test xml_extract_text with simple XPath
+query I
+SELECT xml_extract_text('<root><item>Hello World</item></root>', '//item');
+----
+Hello World
+
+# Test xml_extract_text with nested elements
+query I
+SELECT xml_extract_text('<catalog><book><title>Database Systems</title></book></catalog>', '//title');
+----
+Database Systems
+
+# Test xml_extract_text with attributes in XPath
+query I
+SELECT xml_extract_text('<root><item id="1">First</item><item id="2">Second</item></root>', '//item[@id="2"]');
+----
+Second
+
+# Test xml_extract_text with no matches
+query I
+SELECT xml_extract_text('<root><item>test</item></root>', '//nonexistent');
+----
+(empty)
+
+# Test xml_extract_text with multiple matches (returns first)
+query I
+SELECT xml_extract_text('<root><item>First</item><item>Second</item></root>', '//item');
+----
+First
+
+# Test xml_extract_all_text function
+query I
+SELECT xml_extract_all_text('<root><item>Hello</item><item>World</item></root>');
+----
+HelloWorld
+
+# Test xml_extract_all_text with mixed content
+query I
+SELECT xml_extract_all_text('<root>Start <item>middle</item> end</root>');
+----
+Start middle end
+
+# Test xml_extract_elements with simple XPath
+query I
+SELECT length(xml_extract_elements('<root><item id="1">First</item><item id="2">Second</item></root>', '//item'));
+----
+2
+
+# Test xml_extract_elements structure - check first element name
+query I
+SELECT (xml_extract_elements('<root><item id="1">Test</item></root>', '//item'))[1].name;
+----
+item
+
+# Test xml_extract_elements structure - check text content
+query I
+SELECT (xml_extract_elements('<root><item id="1">Test Content</item></root>', '//item'))[1].text_content;
+----
+Test Content
+
+# Test xml_extract_elements structure - check path
+query I
+SELECT (xml_extract_elements('<root><item id="1">Test</item></root>', '//item'))[1].path;
+----
+/root/item
+
+# Test xml_extract_attributes with simple case
+query I
+SELECT length(xml_extract_attributes('<root><item id="1" name="test">content</item></root>', '//item'));
+----
+2
+
+# Test xml_extract_attributes structure - check attribute name
+query I
+SELECT (xml_extract_attributes('<root><item id="1">content</item></root>', '//item'))[1].attribute_name;
+----
+id
+
+# Test xml_extract_attributes structure - check attribute value
+query I
+SELECT (xml_extract_attributes('<root><item id="1">content</item></root>', '//item'))[1].attribute_value;
+----
+1
+
+# Test xml_extract_elements with complex nested structure
+query I
+SELECT length(xml_extract_elements('<catalog><book><title>Book1</title></book><book><title>Book2</title></book></catalog>', '//book'));
+----
+2
+
+# Test xml_extract_text with namespace-aware XPath
+query I
+SELECT xml_extract_text('<root xmlns:ns="http://example.com"><ns:item>Namespaced Content</ns:item></root>', '//ns:item');
+----
+(empty)
+
+# Test xml_extract_elements with root element
+query I
+SELECT (xml_extract_elements('<root><item>test</item></root>', '/root'))[1].name;
+----
+root
+
+# Test xml_extract_text with complex XPath expression
+query I
+SELECT xml_extract_text('<catalog><book price="29.99"><title>Cheap Book</title></book><book price="59.99"><title>Expensive Book</title></book></catalog>', '//book[@price < 50]/title');
+----
+Cheap Book
+
+# Test xml_extract_text with text() node selection
+query I
+SELECT xml_extract_text('<root><item>Direct text</item></root>', '//item/text()');
+----
+Direct text
+
+# Test xml_extract_elements with attribute filter
+query I
+SELECT length(xml_extract_elements('<root><item type="A">First</item><item type="B">Second</item><item type="A">Third</item></root>', '//item[@type="A"]'));
+----
+2
+
+# Test xml_extract_attributes with multiple elements
+query I
+SELECT length(xml_extract_attributes('<root><item id="1" name="first"/><item id="2" name="second"/></root>', '//item'));
+----
+4
+
+# Test xml_extract_text with parent/child navigation
+query I
+SELECT xml_extract_text('<catalog><book><title>Target</title></book><article><title>Wrong</title></article></catalog>', '//book/title');
+----
+Target
+
+# Test xml_extract_elements with descendant axis
+query I
+SELECT length(xml_extract_elements('<root><level1><level2><item>deep</item></level2></level1></root>', '//item'));
+----
+1

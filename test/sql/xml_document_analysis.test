@@ -1,0 +1,144 @@
+# name: test/sql/xml_document_analysis.test
+# description: Test XML document analysis functions (xml_stats, xml_namespaces)
+# group: [xml]
+
+require xml
+
+# Test xml_stats with simple document
+query I
+SELECT (xml_stats('<root><item>test</item></root>')).element_count;
+----
+2
+
+# Test xml_stats element count with multiple elements
+query I
+SELECT (xml_stats('<catalog><book><title>Book 1</title></book><book><title>Book 2</title></book></catalog>')).element_count;
+----
+5
+
+# Test xml_stats attribute count
+query I
+SELECT (xml_stats('<root><item id="1" name="test">content</item></root>')).attribute_count;
+----
+2
+
+# Test xml_stats max depth
+query I
+SELECT (xml_stats('<root><level1><level2><level3>deep</level3></level2></level1></root>')).max_depth;
+----
+5
+
+# Test xml_stats size calculation
+query I
+SELECT (xml_stats('<root><item>test</item></root>')).size_bytes > 0;
+----
+true
+
+# Test xml_stats with no namespaces
+query I
+SELECT (xml_stats('<root><item>test</item></root>')).namespace_count;
+----
+0
+
+# Test xml_stats with namespaces
+query I
+SELECT (xml_stats('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>')).namespace_count;
+----
+1
+
+# Test xml_stats full structure
+query IIIII
+SELECT 
+    s.element_count,
+    s.attribute_count, 
+    s.max_depth,
+    s.size_bytes > 20 as reasonable_size,
+    s.namespace_count
+FROM (SELECT xml_stats('<catalog xmlns:book="http://example.com/book"><book:book id="1" available="true"><title>Database Systems</title><author>John Doe</author></book:book></catalog>') as s);
+----
+4	2	4	true	1
+
+# Test xml_namespaces with no namespaces
+query I
+SELECT length(xml_namespaces('<root><item>test</item></root>'));
+----
+0
+
+# Test xml_namespaces with single namespace
+query I
+SELECT length(xml_namespaces('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>'));
+----
+1
+
+# Test xml_namespaces namespace extraction
+query II
+SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item>test</book:item></root>')) as ns);
+----
+book	http://example.com/book
+
+# Test xml_namespaces with default namespace
+query I
+SELECT length(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>'));
+----
+1
+
+# Test xml_namespaces with default namespace structure
+query II
+SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>')) as ns);
+----
+(empty)	http://default.com
+
+# Test xml_namespaces with multiple namespaces
+query I
+SELECT length(xml_namespaces('<root xmlns:book="http://example.com/book" xmlns:author="http://example.com/author"><book:item>test</book:item><author:name>John</author:name></root>'));
+----
+2
+
+# Test xml_namespaces multiple namespace extraction
+query II
+SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:item/><b:item/></root>')) as ns) ORDER BY ns.prefix;
+----
+a	http://a.com
+b	http://b.com
+
+# Test xml_namespaces with mixed default and prefixed
+query I
+SELECT length(xml_namespaces('<root xmlns="http://default.com" xmlns:pref="http://prefixed.com"><item/><pref:item/></root>'));
+----
+2
+
+# Test xml_stats with empty document (just root)
+query IIIII
+SELECT 
+    s.element_count,
+    s.attribute_count,
+    s.max_depth,
+    s.size_bytes > 0 as has_size,
+    s.namespace_count
+FROM (SELECT xml_stats('<root/>') as s);
+----
+1	0	1	true	0
+
+# Test xml_stats with complex nested structure
+query I
+SELECT (xml_stats('<catalog><section><book id="1"><title>Book 1</title><author name="John">John Doe</author></book><book id="2"><title>Book 2</title></book></section></catalog>')).max_depth;
+----
+4
+
+# Test xml_namespaces error handling with invalid XML
+query I
+SELECT length(xml_namespaces('<invalid>unclosed'));
+----
+0
+
+# Test xml_stats error handling with invalid XML  
+query IIIII
+SELECT 
+    s.element_count,
+    s.attribute_count,
+    s.max_depth,
+    s.size_bytes,
+    s.namespace_count
+FROM (SELECT xml_stats('<invalid>unclosed') as s);
+----
+0	0	0	0	0

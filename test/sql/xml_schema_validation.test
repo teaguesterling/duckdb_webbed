@@ -1,0 +1,158 @@
+# name: test/sql/xml_schema_validation.test
+# description: Test XML schema validation function
+# group: [xml]
+
+require xml
+
+# Test xml_validate_schema with valid XML and schema
+query I
+SELECT xml_validate_schema(
+    '<root><item>test</item></root>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root"><xs:complexType><xs:sequence><xs:element name="item" type="xs:string"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with invalid XML against schema
+query I
+SELECT xml_validate_schema(
+    '<root><wrongelement>test</wrongelement></root>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root"><xs:complexType><xs:sequence><xs:element name="item" type="xs:string"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with simple string element schema
+query I
+SELECT xml_validate_schema(
+    '<message>Hello World</message>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="message" type="xs:string"/></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with integer element schema
+query I
+SELECT xml_validate_schema(
+    '<number>123</number>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="number" type="xs:integer"/></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with invalid integer
+query I
+SELECT xml_validate_schema(
+    '<number>not_a_number</number>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="number" type="xs:integer"/></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with attribute validation
+query I
+SELECT xml_validate_schema(
+    '<item id="123">content</item>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="item"><xs:complexType><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="id" type="xs:integer" use="required"/></xs:extension></xs:simpleContent></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with missing required attribute
+query I
+SELECT xml_validate_schema(
+    '<item>content</item>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="item"><xs:complexType><xs:simpleContent><xs:extension base="xs:string"><xs:attribute name="id" type="xs:integer" use="required"/></xs:extension></xs:simpleContent></xs:complexType></xs:element></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with multiple elements in sequence
+query I
+SELECT xml_validate_schema(
+    '<book><title>Test Book</title><author>John Doe</author><price>29.99</price></book>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="book"><xs:complexType><xs:sequence><xs:element name="title" type="xs:string"/><xs:element name="author" type="xs:string"/><xs:element name="price" type="xs:decimal"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with wrong sequence order
+query I
+SELECT xml_validate_schema(
+    '<book><author>John Doe</author><title>Test Book</title><price>29.99</price></book>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="book"><xs:complexType><xs:sequence><xs:element name="title" type="xs:string"/><xs:element name="author" type="xs:string"/><xs:element name="price" type="xs:decimal"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with invalid XML document
+query I
+SELECT xml_validate_schema(
+    '<root><unclosed>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root" type="xs:string"/></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with invalid XSD schema
+query I
+SELECT xml_validate_schema(
+    '<root>test</root>',
+    '<invalid_schema>not_xsd</invalid_schema>'
+);
+----
+false
+
+# Test xml_validate_schema with empty XML
+query I
+SELECT xml_validate_schema(
+    '',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root" type="xs:string"/></xs:schema>'
+);
+----
+false
+
+# Test xml_validate_schema with empty schema
+query I
+SELECT xml_validate_schema(
+    '<root>test</root>',
+    ''
+);
+----
+false
+
+# Test xml_validate_schema with optional element present
+query I
+SELECT xml_validate_schema(
+    '<person><name>John</name><age>30</age></person>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="person"><xs:complexType><xs:sequence><xs:element name="name" type="xs:string"/><xs:element name="age" type="xs:integer" minOccurs="0"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with optional element absent
+query I
+SELECT xml_validate_schema(
+    '<person><name>John</name></person>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="person"><xs:complexType><xs:sequence><xs:element name="name" type="xs:string"/><xs:element name="age" type="xs:integer" minOccurs="0"/></xs:sequence></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with choice element (first option)
+query I
+SELECT xml_validate_schema(
+    '<contact><email>john@example.com</email></contact>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="contact"><xs:complexType><xs:choice><xs:element name="email" type="xs:string"/><xs:element name="phone" type="xs:string"/></xs:choice></xs:complexType></xs:element></xs:schema>'
+);
+----
+true
+
+# Test xml_validate_schema with choice element (second option)
+query I
+SELECT xml_validate_schema(
+    '<contact><phone>555-1234</phone></contact>',
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="contact"><xs:complexType><xs:choice><xs:element name="email" type="xs:string"/><xs:element name="phone" type="xs:string"/></xs:choice></xs:complexType></xs:element></xs:schema>'
+);
+----
+true

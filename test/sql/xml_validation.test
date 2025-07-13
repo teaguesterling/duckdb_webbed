@@ -1,0 +1,107 @@
+# name: test/sql/xml_validation.test
+# description: Test basic XML validation functions
+# group: [xml]
+
+require xml
+
+# Test xml_valid function with valid XML
+query I
+SELECT xml_valid('<root><item>test</item></root>');
+----
+true
+
+# Test xml_valid function with invalid XML (missing closing tag)
+query I
+SELECT xml_valid('<root><item>test</root>');
+----
+false
+
+# Test xml_valid function with invalid XML (malformed)
+query I
+SELECT xml_valid('<root><item test</item></root>');
+----
+false
+
+# Test xml_valid function with empty string
+query I
+SELECT xml_valid('');
+----
+false
+
+# Test xml_valid function with XML declaration
+query I
+SELECT xml_valid('<?xml version="1.0" encoding="UTF-8"?><root><item>test</item></root>');
+----
+true
+
+# Test xml_valid function with namespaces
+query I
+SELECT xml_valid('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>');
+----
+true
+
+# Test xml_valid function with attributes
+query I
+SELECT xml_valid('<root><item id="1" name="test">content</item></root>');
+----
+true
+
+# Test xml_well_formed function with valid XML
+query I
+SELECT xml_well_formed('<root><item>test</item></root>');
+----
+true
+
+# Test xml_well_formed function with invalid XML
+query I
+SELECT xml_well_formed('<root><item>test</root>');
+----
+false
+
+# Test xml_valid with complex nested structure
+query I
+SELECT xml_valid('<catalog><book id="1"><title>Database Systems</title><author><name>John Doe</name><email>john@example.com</email></author><tags><tag>database</tag><tag>sql</tag></tags></book></catalog>');
+----
+true
+
+# Test xml_valid with CDATA
+query I
+SELECT xml_valid('<root><![CDATA[This is some CDATA content with <special> characters]]></root>');
+----
+true
+
+# Test xml_valid with comments
+query I
+SELECT xml_valid('<!-- This is a comment --><root><!-- Another comment --><item>test</item></root>');
+----
+true
+
+# Test xml_valid with processing instructions
+query I
+SELECT xml_valid('<?xml version="1.0"?><?xml-stylesheet type="text/xsl" href="style.xsl"?><root><item>test</item></root>');
+----
+true
+
+# Test xml_valid with mixed content
+query I
+SELECT xml_valid('<root>Some text <item>nested</item> more text</root>');
+----
+true
+
+# Test xml_valid with self-closing tags
+query I
+SELECT xml_valid('<root><item id="1"/><item id="2"/></root>');
+----
+true
+
+# Test xml_valid with special characters
+query I
+SELECT xml_valid('<root><item>Content with &amp; &lt; &gt; &quot; &apos; entities</item></root>');
+----
+true
+
+# Test xml_valid with Unicode content
+query I
+SELECT xml_valid('<root><item>Unicode: αβγδε 中文 русский العربية</item></root>');
+----
+true

@@ -1,0 +1,115 @@
+# name: test/sql/xml_large_files.test
+# description: Test XML extension with large files for performance and memory handling
+# group: [xml]
+
+require xml
+
+# Test loading large catalog file
+query I
+SELECT xml_valid(xml::VARCHAR) FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test extracting metadata from large catalog
+query III
+SELECT 
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="version"]'),
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="total_products"]'),
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="created"]')
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+2.1.0	1000	2024-01-15T10:30:00Z
+
+# Test extracting all product names (should handle multiple results efficiently)
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item"]/*[local-name()="name"]')) > 0
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test stats on large document
+query I
+SELECT (xml_stats(xml::VARCHAR)).element_count > 50
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test namespace extraction from large document
+query I
+SELECT length(xml_namespaces(xml::VARCHAR)) >= 2
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test XPath extraction with complex predicates on large file
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item" and @featured="true"]')) > 0
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test extracting nested review data
+query I
+SELECT length(xml_extract_text(xml::VARCHAR, '//reviews/review[1]/title')) > 0
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test pretty print performance on large document
+query I
+SELECT length(xml_pretty_print(xml::VARCHAR)) > length(xml::VARCHAR)
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test JSON conversion on large document (should complete without timeout)
+query I
+SELECT length(xml_to_json(xml::VARCHAR)) > 1000
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test extracting warehouse locations using complex XPath
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//warehouses/warehouse[@location]')) > 0
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test memory efficiency: multiple operations on same large document
+query III
+SELECT 
+    (xml_stats(xml::VARCHAR)).element_count > 20,
+    length(xml_namespaces(xml::VARCHAR)) >= 2,
+    xml_valid(xml::VARCHAR)
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true	true	true
+
+# Test extracting all attributes from large document
+query I
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[local-name()="item"]', 'id')) > 0
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test complex aggregation: count products by category
+query I
+SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item" and @category="electronics"]')) >= 1
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test deep nesting extraction: get review content
+query I
+SELECT length(xml_extract_text(xml::VARCHAR, '//reviews/review/content')) > 10
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
+
+# Test performance with minification
+query I
+SELECT length(xml_minify(xml::VARCHAR)) < length(xml::VARCHAR)
+FROM read_xml_objects('test/xml/large_catalog.xml');
+----
+true
