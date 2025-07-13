@@ -13,10 +13,12 @@
 namespace duckdb {
 
 static void LoadInternal(DatabaseInstance &instance) {
+	// JSON extension is automatically available as a dependency
+	
 	// Initialize libxml2
 	XMLUtils::InitializeLibXML();
 	
-	// Register XML types
+	// Register XML types (includes JSON to XML casting)
 	XMLTypes::Register(instance);
 	
 	// Register scalar functions

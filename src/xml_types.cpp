@@ -82,8 +82,14 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	// Register cast functions for XML type conversion
 	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
-	// TODO: Register JSON to XML cast when JSON type is available in this DuckDB version
-	// ExtensionUtil::RegisterCastFunction(db, LogicalType(LogicalTypeId::JSON), xml_type, JSONToXMLCast);
+	
+	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
+	try {
+		auto json_type = LogicalType::JSON();
+		ExtensionUtil::RegisterCastFunction(db, json_type, xml_type, JSONToXMLCast);
+	} catch (...) {
+		// JSON type might not be available, but this shouldn't prevent XML extension from loading
+	}
 }
 
 } // namespace duckdb
