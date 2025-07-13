@@ -12,6 +12,7 @@ private:
 	// Validation functions
 	static void XMLValidFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLWellFormedFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLValidateSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	
 	// Text extraction functions
 	static void XMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
@@ -20,9 +21,16 @@ private:
 	// Element extraction functions
 	static void XMLExtractElementsFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAttributesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLExtractCommentsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLExtractCDataFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	
+	// Content manipulation functions
+	static void XMLPrettyPrintFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLMinifyFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	
 	// Conversion functions
 	static void XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void JSONToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	
 	// Analysis functions

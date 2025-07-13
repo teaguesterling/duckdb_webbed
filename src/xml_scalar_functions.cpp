@@ -151,24 +151,181 @@ void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, Expressio
 	}
 }
 
-void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// This will be implemented in Phase 4
-	throw NotImplementedException("xml_to_json not yet implemented");
+void XMLScalarFunctions::XMLPrettyPrintFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(xml_vector, result, args.size(), [&](string_t xml_str) {
+		std::string xml_string = xml_str.GetString();
+		std::string formatted = XMLUtils::PrettyPrintXML(xml_string);
+		return StringVector::AddString(result, formatted);
+	});
 }
 
-void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// This will be implemented in Phase 4
-	throw NotImplementedException("value_to_xml not yet implemented");
+void XMLScalarFunctions::XMLMinifyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(xml_vector, result, args.size(), [&](string_t xml_str) {
+		std::string xml_string = xml_str.GetString();
+		std::string minified = XMLUtils::MinifyXML(xml_string);
+		return StringVector::AddString(result, minified);
+	});
+}
+
+void XMLScalarFunctions::XMLValidateSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto &schema_vector = args.data[1];
+	
+	BinaryExecutor::Execute<string_t, string_t, bool>(
+		xml_vector, schema_vector, result, args.size(),
+		[&](string_t xml_str, string_t schema_str) {
+			std::string xml_string = xml_str.GetString();
+			std::string schema_string = schema_str.GetString();
+			return XMLUtils::ValidateXMLSchema(xml_string, schema_string);
+		});
+}
+
+void XMLScalarFunctions::XMLExtractCommentsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		std::string xml_string = xml_str.GetString();
+		
+		auto comments = XMLUtils::ExtractComments(xml_string);
+		
+		// Create list of comment structs
+		vector<Value> comment_values;
+		
+		for (const auto &comment : comments) {
+			child_list_t<Value> comment_children;
+			comment_children.emplace_back("content", Value(comment.content));
+			comment_children.emplace_back("line_number", Value::BIGINT(comment.line_number));
+			
+			comment_values.emplace_back(Value::STRUCT(comment_children));
+		}
+		
+		// Create list value
+		auto comment_struct_type = LogicalType::STRUCT({
+			make_pair("content", LogicalType::VARCHAR),
+			make_pair("line_number", LogicalType::BIGINT)
+		});
+		
+		Value list_value = Value::LIST(comment_struct_type, comment_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::XMLExtractCDataFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		std::string xml_string = xml_str.GetString();
+		
+		auto cdata_sections = XMLUtils::ExtractCData(xml_string);
+		
+		// Create list of CDATA structs
+		vector<Value> cdata_values;
+		
+		for (const auto &cdata : cdata_sections) {
+			child_list_t<Value> cdata_children;
+			cdata_children.emplace_back("content", Value(cdata.content));
+			cdata_children.emplace_back("line_number", Value::BIGINT(cdata.line_number));
+			
+			cdata_values.emplace_back(Value::STRUCT(cdata_children));
+		}
+		
+		// Create list value
+		auto cdata_struct_type = LogicalType::STRUCT({
+			make_pair("content", LogicalType::VARCHAR),
+			make_pair("line_number", LogicalType::BIGINT)
+		});
+		
+		Value list_value = Value::LIST(cdata_struct_type, cdata_values);
+		result.SetValue(i, list_value);
+	}
 }
 
 void XMLScalarFunctions::XMLStatsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// This will be implemented in Phase 4
-	throw NotImplementedException("xml_stats not yet implemented");
+	auto &xml_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		std::string xml_string = xml_str.GetString();
+		
+		auto stats = XMLUtils::GetXMLStats(xml_string);
+		
+		// Create stats struct
+		child_list_t<Value> stats_children;
+		stats_children.emplace_back("element_count", Value::BIGINT(stats.element_count));
+		stats_children.emplace_back("attribute_count", Value::BIGINT(stats.attribute_count));
+		stats_children.emplace_back("max_depth", Value::BIGINT(stats.max_depth));
+		stats_children.emplace_back("size_bytes", Value::BIGINT(stats.size_bytes));
+		stats_children.emplace_back("namespace_count", Value::BIGINT(stats.namespace_count));
+		
+		Value stats_value = Value::STRUCT(stats_children);
+		result.SetValue(i, stats_value);
+	}
 }
 
 void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// This will be implemented in Phase 4
-	throw NotImplementedException("xml_namespaces not yet implemented");
+	auto &xml_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		std::string xml_string = xml_str.GetString();
+		
+		auto namespaces = XMLUtils::ExtractNamespaces(xml_string);
+		
+		// Create list of namespace structs
+		vector<Value> ns_values;
+		
+		for (const auto &ns : namespaces) {
+			child_list_t<Value> ns_children;
+			ns_children.emplace_back("prefix", Value(ns.prefix));
+			ns_children.emplace_back("uri", Value(ns.uri));
+			
+			ns_values.emplace_back(Value::STRUCT(ns_children));
+		}
+		
+		// Create list value
+		auto ns_struct_type = LogicalType::STRUCT({
+			make_pair("prefix", LogicalType::VARCHAR),
+			make_pair("uri", LogicalType::VARCHAR)
+		});
+		
+		Value list_value = Value::LIST(ns_struct_type, ns_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(xml_vector, result, args.size(), [&](string_t xml_str) {
+		std::string xml_string = xml_str.GetString();
+		std::string json_string = XMLUtils::XMLToJSON(xml_string);
+		return StringVector::AddString(result, json_string);
+	});
+}
+
+void XMLScalarFunctions::JSONToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &json_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(json_vector, result, args.size(), [&](string_t json_str) {
+		std::string json_string = json_str.GetString();
+		std::string xml_string = XMLUtils::JSONToXML(json_string);
+		return StringVector::AddString(result, xml_string);
+	});
+}
+
+void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// This will be implemented later
+	throw NotImplementedException("value_to_xml not yet implemented");
 }
 
 void XMLScalarFunctions::Register(DatabaseInstance &db) {
@@ -233,6 +390,66 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	auto xml_extract_attributes_function = ScalarFunction("xml_extract_attributes", 
 		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction);
 	ExtensionUtil::RegisterFunction(db, xml_extract_attributes_function);
+	
+	// Register xml_pretty_print function
+	auto xml_pretty_print_function = ScalarFunction("xml_pretty_print", 
+		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLPrettyPrintFunction);
+	ExtensionUtil::RegisterFunction(db, xml_pretty_print_function);
+	
+	// Register xml_minify function
+	auto xml_minify_function = ScalarFunction("xml_minify", 
+		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLMinifyFunction);
+	ExtensionUtil::RegisterFunction(db, xml_minify_function);
+	
+	// Register xml_validate_schema function
+	auto xml_validate_schema_function = ScalarFunction("xml_validate_schema", 
+		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidateSchemaFunction);
+	ExtensionUtil::RegisterFunction(db, xml_validate_schema_function);
+	
+	// Register xml_extract_comments function (returns LIST<STRUCT>)
+	auto comment_struct_type = LogicalType::STRUCT({
+		make_pair("content", LogicalType::VARCHAR),
+		make_pair("line_number", LogicalType::BIGINT)
+	});
+	auto xml_extract_comments_function = ScalarFunction("xml_extract_comments", 
+		{LogicalType::VARCHAR}, LogicalType::LIST(comment_struct_type), XMLExtractCommentsFunction);
+	ExtensionUtil::RegisterFunction(db, xml_extract_comments_function);
+	
+	// Register xml_extract_cdata function (returns LIST<STRUCT>)
+	auto xml_extract_cdata_function = ScalarFunction("xml_extract_cdata", 
+		{LogicalType::VARCHAR}, LogicalType::LIST(comment_struct_type), XMLExtractCDataFunction);
+	ExtensionUtil::RegisterFunction(db, xml_extract_cdata_function);
+	
+	// Register xml_stats function (returns STRUCT)
+	auto stats_struct_type = LogicalType::STRUCT({
+		make_pair("element_count", LogicalType::BIGINT),
+		make_pair("attribute_count", LogicalType::BIGINT),
+		make_pair("max_depth", LogicalType::BIGINT),
+		make_pair("size_bytes", LogicalType::BIGINT),
+		make_pair("namespace_count", LogicalType::BIGINT)
+	});
+	auto xml_stats_function = ScalarFunction("xml_stats", 
+		{LogicalType::VARCHAR}, stats_struct_type, XMLStatsFunction);
+	ExtensionUtil::RegisterFunction(db, xml_stats_function);
+	
+	// Register xml_namespaces function (returns LIST<STRUCT>)
+	auto namespace_struct_type = LogicalType::STRUCT({
+		make_pair("prefix", LogicalType::VARCHAR),
+		make_pair("uri", LogicalType::VARCHAR)
+	});
+	auto xml_namespaces_function = ScalarFunction("xml_namespaces", 
+		{LogicalType::VARCHAR}, LogicalType::LIST(namespace_struct_type), XMLNamespacesFunction);
+	ExtensionUtil::RegisterFunction(db, xml_namespaces_function);
+	
+	// Register xml_to_json function
+	auto xml_to_json_function = ScalarFunction("xml_to_json", 
+		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLToJSONFunction);
+	ExtensionUtil::RegisterFunction(db, xml_to_json_function);
+	
+	// Register json_to_xml function
+	auto json_to_xml_function = ScalarFunction("json_to_xml", 
+		{LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction);
+	ExtensionUtil::RegisterFunction(db, json_to_xml_function);
 }
 
 } // namespace duckdb

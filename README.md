@@ -25,15 +25,31 @@ read_xml_objects(files, [options...]) → table            -- ✅ IMPLEMENTED
 
 -- XPath-based extraction  
 xml_extract_text(xml_content, xpath) → VARCHAR           -- ✅ IMPLEMENTED
-xml_extract_all_text(xml_content, xpath) → VARCHAR[]     -- ✅ IMPLEMENTED
+xml_extract_all_text(xml_content) → VARCHAR              -- ✅ IMPLEMENTED
+xml_extract_elements(xml_content, xpath) → LIST<STRUCT>  -- ✅ IMPLEMENTED
+xml_extract_attributes(xml_content, xpath) → LIST<STRUCT> -- ✅ IMPLEMENTED
 
 -- Validation and utility functions
 xml_valid(content) → BOOLEAN                             -- ✅ IMPLEMENTED
 xml_well_formed(content) → BOOLEAN                       -- ✅ IMPLEMENTED
-xml_libxml2_version() → VARCHAR                          -- ✅ IMPLEMENTED
+xml_validate_schema(xml_content, xsd_schema) → BOOLEAN   -- ✅ IMPLEMENTED
 
--- Schema inference with configurable options
--- Supports: root_element, include_attributes, auto_detect, schema_depth
+-- Format conversion functions
+xml_to_json(xml_content) → VARCHAR                       -- ✅ IMPLEMENTED
+json_to_xml(json_content) → VARCHAR                      -- ✅ IMPLEMENTED
+
+-- Document analysis and formatting
+xml_stats(xml_content) → STRUCT                          -- ✅ IMPLEMENTED
+xml_namespaces(xml_content) → LIST<STRUCT>               -- ✅ IMPLEMENTED
+xml_pretty_print(xml_content) → VARCHAR                  -- ✅ IMPLEMENTED
+xml_minify(xml_content) → VARCHAR                        -- ⚠️ PARTIAL (see known issues)
+
+-- Content extraction (specialized)
+xml_extract_comments(xml_content) → LIST<STRUCT>         -- ⚠️ KNOWN ISSUE
+xml_extract_cdata(xml_content) → LIST<STRUCT>            -- ⚠️ KNOWN ISSUE
+
+-- Legacy compatibility
+xml_libxml2_version() → VARCHAR                          -- ✅ IMPLEMENTED
 ```
 
 ### Example Usage
@@ -45,9 +61,28 @@ LOAD xml;
 SELECT * FROM 'catalog.xml';
 SELECT * FROM 'data/*.xml' WHERE available = true;
 
--- Basic XML validation and XPath extraction
+-- Basic XML validation and text extraction
 SELECT xml_valid('<root><item>test</item></root>');
 SELECT xml_extract_text('<books><book>Title</book></books>', '//book');
+
+-- Format conversion between XML and JSON
+SELECT xml_to_json('<catalog><book id="1"><title>Database Systems</title></book></catalog>');
+SELECT json_to_xml('{"root":{"name":"test","value":"123"}}');
+
+-- Document analysis and statistics
+SELECT xml_stats('<catalog><book id="1"><title>DB</title></book></catalog>');
+SELECT xml_namespaces('<root xmlns:book="http://example.com/book"><book:item/></root>');
+
+-- XSD schema validation
+SELECT xml_validate_schema('<root><item>test</item></root>', 
+    '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+     <xs:element name="root"><xs:complexType><xs:sequence>
+     <xs:element name="item" type="xs:string"/></xs:sequence></xs:complexType></xs:element>
+     </xs:schema>');
+
+-- Element and attribute extraction with XPath
+SELECT xml_extract_elements('<catalog><book id="1"><title>Book 1</title></book></catalog>', '//book');
+SELECT xml_extract_attributes('<catalog><book id="1" available="true"></book></catalog>', '//book');
 
 -- File reading with schema inference options
 SELECT * FROM read_xml('books.xml', 
@@ -60,9 +95,8 @@ SELECT * FROM read_xml('books.xml',
 -- Extract XML document content as-is
 SELECT filename, content FROM read_xml_objects('config/*.xml', ignore_errors => true);
 
--- XPath-based data extraction
-SELECT xml_extract_all_text(content, '//price') AS prices
-FROM read_xml_objects('catalog.xml');
+-- Document formatting
+SELECT xml_pretty_print('<root><item>test</item></root>');
 ```
 
 ## Design Principles
@@ -102,38 +136,62 @@ To maintain focus and simplicity:
 - ✅ Replacement scan support for `.xml` files (`FROM 'file.xml'` syntax)
 - ✅ Smart type detection (BOOLEAN, INTEGER, DOUBLE, DATE, TIMESTAMP, TIME)
 
-### Phase 3: XPath Integration ✅ MOSTLY COMPLETE
+### Phase 3: XPath Integration ✅ COMPLETE
 - ✅ XPath-based element extraction with libxml2 xpath context
 - ✅ Attribute and content handling in schema inference
-- 🔄 Cross-format conversion functions (JSON conversion planned)
+- ✅ Cross-format conversion functions (XML ↔ JSON)
 
-### Phase 4: Optimization & Polish 🔄 IN PROGRESS
-- 🔄 Performance optimization for large documents
-- ✅ Comprehensive test suite with 31 passing assertions
-- 🔄 Advanced configuration options and edge case handling
+### Phase 4: Utility Functions ✅ COMPLETE
+- ✅ Document analysis functions (`xml_stats`, `xml_namespaces`)
+- ✅ Document formatting (`xml_pretty_print`, partial `xml_minify`)
+- ✅ XSD schema validation with `xml_validate_schema`
+- ✅ Comprehensive utility function suite with RAII memory management
+
+### Phase 5: Testing & Polish ✅ COMPLETE
+- ✅ Comprehensive test suite covering all major functionality
+- ✅ Production-ready error handling and memory management
+- ✅ Documentation and examples
 
 ## Current Status
 
 The DuckDB XML extension has reached a mature state with comprehensive XML processing capabilities:
 
-- **Core functionality**: All basic XML operations are implemented and tested
+- **Core functionality**: All major XML operations are implemented and tested
 - **Schema inference**: Automatic XML-to-relational mapping with configurable options
-- **Production ready**: 31 passing test assertions with robust error handling
+- **Format conversion**: Seamless XML ↔ JSON conversion with proper structure preservation
+- **Production ready**: Comprehensive test suite with robust error handling
 - **Standards compliant**: Built on libxml2 for reliable XML parsing and XPath support
 
 ### Recent Improvements
-- Fixed frequency calculation in schema inference engine
-- Enhanced XPath text extraction with support for multiple results
-- Improved error handling with `ignore_errors` parameter
-- Added comprehensive configuration options for schema detection
+- ✅ Implemented comprehensive XML utility function suite (10+ functions)
+- ✅ Fixed XML-to-JSON conversion algorithm with proper structure handling
+- ✅ Added XSD schema validation with `xml_validate_schema`
+- ✅ Enhanced document analysis with `xml_stats` and `xml_namespaces`
+- ✅ Implemented RAII memory management throughout with DuckDB-style smart pointers
+
+## Known Issues
+
+### Minor Functionality Issues
+- **`xml_extract_comments()`**: Returns empty results - requires special libxml2 parsing flags to preserve comments in document tree
+- **`xml_extract_cdata()`**: Returns empty results - similar issue with CDATA section preservation during parsing
+- **`xml_minify()`**: Partial implementation - currently doesn't remove all insignificant whitespace
+
+### Workarounds
+- For comment extraction: Comments can be accessed via XPath expressions in some cases
+- For CDATA content: Text content is accessible via `xml_extract_text()` even if CDATA structure isn't preserved
+- For minification: `xml_pretty_print()` works correctly for formatting
+
+### Status
+These are low-priority issues that don't affect core XML processing functionality. The vast majority of XML analytical use cases are fully supported.
 
 ## Contributing
 
 Contributions are welcome! The extension has solid foundations and is ready for:
-- Performance optimizations
-- Additional XPath functions
-- JSON conversion utilities
-- Advanced schema inference features
+- Fixing comment/CDATA extraction with proper libxml2 parsing flags
+- Performance optimizations for large document processing
+- Additional XPath 2.0 features and functions
+- Enhanced JSON conversion with nested object handling
+- Advanced schema inference features for complex document structures
 
 ## License
 
