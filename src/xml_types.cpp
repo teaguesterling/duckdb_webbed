@@ -13,8 +13,18 @@ LogicalType XMLTypes::XMLType() {
 	return xml_type;
 }
 
+LogicalType XMLTypes::XMLFragmentType() {
+	auto xml_frag_type = LogicalType(LogicalTypeId::VARCHAR);
+	xml_frag_type.SetAlias("xmlfragment");
+	return xml_frag_type;
+}
+
 bool XMLTypes::IsXMLType(const LogicalType& type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xml";
+}
+
+bool XMLTypes::IsXMLFragmentType(const LogicalType& type) {
+	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xmlfragment";
 }
 
 bool XMLTypes::XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
