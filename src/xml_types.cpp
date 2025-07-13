@@ -4,6 +4,10 @@
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/main/config.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/extension_util.hpp"
 
 namespace duckdb {
 
@@ -55,13 +59,18 @@ bool XMLTypes::XMLToJSONCast(Vector &source, Vector &result, idx_t count, CastPa
 }
 
 void XMLTypes::Register(DatabaseInstance &db) {
-	// For now, we'll skip creating a custom XML type and just use VARCHAR directly
-	// This simplifies the implementation while maintaining functionality
-	// The XML type validation will be done through the xml_valid() function
+	// For now, register XML as a simple type alias
+	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
 	
-	// Register cast functions
-	// These will be needed for proper type system integration
-	// For now, we'll rely on implicit VARCHAR casting
+	auto xml_type = LogicalType(LogicalType::VARCHAR);
+	xml_type.SetAlias("XML");
+	
+	// Register the XML type through the extension utility
+	ExtensionUtil::RegisterType(db, "XML", xml_type);
+	
+	// Register cast functions for XML type conversion
+	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
+	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
 }
 
 } // namespace duckdb

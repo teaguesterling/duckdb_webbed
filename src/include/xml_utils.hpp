@@ -53,11 +53,18 @@ struct XMLCharDeleter {
 	}
 };
 
+struct XMLDocDeleter {
+	void operator()(xmlDocPtr ptr) const {
+		if (ptr) xmlFreeDoc(ptr);
+	}
+};
+
 // Type aliases for DuckDB-style smart pointers
 using XMLSchemaParserPtr = std::unique_ptr<xmlSchemaParserCtxt, XMLSchemaParserDeleter>;
 using XMLSchemaPtr = std::unique_ptr<xmlSchema, XMLSchemaDeleter>;
 using XMLSchemaValidPtr = std::unique_ptr<xmlSchemaValidCtxt, XMLSchemaValidDeleter>;
 using XMLCharPtr = std::unique_ptr<xmlChar, XMLCharDeleter>;
+using XMLDocPtr = std::unique_ptr<xmlDoc, XMLDocDeleter>;
 
 // Structure to hold extracted XML element information
 struct XMLElement {
@@ -115,6 +122,7 @@ public:
 	// Conversion functions
 	static std::string XMLToJSON(const std::string& xml_str);
 	static std::string JSONToXML(const std::string& json_str);
+	static std::string ScalarToXML(const std::string& value, const std::string& node_name);
 	
 	// Internal helper functions
 	static XMLElement ProcessXMLNode(xmlNodePtr node);

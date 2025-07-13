@@ -1,5 +1,6 @@
 #include "xml_scalar_functions.hpp"
 #include "xml_utils.hpp"
+#include "xml_types.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -324,20 +325,57 @@ void XMLScalarFunctions::JSONToXMLFunction(DataChunk &args, ExpressionState &sta
 }
 
 void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	// This will be implemented later
-	throw NotImplementedException("value_to_xml not yet implemented");
+	auto &input_vector = args.data[0];
+	
+	// For now, simple VARCHAR input case
+	if (args.ColumnCount() == 1) {
+		// Single argument: to_xml(value) - use default node name
+		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t input) {
+			std::string input_str = input.GetString();
+			
+			// Check if input is already valid XML
+			if (XMLUtils::IsValidXML(input_str)) {
+				return StringVector::AddString(result, input_str);
+			} else {
+				// Convert scalar value to XML using libxml2
+				std::string xml_result = XMLUtils::ScalarToXML(input_str, "xml");
+				return StringVector::AddString(result, xml_result);
+			}
+		});
+	} else if (args.ColumnCount() == 2) {
+		// Two arguments: to_xml(value, node_name)
+		auto &node_name_vector = args.data[1];
+		BinaryExecutor::Execute<string_t, string_t, string_t>(
+			input_vector, node_name_vector, result, args.size(),
+			[&](string_t input, string_t node_name) {
+				std::string input_str = input.GetString();
+				std::string node_name_str = node_name.GetString();
+				
+				// Check if input is already valid XML
+				if (XMLUtils::IsValidXML(input_str)) {
+					return StringVector::AddString(result, input_str);
+				} else {
+					// Convert scalar value to XML with custom node name
+					std::string xml_result = XMLUtils::ScalarToXML(input_str, node_name_str);
+					return StringVector::AddString(result, xml_result);
+				}
+			});
+	}
 }
 
 void XMLScalarFunctions::Register(DatabaseInstance &db) {
-	// Register legacy xml function for compatibility
-	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, 
-		[](DataChunk &args, ExpressionState &state, Vector &result) {
-			auto &name_vector = args.data[0];
-			UnaryExecutor::Execute<string_t, string_t>(name_vector, result, args.size(), [&](string_t name) {
-				return StringVector::AddString(result, "Xml " + name.GetString() + " 🐥");
-			});
-		});
+	// Register xml function (same as to_xml for now) - using VARCHAR for now, will enhance type system later
+	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
 	ExtensionUtil::RegisterFunction(db, xml_function);
+	
+	// Register to_xml function (single argument)
+	auto to_xml_function = ScalarFunction("to_xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
+	ExtensionUtil::RegisterFunction(db, to_xml_function);
+	
+	// Register to_xml function (two arguments: value, node_name)
+	auto to_xml_with_name_function = ScalarFunction("to_xml", 
+		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
+	ExtensionUtil::RegisterFunction(db, to_xml_with_name_function);
 	
 	// Register xml_libxml2_version function 
 	auto xml_libxml2_version_function = ScalarFunction("xml_libxml2_version", {LogicalType::VARCHAR}, LogicalType::VARCHAR,

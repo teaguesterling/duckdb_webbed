@@ -668,4 +668,40 @@ std::string XMLUtils::JSONToXML(const std::string& json_str) {
 	return result;
 }
 
+std::string XMLUtils::ScalarToXML(const std::string& value, const std::string& node_name) {
+	// Use RAII-safe libxml2 document creation
+	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
+	if (!doc) {
+		return "<" + node_name + "></" + node_name + ">";
+	}
+	
+	// Create root node
+	xmlNodePtr root_node = xmlNewNode(nullptr, BAD_CAST node_name.c_str());
+	if (!root_node) {
+		return "<" + node_name + "></" + node_name + ">";
+	}
+	
+	xmlDocSetRootElement(doc.get(), root_node);
+	
+	// Add text content (libxml2 handles XML escaping automatically)
+	xmlNodePtr text_node = xmlNewText(BAD_CAST value.c_str());
+	if (text_node) {
+		xmlAddChild(root_node, text_node);
+	}
+	
+	// Convert to string using RAII-safe memory management
+	xmlChar* xml_string = nullptr;
+	int size = 0;
+	xmlDocDumpMemory(doc.get(), &xml_string, &size);
+	
+	// Use XMLCharPtr for automatic cleanup
+	XMLCharPtr xml_ptr(xml_string);
+	
+	if (xml_ptr) {
+		return std::string(reinterpret_cast<const char*>(xml_ptr.get()));
+	} else {
+		return "<" + node_name + ">" + value + "</" + node_name + ">";
+	}
+}
+
 } // namespace duckdb
