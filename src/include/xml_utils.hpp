@@ -124,6 +124,10 @@ public:
 	static std::string JSONToXML(const std::string& json_str);
 	static std::string ScalarToXML(const std::string& value, const std::string& node_name);
 	
+	// Complex type conversion functions for to_xml()
+	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name);
+	static void ConvertStructToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name);
+	
 	// Internal helper functions
 	static XMLElement ProcessXMLNode(xmlNodePtr node);
 	static std::string GetNodePath(xmlNodePtr node);

@@ -18,6 +18,7 @@ private:
 	static bool XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
 	static bool VarcharToXMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
 	static bool XMLToJSONCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
+	static bool JSONToXMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
 };
 
 } // namespace duckdb

@@ -326,40 +326,63 @@ void XMLScalarFunctions::JSONToXMLFunction(DataChunk &args, ExpressionState &sta
 
 void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &input_vector = args.data[0];
+	auto &input_type = input_vector.GetType();
 	
-	// For now, simple VARCHAR input case
-	if (args.ColumnCount() == 1) {
-		// Single argument: to_xml(value) - use default node name
+	// Get node name (default "xml" if not provided)
+	std::string default_node_name = "xml";
+	if (args.ColumnCount() == 2) {
+		// Node name provided as second argument - for now, assume it's constant
+		// TODO: Handle variable node names per row
+		auto &node_name_vector = args.data[1];
+		if (node_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+			auto node_name_data = ConstantVector::GetData<string_t>(node_name_vector);
+			if (!ConstantVector::IsNull(node_name_vector)) {
+				default_node_name = node_name_data->GetString();
+			}
+		}
+	}
+	
+	// Apply our type hierarchy
+	if (XMLTypes::IsXMLFragmentType(input_type)) {
+		// XMLFragment → Insert verbatim
 		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t input) {
-			std::string input_str = input.GetString();
+			return StringVector::AddString(result, input.GetString());
+		});
+	} else if (XMLTypes::IsXMLType(input_type)) {
+		// XML → Insert verbatim  
+		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t input) {
+			return StringVector::AddString(result, input.GetString());
+		});
+	} else if (input_type.id() == LogicalTypeId::LIST) {
+		// LIST → Recursive conversion
+		XMLUtils::ConvertListToXML(input_vector, result, args.size(), default_node_name);
+	} else if (input_type.id() == LogicalTypeId::STRUCT) {
+		// STRUCT → Recursive conversion  
+		XMLUtils::ConvertStructToXML(input_vector, result, args.size(), default_node_name);
+	} else {
+		// STRING/Other → Convert to string representation, then to XML
+		for (idx_t i = 0; i < args.size(); i++) {
+			Value input_value = input_vector.GetValue(i);
+			std::string input_str;
 			
-			// Check if input is already valid XML
-			if (XMLUtils::IsValidXML(input_str)) {
-				return StringVector::AddString(result, input_str);
+			if (input_value.IsNull()) {
+				input_str = "";
+			} else if (input_type.id() == LogicalTypeId::VARCHAR) {
+				input_str = input_value.GetValue<string>();
+			} else {
+				// Convert any other type to string representation
+				input_str = input_value.ToString();
+			}
+			
+			// Check if input is already valid XML (only for string types)
+			if (input_type.id() == LogicalTypeId::VARCHAR && XMLUtils::IsValidXML(input_str)) {
+				result.SetValue(i, Value(input_str));
 			} else {
 				// Convert scalar value to XML using libxml2
-				std::string xml_result = XMLUtils::ScalarToXML(input_str, "xml");
-				return StringVector::AddString(result, xml_result);
+				std::string xml_result = XMLUtils::ScalarToXML(input_str, default_node_name);
+				result.SetValue(i, Value(xml_result));
 			}
-		});
-	} else if (args.ColumnCount() == 2) {
-		// Two arguments: to_xml(value, node_name)
-		auto &node_name_vector = args.data[1];
-		BinaryExecutor::Execute<string_t, string_t, string_t>(
-			input_vector, node_name_vector, result, args.size(),
-			[&](string_t input, string_t node_name) {
-				std::string input_str = input.GetString();
-				std::string node_name_str = node_name.GetString();
-				
-				// Check if input is already valid XML
-				if (XMLUtils::IsValidXML(input_str)) {
-					return StringVector::AddString(result, input_str);
-				} else {
-					// Convert scalar value to XML with custom node name
-					std::string xml_result = XMLUtils::ScalarToXML(input_str, node_name_str);
-					return StringVector::AddString(result, xml_result);
-				}
-			});
+		}
 	}
 }
 
@@ -368,14 +391,23 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
 	ExtensionUtil::RegisterFunction(db, xml_function);
 	
-	// Register to_xml function (single argument)
+	// Register to_xml function (single argument) - VARCHAR variant
 	auto to_xml_function = ScalarFunction("to_xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
 	ExtensionUtil::RegisterFunction(db, to_xml_function);
 	
-	// Register to_xml function (two arguments: value, node_name)
+	// Register to_xml function (single argument) - ANY type variant
+	auto to_xml_any_function = ScalarFunction("to_xml", {LogicalType::ANY}, LogicalType::VARCHAR, ValueToXMLFunction);
+	ExtensionUtil::RegisterFunction(db, to_xml_any_function);
+	
+	// Register to_xml function (two arguments: value, node_name) - VARCHAR variant
 	auto to_xml_with_name_function = ScalarFunction("to_xml", 
 		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
 	ExtensionUtil::RegisterFunction(db, to_xml_with_name_function);
+	
+	// Register to_xml function (two arguments: value, node_name) - ANY type variant
+	auto to_xml_any_with_name_function = ScalarFunction("to_xml", 
+		{LogicalType::ANY, LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
+	ExtensionUtil::RegisterFunction(db, to_xml_any_with_name_function);
 	
 	// Register xml_libxml2_version function 
 	auto xml_libxml2_version_function = ScalarFunction("xml_libxml2_version", {LogicalType::VARCHAR}, LogicalType::VARCHAR,

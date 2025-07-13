@@ -1,4 +1,5 @@
 #include "xml_types.hpp"
+#include "xml_utils.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/type_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
@@ -58,6 +59,16 @@ bool XMLTypes::XMLToJSONCast(Vector &source, Vector &result, idx_t count, CastPa
 	throw NotImplementedException("XML to JSON conversion not yet implemented");
 }
 
+bool XMLTypes::JSONToXMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// Convert JSON to XML using our existing JSONToXML utility
+	UnaryExecutor::Execute<string_t, string_t>(source, result, count, [&](string_t json_input) {
+		std::string json_str = json_input.GetString();
+		std::string xml_result = XMLUtils::JSONToXML(json_str);
+		return StringVector::AddString(result, xml_result);
+	});
+	return true;
+}
+
 void XMLTypes::Register(DatabaseInstance &db) {
 	// For now, register XML as a simple type alias
 	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
@@ -71,6 +82,8 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	// Register cast functions for XML type conversion
 	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	// TODO: Register JSON to XML cast when JSON type is available in this DuckDB version
+	// ExtensionUtil::RegisterCastFunction(db, LogicalType(LogicalTypeId::JSON), xml_type, JSONToXMLCast);
 }
 
 } // namespace duckdb

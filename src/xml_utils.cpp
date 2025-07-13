@@ -704,4 +704,110 @@ std::string XMLUtils::ScalarToXML(const std::string& value, const std::string& n
 	}
 }
 
+void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name) {
+	auto list_suffix = "_list";
+	auto element_name = node_name;
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto list_value = FlatVector::GetData<list_entry_t>(input_vector)[i];
+		auto &child_vector = ListVector::GetEntry(input_vector);
+		auto child_type = ListType::GetChildType(input_vector.GetType());
+		
+		XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
+		if (!doc) {
+			result.SetValue(i, Value("<" + node_name + list_suffix + "></" + node_name + list_suffix + ">"));
+			continue;
+		}
+		
+		// Create root container element 
+		xmlNodePtr root_node = xmlNewNode(nullptr, BAD_CAST (node_name + list_suffix).c_str());
+		xmlDocSetRootElement(doc.get(), root_node);
+		
+		// Process each list element
+		for (idx_t j = 0; j < list_value.length; j++) {
+			idx_t child_idx = list_value.offset + j;
+			
+			// Create element node for each list item
+			xmlNodePtr item_node = xmlNewNode(nullptr, BAD_CAST element_name.c_str());
+			xmlAddChild(root_node, item_node);
+			
+			// Convert the child value based on its type
+			if (child_type.id() == LogicalTypeId::VARCHAR) {
+				auto child_data = FlatVector::GetData<string_t>(child_vector);
+				std::string child_str = child_data[child_idx].GetString();
+				xmlNodePtr text_node = xmlNewText(BAD_CAST child_str.c_str());
+				if (text_node) xmlAddChild(item_node, text_node);
+			} else {
+				// For other types, convert to string representation
+				Value child_value = child_vector.GetValue(child_idx);
+				std::string child_str = child_value.ToString();
+				xmlNodePtr text_node = xmlNewText(BAD_CAST child_str.c_str());
+				if (text_node) xmlAddChild(item_node, text_node);
+			}
+		}
+		
+		// Convert document to string
+		xmlChar* xml_string = nullptr;
+		int size = 0;
+		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		
+		XMLCharPtr xml_ptr(xml_string);
+		std::string xml_result = xml_ptr ? 
+			std::string(reinterpret_cast<const char*>(xml_ptr.get())) :
+			"<" + node_name + list_suffix + "></" + node_name + list_suffix + ">";
+		
+		result.SetValue(i, Value(xml_result));
+	}
+}
+
+void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name) {
+	auto struct_type = input_vector.GetType();
+	auto &child_types = StructType::GetChildTypes(struct_type);
+	
+	for (idx_t i = 0; i < count; i++) {
+		XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
+		if (!doc) {
+			result.SetValue(i, Value("<" + node_name + "></" + node_name + ">"));
+			continue;
+		}
+		
+		// Create root element
+		xmlNodePtr root_node = xmlNewNode(nullptr, BAD_CAST node_name.c_str());
+		xmlDocSetRootElement(doc.get(), root_node);
+		
+		// Process each struct field
+		for (idx_t field_idx = 0; field_idx < child_types.size(); field_idx++) {
+			auto &field_name = child_types[field_idx].first;
+			auto &field_type = child_types[field_idx].second;
+			
+			// Get the child vector for this field
+			auto &field_vector = StructVector::GetEntries(input_vector)[field_idx];
+			
+			// Create field element
+			xmlNodePtr field_node = xmlNewNode(nullptr, BAD_CAST field_name.c_str());
+			xmlAddChild(root_node, field_node);
+			
+			// Get field value and convert to string
+			Value field_value = field_vector->GetValue(i);
+			if (!field_value.IsNull()) {
+				std::string field_str = field_value.ToString();
+				xmlNodePtr text_node = xmlNewText(BAD_CAST field_str.c_str());
+				if (text_node) xmlAddChild(field_node, text_node);
+			}
+		}
+		
+		// Convert document to string
+		xmlChar* xml_string = nullptr;
+		int size = 0;
+		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		
+		XMLCharPtr xml_ptr(xml_string);
+		std::string xml_result = xml_ptr ? 
+			std::string(reinterpret_cast<const char*>(xml_ptr.get())) :
+			"<" + node_name + "></" + node_name + ">";
+		
+		result.SetValue(i, Value(xml_result));
+	}
+}
+
 } // namespace duckdb
