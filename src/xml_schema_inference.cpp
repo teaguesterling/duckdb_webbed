@@ -846,7 +846,7 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 		child = child->next;
 	}
 	
-	return Value::LIST(list_type, list_values);
+	return Value::LIST(element_type, list_values);
 }
 
 } // namespace duckdb
