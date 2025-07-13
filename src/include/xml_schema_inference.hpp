@@ -24,7 +24,7 @@ struct XMLSchemaOptions {
 	// Schema inference controls
 	std::string root_element;           // Extract only children of specified root (empty = auto-detect)
 	bool auto_detect = true;            // Automatic type detection
-	int32_t schema_depth = 3;           // How deep to analyze (1-4)
+	int32_t max_depth = -1;             // Maximum analysis depth (-1 = unlimited)
 	int32_t sample_size = 50;           // Number of elements to sample for inference
 	
 	// Attribute handling

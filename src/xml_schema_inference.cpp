@@ -217,7 +217,12 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std::string, ElementPattern>& patterns,
                                         const XMLSchemaOptions& options, int32_t current_depth) {
-	if (!node || node->type != XML_ELEMENT_NODE || current_depth >= options.schema_depth) {
+	if (!node || node->type != XML_ELEMENT_NODE) {
+		return;
+	}
+	
+	// Optional depth limiting for performance (unlimited by default)
+	if (options.max_depth >= 0 && current_depth >= options.max_depth) {
 		return;
 	}
 	

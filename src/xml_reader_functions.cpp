@@ -177,8 +177,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.include_attributes = kv.second.GetValue<bool>();
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
-		} else if (kv.first == "schema_depth") {
-			schema_options.schema_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "max_depth") {
+			schema_options.max_depth = kv.second.GetValue<int32_t>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -414,7 +414,7 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_xml_function.named_parameters["root_element"] = LogicalType::VARCHAR;
 	read_xml_function.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
 	read_xml_function.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_xml_function.named_parameters["schema_depth"] = LogicalType::INTEGER;
+	read_xml_function.named_parameters["max_depth"] = LogicalType::INTEGER;
 	
 	// Explicit schema specification (like JSON extension)
 	read_xml_function.named_parameters["columns"] = LogicalType::ANY;
