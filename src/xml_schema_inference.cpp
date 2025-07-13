@@ -44,42 +44,35 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string& xm
 		LogicalType column_type;
 		bool should_create_column = false;
 		
-		// Determine the appropriate type using 7-tier priority system
+		// Determine the appropriate type using 4-tier priority system
 		XMLTier tier = pattern.GetTier();
 		
 		switch (tier) {
-			case XMLTier::UNKNOWN: // Unable to classify
-				// Skip unknown patterns - they shouldn't create columns
-				should_create_column = false;
-				break;
-				
-			case XMLTier::SCALAR: // Homogeneous conforming scalar
-				column_type = InferTypeFromSamples(pattern.sample_values, options);
+			case XMLTier::HOMOGENEOUS_CONFORMING:
+				// Can map to clean DuckDB types (SCALAR, LIST, STRUCT)
+				if (pattern.is_scalar) {
+					column_type = InferTypeFromSamples(pattern.sample_values, options);
+				} else {
+					column_type = InferNestedType(pattern, pattern_map, options);
+				}
 				should_create_column = true;
 				break;
 				
-			case XMLTier::LIST: // Homogeneous conforming children (LIST)
+			case XMLTier::HETEROGENEOUS_CONFORMING:
+				// Extractable but inconsistent structure - try nested types first
 				column_type = InferNestedType(pattern, pattern_map, options);
 				should_create_column = true;
 				break;
 				
-			case XMLTier::STRUCT: // Heterogeneous conforming children (STRUCT)
-				column_type = InferNestedType(pattern, pattern_map, options);
-				should_create_column = true;
-				break;
-				
-			case XMLTier::XML_ARRAY: // Well-formed XML elements (XML[])
-				column_type = XMLTypes::XMLArrayType();
-				should_create_column = true;
-				break;
-				
-			case XMLTier::XML_FRAGMENT: // Extractable as fragment (XMLFragment)
+			case XMLTier::EXTRACTABLE_AS_FRAGMENT:
+				// Can unwrap as XMLFragment (content without parent wrapper)
 				column_type = XMLTypes::XMLFragmentType();
 				should_create_column = true;
 				break;
 				
-			case XMLTier::XML: // Fall back to XML
+			case XMLTier::FALLBACK_TO_XML:
 			default:
+				// Must preserve full XML context
 				column_type = XMLTypes::XMLType();
 				should_create_column = true;
 				break;
@@ -159,8 +152,9 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 			pattern.all_children_conforming = true;
 			
 			// Check child attributes and consistency for proper tier detection
-			XMLTier first_child_tier = XMLTier::UNKNOWN;
+			XMLTier first_child_tier = XMLTier::FALLBACK_TO_XML; // Use as invalid sentinel
 			bool children_have_consistent_tiers = true;
+			bool first_child_set = false;
 			
 			for (const auto& child_name_count : pattern.child_element_counts) {
 				const auto& child_name = child_name_count.first;
@@ -174,16 +168,13 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 						pattern.children_have_attributes = true;
 					}
 					
-					// Check consistency: for LIST (Tier 2), all children must have same tier
+					// Check consistency: for homogeneous lists, all children must have same tier
 					XMLTier child_tier = child_pattern.GetTier();
 					
-					if (child_tier == XMLTier::UNKNOWN) {
-						// Unknown children break consistency
-						pattern.all_children_conforming = false;
-						children_have_consistent_tiers = false;
-					} else if (first_child_tier == XMLTier::UNKNOWN) {
-						// First valid child - set the expected tier
+					if (!first_child_set) {
+						// First child - set the expected tier
 						first_child_tier = child_tier;
+						first_child_set = true;
 					} else if (pattern.all_children_same_name && child_tier != first_child_tier) {
 						// For LIST candidates, children must have identical tiers
 						children_have_consistent_tiers = false;
@@ -382,46 +373,28 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern& pattern,
 	
 	XMLTier tier = pattern.GetTier();
 	
-	if (tier == XMLTier::LIST) {
-		// Tier 2: Homogeneous conforming children (LIST)
-		// We know there's only one type of child element
+	// Check if this is a homogeneous list (same-name children)
+	if (pattern.all_children_same_name && pattern.child_element_counts.size() == 1) {
+		// Homogeneous list - determine element type
 		auto child_name = pattern.child_element_counts.begin()->first;
 		auto child_pattern_iter = all_patterns.find(child_name);
 		
 		if (child_pattern_iter != all_patterns.end()) {
 			const auto& child_pattern = child_pattern_iter->second;
 			
-			// Recursively determine child type using immediate conformity
+			// Recursively determine child type
 			LogicalType child_type;
-			XMLTier child_tier = child_pattern.GetTier();
-			
-			switch (child_tier) {
-				case XMLTier::SCALAR: // Scalar child
-					child_type = InferTypeFromSamples(child_pattern.sample_values, options);
-					break;
-				case XMLTier::LIST: // LIST child
-				case XMLTier::STRUCT: // STRUCT child
-					child_type = InferNestedType(child_pattern, all_patterns, options);
-					break;
-				case XMLTier::XML_ARRAY: // XML[] child (nested arrays)
-					child_type = XMLTypes::XMLArrayType();
-					break;
-				case XMLTier::XML_FRAGMENT: // XMLFragment child
-					child_type = XMLTypes::XMLFragmentType();
-					break;
-				case XMLTier::XML: // XML child
-					child_type = XMLTypes::XMLType();
-					break;
-				case XMLTier::UNKNOWN: // Unknown child
-				default:
-					child_type = XMLTypes::XMLType(); // Fallback to XML for safety
-					break;
+			if (child_pattern.is_scalar) {
+				child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+			} else {
+				// Recursive nested type
+				child_type = InferNestedType(child_pattern, all_patterns, options);
 			}
 			
 			return LogicalType::LIST(child_type);
 		}
-	} else if (tier == XMLTier::STRUCT) {
-		// Tier 3: Heterogeneous conforming children (STRUCT)
+	} else if (pattern.all_children_different_name) {
+		// Heterogeneous struct - different-name children
 		child_list_t<LogicalType> struct_fields;
 		
 		for (const auto& child_pair : pattern.child_element_counts) {
@@ -431,31 +404,13 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern& pattern,
 			if (child_pattern_iter != all_patterns.end()) {
 				const auto& child_pattern = child_pattern_iter->second;
 				
-				// Recursively determine child type using immediate conformity
+				// Recursively determine child type
 				LogicalType child_type;
-				XMLTier child_tier = child_pattern.GetTier();
-				
-				switch (child_tier) {
-					case XMLTier::SCALAR: // Scalar child
-						child_type = InferTypeFromSamples(child_pattern.sample_values, options);
-						break;
-					case XMLTier::LIST: // LIST child
-					case XMLTier::STRUCT: // STRUCT child
-						child_type = InferNestedType(child_pattern, all_patterns, options);
-						break;
-					case XMLTier::XML_ARRAY: // XML[] child
-						child_type = XMLTypes::XMLArrayType();
-						break;
-					case XMLTier::XML_FRAGMENT: // XMLFragment child
-						child_type = XMLTypes::XMLFragmentType();
-						break;
-					case XMLTier::XML: // XML child
-						child_type = XMLTypes::XMLType();
-						break;
-					case XMLTier::UNKNOWN: // Unknown child
-					default:
-						child_type = XMLTypes::XMLType(); // Fallback to XML for safety
-						break;
+				if (child_pattern.is_scalar) {
+					child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+				} else {
+					// Recursive nested type
+					child_type = InferNestedType(child_pattern, all_patterns, options);
 				}
 				
 				struct_fields.push_back(make_pair(child_name, child_type));

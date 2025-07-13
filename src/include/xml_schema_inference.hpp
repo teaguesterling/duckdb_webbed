@@ -8,15 +8,12 @@
 
 namespace duckdb {
 
-// 7-tier priority system for XML element classification
+// 4-tier priority system for XML element classification
 enum class XMLTier {
-	UNKNOWN = 0,       // Unable to classify or invalid pattern
-	SCALAR = 1,        // Homogeneous conforming scalar (only text content, no attributes)
-	LIST = 2,          // Homogeneous conforming children (repeated same-name children, no parent attributes)  
-	STRUCT = 3,        // Heterogeneous conforming children (different-name children, all conforming)
-	XML_ARRAY = 4,     // Well-formed XML elements (heterogeneous but extractable as XML[], no parent attributes)
-	XML_FRAGMENT = 5,  // Extractable as fragment (parent can be removed, no parent attributes)
-	XML = 6            // Fall back to XML (default case, preserves all context)
+	HOMOGENEOUS_CONFORMING = 1,    // Can be mapped to clean DuckDB types (SCALAR, LIST, STRUCT with consistent structure)
+	HETEROGENEOUS_CONFORMING = 2,  // Inconsistent but extractable structure (STRUCT with mixed types, mixed arrays)
+	EXTRACTABLE_AS_FRAGMENT = 3,   // Can be unwrapped as XMLFragment (no parent attributes, content-focused)
+	FALLBACK_TO_XML = 4            // Must preserve full XML context (has parent attributes or complex nesting)
 };
 
 // Configuration options for schema inference
@@ -99,28 +96,36 @@ struct ElementPattern {
 		return has_children && !has_text && child_element_counts.size() > 0;
 	}
 	
-	// 7-tier priority system detection
+	// 4-tier priority system detection
 	XMLTier GetTier() const {
-		// Tier 0: Unknown/invalid patterns
-		if (name.empty()) return XMLTier::UNKNOWN;
+		// Tier 1: Homogeneous conforming - can map to clean DuckDB types
+		if (is_scalar && !has_attributes) {
+			// Pure scalar content (VARCHAR, INTEGER, etc.)
+			return XMLTier::HOMOGENEOUS_CONFORMING;
+		}
+		if (all_children_same_name && !has_attributes && all_children_conforming) {
+			// Homogeneous array of same type (LIST<T>)
+			return XMLTier::HOMOGENEOUS_CONFORMING;
+		}
+		if (all_children_different_name && all_children_conforming && !has_attributes) {
+			// Consistent struct with predictable schema (STRUCT)
+			return XMLTier::HOMOGENEOUS_CONFORMING;
+		}
 		
-		// Tier 1: Homogeneous conforming scalar
-		if (is_scalar && !has_attributes) return XMLTier::SCALAR;
+		// Tier 2: Heterogeneous conforming - extractable but inconsistent
+		if (has_children && all_children_conforming) {
+			// Mixed structure but children are individually conforming
+			return XMLTier::HETEROGENEOUS_CONFORMING;
+		}
 		
-		// Tier 2: Homogeneous conforming children (LIST)
-		if (all_children_same_name && !has_attributes && all_children_conforming) return XMLTier::LIST;
+		// Tier 3: Extractable as fragment - can unwrap without parent context
+		if (!has_attributes) {
+			// No parent attributes means we can safely unwrap content
+			return XMLTier::EXTRACTABLE_AS_FRAGMENT;
+		}
 		
-		// Tier 3: Heterogeneous conforming children (STRUCT)
-		if (all_children_different_name && all_children_conforming) return XMLTier::STRUCT;
-		
-		// Tier 4: Well-formed XML elements (XML[])
-		if (!has_attributes && has_children) return XMLTier::XML_ARRAY;
-		
-		// Tier 5: Extractable as fragment (XMLFragment)
-		if (!has_attributes) return XMLTier::XML_FRAGMENT;
-		
-		// Tier 6: Fall back to XML
-		return XMLTier::XML;
+		// Tier 4: Fall back to XML - must preserve full context
+		return XMLTier::FALLBACK_TO_XML;
 	}
 };
 
