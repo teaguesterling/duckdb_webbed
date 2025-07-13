@@ -1,0 +1,66 @@
+# name: test/sql/xml_type_casting.test
+# description: Test XML type registration and casting functionality
+# group: [xml]
+
+statement ok
+LOAD xml;
+
+# Test XML type casting with simple XML
+query I
+SELECT '<h1>Hi</h1>'::XML AS xml_cast_result;
+----
+<h1>Hi</h1>
+
+# Test XML type casting with more complex XML
+query I
+SELECT '<root><child>content</child></root>'::XML AS complex_xml_cast;
+----
+<root><child>content</child></root>
+
+# Test XML type casting with attributes
+query I
+SELECT '<element attr="value">text</element>'::XML AS xml_with_attrs;
+----
+<element attr="value">text</element>
+
+# Test XML type casting with namespace
+query I
+SELECT '<ns:element xmlns:ns="http://example.com">content</ns:element>'::XML AS xml_with_namespace;
+----
+<ns:element xmlns:ns="http://example.com">content</ns:element>
+
+# Test XML type casting with CDATA
+query I
+SELECT '<![CDATA[<script>alert("test")</script>]]>'::XML AS xml_with_cdata;
+----
+<![CDATA[<script>alert("test")</script>]]>
+
+# Test XML type casting with empty element
+query I
+SELECT '<empty/>'::XML AS empty_element;
+----
+<empty/>
+
+# Test XML type casting with self-closing element
+query I
+SELECT '<br/>'::XML AS self_closing;
+----
+<br/>
+
+# Test XML type casting with whitespace preservation
+query I
+SELECT '  <spaced>  content  </spaced>  '::XML AS spaced_xml;
+----
+  <spaced>  content  </spaced>  
+
+# Test that result type is actually XML type
+query T
+SELECT typeof('<test>value</test>'::XML);
+----
+XML
+
+# Test VARCHAR to XML cast function works
+query I
+SELECT CAST('<test>cast</test>' AS XML) AS varchar_to_xml_cast;
+----
+<test>cast</test>

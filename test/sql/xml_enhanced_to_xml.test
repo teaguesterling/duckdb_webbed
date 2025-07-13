@@ -1,0 +1,144 @@
+# name: test/sql/xml_enhanced_to_xml.test
+# description: Test enhanced to_xml() function with complex type support
+# group: [xml]
+
+statement ok
+LOAD xml;
+
+# Test 1: Basic scalar conversion
+query I
+SELECT to_xml('Hello World') AS scalar_conversion;
+----
+<?xml version="1.0"?>\n<xml>Hello World</xml>\n
+
+# Test 2: Scalar conversion with custom node name
+query I
+SELECT to_xml('Hello World', 'greeting') AS custom_node_name;
+----
+<?xml version="1.0"?>
+<greeting>Hello World</greeting>
+
+# Test 3: Integer conversion
+query I
+SELECT to_xml(42) AS integer_conversion;
+----
+<?xml version="1.0"?>
+<xml>42</xml>
+
+# Test 4: Boolean conversion
+query I
+SELECT to_xml(true) AS boolean_conversion;
+----
+<?xml version="1.0"?>
+<xml>true</xml>
+
+# Test 5: Decimal conversion
+query I
+SELECT to_xml(3.14159) AS decimal_conversion;
+----
+<?xml version="1.0"?>
+<xml>3.14159</xml>
+
+# Test 6: List of strings conversion
+query I
+SELECT to_xml(['ABC', 'DEF', 'GHI']) AS string_list_conversion;
+----
+<?xml version="1.0"?>
+<xml_list><xml>ABC</xml><xml>DEF</xml><xml>GHI</xml></xml_list>
+
+# Test 7: List of integers conversion
+query I
+SELECT to_xml([1, 2, 3, 4]) AS integer_list_conversion;
+----
+<?xml version="1.0"?>
+<xml_list><xml>1</xml><xml>2</xml><xml>3</xml><xml>4</xml></xml_list>
+
+# Test 8: List with custom node name
+query I
+SELECT to_xml(['apple', 'banana'], 'fruit') AS custom_list_conversion;
+----
+<?xml version="1.0"?>
+<fruit_list><fruit>apple</fruit><fruit>banana</fruit></fruit_list>
+
+# Test 9: Empty list conversion
+query I
+SELECT to_xml([]) AS empty_list_conversion;
+----
+<?xml version="1.0"?>
+<xml_list></xml_list>
+
+# Test 10: Simple struct conversion
+query I
+SELECT to_xml({'name': 'John', 'age': 30}) AS simple_struct_conversion;
+----
+<?xml version="1.0"?>
+<xml><name>John</name><age>30</age></xml>
+
+# Test 11: Struct with different data types
+query I
+SELECT to_xml({'id': 123, 'active': true, 'score': 95.5}) AS mixed_struct_conversion;
+----
+<?xml version="1.0"?>
+<xml><id>123</id><active>true</active><score>95.5</score></xml>
+
+# Test 12: Struct with custom node name
+query I
+SELECT to_xml({'name': 'Alice', 'department': 'Engineering'}, 'employee') AS custom_struct_conversion;
+----
+<?xml version="1.0"?>
+<employee><name>Alice</name><department>Engineering</department></employee>
+
+# Test 13: Struct with null values
+query I
+SELECT to_xml({'name': 'Bob', 'middle_name': NULL, 'age': 25}) AS struct_with_nulls;
+----
+<?xml version="1.0"?>
+<xml><name>Bob</name><middle_name></middle_name><age>25</age></xml>
+
+# Test 14: Single element list
+query I
+SELECT to_xml(['single']) AS single_element_list;
+----
+<?xml version="1.0"?>
+<xml_list><xml>single</xml></xml_list>
+
+# Test 15: Single field struct
+query I
+SELECT to_xml({'only_field': 'value'}) AS single_field_struct;
+----
+<?xml version="1.0"?>
+<xml><only_field>value</only_field></xml>
+
+# Test 16: Special characters in string values (should be escaped)
+query I
+SELECT to_xml('Text with <brackets> & "quotes"') AS special_chars_conversion;
+----
+<?xml version="1.0"?>
+<xml>Text with &lt;brackets&gt; &amp; &quot;quotes&quot;</xml>
+
+# Test 17: Empty string conversion
+query I
+SELECT to_xml('') AS empty_string_conversion;
+----
+<?xml version="1.0"?>
+<xml></xml>
+
+# Test 18: Valid XML input (should remain as-is for strings)
+query I
+SELECT to_xml('<already>valid</already>') AS valid_xml_input;
+----
+<already>valid</already>
+
+# Test 19: List with special characters
+query I
+SELECT to_xml(['<tag>', '&entity;', '"quotes"']) AS list_special_chars;
+----
+<?xml version="1.0"?>
+<xml_list><xml>&lt;tag&gt;</xml><xml>&amp;entity;</xml><xml>&quot;quotes&quot;</xml></xml_list>
+
+# Test 20: Struct with special characters in field values
+query I
+SELECT to_xml({'message': 'Hello & welcome!', 'code': '<test>'}) AS struct_special_chars;
+----
+<?xml version="1.0"?>
+<xml><message>Hello &amp; welcome!</message><code>&lt;test&gt;</code></xml>

@@ -1,0 +1,71 @@
+# name: test/sql/xml_function_fixes.test
+# description: Test that xml() function no longer returns toy output and works properly
+# group: [xml]
+
+statement ok
+LOAD xml;
+
+# Test 1: Verify xml() function no longer returns toy "Xml ... 🐥" output
+query I
+SELECT xml('test') AS xml_function_test;
+----
+<?xml version="1.0"?>\n<xml>test</xml>\n
+
+# Test 2: xml() function with different input
+query I
+SELECT xml('Hello World') AS xml_hello_world;
+----
+<?xml version="1.0"?>
+<xml>Hello World</xml>
+
+# Test 3: xml() function with special characters
+query I
+SELECT xml('Text with <brackets> & "quotes"') AS xml_special_chars;
+----
+<?xml version="1.0"?>
+<xml>Text with &lt;brackets&gt; &amp; &quot;quotes&quot;</xml>
+
+# Test 4: xml() function with empty string
+query I
+SELECT xml('') AS xml_empty_string;
+----
+<?xml version="1.0"?>
+<xml></xml>
+
+# Test 5: xml() function with already valid XML (should convert to XML element)
+query I
+SELECT xml('<test>content</test>') AS xml_valid_input;
+----
+<test>content</test>
+
+# Test 6: Verify xml() and to_xml() behave identically for basic inputs
+query I
+SELECT xml('same') = to_xml('same') AS functions_match;
+----
+true
+
+# Test 7: xml() function with numeric input (converted via string representation)
+query I
+SELECT xml('123') AS xml_numeric_string;
+----
+<?xml version="1.0"?>
+<xml>123</xml>
+
+# Test 8: xml() function should not contain any emoji or toy output
+query I
+SELECT xml('test input') NOT LIKE '%🐥%' AND xml('test input') NOT LIKE '%Xml %' AS no_toy_output;
+----
+true
+
+# Test 9: xml() function produces valid XML structure
+query I
+SELECT xml_valid(xml('test content')) AS xml_function_produces_valid_xml;
+----
+true
+
+# Test 10: xml() function with multi-word input
+query I
+SELECT xml('multiple words here') AS xml_multiword;
+----
+<?xml version="1.0"?>
+<xml>multiple words here</xml>

@@ -1,0 +1,54 @@
+# name: test/sql/xml_enhanced_simple.test
+# description: Simple tests for enhanced XML functionality
+# group: [xml]
+
+statement ok
+LOAD xml;
+
+# Test XML type casting works
+statement ok
+SELECT '<h1>Hi</h1>'::XML;
+
+# Test xml() function doesn't return toy output
+query T nosort
+SELECT xml('test') NOT LIKE '%🐥%' AND xml('test') NOT LIKE '%Xml %' AS no_toy_output;
+----
+true
+
+# Test to_xml() basic functionality
+query T nosort
+SELECT to_xml('Hello') LIKE '%<xml>Hello</xml>%' AS to_xml_works;
+----
+true
+
+# Test to_xml() with list works
+statement ok
+SELECT to_xml(['A', 'B']);
+
+# Test to_xml() with struct works  
+statement ok
+SELECT to_xml({'name': 'John', 'age': 30});
+
+# Test to_xml() with custom node name
+query T nosort
+SELECT to_xml('Hello', 'greeting') LIKE '%<greeting>%' AS custom_node_works;
+----
+true
+
+# Test typeof returns XML for XML cast
+query T nosort
+SELECT typeof('<test>value</test>'::XML) = 'XML' AS correct_xml_type;
+----
+true
+
+# Test list contains expected elements
+query T nosort
+SELECT to_xml(['A', 'B']) LIKE '%<xml>A</xml>%' AND to_xml(['A', 'B']) LIKE '%<xml>B</xml>%' AS list_elements_present;
+----
+true
+
+# Test struct contains expected fields
+query T nosort
+SELECT to_xml({'name': 'John'}) LIKE '%<name>John</name>%' AS struct_field_present;
+----
+true
