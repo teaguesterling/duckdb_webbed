@@ -19,12 +19,20 @@ LogicalType XMLTypes::XMLFragmentType() {
 	return xml_frag_type;
 }
 
+LogicalType XMLTypes::XMLArrayType() {
+	return LogicalType::LIST(XMLType());
+}
+
 bool XMLTypes::IsXMLType(const LogicalType& type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xml";
 }
 
 bool XMLTypes::IsXMLFragmentType(const LogicalType& type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xmlfragment";
+}
+
+bool XMLTypes::IsXMLArrayType(const LogicalType& type) {
+	return type.id() == LogicalTypeId::LIST && IsXMLType(ListType::GetChildType(type));
 }
 
 bool XMLTypes::XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {

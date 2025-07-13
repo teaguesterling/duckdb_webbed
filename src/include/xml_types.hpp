@@ -8,8 +8,10 @@ class XMLTypes {
 public:
 	static LogicalType XMLType();
 	static LogicalType XMLFragmentType();
+	static LogicalType XMLArrayType();
 	static bool IsXMLType(const LogicalType& type);
 	static bool IsXMLFragmentType(const LogicalType& type);
+	static bool IsXMLArrayType(const LogicalType& type);
 	static void Register(DatabaseInstance &db);
 	
 private:

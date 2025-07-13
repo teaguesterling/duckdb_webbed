@@ -8,12 +8,23 @@
 
 namespace duckdb {
 
+// 7-tier priority system for XML element classification
+enum class XMLTier {
+	UNKNOWN = 0,       // Unable to classify or invalid pattern
+	SCALAR = 1,        // Homogeneous conforming scalar (only text content, no attributes)
+	LIST = 2,          // Homogeneous conforming children (repeated same-name children, no parent attributes)  
+	STRUCT = 3,        // Heterogeneous conforming children (different-name children, all conforming)
+	XML_ARRAY = 4,     // Well-formed XML elements (heterogeneous but extractable as XML[], no parent attributes)
+	XML_FRAGMENT = 5,  // Extractable as fragment (parent can be removed, no parent attributes)
+	XML = 6            // Fall back to XML (default case, preserves all context)
+};
+
 // Configuration options for schema inference
 struct XMLSchemaOptions {
 	// Schema inference controls
 	std::string root_element;           // Extract only children of specified root (empty = auto-detect)
 	bool auto_detect = true;            // Automatic type detection
-	int32_t schema_depth = 2;           // How deep to analyze (1-3)
+	int32_t schema_depth = 3;           // How deep to analyze (1-4)
 	int32_t sample_size = 50;           // Number of elements to sample for inference
 	
 	// Attribute handling
@@ -68,6 +79,14 @@ struct ElementPattern {
 	bool appears_in_array = false;      // This element appears multiple times with same parent
 	bool has_homogeneous_structure = true; // All instances have same structure
 	
+	// Computed flags for 6-tier priority system
+	bool is_scalar = false;             // Only text content, no children
+	bool all_children_same_name = false; // All children have identical names
+	bool all_children_different_name = false; // All children have unique names (no repeats)
+	bool has_attributes = false;        // This node has attributes
+	bool children_have_attributes = false; // Any child has attributes
+	bool all_children_conforming = false; // All children can be consistently typed
+	
 	double GetFrequency(int32_t total_samples) const {
 		return total_samples > 0 ? static_cast<double>(occurrence_count) / total_samples : 0.0;
 	}
@@ -78,6 +97,30 @@ struct ElementPattern {
 	
 	bool IsStructCandidate() const {
 		return has_children && !has_text && child_element_counts.size() > 0;
+	}
+	
+	// 7-tier priority system detection
+	XMLTier GetTier() const {
+		// Tier 0: Unknown/invalid patterns
+		if (name.empty()) return XMLTier::UNKNOWN;
+		
+		// Tier 1: Homogeneous conforming scalar
+		if (is_scalar && !has_attributes) return XMLTier::SCALAR;
+		
+		// Tier 2: Homogeneous conforming children (LIST)
+		if (all_children_same_name && !has_attributes && all_children_conforming) return XMLTier::LIST;
+		
+		// Tier 3: Heterogeneous conforming children (STRUCT)
+		if (all_children_different_name && all_children_conforming) return XMLTier::STRUCT;
+		
+		// Tier 4: Well-formed XML elements (XML[])
+		if (!has_attributes && has_children) return XMLTier::XML_ARRAY;
+		
+		// Tier 5: Extractable as fragment (XMLFragment)
+		if (!has_attributes) return XMLTier::XML_FRAGMENT;
+		
+		// Tier 6: Fall back to XML
+		return XMLTier::XML;
 	}
 };
 
@@ -137,6 +180,7 @@ private:
 	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType& target_type);
 	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType& struct_type);
 	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType& list_type);
+	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
 };
 
 } // namespace duckdb
