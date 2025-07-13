@@ -6,13 +6,13 @@ require xml
 
 # Test read_xml_objects function with test files
 query II
-SELECT filename, length(content) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml');
+SELECT filename, length(xml::VARCHAR) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml', filename=true);
 ----
 test/xml/simple.xml	true
 
 # Test that the content is valid XML
 query I
-SELECT xml_valid(content) FROM read_xml_objects('test/xml/simple.xml');
+SELECT xml_valid(xml::VARCHAR) FROM read_xml_objects('test/xml/simple.xml');
 ----
 true
 
@@ -30,7 +30,7 @@ SELECT count(*) FROM read_xml_objects('test/xml/invalid.xml', ignore_errors := t
 
 # Test read_xml_objects function for raw content access
 query II
-SELECT filename, length(content) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml');
+SELECT filename, length(xml::VARCHAR) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml', filename=true);
 ----
 test/xml/simple.xml	true
 
