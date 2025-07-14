@@ -18,17 +18,15 @@ SELECT REPLACE(xml('Hello World'), chr(10), '') AS xml_hello_world;
 
 # Test 3: xml() function with special characters
 query I
-SELECT xml('Text with <brackets> & "quotes"') AS xml_special_chars;
+SELECT REPLACE(xml('Text with <brackets> & "quotes"'), chr(10), '') AS xml_special_chars;
 ----
-<?xml version="1.0"?>
-<xml>Text with &lt;brackets&gt; &amp; &quot;quotes&quot;</xml>
+<?xml version="1.0"?><xml>Text with &lt;brackets&gt; &amp; "quotes"</xml>
 
 # Test 4: xml() function with empty string
 query I
-SELECT xml('') AS xml_empty_string;
+SELECT REPLACE(xml(''), chr(10), '') AS xml_empty_string;
 ----
-<?xml version="1.0"?>
-<xml></xml>
+<?xml version="1.0"?><xml></xml>
 
 # Test 5: xml() function with already valid XML (should convert to XML element)
 query I

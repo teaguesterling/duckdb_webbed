@@ -66,7 +66,7 @@ Test Content
 
 # Test xml_wrap_fragment functionality
 query I
-SELECT xml_wrap_fragment(xml_extract_elements('<root><item id="1">Test</item></root>', '//item'), 'wrapper');
+SELECT REPLACE(xml_wrap_fragment(xml_extract_elements('<root><item id="1">Test</item></root>', '//item')::VARCHAR, 'wrapper')::VARCHAR, chr(10), '');
 ----
 <wrapper><item id="1">Test</item></wrapper>
 

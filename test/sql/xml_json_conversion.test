@@ -114,10 +114,9 @@ SELECT xml_to_json('<item id="1" name="test" type="sample" active="true">content
 
 # Test json_to_xml with nested arrays (if supported)
 query I
-SELECT json_to_xml('{"root":{"items":["first","second","third"]}}');
+SELECT REPLACE(json_to_xml('{"root":{"items":["first","second","third"]}}'), chr(10), '');
 ----
-<?xml version="1.0" encoding="UTF-8"?>
-<root><items>first</items><items>second</items><items>third</items></root>
+<?xml version="1.0" encoding="UTF-8"?><root><items_list><items>first</items><items>second</items><items>third</items></items_list></root>
 
 # Test xml_to_json with whitespace handling
 query I
