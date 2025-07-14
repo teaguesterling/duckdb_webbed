@@ -79,9 +79,19 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	// Register the XML type through the extension utility
 	ExtensionUtil::RegisterType(db, "XML", xml_type);
 	
+	// Register XMLFragment type
+	auto xml_fragment_type = LogicalType(LogicalType::VARCHAR);
+	xml_fragment_type.SetAlias("XMLFragment");
+	ExtensionUtil::RegisterType(db, "XMLFragment", xml_fragment_type);
+	
 	// Register cast functions for XML type conversion
 	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	
+	// Register cast functions for XMLFragment type conversion
+	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
+	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, xml_type, VarcharToXMLCast);
 	
 	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
 	try {

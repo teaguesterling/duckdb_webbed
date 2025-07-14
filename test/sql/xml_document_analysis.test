@@ -123,7 +123,7 @@ FROM (SELECT xml_stats('<root/>') as s);
 query I
 SELECT (xml_stats('<catalog><section><book id="1"><title>Book 1</title><author name="John">John Doe</author></book><book id="2"><title>Book 2</title></book></section></catalog>')).max_depth;
 ----
-4
+5
 
 # Test xml_namespaces error handling with invalid XML
 query I

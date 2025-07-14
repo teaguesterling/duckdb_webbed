@@ -6,9 +6,9 @@ require xml
 
 # Test 1: Verify xml() function no longer returns toy "Xml ... 🐥" output
 query I
-SELECT xml('test') AS xml_function_test;
+SELECT REPLACE(xml('test'), chr(10), '') AS xml_function_test;
 ----
-<?xml version="1.0"?>\n<xml>test</xml>\n
+<?xml version="1.0"?><xml>test</xml>
 
 # Test 2: xml() function with different input
 query I

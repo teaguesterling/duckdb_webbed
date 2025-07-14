@@ -46,29 +46,29 @@ SELECT xml_extract_all_text('<root>Start <item>middle</item> end</root>');
 ----
 Start middle end
 
-# Test xml_extract_elements with simple XPath
+# Test xml_extract_elements with simple XPath (returns XMLFragment)
 query I
-SELECT length(xml_extract_elements('<root><item id="1">First</item><item id="2">Second</item></root>', '//item'));
+SELECT length(xml_extract_elements_string('<root><item id="1">First</item><item id="2">Second</item></root>', '//item')) > 0;
 ----
-2
+true
 
-# Test xml_extract_elements structure - check first element name
+# Test xml_extract_elements XMLFragment content
 query I
-SELECT (xml_extract_elements('<root><item id="1">Test</item></root>', '//item'))[1].name;
+SELECT REPLACE(xml_extract_elements('<root><item id="1">Test</item></root>', '//item'), chr(10), '');
 ----
-item
+<item id="1">Test</item>
 
-# Test xml_extract_elements structure - check text content
+# Test xml_extract_elements with text extraction
 query I
-SELECT (xml_extract_elements('<root><item id="1">Test Content</item></root>', '//item'))[1].text_content;
+SELECT xml_extract_text(xml_extract_elements('<root><item id="1">Test Content</item></root>', '//item'), '//item');
 ----
 Test Content
 
-# Test xml_extract_elements structure - check path
+# Test xml_wrap_fragment functionality
 query I
-SELECT (xml_extract_elements('<root><item id="1">Test</item></root>', '//item'))[1].path;
+SELECT xml_wrap_fragment(xml_extract_elements('<root><item id="1">Test</item></root>', '//item'), 'wrapper');
 ----
-/root/item
+<wrapper><item id="1">Test</item></wrapper>
 
 # Test xml_extract_attributes with simple case
 query I

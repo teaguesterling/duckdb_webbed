@@ -48,7 +48,7 @@ HelloWorld
 
 # Test xml_extract_elements function (returns JSON-like string)
 query I
-SELECT length(xml_extract_elements('<books><book id="1"><title>Test</title></book></books>', '//book')) > 0;
+SELECT length(xml_extract_elements_string('<books><book id="1"><title>Test</title></book></books>', '//book')) > 0;
 ----
 true
 

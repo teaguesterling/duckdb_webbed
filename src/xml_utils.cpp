@@ -437,11 +437,11 @@ XMLStats XMLUtils::GetXMLStats(const std::string& xml_str) {
 				if (cur->ns && cur->ns->href) {
 					unique_namespaces.insert(std::string((const char*)cur->ns->href));
 				}
-			}
-			
-			// Traverse children
-			if (cur->children) {
-				traverse_stats(cur->children, depth + 1);
+				
+				// Traverse element children only for depth calculation
+				if (cur->children) {
+					traverse_stats(cur->children, depth + 1);
+				}
 			}
 		}
 	};
