@@ -2,8 +2,7 @@
 # description: Test that xml() function no longer returns toy output and works properly
 # group: [xml]
 
-statement ok
-LOAD xml;
+require xml
 
 # Test 1: Verify xml() function no longer returns toy "Xml ... 🐥" output
 query I

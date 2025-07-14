@@ -543,7 +543,7 @@ std::string XMLUtils::XMLToJSON(const std::string& xml_str) {
 
 std::string XMLUtils::JSONToXML(const std::string& json_str) {
 	if (json_str.empty() || json_str == "{}") {
-		return "<?xml version=\"1.0\"?>\n<root></root>\n";
+		return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root></root>";
 	}
 	
 	// Create a new XML document
@@ -725,19 +725,88 @@ std::string XMLUtils::JSONToXML(const std::string& json_str) {
 		return node;
 	};
 	
+	// Check if JSON is an object with a single key that could be the root element name
+	std::string trimmed = json_str;
+	trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
+	trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
+	
+	std::string root_element_name = "root";
+	std::string actual_json_content = json_str;
+	
+	// Check if JSON has the pattern {"root_name": {...}} and extract it
+	if (trimmed.length() > 4 && trimmed[0] == '{' && trimmed[trimmed.length()-1] == '}') {
+		// Simple parsing to find first key
+		size_t first_quote = trimmed.find('"', 1);
+		if (first_quote != std::string::npos) {
+			size_t second_quote = trimmed.find('"', first_quote + 1);
+			if (second_quote != std::string::npos) {
+				size_t colon = trimmed.find(':', second_quote);
+				if (colon != std::string::npos) {
+					std::string potential_root = trimmed.substr(first_quote + 1, second_quote - first_quote - 1);
+					
+					// Check if the value is an object (indicating this should be the root element)
+					size_t value_start = colon + 1;
+					while (value_start < trimmed.length() && (trimmed[value_start] == ' ' || trimmed[value_start] == '\t')) {
+						value_start++;
+					}
+					
+					if (value_start < trimmed.length() && trimmed[value_start] == '{') {
+						// Find the matching closing brace
+						int brace_count = 1;
+						size_t value_end = value_start + 1;
+						bool in_string = false;
+						
+						while (value_end < trimmed.length() && brace_count > 0) {
+							char c = trimmed[value_end];
+							if (!in_string) {
+								if (c == '"') in_string = true;
+								else if (c == '{') brace_count++;
+								else if (c == '}') brace_count--;
+							} else {
+								if (c == '"' && (value_end == 0 || trimmed[value_end-1] != '\\')) {
+									in_string = false;
+								}
+							}
+							value_end++;
+						}
+						
+						// Check if this is the only key-value pair in the object
+						size_t remaining_start = value_end;
+						while (remaining_start < trimmed.length() && (trimmed[remaining_start] == ' ' || trimmed[remaining_start] == '\t')) {
+							remaining_start++;
+						}
+						
+						if (remaining_start < trimmed.length() && trimmed[remaining_start] == '}') {
+							// This is the only key, use it as root element and extract its value
+							root_element_name = potential_root;
+							actual_json_content = trimmed.substr(value_start, value_end - value_start);
+						}
+					}
+				}
+			}
+		}
+	}
+	
 	// Convert JSON to XML node
-	xmlNodePtr root_node = json_to_node(json_str, "root", doc.get());
+	xmlNodePtr root_node = json_to_node(actual_json_content, root_element_name, doc.get());
 	if (root_node) {
 		xmlDocSetRootElement(doc.get(), root_node);
 	}
 	
-	// Convert to string
+	// Convert to string with encoding="UTF-8"
 	xmlChar* xml_string = nullptr;
 	int size = 0;
-	xmlDocDumpFormatMemory(doc.get(), &xml_string, &size, 0);
+	xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 	
 	XMLCharPtr xml_ptr(xml_string);
-	return xml_ptr ? std::string(reinterpret_cast<const char*>(xml_ptr.get())) : "<?xml version=\"1.0\"?>\n<root></root>\n";
+	std::string result = xml_ptr ? std::string(reinterpret_cast<const char*>(xml_ptr.get())) : "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root></root>";
+	
+	// Remove trailing newline to match expected test format
+	if (!result.empty() && result.back() == '\n') {
+		result.pop_back();
+	}
+	
+	return result;
 }
 
 std::string XMLUtils::ScalarToXML(const std::string& value, const std::string& node_name) {

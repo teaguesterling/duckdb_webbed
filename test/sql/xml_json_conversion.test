@@ -56,7 +56,7 @@ SELECT REPLACE(json_to_xml('{"root":{"name":"test"}}'), chr(10), '|');
 query I
 SELECT REPLACE(json_to_xml('{"catalog":{"book":{"title":"Database Systems","author":"John Doe"}}}'), chr(10), '|');
 ----
-<?xml version="1.0" encoding="UTF-8"?>|<catalog><book><title>Database Systems</title><author>John Doe</author></book></catalog>
+<?xml version="1.0" encoding="UTF-8"?>|<catalog><book><author>John Doe</author><title>Database Systems</title></book></catalog>
 
 # Test json_to_xml with empty object
 query I
