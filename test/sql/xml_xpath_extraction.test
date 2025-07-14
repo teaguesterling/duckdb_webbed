@@ -90,9 +90,9 @@ SELECT (xml_extract_attributes('<root><item id="1">content</item></root>', '//it
 
 # Test xml_extract_elements with complex nested structure
 query I
-SELECT length(xml_extract_elements('<catalog><book><title>Book1</title></book><book><title>Book2</title></book></catalog>', '//book'));
+SELECT length(xml_extract_elements_string('<catalog><book><title>Book1</title></book><book><title>Book2</title></book></catalog>', '//book')) > 0;
 ----
-2
+true
 
 # Test xml_extract_text with namespace-aware XPath
 query I

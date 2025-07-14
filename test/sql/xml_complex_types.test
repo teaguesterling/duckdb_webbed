@@ -78,7 +78,7 @@ query III
 SELECT 
     xml_extract_text('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//id')::INTEGER as product_id,
     xml_extract_text('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//name') as product_name,
-    REPLACE(xml_extract_elements('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//specs'), chr(10), '') as specs_xml;
+    REPLACE(xml_extract_elements('<product><id>123</id><name>Widget</name><specs><weight>1.5kg</weight><color>blue</color></specs></product>', '//specs')::VARCHAR, chr(10), '') as specs_xml;
 ----
 123	Widget	<specs><weight>1.5kg</weight><color>blue</color></specs>
 

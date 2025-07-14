@@ -42,10 +42,9 @@ true
 
 # Test 7: xml() function with numeric input (converted via string representation)
 query I
-SELECT xml('123') AS xml_numeric_string;
+SELECT REPLACE(xml('123'), chr(10), '') AS xml_numeric_string;
 ----
-<?xml version="1.0"?>
-<xml>123</xml>
+<?xml version="1.0"?><xml>123</xml>
 
 # Test 8: xml() function should not contain any emoji or toy output
 query I
