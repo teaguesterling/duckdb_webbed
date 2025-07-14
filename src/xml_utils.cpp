@@ -705,11 +705,43 @@ std::string XMLUtils::JSONToXML(const std::string& json_str) {
 				}
 			}
 			
-			// Convert each property to a child element
+			// Handle properties - separate attributes from elements
+			std::string text_content;
+			
 			for (const auto& prop : properties) {
-				xmlNodePtr child = json_to_node(prop.second, prop.first, document);
-				if (child) {
-					xmlAddChild(node, child);
+				if (prop.first.length() > 0 && prop.first[0] == '@') {
+					// This is an attribute (starts with @)
+					std::string attr_name = prop.first.substr(1); // Remove @ prefix
+					std::string attr_value = prop.second;
+					
+					// Remove quotes from attribute value if present
+					if (attr_value.length() >= 2 && attr_value[0] == '"' && attr_value[attr_value.length()-1] == '"') {
+						attr_value = attr_value.substr(1, attr_value.length() - 2);
+					}
+					
+					xmlSetProp(node, BAD_CAST attr_name.c_str(), BAD_CAST attr_value.c_str());
+				} else if (prop.first == "#text") {
+					// This is text content
+					text_content = prop.second;
+					
+					// Remove quotes from text content if present
+					if (text_content.length() >= 2 && text_content[0] == '"' && text_content[text_content.length()-1] == '"') {
+						text_content = text_content.substr(1, text_content.length() - 2);
+					}
+				} else {
+					// This is a child element
+					xmlNodePtr child = json_to_node(prop.second, prop.first, document);
+					if (child) {
+						xmlAddChild(node, child);
+					}
+				}
+			}
+			
+			// Add text content if present
+			if (!text_content.empty()) {
+				xmlNodePtr text_node = xmlNewText(BAD_CAST text_content.c_str());
+				if (text_node) {
+					xmlAddChild(node, text_node);
 				}
 			}
 			
@@ -807,6 +839,62 @@ std::string XMLUtils::JSONToXML(const std::string& json_str) {
 	}
 	
 	return result;
+}
+
+std::string XMLUtils::ExtractXMLFragment(const std::string& xml_str, const std::string& xpath) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+	
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+	
+	std::string fragment_xml;
+	
+	// Iterate through all matching nodes and serialize them
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			// Create a temporary document for dumping this node
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				// Copy the node to avoid ownership issues
+				xmlNodePtr copied_node = xmlCopyNode(node, 1); // 1 = recursive copy
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+					
+					// Dump the node as XML string
+					xmlChar* node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char*>(node_ptr.get()));
+						
+						// Remove XML declaration from individual nodes
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							// Remove leading whitespace/newlines
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+						
+						fragment_xml += node_xml;
+					}
+				}
+			}
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return fragment_xml;
 }
 
 std::string XMLUtils::ScalarToXML(const std::string& value, const std::string& node_name) {

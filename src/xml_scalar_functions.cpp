@@ -57,49 +57,52 @@ void XMLScalarFunctions::XMLExtractAllTextFunction(DataChunk &args, ExpressionSt
 void XMLScalarFunctions::XMLExtractElementsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
-	auto count = args.size();
 	
-	// For complex types like LIST<STRUCT>, we need to manually handle the vectorization
-	for (idx_t i = 0; i < count; i++) {
-		// Get input values
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
-		
-		std::string xml_string = xml_str.GetString();
-		std::string xpath_string = xpath_str.GetString();
-		
-		// Extract elements using XPath
-		auto elements = XMLUtils::ExtractByXPath(xml_string, xpath_string);
-		
-		// Create list of structs
-		vector<Value> struct_values;
-		
-		for (const auto &elem : elements) {
-			// Create struct with fields: name, text_content, namespace_uri, path, line_number
-			child_list_t<Value> struct_children;
-			struct_children.emplace_back("name", Value(elem.name));
-			struct_children.emplace_back("text_content", Value(elem.text_content));
-			struct_children.emplace_back("namespace_uri", Value(elem.namespace_uri));
-			struct_children.emplace_back("path", Value(elem.path));
-			struct_children.emplace_back("line_number", Value::BIGINT(elem.line_number));
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+		xml_vector, xpath_vector, result, args.size(),
+		[&](string_t xml_str, string_t xpath_str) {
+			std::string xml_string = xml_str.GetString();
+			std::string xpath_string = xpath_str.GetString();
 			
-			struct_values.emplace_back(Value::STRUCT(struct_children));
-		}
-		
-		// Create list value
-		auto struct_type = LogicalType::STRUCT({
-			make_pair("name", LogicalType::VARCHAR),
-			make_pair("text_content", LogicalType::VARCHAR),
-			make_pair("namespace_uri", LogicalType::VARCHAR),
-			make_pair("path", LogicalType::VARCHAR),
-			make_pair("line_number", LogicalType::BIGINT)
+			// Extract XML fragment using our new utility function
+			std::string fragment_xml = XMLUtils::ExtractXMLFragment(xml_string, xpath_string);
+			
+			return StringVector::AddString(result, fragment_xml);
 		});
-		
-		Value list_value = Value::LIST(struct_type, struct_values);
-		
-		// Set result
-		result.SetValue(i, list_value);
-	}
+}
+
+void XMLScalarFunctions::XMLExtractElementsStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+		xml_vector, xpath_vector, result, args.size(),
+		[&](string_t xml_str, string_t xpath_str) {
+			std::string xml_string = xml_str.GetString();
+			std::string xpath_string = xpath_str.GetString();
+			
+			// Extract XML fragment using our new utility function
+			std::string fragment_xml = XMLUtils::ExtractXMLFragment(xml_string, xpath_string);
+			
+			return StringVector::AddString(result, fragment_xml);
+		});
+}
+
+void XMLScalarFunctions::XMLWrapFragmentFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &fragment_vector = args.data[0];
+	auto &wrapper_vector = args.data[1];
+	
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+		fragment_vector, wrapper_vector, result, args.size(),
+		[&](string_t fragment_str, string_t wrapper_str) {
+			std::string fragment = fragment_str.GetString();
+			std::string wrapper = wrapper_str.GetString();
+			
+			// Create wrapped XML: <wrapper>fragment</wrapper>
+			std::string wrapped_xml = "<" + wrapper + ">" + fragment + "</" + wrapper + ">";
+			
+			return StringVector::AddString(result, wrapped_xml);
+		});
 }
 
 void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -457,17 +460,20 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractAllTextFunction);
 	ExtensionUtil::RegisterFunction(db, xml_extract_all_text_function);
 	
-	// Register xml_extract_elements function (returns LIST<STRUCT>)
-	auto element_struct_type = LogicalType::STRUCT({
-		make_pair("name", LogicalType::VARCHAR),
-		make_pair("text_content", LogicalType::VARCHAR),
-		make_pair("namespace_uri", LogicalType::VARCHAR),
-		make_pair("path", LogicalType::VARCHAR),
-		make_pair("line_number", LogicalType::BIGINT)
-	});
+	// Register xml_extract_elements function (returns XMLFragment)
 	auto xml_extract_elements_function = ScalarFunction("xml_extract_elements", 
-		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(element_struct_type), XMLExtractElementsFunction);
+		{LogicalType::VARCHAR, LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction);
 	ExtensionUtil::RegisterFunction(db, xml_extract_elements_function);
+	
+	// Register xml_extract_elements_string function (returns VARCHAR)
+	auto xml_extract_elements_string_function = ScalarFunction("xml_extract_elements_string", 
+		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction);
+	ExtensionUtil::RegisterFunction(db, xml_extract_elements_string_function);
+	
+	// Register xml_wrap_fragment function (returns XML)
+	auto xml_wrap_fragment_function = ScalarFunction("xml_wrap_fragment", 
+		{LogicalType::VARCHAR, LogicalType::VARCHAR}, XMLTypes::XMLType(), XMLWrapFragmentFunction);
+	ExtensionUtil::RegisterFunction(db, xml_wrap_fragment_function);
 	
 	// Register xml_extract_attributes function (returns LIST<STRUCT>)
 	auto attr_struct_type = LogicalType::STRUCT({

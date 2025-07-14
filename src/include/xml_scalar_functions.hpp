@@ -20,6 +20,8 @@ private:
 	
 	// Element extraction functions
 	static void XMLExtractElementsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLExtractElementsStringFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLWrapFragmentFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAttributesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractCommentsFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractCDataFunction(DataChunk &args, ExpressionState &state, Vector &result);
