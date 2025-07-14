@@ -12,10 +12,9 @@ SELECT REPLACE(xml('test'), chr(10), '') AS xml_function_test;
 
 # Test 2: xml() function with different input
 query I
-SELECT xml('Hello World') AS xml_hello_world;
+SELECT REPLACE(xml('Hello World'), chr(10), '') AS xml_hello_world;
 ----
-<?xml version="1.0"?>
-<xml>Hello World</xml>
+<?xml version="1.0"?><xml>Hello World</xml>
 
 # Test 3: xml() function with special characters
 query I

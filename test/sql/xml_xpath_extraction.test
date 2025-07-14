@@ -54,13 +54,13 @@ true
 
 # Test xml_extract_elements XMLFragment content
 query I
-SELECT REPLACE(xml_extract_elements('<root><item id="1">Test</item></root>', '//item'), chr(10), '');
+SELECT REPLACE(xml_extract_elements('<root><item id="1">Test</item></root>', '//item')::VARCHAR, chr(10), '');
 ----
 <item id="1">Test</item>
 
 # Test xml_extract_elements with text extraction
 query I
-SELECT xml_extract_text(xml_extract_elements('<root><item id="1">Test Content</item></root>', '//item'), '//item');
+SELECT xml_extract_text(xml_extract_elements('<root><item id="1">Test Content</item></root>', '//item')::VARCHAR, '//item');
 ----
 Test Content
 

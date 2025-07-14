@@ -17,7 +17,7 @@ true
 
 # Test to_xml() basic functionality
 query T nosort
-SELECT to_xml('Hello') LIKE '%<xml>Hello</xml>%' AS to_xml_works;
+SELECT to_xml('Hello')::VARCHAR LIKE '%<xml>Hello</xml>%' AS to_xml_works;
 ----
 true
 

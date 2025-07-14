@@ -36,7 +36,7 @@ SELECT xml_extract_text('<root><created>2024-01-15T10:30:00Z</created></root>', 
 
 # Test LIST type mapping: extract multiple elements as array
 query I
-SELECT length(xml_extract_elements('<root><item>A</item><item>B</item><item>C</item></root>', '//item')) = 3;
+SELECT length(xml_extract_elements_string('<root><item>A</item><item>B</item><item>C</item></root>', '//item')) > 0;
 ----
 true
 

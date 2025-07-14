@@ -11,11 +11,11 @@ Catalog Error: Scalar Function with name xml does not exist!
 # Require statement will ensure this test is run with this extension loaded
 require xml
 
-# Confirm the extension works
+# Confirm the extension works (xml function now returns proper XML)
 query I
-SELECT xml('Sam');
+SELECT REPLACE(xml('Sam'), chr(10), '');
 ----
-Xml Sam 🐥
+<?xml version="1.0"?><xml>Sam</xml>
 
 query I
 SELECT xml_libxml2_version('Michael') ILIKE 'Xml Michael, my linked libxml2 version is%';
