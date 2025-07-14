@@ -128,6 +128,9 @@ public:
 	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name);
 	static void ConvertStructToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name);
 	
+	// Recursive value conversion for nested types - returns xmlNodePtr for direct attachment
+	static xmlNodePtr ConvertValueToXMLNode(const Value& value, const LogicalType& type, const std::string& node_name, xmlDocPtr doc);
+	
 	// Internal helper functions
 	static XMLElement ProcessXMLNode(xmlNodePtr node);
 	static std::string GetNodePath(xmlNodePtr node);
