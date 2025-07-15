@@ -60,7 +60,6 @@ true
 
 # Test 10: xml() function with multi-word input
 query I
-SELECT xml('multiple words here') AS xml_multiword;
+SELECT REPLACE(xml('multiple words here'), chr(10), '') AS xml_multiword;
 ----
-<?xml version="1.0"?>
-<xml>multiple words here</xml>
+<?xml version="1.0"?><xml>multiple words here</xml>

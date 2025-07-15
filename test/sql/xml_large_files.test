@@ -22,7 +22,7 @@ FROM read_xml_objects('test/xml/large_catalog.xml');
 
 # Test extracting all product names (should handle multiple results efficiently)
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item"]/*[local-name()="name"]')) > 0
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//*[local-name()="item"]/*[local-name()="name"]')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true

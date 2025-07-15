@@ -2,8 +2,7 @@
 # description: Simple tests for enhanced XML functionality
 # group: [xml]
 
-statement ok
-LOAD xml;
+require xml
 
 # Test XML type casting works
 statement ok
@@ -31,7 +30,7 @@ SELECT to_xml({'name': 'John', 'age': 30});
 
 # Test to_xml() with custom node name
 query T nosort
-SELECT to_xml('Hello', 'greeting') LIKE '%<greeting>%' AS custom_node_works;
+SELECT to_xml('Hello', 'greeting')::VARCHAR LIKE '%<greeting>%' AS custom_node_works;
 ----
 true
 
@@ -43,12 +42,12 @@ true
 
 # Test list contains expected elements
 query T nosort
-SELECT to_xml(['A', 'B']) LIKE '%<xml>A</xml>%' AND to_xml(['A', 'B']) LIKE '%<xml>B</xml>%' AS list_elements_present;
+SELECT to_xml(['A', 'B'])::VARCHAR LIKE '%<xml>A</xml>%' AND to_xml(['A', 'B'])::VARCHAR LIKE '%<xml>B</xml>%' AS list_elements_present;
 ----
 true
 
 # Test struct contains expected fields
 query T nosort
-SELECT to_xml({'name': 'John'}) LIKE '%<name>John</name>%' AS struct_field_present;
+SELECT to_xml({'name': 'John'})::VARCHAR LIKE '%<name>John</name>%' AS struct_field_present;
 ----
 true

@@ -6,12 +6,12 @@ require xml
 
 # Test hybrid approach: extract some fields as columns, keep complex parts as XML
 query IIIII
-SELECT 
-    xml_extract_text(xml_data, '//product/@id') as product_id,
-    xml_extract_text(xml_data, '//name') as product_name,
-    xml_extract_text(xml_data, '//price')::DECIMAL(10,2) as price,
-    xml_extract_text(xml_data, '//category') as category,
-    xml_extract_elements(xml_data, '//specifications')[1] as specs_xml
+SELECT
+    xml_extract_text(xml_data::VARCHAR, '//product/@id') as product_id,
+    xml_extract_text(xml_data::VARCHAR, '//name') as product_name,
+    xml_extract_text(xml_data::VARCHAR, '//price')::DECIMAL(10,2) as price,
+    xml_extract_text(xml_data::VARCHAR, '//category') as category,
+    xml_extract_elements(xml_data::VARCHAR, '//specifications')::VARCHAR as specs_xml
 FROM (
     SELECT '<product id="P001"><name>Laptop</name><price>999.99</price><category>electronics</category><specifications><cpu>Intel i7</cpu><ram>16GB</ram><storage>512GB SSD</storage></specifications></product>'::XML as xml_data
 );
@@ -20,21 +20,21 @@ P001	Laptop	999.99	electronics	<specifications><cpu>Intel i7</cpu><ram>16GB</ram
 
 # Test querying hybrid data: filter on extracted column, analyze XML column
 query II
-SELECT 
+SELECT
     xml_extract_text(xml_data, '//name') as name,
     xml_extract_text(specs_xml, '//cpu') as cpu_info
 FROM (
-    SELECT 
+    SELECT
         '<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>'::XML as xml_data,
         xml_extract_elements('<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>', '//specifications')[1] as specs_xml
-) 
+)
 WHERE xml_extract_text(xml_data, '//price')::DECIMAL > 1000;
 ----
 Desktop	AMD Ryzen 9
 
 # Test hybrid with arrays: flatten some arrays, keep complex ones as XML
 query III
-SELECT 
+SELECT
     unnest(xml_extract_attributes(xml_data, '//tag', 'name')) as tag_name,
     xml_extract_text(xml_data, '//product_name') as product,
     xml_extract_elements(xml_data, '//reviews')[1] as reviews_xml
@@ -47,16 +47,16 @@ new	Widget	<reviews><review rating="5">Great!</review><review rating="4">Good</r
 
 # Test hybrid aggregation: group by flattened column, aggregate XML content
 query III
-SELECT 
+SELECT
     category,
     count(*) as product_count,
     avg(price) as avg_price,
 FROM (
-    SELECT 
+    SELECT
         xml_extract_text(product_xml, '//category') as category,
         xml_extract_text(product_xml, '//price')::DECIMAL as price
     FROM (
-        VALUES 
+        VALUES
             ('<product><category>laptop</category><price>999</price><specifications><cpu>Intel i5</cpu></specifications></product>'::XML),
             ('<product><category>laptop</category><price>1299</price><specifications><cpu>Intel i7</cpu></specifications></product>'::XML),
             ('<product><category>desktop</category><price>899</price><specifications><cpu>AMD Ryzen 5</cpu></specifications></product>'::XML)
@@ -70,7 +70,7 @@ laptop	2	1149.0
 
 # Test temporal data in hybrid schema: extract dates as columns, keep events as XML
 query IIII
-SELECT 
+SELECT
     xml_extract_text(record_xml, '//user_id')::INTEGER as user_id,
     xml_extract_text(record_xml, '//login_time')::TIMESTAMP as login_time,
     xml_extract_text(record_xml, '//session_duration')::INTEGER as duration_minutes,
@@ -83,7 +83,7 @@ FROM (
 
 # Test hybrid schema with namespaces: flatten namespaced fields, preserve complex namespaced XML
 query IIII
-SELECT 
+SELECT
     xml_extract_text(doc_xml, '//meta:id') as document_id,
     xml_extract_text(doc_xml, '//meta:title') as title,
     xml_extract_text(doc_xml, '//meta:created')::DATE as created_date,
@@ -96,14 +96,14 @@ DOC001	Test Document	2024-01-01	<content:body xmlns:content="http://content.com"
 
 # Test hybrid performance: mix indexed columns with XML analysis
 query IIIII
-SELECT 
+SELECT
     product_id,
     product_name,
     price,
     (xml_stats(full_xml)).element_count as xml_complexity,
     length(xml_namespaces(full_xml)) as namespace_count
 FROM (
-    SELECT 
+    SELECT
         xml_extract_text(product_data, '//@id') as product_id,
         xml_extract_text(product_data, '//name') as product_name,
         xml_extract_text(product_data, '//price')::DECIMAL as price,
@@ -117,7 +117,7 @@ P001	Item1	100.0	4	0
 
 # Test hybrid with JSON conversion: flatten key fields, convert complex parts to JSON
 query IIII
-SELECT 
+SELECT
     xml_extract_text(order_xml, '//order_id') as order_id,
     xml_extract_text(order_xml, '//total')::DECIMAL as total,
     xml_extract_text(order_xml, '//status') as status,
@@ -130,12 +130,12 @@ ORD123	299.99	shipped	true
 
 # Test error handling in hybrid schema: graceful handling of missing fields
 query III
-SELECT 
+SELECT
     coalesce(xml_extract_text(data_xml, '//id'), 'MISSING') as id,
     coalesce(xml_extract_text(data_xml, '//name'), 'UNKNOWN') as name,
     length(xml_extract_elements(data_xml, '//details')) as details_count
 FROM (
-    VALUES 
+    VALUES
         ('<record><id>R001</id><name>Complete</name><details><item>A</item></details></record>'::XML),
         ('<record><name>Partial</name></record>'::XML),
         ('<record><id>R003</id></record>'::XML)
@@ -147,14 +147,14 @@ R003	UNKNOWN	0
 
 # Test hybrid indexing scenario: searchable columns + rich XML content
 query IIIII
-SELECT 
+SELECT
     category,
     title,
     author,
     published_year,
     xml_extract_elements(metadata_xml, '//subjects')[1] as subjects_xml
 FROM (
-    SELECT 
+    SELECT
         xml_extract_text(book_xml, '//category') as category,
         xml_extract_text(book_xml, '//title') as title,
         xml_extract_text(book_xml, '//author') as author,
@@ -170,14 +170,14 @@ fiction	Test Novel	Jane Doe	2023	<subjects><subject>literature</subject><subject
 
 # Test hybrid with computed columns: derive values from XML, store alongside XML
 query IIIII
-SELECT 
+SELECT
     product_code,
     base_price,
     discounted_price,
     discount_percentage,
     pricing_xml
 FROM (
-    SELECT 
+    SELECT
         xml_extract_text(product_xml, '//code') as product_code,
         xml_extract_text(product_xml, '//base_price')::DECIMAL as base_price,
         xml_extract_text(product_xml, '//discounted_price')::DECIMAL as discounted_price,

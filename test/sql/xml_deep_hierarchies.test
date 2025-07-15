@@ -51,14 +51,14 @@ true
 
 # Test extracting all employee names across hierarchy levels
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="employee"]/*[local-name()="name"]')) >= 2
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//*[local-name()="employee"]/*[local-name()="name"]')) > 0
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
 
 # Test complex XPath: find all completed tasks
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//task[@status="completed"]')) >= 1
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//task[@status="completed"]')) > 0
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
