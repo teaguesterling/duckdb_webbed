@@ -47,17 +47,45 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string& xm
 		// When unnest_as_columns=true, skip container elements that have children
 		// Only create columns for leaf elements or properly aggregated arrays
 		if (options.unnest_as_columns && pattern.has_children && !pattern.all_children_same_name) {
+			// Before skipping container element, extract its attributes as columns
+			if (options.include_attributes && options.attribute_mode == "columns") {
+				for (const auto& attr_pair : pattern.attribute_counts) {
+					std::string attr_name = pattern.name + "_" + attr_pair.first;
+					if (!options.attribute_prefix.empty()) {
+						attr_name = options.attribute_prefix + attr_name;
+					}
+					
+					// For now, assume VARCHAR for attributes (could be enhanced with sampling)
+					auto xpath = GetElementXPath(pattern.name, true, attr_pair.first);
+					columns.emplace_back(attr_name, LogicalType::VARCHAR, true, xpath, 0.8);
+				}
+			}
 			// Skip this container element - its children will be processed as individual columns
 			continue;
 		}
 		
-		// TODO: Also skip individual elements that appear in homogeneous arrays (they'll be aggregated)
-		// This requires more sophisticated pattern analysis to detect when individual elements
-		// are part of a parent collection that will be aggregated as an array column
-		// For now, both individual and aggregated columns may appear
-		// if (options.unnest_as_columns && pattern.appears_in_array && pattern.is_scalar) {
-		//     continue;
-		// }
+		// Skip individual elements that appear in homogeneous arrays (they'll be aggregated)
+		// Check if this element is a child of a homogeneous collection that will create a LIST column
+		if (options.unnest_as_columns && pattern.is_scalar) {
+			bool appears_in_homogeneous_collection = false;
+			
+			// Check if any other pattern contains this element as a homogeneous child collection
+			for (const auto& other_pattern : patterns) {
+				if (other_pattern.all_children_same_name && 
+					other_pattern.child_element_counts.size() == 1 &&
+					other_pattern.child_element_counts.find(pattern.name) != other_pattern.child_element_counts.end() &&
+					other_pattern.child_element_counts.at(pattern.name) > 1) {
+					// This scalar element appears multiple times under another element
+					// The parent will create a LIST column, so skip this individual element
+					appears_in_homogeneous_collection = true;
+					break;
+				}
+			}
+			
+			if (appears_in_homogeneous_collection) {
+				continue;
+			}
+		}
 		
 		// Determine the appropriate type using 4-tier priority system
 		XMLTier tier = pattern.GetTier();
