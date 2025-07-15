@@ -24,6 +24,18 @@ static void XMLErrorHandler(void *ctx, const char *msg, ...) {
 	xml_parse_error_message = std::string(buffer);
 }
 
+// Silent error handler that suppresses libxml2 warnings during normal operations
+void XMLSilentErrorHandler(void *ctx, const char *msg, ...) {
+	// Silently capture errors without printing to stderr
+	xml_parse_error_occurred = true;
+}
+
+// Silent error handler for schema validation (with varargs to match xmlSchemaValidityErrorFunc)
+void XMLSilentSchemaErrorHandler(void *ctx, const char *msg, ...) {
+	// Silently capture schema validation errors without printing to stderr
+	xml_parse_error_occurred = true;
+}
+
 XMLDocRAII::XMLDocRAII(const std::string& xml_str) {
 	// Reset error state
 	xml_parse_error_occurred = false;
@@ -185,8 +197,14 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string& xml_str, con
 		return results;
 	}
 	
+	// Suppress XPath warnings (e.g., undefined namespace prefixes)
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
 		BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+	
+	// Restore normal error handling
+	xmlSetGenericErrorFunc(nullptr, nullptr);
 	
 	if (xpath_obj && xpath_obj->nodesetval) {
 		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -210,8 +228,14 @@ std::string XMLUtils::ExtractTextByXPath(const std::string& xml_str, const std::
 		return "";
 	}
 	
+	// Suppress XPath warnings (e.g., undefined namespace prefixes)
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
 		BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+	
+	// Restore normal error handling
+	xmlSetGenericErrorFunc(nullptr, nullptr);
 	
 	std::string result;
 	if (xpath_obj) {
@@ -260,30 +284,47 @@ std::string XMLUtils::MinifyXML(const std::string& xml_str) {
 }
 
 bool XMLUtils::ValidateXMLSchema(const std::string& xml_str, const std::string& xsd_schema) {
+	// Suppress schema validation warnings
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	
 	// Parse the XSD schema using DuckDB-style smart pointers
 	XMLSchemaParserPtr parser_ctx(xmlSchemaNewMemParserCtxt(xsd_schema.c_str(), xsd_schema.length()));
 	if (!parser_ctx) {
+		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 	
+	// Set silent error handler for schema parsing
+	xmlSchemaSetParserErrors(parser_ctx.get(), XMLSilentSchemaErrorHandler, XMLSilentSchemaErrorHandler, nullptr);
+	
 	XMLSchemaPtr schema(xmlSchemaParse(parser_ctx.get()));
 	if (!schema) {
+		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 	
 	// Create validation context
 	XMLSchemaValidPtr valid_ctx(xmlSchemaNewValidCtxt(schema.get()));
 	if (!valid_ctx) {
+		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
+	
+	// Set silent error handler for validation
+	xmlSchemaSetValidErrors(valid_ctx.get(), XMLSilentSchemaErrorHandler, XMLSilentSchemaErrorHandler, nullptr);
 	
 	// Parse and validate the XML document
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid()) {
+		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 	
 	int validation_result = xmlSchemaValidateDoc(valid_ctx.get(), xml_doc.doc);
+	
+	// Restore normal error handling
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
 	return (validation_result == 0);
 }
 
@@ -847,8 +888,14 @@ std::string XMLUtils::ExtractXMLFragment(const std::string& xml_str, const std::
 		return "";
 	}
 	
+	// Suppress XPath warnings (e.g., undefined namespace prefixes)
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
 		BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+	
+	// Restore normal error handling
+	xmlSetGenericErrorFunc(nullptr, nullptr);
 	
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj) xmlXPathFreeObject(xpath_obj);

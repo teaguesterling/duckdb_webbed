@@ -8,6 +8,9 @@
 
 namespace duckdb {
 
+// Forward declaration for silent error handler from xml_utils.cpp
+void XMLSilentErrorHandler(void *ctx, const char *msg, ...);
+
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string& xml_content, 
                                                             const XMLSchemaOptions& options) {
 	std::vector<XMLColumnInfo> columns;
@@ -170,7 +173,14 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 	if (!options.root_element.empty()) {
 		// Use XPath to find the specified root element
 		std::string xpath = "//" + options.root_element;
+		
+		// Suppress XPath warnings (e.g., undefined namespace prefixes)
+		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+		
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+		
+		// Restore normal error handling
+		xmlSetGenericErrorFunc(nullptr, nullptr);
 		
 		if (xpath_obj && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			root = xpath_obj->nodesetval->nodeTab[0];
