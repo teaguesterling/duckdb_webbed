@@ -461,6 +461,10 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	// XML + STRING_LITERAL (for direct string literals)
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, XMLExtractTextFunction));
+	// XMLFragment + VARCHAR (for results from xml_extract_elements)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
+	// XMLFragment + STRING_LITERAL
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	// VARCHAR + VARCHAR (compatibility)
 	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	// VARCHAR + STRING_LITERAL (compatibility)
@@ -478,8 +482,20 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	
 	// Register xml_extract_elements function as a function set
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
+	
+	// XML + VARCHAR
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// XML + STRING_LITERAL
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// XMLFragment + VARCHAR (for nested extraction)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// XMLFragment + STRING_LITERAL
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// VARCHAR + VARCHAR (compatibility)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// VARCHAR + STRING_LITERAL (compatibility)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	
 	ExtensionUtil::RegisterFunction(db, xml_extract_elements_functions);
 	
 	// Register xml_extract_elements_string function as a function set

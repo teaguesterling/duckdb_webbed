@@ -14,7 +14,7 @@ namespace duckdb {
 
 LogicalType XMLTypes::XMLType() {
 	auto xml_type = LogicalType(LogicalTypeId::VARCHAR);
-	xml_type.SetAlias("xml");
+	xml_type.SetAlias("XML");
 	return xml_type;
 }
 
@@ -29,7 +29,7 @@ LogicalType XMLTypes::XMLArrayType() {
 }
 
 bool XMLTypes::IsXMLType(const LogicalType& type) {
-	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xml";
+	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "XML";
 }
 
 bool XMLTypes::IsXMLFragmentType(const LogicalType& type) {

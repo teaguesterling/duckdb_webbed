@@ -15,11 +15,11 @@ The package libxml2 is compatible with built-in CMake targets:
     find_package(LibXml2 REQUIRED)
     target_link_libraries(main PRIVATE LibXml2::LibXml2)
 
-All requested installations completed successfully in: 83.6 us
+All requested installations completed successfully in: 77.4 us
 -- Running vcpkg install - done
 -- git hash 0b83e5d2f6, version v1.3.2, extension folder v1.3.2
 -- Extensions will be deployed to: /mnt/aux-data/teague/Projects/duckdb_xml/build/release/repository
--- Load extension 'xml' from '/mnt/aux-data/teague/Projects/duckdb_xml' @ 09c61af
+-- Load extension 'xml' from '/mnt/aux-data/teague/Projects/duckdb_xml' @ d4570e9
 -- Load extension 'json' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
 -- Load extension 'core_functions' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
 -- Load extension 'parquet' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
@@ -35,8 +35,8 @@ CMake Deprecation Warning at /mnt/aux-data/teague/Projects/duckdb_xml/CMakeLists
 
 -- Extensions linked into DuckDB: [xml, json, core_functions, parquet, jemalloc]
 -- Tests loaded for extensions: [xml]
--- Configuring done (7.5s)
--- Generating done (0.6s)
+-- Configuring done (2.2s)
+-- Generating done (0.5s)
 -- Build files have been written to: /mnt/aux-data/teague/Projects/duckdb_xml/build/release
 cmake --build build/release --config Release
 gmake[1]: Entering directory '/mnt/aux-data/teague/Projects/duckdb_xml/build/release'
