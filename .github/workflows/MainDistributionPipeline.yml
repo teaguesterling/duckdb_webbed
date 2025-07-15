@@ -28,6 +28,7 @@ jobs:
       duckdb_version: v1.3.2
       ci_tools_version: v1.3.2
       extension_name: xml
+      exclude_archs: 'windows_amd64_mingw'
 
 #  code-quality-check:
 #    name: Code Quality Check
