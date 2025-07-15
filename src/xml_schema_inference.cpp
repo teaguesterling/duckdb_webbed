@@ -44,6 +44,21 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string& xm
 		LogicalType column_type;
 		bool should_create_column = false;
 		
+		// When unnest_as_columns=true, skip container elements that have children
+		// Only create columns for leaf elements or properly aggregated arrays
+		if (options.unnest_as_columns && pattern.has_children && !pattern.all_children_same_name) {
+			// Skip this container element - its children will be processed as individual columns
+			continue;
+		}
+		
+		// TODO: Also skip individual elements that appear in homogeneous arrays (they'll be aggregated)
+		// This requires more sophisticated pattern analysis to detect when individual elements
+		// are part of a parent collection that will be aggregated as an array column
+		// For now, both individual and aggregated columns may appear
+		// if (options.unnest_as_columns && pattern.appears_in_array && pattern.is_scalar) {
+		//     continue;
+		// }
+		
 		// Determine the appropriate type using 4-tier priority system
 		XMLTier tier = pattern.GetTier();
 		

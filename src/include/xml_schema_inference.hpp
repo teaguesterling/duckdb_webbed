@@ -32,6 +32,7 @@ struct XMLSchemaOptions {
 	// Content handling
 	std::string text_content_column = "text_content"; // Column name for mixed text content
 	bool preserve_mixed_content = false; // Handle elements with both text and children
+	bool unnest_as_columns = true;      // True: flatten nested elements as columns, False: preserve as structs (future)
 	
 	// Type detection
 	bool temporal_detection = true;     // Detect DATE/TIME/TIMESTAMP

@@ -179,6 +179,15 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
 			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "unnest_as") {
+			auto unnest_mode = kv.second.ToString();
+			if (unnest_mode == "columns") {
+				schema_options.unnest_as_columns = true;
+			} else if (unnest_mode == "struct") {
+				schema_options.unnest_as_columns = false;  // Future: implement struct mode
+			} else {
+				throw BinderException("read_xml \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'", unnest_mode);
+			}
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -415,6 +424,7 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_xml_function.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
 	read_xml_function.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_function.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_xml_function.named_parameters["unnest_as"] = LogicalType::VARCHAR;  // 'columns' (default) or 'struct' (future)
 	
 	// Explicit schema specification (like JSON extension)
 	read_xml_function.named_parameters["columns"] = LogicalType::ANY;

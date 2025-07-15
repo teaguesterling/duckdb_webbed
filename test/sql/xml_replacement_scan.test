@@ -5,34 +5,34 @@
 require xml
 
 # Test basic replacement scan - direct file querying
-query II
-SELECT filename, length(content) > 0 as has_content FROM 'test/xml/simple.xml';
-----
-test/xml/simple.xml	true
-
-# Test replacement scan with XML validation
-query II
-SELECT filename, xml_valid(content) as is_valid FROM 'test/xml/simple.xml';
-----
-test/xml/simple.xml	true
-
-# Test replacement scan with XPath extraction
 query I
-SELECT xml_extract_text(content, '//title') as book_title FROM 'test/xml/simple.xml';
+SELECT count(*) > 0 as has_data FROM 'test/xml/simple.xml';
+----
+true
+
+# Test replacement scan with schema inference - check specific fields
+query II
+SELECT title, price FROM 'test/xml/simple.xml' WHERE book_id = '1';
+----
+Database Systems	49.99
+
+# Test replacement scan returns multiple rows for multiple XML elements
+query I
+SELECT count(*) FROM 'test/xml/simple.xml';
+----
+2
+
+# Test that alias works with replacement scan
+query I
+SELECT simple.title FROM 'test/xml/simple.xml' as simple WHERE simple.book_id = '1';
 ----
 Database Systems
-
-# Test that alias is set correctly for single files (should use base filename)
-query I
-SELECT simple.filename FROM 'test/xml/simple.xml' as simple;
-----
-test/xml/simple.xml
 
 # Test replacement scan recognizes .xml extension
 query I
 SELECT count(*) FROM 'test/xml/simple.xml';
 ----
-1
+2
 
 # Test that non-XML files are not handled by our replacement scan
 statement error
