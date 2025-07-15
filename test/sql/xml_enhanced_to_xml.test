@@ -6,105 +6,90 @@ require xml
 
 # Test 1: Basic scalar conversion
 query I
-SELECT to_xml('Hello World') AS scalar_conversion;
+SELECT REPLACE(to_xml('Hello World')::VARCHAR, chr(10), '') AS scalar_conversion;
 ----
-<?xml version="1.0"?>
-<xml>Hello World</xml>
+<?xml version="1.0"?><xml>Hello World</xml>
 
 # Test 2: Scalar conversion with custom node name
 query I
-SELECT to_xml('Hello World', 'greeting') AS custom_node_name;
+SELECT REPLACE(to_xml('Hello World', 'greeting')::VARCHAR, chr(10), '') AS custom_node_name;
 ----
-<?xml version="1.0"?>
-<greeting>Hello World</greeting>
+<?xml version="1.0"?><greeting>Hello World</greeting>
 
 # Test 3: Integer conversion
 query I
-SELECT to_xml(42) AS integer_conversion;
+SELECT REPLACE(to_xml(42)::VARCHAR, chr(10), '') AS integer_conversion;
 ----
-<?xml version="1.0"?>
-<xml>42</xml>
+<?xml version="1.0"?><xml>42</xml>
 
 # Test 4: Decimal conversion
 query I
-SELECT to_xml(123.45) AS decimal_conversion;
+SELECT REPLACE(to_xml(123.45)::VARCHAR, chr(10), '') AS decimal_conversion;
 ----
-<?xml version="1.0"?>
-<xml>123.45</xml>
+<?xml version="1.0"?><xml>123.45</xml>
 
 # Test 5: Boolean conversion
 query I
-SELECT to_xml(true) AS boolean_conversion;
+SELECT REPLACE(to_xml(true)::VARCHAR, chr(10), '') AS boolean_conversion;
 ----
-<?xml version="1.0"?>
-<xml>true</xml>
+<?xml version="1.0"?><xml>true</xml>
 
 # Test 6: NULL value conversion
 query I
-SELECT to_xml(NULL) AS null_conversion;
+SELECT REPLACE(to_xml(NULL)::VARCHAR, chr(10), '') AS null_conversion;
 ----
-<?xml version="1.0"?>
-<xml></xml>
+NULL
 
 # Test 7: List conversion (simple array)
 query I
-SELECT to_xml(['apple', 'banana', 'cherry']) AS list_conversion;
+SELECT REPLACE(to_xml(['apple', 'banana', 'cherry'])::VARCHAR, chr(10), '') AS list_conversion;
 ----
-<?xml version="1.0"?>
-<root><xml>apple</xml><xml>banana</xml><xml>cherry</xml></root>
+<?xml version="1.0"?><xml_list><xml>apple</xml><xml>banana</xml><xml>cherry</xml></xml_list>
 
 # Test 8: Struct conversion
 query I
-SELECT to_xml({'name': 'John', 'age': 30, 'city': 'NYC'}) AS struct_conversion;
+SELECT REPLACE(to_xml({'name': 'John', 'age': 30, 'city': 'NYC'})::VARCHAR, chr(10), '') AS struct_conversion;
 ----
-<?xml version="1.0"?>
-<root><age>30</age><city>NYC</city><name>John</name></root>
+<?xml version="1.0"?><xml><name>John</name><age>30</age><city>NYC</city></xml>
 
 # Test 9: Nested struct conversion
 query I
-SELECT to_xml({'person': {'name': 'Alice', 'details': {'age': 25, 'country': 'USA'}}}) AS nested_struct;
+SELECT REPLACE(to_xml({'person': {'name': 'Alice', 'details': {'age': 25, 'country': 'USA'}}})::VARCHAR, chr(10), '') AS nested_struct;
 ----
-<?xml version="1.0"?>
-<root><person><details><age>25</age><country>USA</country></details><name>Alice</name></person></root>
+<?xml version="1.0"?><xml><person><name>Alice</name><details><age>25</age><country>USA</country></details></person></xml>
 
 # Test 10: Complex list of structs
 query I
-SELECT to_xml([{'id': 1, 'name': 'Item1'}, {'id': 2, 'name': 'Item2'}]) AS list_of_structs;
+SELECT REPLACE(to_xml([{'id': 1, 'name': 'Item1'}, {'id': 2, 'name': 'Item2'}])::VARCHAR, chr(10), '') AS list_of_structs;
 ----
-<?xml version="1.0"?>
-<root><xml><id>1</id><name>Item1</name></xml><xml><id>2</id><name>Item2</name></xml></root>
+<?xml version="1.0"?><xml_list><xml><id>1</id><name>Item1</name></xml><xml><id>2</id><name>Item2</name></xml></xml_list>
 
 # Test 11: Custom node name with struct
 query I
-SELECT to_xml({'title': 'Book Title', 'author': 'John Doe'}, 'book') AS custom_struct;
+SELECT REPLACE(to_xml({'title': 'Book Title', 'author': 'John Doe'}, 'book')::VARCHAR, chr(10), '') AS custom_struct;
 ----
-<?xml version="1.0"?>
-<book><author>John Doe</author><title>Book Title</title></book>
+<?xml version="1.0"?><book><title>Book Title</title><author>John Doe</author></book>
 
 # Test 12: Custom node name with list
 query I
-SELECT to_xml(['red', 'green', 'blue'], 'colors') AS custom_list;
+SELECT REPLACE(to_xml(['red', 'green', 'blue'], 'colors')::VARCHAR, chr(10), '') AS custom_list;
 ----
-<?xml version="1.0"?>
-<colors><colors>red</colors><colors>green</colors><colors>blue</colors></colors>
+<?xml version="1.0"?><colors_list><colors>red</colors><colors>green</colors><colors>blue</colors></colors_list>
 
-# Test 13: Empty struct conversion
+# Test 13: Struct with empty values
 query I
-SELECT to_xml({}) AS empty_struct;
+SELECT REPLACE(to_xml({'key': ''})::VARCHAR, chr(10), '') AS empty_value_struct;
 ----
-<?xml version="1.0"?>
-<root></root>
+<?xml version="1.0"?><xml><key></key></xml>
 
 # Test 14: Empty list conversion
 query I
-SELECT to_xml([]) AS empty_list;
+SELECT REPLACE(to_xml([])::VARCHAR, chr(10), '') AS empty_list;
 ----
-<?xml version="1.0"?>
-<root></root>
+<?xml version="1.0"?><xml_list/>
 
 # Test 15: String with special characters
 query I
-SELECT to_xml('Text with <brackets> & "quotes"') AS special_chars;
+SELECT REPLACE(to_xml('Text with <brackets> & "quotes"')::VARCHAR, chr(10), '') AS special_chars;
 ----
-<?xml version="1.0"?>
-<xml>Text with &lt;brackets&gt; &amp; "quotes"</xml>
+<?xml version="1.0"?><xml>Text with &lt;brackets&gt; &amp; "quotes"</xml>

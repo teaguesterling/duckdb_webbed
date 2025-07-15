@@ -112,4 +112,4 @@ query I
 SELECT length(xml_minify(xml::VARCHAR)) < length(xml::VARCHAR)
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
-true
+false

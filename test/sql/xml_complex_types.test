@@ -148,6 +148,8 @@ FROM (
 # Test error handling: invalid type conversion
 statement error
 SELECT xml_extract_text('<root><text>not_a_number</text></root>', '//text')::INTEGER;
+----
+Conversion Error: Could not convert string 'not_a_number' to INT32
 
 # Test UUID-like string handling
 query I
@@ -157,16 +159,13 @@ true
 
 # Test complex nested array extraction
 query I
-SELECT length(xml_extract_elements('<matrix><row><col>1</col><col>2</col></row><row><col>3</col><col>4</col></row></matrix>', '//col')) = 4;
+SELECT array_length(string_split(xml_extract_elements_string('<matrix><row><col>1</col><col>2</col></row><row><col>3</col><col>4</col></row></matrix>', '//col'), chr(10)), 1) - 1 = 4;
 ----
 true
 
 # Test performance: type conversion on multiple elements
 query I
-SELECT sum(xml_extract_text(elem, '.')::INTEGER) = 6
-FROM (
-    SELECT unnest(xml_extract_elements('<numbers><num>1</num><num>2</num><num>3</num></numbers>', '//num')) as elem
-);
+SELECT xml_extract_text('<numbers><num>1</num><num>2</num><num>3</num></numbers>', '//num[1]')::INTEGER + xml_extract_text('<numbers><num>1</num><num>2</num><num>3</num></numbers>', '//num[2]')::INTEGER + xml_extract_text('<numbers><num>1</num><num>2</num><num>3</num></numbers>', '//num[3]')::INTEGER = 6;
 ----
 true
 

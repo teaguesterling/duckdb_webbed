@@ -22,7 +22,7 @@ P001	Laptop	999.99	electronics	<specifications><cpu>Intel i7</cpu><ram>16GB</ram
 query II
 SELECT
     xml_extract_text(xml_data::VARCHAR, '//name') as name,
-    xml_extract_text(specs_xml, '//cpu') as cpu_info
+    xml_extract_text(specs_xml::VARCHAR, '//cpu') as cpu_info
 FROM (
     SELECT
         '<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>'::XML as xml_data,
@@ -35,9 +35,9 @@ Desktop	AMD Ryzen 9
 # Test hybrid with arrays: flatten some arrays, keep complex ones as XML
 query III
 SELECT
-    unnest(xml_extract_attributes(xml_data, '//tag')) as tag_name,
+    (unnest(xml_extract_attributes(xml_data::VARCHAR, '//tag'))).attribute_value as tag_name,
     xml_extract_text(xml_data::VARCHAR, '//product_name') as product,
-    xml_extract_elements(xml_data, '//reviews') as reviews_xml
+    REPLACE(xml_extract_elements(xml_data::VARCHAR, '//reviews')::VARCHAR, chr(10), '') as reviews_xml
 FROM (
     SELECT '<item><product_name>Widget</product_name><tags><tag name="popular"/><tag name="new"/></tags><reviews><review rating="5">Great!</review><review rating="4">Good</review></reviews></item>'::XML as xml_data
 );
@@ -53,8 +53,8 @@ SELECT
     avg(price) as avg_price,
 FROM (
     SELECT
-        xml_extract_text(product_xml, '//category') as category,
-        xml_extract_text(product_xml, '//price')::DECIMAL as price
+        xml_extract_text(product_xml::VARCHAR, '//category') as category,
+        xml_extract_text(product_xml::VARCHAR, '//price')::DECIMAL as price
     FROM (
         VALUES
             ('<product><category>laptop</category><price>999</price><specifications><cpu>Intel i5</cpu></specifications></product>'::XML),
@@ -71,10 +71,10 @@ laptop	2	1149.0
 # Test temporal data in hybrid schema: extract dates as columns, keep events as XML
 query IIII
 SELECT
-    xml_extract_text(record_xml, '//user_id')::INTEGER as user_id,
-    xml_extract_text(record_xml, '//login_time')::TIMESTAMP as login_time,
-    xml_extract_text(record_xml, '//session_duration')::INTEGER as duration_minutes,
-    xml_extract_elements(record_xml, '//activities') as activities_xml
+    xml_extract_text(record_xml::VARCHAR, '//user_id')::INTEGER as user_id,
+    xml_extract_text(record_xml::VARCHAR, '//login_time')::TIMESTAMP as login_time,
+    xml_extract_text(record_xml::VARCHAR, '//session_duration')::INTEGER as duration_minutes,
+    REPLACE(xml_extract_elements(record_xml::VARCHAR, '//activities')::VARCHAR, chr(10), '') as activities_xml
 FROM (
     SELECT '<session><user_id>123</user_id><login_time>2024-01-15T09:30:00</login_time><session_duration>45</session_duration><activities><activity type="view" page="/dashboard"/><activity type="click" element="button_save"/></activities></session>'::XML as record_xml
 );
