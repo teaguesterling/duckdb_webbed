@@ -85,15 +85,10 @@ SELECT xml_extract_elements('<catalog><book id="1"><title>Book 1</title></book><
 SELECT xml_extract_attributes('<catalog><book id="1" available="true"></book></catalog>', '//book');
 
 -- File reading with schema inference options
-SELECT * FROM read_xml('books.xml', 
-    root_element => 'book',
-    include_attributes => true,
-    auto_detect => true,
-    schema_depth => 2
-);
+SELECT * FROM read_xml('books.xml');
 
 -- Extract XML document content as-is
-SELECT filename, content FROM read_xml_objects('config/*.xml', ignore_errors => true);
+SELECT filename, content FROM read_xml_objects('config/*.xml', ignore_errors=true);
 
 -- Document formatting
 SELECT xml_pretty_print('<root><item>test</item></root>');
