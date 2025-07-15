@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<test>
+    <projects>
+        <project>
+            <name>Project A</name>
+            <status>active</status>
+        </project>
+        <project>
+            <name>Project B</name>
+            <status>completed</status>
+        </project>
+    </projects>
+</test>

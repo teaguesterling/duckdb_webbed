@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<company>
+    <department>
+        <name>Engineering</name>
+        <employees>
+            <employee id="123">
+                <name>Alice</name>
+                <skills>
+                    <skill level="expert">Python</skill>
+                    <skill level="intermediate">Go</skill>
+                </skills>
+                <projects>
+                    <project>
+                        <name>API Gateway</name>
+                        <status>active</status>
+                        <technologies>
+                            <tech>Docker</tech>
+                            <tech>Kubernetes</tech>
+                        </technologies>
+                    </project>
+                    <project>
+                        <name>Database Migration</name>
+                        <status>completed</status>
+                        <technologies>
+                            <tech>PostgreSQL</tech>
+                            <tech>Redis</tech>
+                        </technologies>
+                    </project>
+                </projects>
+            </employee>
+            <employee id="456">
+                <name>Bob</name>
+                <skills>
+                    <skill level="expert">JavaScript</skill>
+                    <skill level="beginner">Rust</skill>
+                </skills>
+                <projects>
+                    <project>
+                        <name>Frontend Rewrite</name>
+                        <status>planning</status>
+                        <technologies>
+                            <tech>React</tech>
+                            <tech>TypeScript</tech>
+                        </technologies>
+                    </project>
+                </projects>
+            </employee>
+        </employees>
+    </department>
+</company>

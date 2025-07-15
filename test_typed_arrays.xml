@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<survey_responses>
+    <response>
+        <user_id>123</user_id>
+        <scores>
+            <score>85</score>
+            <score>92</score>
+            <score>78</score>
+        </scores>
+        <timestamps>
+            <timestamp>2024-01-15 10:30:00</timestamp>
+            <timestamp>2024-01-16 14:20:00</timestamp>
+        </timestamps>
+        <flags>
+            <flag>true</flag>
+            <flag>false</flag>
+            <flag>true</flag>
+        </flags>
+    </response>
+    <response>
+        <user_id>456</user_id>
+        <scores>
+            <score>95</score>
+            <score>88</score>
+        </scores>
+        <timestamps>
+            <timestamp>2024-01-17 09:15:00</timestamp>
+        </timestamps>
+        <flags>
+            <flag>false</flag>
+            <flag>true</flag>
+        </flags>
+    </response>
+</survey_responses>

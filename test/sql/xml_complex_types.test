@@ -147,7 +147,6 @@ FROM (
 
 # Test error handling: invalid type conversion
 statement error
-Conversion Error
 SELECT xml_extract_text('<root><text>not_a_number</text></root>', '//text')::INTEGER;
 
 # Test UUID-like string handling

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This is a test XML file for utility functions -->
+<catalog xmlns:book="http://example.com/book">
+  <book:book id="1" available="true">
+    <title>Database Systems</title>
+    <author>John Doe</author>
+    <price>49.99</price>
+    <tags>
+      <tag>database</tag>
+      <tag>sql</tag>
+    </tags>
+    <description><![CDATA[A comprehensive guide to database systems and SQL programming.]]></description>
+  </book:book>
+  <!-- Another book entry -->
+  <book:book id="2" available="false">
+    <title>Advanced SQL</title>
+    <author>Jane Smith</author>
+    <price>59.99</price>
+    <tags>
+      <tag>sql</tag>
+      <tag>advanced</tag>
+    </tags>
+    <description><![CDATA[Deep dive into advanced SQL techniques.]]></description>
+  </book:book>
+</catalog>

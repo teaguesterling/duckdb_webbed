@@ -43,7 +43,7 @@ true
 
 # Test XPath extraction with complex predicates on large file
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item" and @featured="true"]')) > 0
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//*[local-name()="item" and @featured="true"]')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
@@ -71,7 +71,7 @@ true
 
 # Test extracting warehouse locations using complex XPath
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//warehouses/warehouse[@location]')) > 0
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//warehouses/warehouse[@location]')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
@@ -88,14 +88,14 @@ true	true	true
 
 # Test extracting all attributes from large document
 query I
-SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[local-name()="item"]', 'id')) > 0
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[local-name()="item"]')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
 
 # Test complex aggregation: count products by category
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//*[local-name()="item" and @category="electronics"]')) >= 1
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//*[local-name()="item" and @category="electronics"]')) >= 1
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true

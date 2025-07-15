@@ -65,14 +65,14 @@ true
 
 # Test deep attribute extraction: all IDs at various levels
 query I
-SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[@id]', 'id')) >= 10
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//*[@id]')) >= 10
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
 
 # Test extracting training module topics (deeply nested structure)
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//modules/module/topics/topic')) >= 2
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//modules/module/topics/topic')) >= 2
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
@@ -86,14 +86,14 @@ true
 
 # Test extracting salary information across all hierarchy levels
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//salary[@currency="USD"]')) >= 3
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//salary[@currency="USD"]')) >= 3
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
 
 # Test deep XPath with predicates: high priority projects
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//project[@priority="high"]')) >= 1
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//project[@priority="high"]')) >= 1
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
@@ -109,7 +109,7 @@ Deep Learning for Time Series Forecasting	127
 
 # Test complex hierarchy traversal: find all authors in publications
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//coauthors/author')) >= 2
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//coauthors/author')) >= 2
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
@@ -123,7 +123,7 @@ true
 
 # Test extracting dependency information from deeply nested tasks
 query I
-SELECT length(xml_extract_elements(xml::VARCHAR, '//dependencies/dependency')) >= 1
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//dependencies/dependency')) >= 1
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
@@ -137,7 +137,7 @@ true
 
 # Test extracting weight attributes from nested topics
 query I
-SELECT length(xml_extract_attributes(xml::VARCHAR, '//topics/topic[@weight]', 'weight')) >= 3
+SELECT length(xml_extract_attributes(xml::VARCHAR, '//topics/topic[@weight]')) >= 3
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
@@ -145,8 +145,8 @@ true
 # Test complex multi-level aggregation: count all tasks and subtasks
 query I
 SELECT 
-    length(xml_extract_elements(xml::VARCHAR, '//task')) + 
-    length(xml_extract_elements(xml::VARCHAR, '//subtask')) >= 4
+    length(xml_extract_elements_string(xml::VARCHAR, '//task')) + 
+    length(xml_extract_elements_string(xml::VARCHAR, '//subtask')) >= 4
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true

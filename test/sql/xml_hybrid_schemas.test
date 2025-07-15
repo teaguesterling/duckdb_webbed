@@ -11,7 +11,7 @@ SELECT
     xml_extract_text(xml_data::VARCHAR, '//name') as product_name,
     xml_extract_text(xml_data::VARCHAR, '//price')::DECIMAL(10,2) as price,
     xml_extract_text(xml_data::VARCHAR, '//category') as category,
-    xml_extract_elements(xml_data::VARCHAR, '//specifications')::VARCHAR as specs_xml
+    REPLACE(xml_extract_elements(xml_data::VARCHAR, '//specifications')::VARCHAR, chr(10), '') as specs_xml
 FROM (
     SELECT '<product id="P001"><name>Laptop</name><price>999.99</price><category>electronics</category><specifications><cpu>Intel i7</cpu><ram>16GB</ram><storage>512GB SSD</storage></specifications></product>'::XML as xml_data
 );
@@ -21,23 +21,23 @@ P001	Laptop	999.99	electronics	<specifications><cpu>Intel i7</cpu><ram>16GB</ram
 # Test querying hybrid data: filter on extracted column, analyze XML column
 query II
 SELECT
-    xml_extract_text(xml_data, '//name') as name,
+    xml_extract_text(xml_data::VARCHAR, '//name') as name,
     xml_extract_text(specs_xml, '//cpu') as cpu_info
 FROM (
     SELECT
         '<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>'::XML as xml_data,
-        xml_extract_elements('<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>', '//specifications')[1] as specs_xml
+        xml_extract_elements('<product><name>Desktop</name><price>1299.99</price><specifications><cpu>AMD Ryzen 9</cpu><ram>32GB</ram></specifications></product>', '//specifications') as specs_xml
 )
-WHERE xml_extract_text(xml_data, '//price')::DECIMAL > 1000;
+WHERE xml_extract_text(xml_data::VARCHAR, '//price')::DECIMAL > 1000;
 ----
 Desktop	AMD Ryzen 9
 
 # Test hybrid with arrays: flatten some arrays, keep complex ones as XML
 query III
 SELECT
-    unnest(xml_extract_attributes(xml_data, '//tag', 'name')) as tag_name,
-    xml_extract_text(xml_data, '//product_name') as product,
-    xml_extract_elements(xml_data, '//reviews')[1] as reviews_xml
+    unnest(xml_extract_attributes(xml_data, '//tag')) as tag_name,
+    xml_extract_text(xml_data::VARCHAR, '//product_name') as product,
+    xml_extract_elements(xml_data, '//reviews') as reviews_xml
 FROM (
     SELECT '<item><product_name>Widget</product_name><tags><tag name="popular"/><tag name="new"/></tags><reviews><review rating="5">Great!</review><review rating="4">Good</review></reviews></item>'::XML as xml_data
 );
@@ -74,7 +74,7 @@ SELECT
     xml_extract_text(record_xml, '//user_id')::INTEGER as user_id,
     xml_extract_text(record_xml, '//login_time')::TIMESTAMP as login_time,
     xml_extract_text(record_xml, '//session_duration')::INTEGER as duration_minutes,
-    xml_extract_elements(record_xml, '//activities')[1] as activities_xml
+    xml_extract_elements(record_xml, '//activities') as activities_xml
 FROM (
     SELECT '<session><user_id>123</user_id><login_time>2024-01-15T09:30:00</login_time><session_duration>45</session_duration><activities><activity type="view" page="/dashboard"/><activity type="click" element="button_save"/></activities></session>'::XML as record_xml
 );
@@ -87,7 +87,7 @@ SELECT
     xml_extract_text(doc_xml, '//meta:id') as document_id,
     xml_extract_text(doc_xml, '//meta:title') as title,
     xml_extract_text(doc_xml, '//meta:created')::DATE as created_date,
-    xml_extract_elements(doc_xml, '//content:body')[1] as content_xml
+    xml_extract_elements(doc_xml, '//content:body') as content_xml
 FROM (
     SELECT '<document xmlns:meta="http://meta.com" xmlns:content="http://content.com"><meta:id>DOC001</meta:id><meta:title>Test Document</meta:title><meta:created>2024-01-01</meta:created><content:body><content:section><content:paragraph>Text here</content:paragraph></content:section></content:body></document>'::XML as doc_xml
 );
@@ -121,7 +121,7 @@ SELECT
     xml_extract_text(order_xml, '//order_id') as order_id,
     xml_extract_text(order_xml, '//total')::DECIMAL as total,
     xml_extract_text(order_xml, '//status') as status,
-    length(xml_to_json(xml_extract_elements(order_xml, '//items')[1])) > 10 as has_items_json
+    length(xml_to_json(xml_extract_elements(order_xml, '//items'))) > 10 as has_items_json
 FROM (
     SELECT '<order><order_id>ORD123</order_id><total>299.99</total><status>shipped</status><items><item><name>Book</name><qty>2</qty></item><item><name>Pen</name><qty>5</qty></item></items></order>'::XML as order_xml
 );
@@ -152,14 +152,14 @@ SELECT
     title,
     author,
     published_year,
-    xml_extract_elements(metadata_xml, '//subjects')[1] as subjects_xml
+    xml_extract_elements(metadata_xml, '//subjects') as subjects_xml
 FROM (
     SELECT
         xml_extract_text(book_xml, '//category') as category,
         xml_extract_text(book_xml, '//title') as title,
         xml_extract_text(book_xml, '//author') as author,
         xml_extract_text(book_xml, '//year')::INTEGER as published_year,
-        xml_extract_elements(book_xml, '//metadata')[1] as metadata_xml
+        xml_extract_elements(book_xml, '//metadata') as metadata_xml
     FROM (
         SELECT '<book><category>fiction</category><title>Test Novel</title><author>Jane Doe</author><year>2023</year><metadata><subjects><subject>literature</subject><subject>drama</subject></subjects><awards><award>Best Fiction 2023</award></awards></metadata></book>'::XML as book_xml
     )
@@ -182,7 +182,7 @@ FROM (
         xml_extract_text(product_xml, '//base_price')::DECIMAL as base_price,
         xml_extract_text(product_xml, '//discounted_price')::DECIMAL as discounted_price,
         round((1 - xml_extract_text(product_xml, '//discounted_price')::DECIMAL / xml_extract_text(product_xml, '//base_price')::DECIMAL) * 100, 1) as discount_percentage,
-        xml_extract_elements(product_xml, '//pricing')[1] as pricing_xml
+        xml_extract_elements(product_xml, '//pricing') as pricing_xml
     FROM (
         SELECT '<product><code>SKU123</code><pricing><base_price>100.00</base_price><discounted_price>80.00</discounted_price><currency>USD</currency><valid_until>2024-12-31</valid_until></pricing></product>'::XML as product_xml
     )

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<people>
+    <person id="123">
+        <id>789</id>
+        <name>Bill</name>
+        <name>William</name>
+        <addresses>
+            <address>123 Main St</address>
+            <address>456 Oak Ave</address>
+        </addresses>
+    </person>
+    <person id="456">
+        <id>999</id>
+        <name>Alice</name>
+        <name>Alicia</name>
+        <addresses>
+            <address>789 Pine Rd</address>
+        </addresses>
+    </person>
+</people>

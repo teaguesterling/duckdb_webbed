@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<employees>
+    <employee id="1" department="engineering">
+        <name>Alice</name>
+        <skills level="expert">
+            <skill>Python</skill>
+            <skill>SQL</skill>
+        </skills>
+    </employee>
+    <employee id="2" department="product">
+        <name>Bob</name>
+        <skills level="intermediate">
+            <skill>Java</skill>
+            <skill>React</skill>
+        </skills>
+    </employee>
+</employees>

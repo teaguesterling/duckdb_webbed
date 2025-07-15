@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<employees>
+    <employee>
+        <name>Alice</name>
+        <skills>
+            <skill>Python</skill>
+            <skill>Go</skill>
+        </skills>
+        <projects>
+            <project>
+                <name>API Gateway</name>
+                <status>active</status>
+            </project>
+            <project>
+                <name>Database Migration</name>
+                <status>completed</status>
+            </project>
+        </projects>
+    </employee>
+</employees>
