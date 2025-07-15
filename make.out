@@ -15,11 +15,11 @@ The package libxml2 is compatible with built-in CMake targets:
     find_package(LibXml2 REQUIRED)
     target_link_libraries(main PRIVATE LibXml2::LibXml2)
 
-All requested installations completed successfully in: 117 us
+All requested installations completed successfully in: 83.6 us
 -- Running vcpkg install - done
 -- git hash 0b83e5d2f6, version v1.3.2, extension folder v1.3.2
 -- Extensions will be deployed to: /mnt/aux-data/teague/Projects/duckdb_xml/build/release/repository
--- Load extension 'xml' from '/mnt/aux-data/teague/Projects/duckdb_xml' @ 4172a5b
+-- Load extension 'xml' from '/mnt/aux-data/teague/Projects/duckdb_xml' @ 09c61af
 -- Load extension 'json' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
 -- Load extension 'core_functions' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
 -- Load extension 'parquet' from '/mnt/aux-data/teague/Projects/duckdb_xml/duckdb/extensions' @ v1.3.2
@@ -35,8 +35,8 @@ CMake Deprecation Warning at /mnt/aux-data/teague/Projects/duckdb_xml/CMakeLists
 
 -- Extensions linked into DuckDB: [xml, json, core_functions, parquet, jemalloc]
 -- Tests loaded for extensions: [xml]
--- Configuring done (2.4s)
--- Generating done (0.9s)
+-- Configuring done (7.5s)
+-- Generating done (0.6s)
 -- Build files have been written to: /mnt/aux-data/teague/Projects/duckdb_xml/build/release
 cmake --build build/release --config Release
 gmake[1]: Entering directory '/mnt/aux-data/teague/Projects/duckdb_xml/build/release'
@@ -212,24 +212,14 @@ gmake[1]: Entering directory '/mnt/aux-data/teague/Projects/duckdb_xml/build/rel
 [ 71%] Built target parquet_extension
 [ 71%] Built target core_functions_extension
 [ 77%] Built target json_extension
-[ 77%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_extension.cpp.o
-[ 77%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_types.cpp.o
-[ 78%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_utils.cpp.o
-[ 78%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_scalar_functions.cpp.o
-[ 78%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_reader_functions.cpp.o
-[ 78%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_schema_inference.cpp.o
-[ 78%] Linking CXX static library libxml_extension.a
+[ 77%] Building CXX object extension/xml/CMakeFiles/xml_extension.dir/src/xml_scalar_functions.cpp.o
+[ 77%] Linking CXX static library libxml_extension.a
 [ 78%] Built target xml_extension
 [ 78%] Built target duckdb_static
 [ 78%] Linking CXX shared library loadable_extension_optimizer_demo.duckdb_extension
 [ 78%] Built target loadable_extension_optimizer_demo_loadable_extension
-[ 78%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_extension.cpp.o
-[ 79%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_types.cpp.o
-[ 79%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_utils.cpp.o
-[ 79%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_scalar_functions.cpp.o
-[ 79%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_reader_functions.cpp.o
-[ 79%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_schema_inference.cpp.o
-[ 80%] Linking CXX shared library xml.duckdb_extension
+[ 78%] Building CXX object extension/xml/CMakeFiles/xml_loadable_extension.dir/src/xml_scalar_functions.cpp.o
+[ 79%] Linking CXX shared library xml.duckdb_extension
 [ 80%] Built target xml_loadable_extension
 [ 80%] Linking CXX shared library json.duckdb_extension
 [ 85%] Built target json_loadable_extension
