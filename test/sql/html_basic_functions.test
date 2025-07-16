@@ -1,0 +1,41 @@
+# name: test/sql/html_basic_functions.test
+# description: Test basic HTML functions that should work with current XML infrastructure
+# group: [xml]
+
+require xml
+
+# Test that XML functions work on HTML type (compatibility)
+query I
+SELECT xml_extract_text('<h1>Title</h1><p>Content</p>'::HTML, '//h1');
+----
+Title
+
+# Test xml_extract_elements on HTML type
+query I
+SELECT xml_extract_elements('<ul><li>Item 1</li><li>Item 2</li></ul>'::HTML, '//li');
+----
+<li>Item 1</li>
+
+# Test xml_extract_attributes on HTML type  
+query IIIII
+SELECT 
+    (unnest(xml_extract_attributes('<a href="test.html" title="Test">Link</a>'::HTML, '//a'))).element_name,
+    (unnest(xml_extract_attributes('<a href="test.html" title="Test">Link</a>'::HTML, '//a'))).attribute_name,
+    (unnest(xml_extract_attributes('<a href="test.html" title="Test">Link</a>'::HTML, '//a'))).attribute_value,
+    (unnest(xml_extract_attributes('<a href="test.html" title="Test">Link</a>'::HTML, '//a'))).element_path,
+    (unnest(xml_extract_attributes('<a href="test.html" title="Test">Link</a>'::HTML, '//a'))).line_number;
+----
+a	href	test.html	/a	1
+a	title	Test	/a	1
+
+# Test HTML-specific XPath on HTML type
+query I
+SELECT xml_extract_text('<html><head><title>Page Title</title></head><body><h1>Header</h1></body></html>'::HTML, '//title');
+----
+Page Title
+
+# Test complex HTML with XML functions
+query I
+SELECT xml_extract_text('<div class="content"><span>Text content</span></div>'::HTML, '//span');
+----
+Text content

@@ -1,0 +1,59 @@
+# name: test/sql/html_basic.test
+# description: Test basic HTML processing functionality
+# group: [xml]
+
+require xml
+
+# Test HTML type casting with simple HTML
+query I
+SELECT '<h1>Hello World</h1>'::HTML AS html_cast_result;
+----
+<h1>Hello World</h1>
+
+# Test HTML type casting with more complex HTML
+query I
+SELECT '<html><body><h1>Title</h1><p>Content</p></body></html>'::HTML AS complex_html_cast;
+----
+<html><body><h1>Title</h1><p>Content</p></body></html>
+
+# Test HTML type casting with attributes
+query I
+SELECT '<div class="container"><a href="https://example.com">Link</a></div>'::HTML AS html_with_attrs;
+----
+<div class="container"><a href="https://example.com">Link</a></div>
+
+# Test HTML type casting with self-closing tags
+query I
+SELECT '<img src="image.jpg" alt="Test Image"/><br/>'::HTML AS html_self_closing;
+----
+<img src="image.jpg" alt="Test Image"/><br/>
+
+# Test HTML type casting with malformed HTML (should parse with recovery)
+query I
+SELECT '<div><p>Unclosed paragraph<div>Nested content</div>'::HTML AS malformed_html;
+----
+<div><p>Unclosed paragraph<div>Nested content</div>
+
+# Test that result type is actually HTML type
+query T
+SELECT typeof('<div>test</div>'::HTML);
+----
+HTML
+
+# Test VARCHAR to HTML cast function works
+query I
+SELECT CAST('<span>cast test</span>' AS HTML) AS varchar_to_html_cast;
+----
+<span>cast test</span>
+
+# Test HTML to XML cast compatibility
+query I
+SELECT CAST('<p>HTML content</p>'::HTML AS XML) AS html_to_xml_cast;
+----
+<p>HTML content</p>
+
+# Test XML to HTML cast compatibility  
+query I
+SELECT CAST('<element>XML content</element>'::XML AS HTML) AS xml_to_html_cast;
+----
+<element>XML content</element>

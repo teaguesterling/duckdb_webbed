@@ -15,6 +15,7 @@ struct XMLDocRAII {
 	xmlXPathContextPtr xpath_ctx = nullptr;
 	
 	XMLDocRAII(const std::string& xml_str);
+	XMLDocRAII(const std::string& content, bool is_html);
 	~XMLDocRAII();
 	
 	// Delete copy operations for safety
@@ -97,6 +98,31 @@ struct XMLStats {
 	int64_t namespace_count;
 };
 
+// HTML-specific structures
+struct HTMLLink {
+	std::string text;
+	std::string url;
+	std::string title;
+	int64_t line_number;
+};
+
+struct HTMLImage {
+	std::string alt_text;
+	std::string src;
+	std::string title;
+	int64_t width;
+	int64_t height;
+	int64_t line_number;
+};
+
+struct HTMLTable {
+	std::vector<std::string> headers;
+	std::vector<std::vector<std::string>> rows;
+	int64_t line_number;
+	int64_t num_columns;
+	int64_t num_rows;
+};
+
 // Utility functions
 class XMLUtils {
 public:
@@ -126,6 +152,7 @@ public:
 	
 	// XMLFragment extraction
 	static std::string ExtractXMLFragment(const std::string& xml_str, const std::string& xpath);
+	static std::string ExtractXMLFragmentAll(const std::string& xml_str, const std::string& xpath);
 	
 	// Complex type conversion functions for to_xml()
 	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string& node_name);
@@ -133,6 +160,13 @@ public:
 	
 	// Recursive value conversion for nested types - returns xmlNodePtr for direct attachment
 	static xmlNodePtr ConvertValueToXMLNode(const Value& value, const LogicalType& type, const std::string& node_name, xmlDocPtr doc);
+	
+	// HTML-specific extraction functions
+	static std::vector<HTMLLink> ExtractHTMLLinks(const std::string& html_str);
+	static std::vector<HTMLImage> ExtractHTMLImages(const std::string& html_str);
+	static std::vector<HTMLTable> ExtractHTMLTables(const std::string& html_str);
+	static std::string ExtractHTMLText(const std::string& html_str, const std::string& selector = "");
+	static std::string ExtractHTMLTextByXPath(const std::string& html_str, const std::string& xpath);
 	
 	// Internal helper functions
 	static XMLElement ProcessXMLNode(xmlNodePtr node);

@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
+#include <libxml/HTMLparser.h>
 #include <iostream>
 #include <functional>
 #include <set>
@@ -50,6 +51,35 @@ XMLDocRAII::XMLDocRAII(const std::string& xml_str) {
 		// Parse with default options (preserves comments and CDATA by default)
 		doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(), nullptr, nullptr, 0);
 		xmlFreeParserCtxt(parser_ctx);
+	}
+	
+	if (doc && !xml_parse_error_occurred) {
+		xpath_ctx = xmlXPathNewContext(doc);
+	}
+	
+	// Reset error handler
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+}
+
+XMLDocRAII::XMLDocRAII(const std::string& content, bool is_html) {
+	// Reset error state
+	xml_parse_error_occurred = false;
+	xml_parse_error_message.clear();
+	
+	// Set error handler
+	xmlSetGenericErrorFunc(nullptr, XMLErrorHandler);
+	
+	if (is_html) {
+		// Parse as HTML using libxml2's HTML parser
+		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, nullptr, 
+		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+	} else {
+		// Parse as XML (same as original constructor)
+		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+		if (parser_ctx) {
+			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr, 0);
+			xmlFreeParserCtxt(parser_ctx);
+		}
 	}
 	
 	if (doc && !xml_parse_error_occurred) {
@@ -904,7 +934,75 @@ std::string XMLUtils::ExtractXMLFragment(const std::string& xml_str, const std::
 	
 	std::string fragment_xml;
 	
-	// Iterate through all matching nodes and serialize them
+	// Return only the first matching node
+	if (xpath_obj->nodesetval->nodeNr > 0) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
+		if (node) {
+			// Create a temporary document for dumping this node
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				// Copy the node to avoid ownership issues
+				xmlNodePtr copied_node = xmlCopyNode(node, 1); // 1 = recursive copy
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+					
+					// Dump the node as XML string
+					xmlChar* node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char*>(node_ptr.get()));
+						
+						// Remove XML declaration from individual nodes
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							// Remove leading whitespace/newlines
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+						
+						// Remove trailing whitespace/newlines
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+						
+						fragment_xml = node_xml;
+					}
+				}
+			}
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return fragment_xml;
+}
+
+std::string XMLUtils::ExtractXMLFragmentAll(const std::string& xml_str, const std::string& xpath) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+	
+	// Suppress XPath warnings (e.g., undefined namespace prefixes)
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+	
+	// Restore normal error handling
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+	
+	std::string fragment_xml;
+	
+	// Return ALL matching nodes, separated by newlines
 	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
 		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
 		if (node) {
@@ -933,6 +1031,15 @@ std::string XMLUtils::ExtractXMLFragment(const std::string& xml_str, const std::
 							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
 						}
 						
+						// Remove trailing whitespace/newlines
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+						
+						if (!fragment_xml.empty()) {
+							fragment_xml += "\n";
+						}
 						fragment_xml += node_xml;
 					}
 				}
@@ -941,6 +1048,12 @@ std::string XMLUtils::ExtractXMLFragment(const std::string& xml_str, const std::
 	}
 	
 	xmlXPathFreeObject(xpath_obj);
+	
+	// Add trailing newline for consistent string splitting
+	if (!fragment_xml.empty()) {
+		fragment_xml += "\n";
+	}
+	
 	return fragment_xml;
 }
 
@@ -1237,6 +1350,306 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value& value, const LogicalType
 			return node;
 		}
 	}
+}
+
+// HTML-specific extraction functions
+std::vector<HTMLLink> XMLUtils::ExtractHTMLLinks(const std::string& html_str) {
+	std::vector<HTMLLink> links;
+	
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return links;
+	}
+	
+	// Find all <a> elements with href attributes
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST "//a[@href]", html_doc.xpath_ctx);
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return links;
+	}
+	
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node && node->type == XML_ELEMENT_NODE) {
+			HTMLLink link;
+			
+			// Get href attribute using RAII
+			XMLCharPtr href(xmlGetProp(node, BAD_CAST "href"));
+			if (href) {
+				link.url = std::string(reinterpret_cast<const char*>(href.get()));
+			}
+			
+			// Get title attribute using RAII
+			XMLCharPtr title(xmlGetProp(node, BAD_CAST "title"));
+			if (title) {
+				link.title = std::string(reinterpret_cast<const char*>(title.get()));
+			}
+			
+			// Get text content using RAII
+			XMLCharPtr text(xmlNodeGetContent(node));
+			if (text) {
+				link.text = std::string(reinterpret_cast<const char*>(text.get()));
+			}
+			
+			link.line_number = node->line;
+			links.push_back(link);
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return links;
+}
+
+std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string& html_str) {
+	std::vector<HTMLImage> images;
+	
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return images;
+	}
+	
+	// Find all <img> elements
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST "//img", html_doc.xpath_ctx);
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return images;
+	}
+	
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node && node->type == XML_ELEMENT_NODE) {
+			HTMLImage image;
+			
+			// Get src attribute using RAII
+			XMLCharPtr src(xmlGetProp(node, BAD_CAST "src"));
+			if (src) {
+				image.src = std::string(reinterpret_cast<const char*>(src.get()));
+			}
+			
+			// Get alt attribute using RAII
+			XMLCharPtr alt(xmlGetProp(node, BAD_CAST "alt"));
+			if (alt) {
+				image.alt_text = std::string(reinterpret_cast<const char*>(alt.get()));
+			}
+			
+			// Get title attribute using RAII
+			XMLCharPtr title(xmlGetProp(node, BAD_CAST "title"));
+			if (title) {
+				image.title = std::string(reinterpret_cast<const char*>(title.get()));
+			}
+			
+			// Get width attribute using RAII
+			XMLCharPtr width(xmlGetProp(node, BAD_CAST "width"));
+			if (width) {
+				try {
+					image.width = std::stoll(std::string(reinterpret_cast<const char*>(width.get())));
+				} catch (...) {
+					image.width = 0;
+				}
+			}
+			
+			// Get height attribute using RAII
+			XMLCharPtr height(xmlGetProp(node, BAD_CAST "height"));
+			if (height) {
+				try {
+					image.height = std::stoll(std::string(reinterpret_cast<const char*>(height.get())));
+				} catch (...) {
+					image.height = 0;
+				}
+			}
+			
+			image.line_number = node->line;
+			images.push_back(image);
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return images;
+}
+
+std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string& html_str) {
+	std::vector<HTMLTable> tables;
+	
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return tables;
+	}
+	
+	// Find all <table> elements
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST "//table", html_doc.xpath_ctx);
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return tables;
+	}
+	
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr table_node = xpath_obj->nodesetval->nodeTab[i];
+		if (table_node && table_node->type == XML_ELEMENT_NODE) {
+			HTMLTable table;
+			table.line_number = table_node->line;
+			
+			// Extract header row from thead/th or first tr/th
+			xmlXPathContextPtr local_ctx = xmlXPathNewContext(html_doc.doc);
+			if (local_ctx) {
+				// Set context to this table node
+				local_ctx->node = table_node;
+				
+				// Look for header cells (th elements)
+				xmlXPathObjectPtr header_obj = xmlXPathEvalExpression(
+					BAD_CAST ".//thead//th | .//tr[1]//th", local_ctx);
+				
+				if (header_obj && header_obj->nodesetval && header_obj->nodesetval->nodeNr > 0) {
+					// Found th elements - use as headers
+					for (int j = 0; j < header_obj->nodesetval->nodeNr; j++) {
+						xmlNodePtr th_node = header_obj->nodesetval->nodeTab[j];
+						XMLCharPtr text(xmlNodeGetContent(th_node));
+						if (text) {
+							table.headers.push_back(std::string(reinterpret_cast<const char*>(text.get())));
+						} else {
+							table.headers.push_back("");
+						}
+					}
+				}
+				
+				if (header_obj) xmlXPathFreeObject(header_obj);
+				
+				// Extract data rows (all rows for tables without th headers)
+				bool has_th_headers = !table.headers.empty();
+				std::string data_xpath = has_th_headers ? 
+					".//tbody//tr | .//tr[not(th)]" : 
+					".//tbody//tr | .//tr";
+				
+				xmlXPathObjectPtr rows_obj = xmlXPathEvalExpression(
+					BAD_CAST data_xpath.c_str(), local_ctx);
+				
+				if (rows_obj && rows_obj->nodesetval) {
+					for (int j = 0; j < rows_obj->nodesetval->nodeNr; j++) {
+						xmlNodePtr row_node = rows_obj->nodesetval->nodeTab[j];
+						std::vector<std::string> row_data;
+						
+						// Extract td elements from this row
+						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
+						if (row_ctx) {
+							row_ctx->node = row_node;
+							xmlXPathObjectPtr cells_obj = xmlXPathEvalExpression(
+								BAD_CAST ".//td", row_ctx);
+							
+							if (cells_obj && cells_obj->nodesetval) {
+								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
+									xmlNodePtr cell_node = cells_obj->nodesetval->nodeTab[k];
+									XMLCharPtr text(xmlNodeGetContent(cell_node));
+									if (text) {
+										row_data.push_back(std::string(reinterpret_cast<const char*>(text.get())));
+									} else {
+										row_data.push_back("");
+									}
+								}
+							}
+							
+							if (cells_obj) xmlXPathFreeObject(cells_obj);
+							xmlXPathFreeContext(row_ctx);
+						}
+						
+						if (!row_data.empty()) {
+							table.rows.push_back(row_data);
+						}
+					}
+				}
+				
+				if (rows_obj) xmlXPathFreeObject(rows_obj);
+				xmlXPathFreeContext(local_ctx);
+			}
+			
+			// Set table metadata
+			table.num_columns = static_cast<int64_t>(table.headers.size());
+			table.num_rows = static_cast<int64_t>(table.rows.size());
+			
+			// Only add table if it has content
+			if (table.num_columns > 0 || table.num_rows > 0) {
+				tables.push_back(table);
+			}
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return tables;
+}
+
+std::string XMLUtils::ExtractHTMLText(const std::string& html_str, const std::string& selector) {
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return "";
+	}
+	
+	std::string xpath = selector.empty() ? "//text()" : selector;
+	
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+	
+	std::string text_content;
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLCharPtr content(xmlNodeGetContent(node));
+			if (content) {
+				text_content += std::string(reinterpret_cast<const char*>(content.get()));
+			}
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return text_content;
+}
+
+std::string XMLUtils::ExtractHTMLTextByXPath(const std::string& html_str, const std::string& xpath) {
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return "";
+	}
+	
+	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(
+		BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
+	xmlSetGenericErrorFunc(nullptr, nullptr);
+	
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj) xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+	
+	std::string text_content;
+	// Return only the first match
+	if (xpath_obj->nodesetval->nodeNr > 0) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
+		if (node) {
+			XMLCharPtr content(xmlNodeGetContent(node));
+			if (content) {
+				text_content = std::string(reinterpret_cast<const char*>(content.get()));
+			}
+		}
+	}
+	
+	xmlXPathFreeObject(xpath_obj);
+	return text_content;
 }
 
 } // namespace duckdb

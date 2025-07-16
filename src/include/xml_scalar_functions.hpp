@@ -38,6 +38,17 @@ private:
 	// Analysis functions
 	static void XMLStatsFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	
+	// HTML-specific extraction functions
+	static void HTMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractTextWithXPathFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	
+	// HTML file parsing functions
+	static void ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 };
 
 } // namespace duckdb

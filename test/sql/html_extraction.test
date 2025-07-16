@@ -1,0 +1,93 @@
+# name: test/sql/html_extraction.test
+# description: Test HTML content extraction functions
+# group: [xml]
+
+require xml
+
+# Test html_extract_text with simple HTML
+query I
+SELECT html_extract_text('<h1>Main Title</h1><p>Some content here.</p>', '//h1');
+----
+Main Title
+
+# Test html_extract_text with multiple elements
+query I
+SELECT html_extract_text('<div><p>First</p><p>Second</p></div>', '//p');
+----
+First
+
+# Test html_extract_links from HTML content
+query III
+SELECT 
+    (unnest(html_extract_links('<a href="https://example.com">Example</a><a href="/internal">Internal</a>'))).href as url,
+    (unnest(html_extract_links('<a href="https://example.com">Example</a><a href="/internal">Internal</a>'))).text as link_text,
+    (unnest(html_extract_links('<a href="https://example.com">Example</a><a href="/internal">Internal</a>'))).title as link_title;
+----
+https://example.com	Example	NULL
+/internal	Internal	NULL
+
+# Test html_extract_links with titles and attributes
+query III  
+SELECT 
+    (unnest(html_extract_links('<a href="https://test.com" title="Test Site" target="_blank">Test Link</a>'))).href as url,
+    (unnest(html_extract_links('<a href="https://test.com" title="Test Site" target="_blank">Test Link</a>'))).text as link_text,
+    (unnest(html_extract_links('<a href="https://test.com" title="Test Site" target="_blank">Test Link</a>'))).title as link_title;
+----
+https://test.com	Test Link	Test Site
+
+# Test html_extract_images from HTML content  
+query III
+SELECT 
+    (unnest(html_extract_images('<img src="photo.jpg" alt="A photo"><img src="icon.png" alt="Icon" title="App Icon">'))).src as image_src,
+    (unnest(html_extract_images('<img src="photo.jpg" alt="A photo"><img src="icon.png" alt="Icon" title="App Icon">'))).alt as image_alt,
+    (unnest(html_extract_images('<img src="photo.jpg" alt="A photo"><img src="icon.png" alt="Icon" title="App Icon">'))).title as image_title;
+----
+photo.jpg	A photo	NULL
+icon.png	Icon	App Icon
+
+# Test html_extract_tables from HTML content
+query III
+SELECT 
+    table_index,
+    row_index, 
+    columns
+FROM html_extract_tables('<table><tr><th>Name</th><th>Age</th></tr><tr><td>John</td><td>25</td></tr><tr><td>Jane</td><td>30</td></tr></table>');
+----
+0	0	[Name, Age]
+0	1	[John, 25]
+0	2	[Jane, 30]
+
+# Test html_extract_tables with multiple tables
+query III
+SELECT 
+    table_index,
+    row_index,
+    columns  
+FROM html_extract_tables('<table><tr><td>Table1</td></tr></table><table><tr><td>Table2</td></tr></table>');
+----
+0	0	[Table1]
+1	0	[Table2]
+
+# Test compatibility: XML functions should work on HTML type
+query I
+SELECT xml_extract_text('<div><span>HTML processed as XML</span></div>'::HTML, '//span');
+----
+HTML processed as XML
+
+# Test compatibility: xml_extract_elements should work on HTML
+query I
+SELECT xml_extract_elements('<ul><li>Item 1</li><li>Item 2</li></ul>'::HTML, '//li');
+----
+<li>Item 1</li>
+
+# Test HTML-specific XPath expressions
+query I  
+SELECT html_extract_text('<html><head><title>Page Title</title></head><body><h1>Header</h1></body></html>', '//title');
+----
+Page Title
+
+# Test HTML with complex nested structure
+query I
+SELECT html_extract_text('<div><header><h1>Title</h1></header><main><p>Content here.</p></main></div>', '//h1');
+----
+Title

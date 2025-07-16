@@ -430,6 +430,236 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_xml_function.named_parameters["columns"] = LogicalType::ANY;
 	
 	ExtensionUtil::RegisterFunction(db, read_xml_function);
+	
+	// Register read_html_objects table function for batch HTML processing
+	TableFunction read_html_objects_function("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction, 
+	                                          ReadHTMLBind, ReadHTMLInit);
+	read_html_objects_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_objects_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_objects_function.named_parameters["filename"] = LogicalType::BOOLEAN;
+	ExtensionUtil::RegisterFunction(db, read_html_objects_function);
+	
+	// Register html_extract_tables table function
+	TableFunction html_extract_tables_function("html_extract_tables", {LogicalType::VARCHAR}, HTMLExtractTablesFunction,
+	                                            HTMLExtractTablesBind, HTMLExtractTablesInit);
+	ExtensionUtil::RegisterFunction(db, html_extract_tables_function);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<XMLReadFunctionData>();
+	
+	// Get file pattern from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("read_html requires at least one argument (file pattern)");
+	}
+	
+	auto file_pattern = input.inputs[0].ToString();
+	
+	// Expand file pattern using file system
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto glob_result = fs.Glob(file_pattern, nullptr);
+	
+	// Extract file paths from OpenFileInfo results
+	for (const auto &file_info : glob_result) {
+		result->files.push_back(file_info.path);
+	}
+	
+	if (result->files.empty()) {
+		throw InvalidInputException("No files found matching pattern: %s", file_pattern);
+	}
+	
+	// Handle optional parameters
+	bool include_filename = false; // Default: don't include filename column
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+		} else if (kv.first == "maximum_file_size") {
+			result->max_file_size = kv.second.GetValue<idx_t>();
+		} else if (kv.first == "filename") {
+			include_filename = kv.second.GetValue<bool>();
+		}
+	}
+	
+	// Set return schema based on filename parameter
+	if (include_filename) {
+		return_types.push_back(LogicalType::VARCHAR); // filename
+		names.push_back("filename");
+	}
+	return_types.push_back(XMLTypes::HTMLType()); // HTML content
+	names.push_back("html");
+	
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLInit(ClientContext &context, TableFunctionInitInput &input) {
+	auto result = make_uniq<XMLReadGlobalState>();
+	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
+	
+	result->files = bind_data.files;
+	result->file_index = 0;
+	
+	return std::move(result);
+}
+
+void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
+	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
+	
+	if (gstate.file_index >= gstate.files.size()) {
+		// No more files to process
+		return;
+	}
+	
+	auto &fs = FileSystem::GetFileSystem(context);
+	idx_t output_idx = 0;
+	
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
+		const auto &filename = gstate.files[gstate.file_index++];
+		
+		try {
+			// Check file size
+			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+			
+			if (file_size > bind_data.max_file_size) {
+				if (!bind_data.ignore_errors) {
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
+					                           filename, bind_data.max_file_size);
+				}
+				continue; // Skip this file
+			}
+			
+			// Read file content
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void*)content.data(), file_size);
+			
+			// Handle empty HTML files gracefully (HTML is more permissive than XML)
+			if (content.empty()) {
+				if (bind_data.ignore_errors) {
+					continue; // Skip this empty file
+				} else {
+					// For HTML, treat empty file as empty HTML content
+					content = "<html></html>";
+				}
+			}
+			
+			// Set output values based on schema
+			idx_t col_idx = 0;
+			if (output.data.size() == 2) {
+				// Both filename and html columns
+				output.data[col_idx++].SetValue(output_idx, Value(filename));
+				output.data[col_idx++].SetValue(output_idx, Value(content));
+			} else {
+				// Only html column
+				output.data[col_idx++].SetValue(output_idx, Value(content));
+			}
+			output_idx++;
+			
+		} catch (const Exception &e) {
+			if (!bind_data.ignore_errors) {
+				throw;
+			}
+			// Skip this file and continue
+		}
+	}
+	
+	output.SetCardinality(output_idx);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                     vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<HTMLTableExtractionData>();
+	
+	// Get HTML content from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("html_extract_tables requires HTML content as first argument");
+	}
+	
+	result->html_content = input.inputs[0].ToString();
+	
+	// Set return schema: table_index, row_index, columns
+	return_types.push_back(LogicalType::BIGINT);   // table_index
+	names.push_back("table_index");
+	return_types.push_back(LogicalType::BIGINT);   // row_index
+	names.push_back("row_index");
+	return_types.push_back(LogicalType::LIST(LogicalType::VARCHAR)); // columns
+	names.push_back("columns");
+	
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::HTMLExtractTablesInit(ClientContext &context, TableFunctionInitInput &input) {
+	auto result = make_uniq<HTMLTableExtractionGlobalState>();
+	auto &bind_data = input.bind_data->Cast<HTMLTableExtractionData>();
+	
+	// Extract tables from the HTML content
+	auto tables = XMLUtils::ExtractHTMLTables(bind_data.html_content);
+	
+	// Convert to our format: [table][row][column]
+	for (const auto &table : tables) {
+		vector<vector<string>> table_rows;
+		
+		// Add header row if present
+		if (!table.headers.empty()) {
+			vector<string> header_row;
+			for (const auto &header : table.headers) {
+				header_row.push_back(header);
+			}
+			table_rows.push_back(header_row);
+		}
+		
+		// Add data rows
+		for (const auto &row : table.rows) {
+			vector<string> data_row;
+			for (const auto &cell : row) {
+				data_row.push_back(cell);
+			}
+			table_rows.push_back(data_row);
+		}
+		
+		result->all_tables.push_back(table_rows);
+	}
+	
+	return std::move(result);
+}
+
+void XMLReaderFunctions::HTMLExtractTablesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &gstate = data_p.global_state->Cast<HTMLTableExtractionGlobalState>();
+	
+	idx_t output_idx = 0;
+	
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.current_table < gstate.all_tables.size()) {
+		const auto &current_table = gstate.all_tables[gstate.current_table];
+		
+		if (gstate.current_row < current_table.size()) {
+			const auto &current_row = current_table[gstate.current_row];
+			
+			// Set table_index
+			output.data[0].SetValue(output_idx, Value::BIGINT(static_cast<int64_t>(gstate.current_table)));
+			
+			// Set row_index
+			output.data[1].SetValue(output_idx, Value::BIGINT(static_cast<int64_t>(gstate.current_row)));
+			
+			// Set columns as list of strings
+			vector<Value> column_values;
+			for (const auto &column : current_row) {
+				column_values.emplace_back(Value(column));
+			}
+			Value columns_list = Value::LIST(LogicalType::VARCHAR, column_values);
+			output.data[2].SetValue(output_idx, columns_list);
+			
+			output_idx++;
+			gstate.current_row++;
+		} else {
+			// Move to next table
+			gstate.current_table++;
+			gstate.current_row = 0;
+		}
+	}
+	
+	output.SetCardinality(output_idx);
 }
 
 } // namespace duckdb

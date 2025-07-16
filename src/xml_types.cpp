@@ -24,6 +24,12 @@ LogicalType XMLTypes::XMLFragmentType() {
 	return xml_frag_type;
 }
 
+LogicalType XMLTypes::HTMLType() {
+	auto html_type = LogicalType(LogicalTypeId::VARCHAR);
+	html_type.SetAlias("HTML");
+	return html_type;
+}
+
 LogicalType XMLTypes::XMLArrayType() {
 	return LogicalType::LIST(XMLType());
 }
@@ -38,6 +44,10 @@ bool XMLTypes::IsXMLFragmentType(const LogicalType& type) {
 
 bool XMLTypes::IsXMLArrayType(const LogicalType& type) {
 	return type.id() == LogicalTypeId::LIST && IsXMLType(ListType::GetChildType(type));
+}
+
+bool XMLTypes::IsHTMLType(const LogicalType& type) {
+	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "HTML";
 }
 
 bool XMLTypes::XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
@@ -69,6 +79,30 @@ bool XMLTypes::JSONToXMLCast(Vector &source, Vector &result, idx_t count, CastPa
 	return true;
 }
 
+bool XMLTypes::HTMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// HTML to VARCHAR is essentially a no-op since HTML is stored as VARCHAR internally
+	VectorOperations::Copy(source, result, count, 0, 0);
+	return true;
+}
+
+bool XMLTypes::VarcharToHTMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// VARCHAR to HTML: for now, just copy the data - validation could be added later
+	VectorOperations::Copy(source, result, count, 0, 0);
+	return true;
+}
+
+bool XMLTypes::XMLToHTMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// XML to HTML: copy as-is (XML is valid in HTML context for our purposes)
+	VectorOperations::Copy(source, result, count, 0, 0);
+	return true;
+}
+
+bool XMLTypes::HTMLToXMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	// HTML to XML: copy as-is (we'll assume HTML was parsed and is well-formed)
+	VectorOperations::Copy(source, result, count, 0, 0);
+	return true;
+}
+
 void XMLTypes::Register(DatabaseInstance &db) {
 	// For now, register XML as a simple type alias
 	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
@@ -84,6 +118,11 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	xml_fragment_type.SetAlias("XMLFragment");
 	ExtensionUtil::RegisterType(db, "XMLFragment", xml_fragment_type);
 	
+	// Register HTML type
+	auto html_type = LogicalType(LogicalType::VARCHAR);
+	html_type.SetAlias("HTML");
+	ExtensionUtil::RegisterType(db, "HTML", html_type);
+	
 	// Register cast functions for XML type conversion
 	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
@@ -92,6 +131,12 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
 	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, xml_type, VarcharToXMLCast);
+	
+	// Register cast functions for HTML type conversion
+	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, html_type, VarcharToHTMLCast);
+	ExtensionUtil::RegisterCastFunction(db, html_type, LogicalType::VARCHAR, HTMLToVarcharCast);
+	ExtensionUtil::RegisterCastFunction(db, xml_type, html_type, XMLToHTMLCast);
+	ExtensionUtil::RegisterCastFunction(db, html_type, xml_type, HTMLToXMLCast);
 	
 	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
 	try {

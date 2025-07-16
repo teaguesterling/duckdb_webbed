@@ -1,0 +1,70 @@
+# name: test/sql/html_file_reading.test  
+# description: Test reading HTML files and processing them
+# group: [xml]
+
+require xml
+
+# Test parse_html function with simple HTML content
+query I
+SELECT parse_html('test/html/simple.html') AS html_content;
+----
+<html><head><title>Simple Page</title></head><body><h1>Welcome</h1><p>This is a test page.</p></body></html>
+
+# Test read_html_objects function for batch processing
+query I
+SELECT 
+    typeof(html) AS content_type
+FROM read_html_objects('test/html/*.html');
+----
+HTML
+HTML
+HTML
+HTML
+HTML
+
+# Test extracting data from read HTML files
+query I
+SELECT 
+    html_extract_text(html, '//title') AS page_title
+FROM read_html_objects('test/html/*.html')
+WHERE html_extract_text(html, '//title') IS NOT NULL AND html_extract_text(html, '//title') != ''
+ORDER BY page_title;
+----
+Complex Page
+Simple Page
+Unicode Test
+
+# Test extracting links from HTML files
+query II
+SELECT 
+    (unnest(html_extract_links(html))).href AS link_url,
+    (unnest(html_extract_links(html))).text AS link_text
+FROM read_html_objects('test/html/complex.html');
+----
+https://example.com	External Link
+/internal	Internal Page
+
+# Test malformed HTML handling
+query I
+SELECT parse_html('test/html/malformed.html') AS parsed_html;
+----
+<html><body><div><p>Unclosed tags<span>More content</span></p></div></body></html>
+
+# Test HTML file that doesn't exist (should error gracefully)
+statement error
+SELECT parse_html('test/html/nonexistent.html');
+----
+IO Error
+
+# Test empty HTML file
+query I  
+SELECT parse_html('test/html/empty.html') AS empty_content;
+----
+<html></html>
+
+
+# Test HTML with encoding issues
+query I
+SELECT html_extract_text(parse_html('test/html/unicode.html'), '//h1');
+----
+Héllo Wörld 测试

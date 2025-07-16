@@ -24,6 +24,18 @@ private:
 	static unique_ptr<FunctionData> ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
 	                                             vector<LogicalType> &return_types, vector<string> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadXMLInit(ClientContext &context, TableFunctionInitInput &input);
+	
+	// HTML reading functions
+	static void ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
+	static unique_ptr<FunctionData> ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
+	                                              vector<LogicalType> &return_types, vector<string> &names);
+	static unique_ptr<GlobalTableFunctionState> ReadHTMLInit(ClientContext &context, TableFunctionInitInput &input);
+	
+	// HTML table extraction functions
+	static void HTMLExtractTablesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
+	static unique_ptr<FunctionData> HTMLExtractTablesBind(ClientContext &context, TableFunctionBindInput &input,
+	                                                        vector<LogicalType> &return_types, vector<string> &names);
+	static unique_ptr<GlobalTableFunctionState> HTMLExtractTablesInit(ClientContext &context, TableFunctionInitInput &input);
 };
 
 // Function data structures
@@ -41,6 +53,21 @@ struct XMLReadFunctionData : public TableFunctionData {
 struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t file_index = 0;
 	vector<string> files;
+	
+	idx_t MaxThreads() const override {
+		return 1; // Single-threaded for now
+	}
+};
+
+// HTML table extraction function data
+struct HTMLTableExtractionData : public TableFunctionData {
+	string html_content;
+};
+
+struct HTMLTableExtractionGlobalState : public GlobalTableFunctionState {
+	vector<vector<vector<string>>> all_tables; // [table][row][column]
+	idx_t current_table = 0;
+	idx_t current_row = 0;
 	
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now

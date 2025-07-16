@@ -81,8 +81,8 @@ void XMLScalarFunctions::XMLExtractElementsStringFunction(DataChunk &args, Expre
 			std::string xml_string = xml_str.GetString();
 			std::string xpath_string = xpath_str.GetString();
 			
-			// Extract XML fragment using our new utility function
-			std::string fragment_xml = XMLUtils::ExtractXMLFragment(xml_string, xpath_string);
+			// Extract ALL XML fragments separated by newlines
+			std::string fragment_xml = XMLUtils::ExtractXMLFragmentAll(xml_string, xpath_string);
 			
 			return StringVector::AddString(result, fragment_xml);
 		});
@@ -461,6 +461,10 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	// XML + STRING_LITERAL (for direct string literals)
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, XMLExtractTextFunction));
+	// HTMLType + VARCHAR (use HTML-specific function)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
+	// HTMLType + STRING_LITERAL (use HTML-specific function)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
 	// XMLFragment + VARCHAR (for results from xml_extract_elements)
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	// XMLFragment + STRING_LITERAL
@@ -487,6 +491,10 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
 	// XML + STRING_LITERAL
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// HTML + VARCHAR
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
+	// HTML + STRING_LITERAL
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
 	// XMLFragment + VARCHAR (for nested extraction)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
 	// XMLFragment + STRING_LITERAL
@@ -520,6 +528,7 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	// Register xml_extract_attributes function as a function set
 	ScalarFunctionSet xml_extract_attributes_functions("xml_extract_attributes");
 	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
+	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	xml_extract_attributes_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	ExtensionUtil::RegisterFunction(db, xml_extract_attributes_functions);
 	
@@ -582,6 +591,445 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	auto json_to_xml_function = ScalarFunction("json_to_xml", 
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction);
 	ExtensionUtil::RegisterFunction(db, json_to_xml_function);
+	
+	// Register HTML extraction functions following markdown extension patterns
+	
+	// Define return types for HTML functions
+	auto html_link_struct_type = LogicalType::STRUCT({
+		{"text", LogicalType(LogicalTypeId::VARCHAR)},
+		{"href", LogicalType(LogicalTypeId::VARCHAR)},
+		{"title", LogicalType(LogicalTypeId::VARCHAR)},
+		{"line_number", LogicalType(LogicalTypeId::BIGINT)}
+	});
+	
+	auto html_image_struct_type = LogicalType::STRUCT({
+		{"alt", LogicalType(LogicalTypeId::VARCHAR)},
+		{"src", LogicalType(LogicalTypeId::VARCHAR)},
+		{"title", LogicalType(LogicalTypeId::VARCHAR)},
+		{"width", LogicalType(LogicalTypeId::BIGINT)},
+		{"height", LogicalType(LogicalTypeId::BIGINT)},
+		{"line_number", LogicalType(LogicalTypeId::BIGINT)}
+	});
+	
+	auto html_table_row_struct_type = LogicalType::STRUCT({
+		{"table_index", LogicalType(LogicalTypeId::BIGINT)},
+		{"row_type", LogicalType(LogicalTypeId::VARCHAR)},
+		{"row_index", LogicalType(LogicalTypeId::BIGINT)},
+		{"column_index", LogicalType(LogicalTypeId::BIGINT)},
+		{"cell_value", LogicalType(LogicalTypeId::VARCHAR)},
+		{"line_number", LogicalType(LogicalTypeId::BIGINT)},
+		{"num_columns", LogicalType(LogicalTypeId::BIGINT)},
+		{"num_rows", LogicalType(LogicalTypeId::BIGINT)}
+	});
+	
+	auto html_table_json_struct_type = LogicalType::STRUCT({
+		{"table_index", LogicalType(LogicalTypeId::BIGINT)},
+		{"line_number", LogicalType(LogicalTypeId::BIGINT)},
+		{"num_columns", LogicalType(LogicalTypeId::BIGINT)},
+		{"num_rows", LogicalType(LogicalTypeId::BIGINT)},
+		{"headers", LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR))},
+		{"table_data", LogicalType::LIST(LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR)))},
+		{"table_json", LogicalType::STRUCT({})}, // Complex nested struct
+		{"json_structure", LogicalType::STRUCT({})} // Complex nested struct
+	});
+	
+	// Register html_extract_text function with XPath support
+	ScalarFunctionSet html_extract_text_functions("html_extract_text");
+	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::VARCHAR, HTMLExtractTextFunction));
+	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
+	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
+	ExtensionUtil::RegisterFunction(db, html_extract_text_functions);
+	
+	// Register html_extract_links function
+	auto html_extract_links_function = ScalarFunction("html_extract_links", 
+		{XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction);
+	ExtensionUtil::RegisterFunction(db, html_extract_links_function);
+	
+	// Register html_extract_images function
+	auto html_extract_images_function = ScalarFunction("html_extract_images", 
+		{XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction);
+	ExtensionUtil::RegisterFunction(db, html_extract_images_function);
+	
+	// Register html_extract_table_rows function
+	auto html_extract_table_rows_function = ScalarFunction("html_extract_table_rows", 
+		{XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction);
+	ExtensionUtil::RegisterFunction(db, html_extract_table_rows_function);
+	
+	// Register html_extract_tables_json function
+	auto html_extract_tables_json_function = ScalarFunction("html_extract_tables_json", 
+		{XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
+	ExtensionUtil::RegisterFunction(db, html_extract_tables_json_function);
+	
+	// Register parse_html scalar function for parsing HTML files
+	auto parse_html_function = ScalarFunction("parse_html", 
+		{LogicalType::VARCHAR}, XMLTypes::HTMLType(), ParseHTMLFunction);
+	ExtensionUtil::RegisterFunction(db, parse_html_function);
+}
+
+// HTML-specific extraction function implementations
+void XMLScalarFunctions::HTMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(html_vector, result, args.size(), [&](string_t html_str) {
+		std::string html_string = html_str.GetString();
+		std::string extracted_text = XMLUtils::ExtractHTMLText(html_string);
+		return StringVector::AddString(result, extracted_text);
+	});
+}
+
+void XMLScalarFunctions::HTMLExtractTextWithXPathFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	
+	BinaryExecutor::Execute<string_t, string_t, string_t>(
+		html_vector, xpath_vector, result, args.size(),
+		[&](string_t html_str, string_t xpath_str) {
+			std::string html_string = html_str.GetString();
+			std::string xpath_string = xpath_str.GetString();
+			std::string extracted_text = XMLUtils::ExtractHTMLTextByXPath(html_string, xpath_string);
+			return StringVector::AddString(result, extracted_text);
+		});
+}
+
+void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
+		std::string html_string = html_str.GetString();
+		
+		auto links = XMLUtils::ExtractHTMLLinks(html_string);
+		
+		vector<Value> link_values;
+		for (const auto &link : links) {
+			child_list_t<Value> link_children;
+			link_children.emplace_back("text", Value(link.text));
+			link_children.emplace_back("href", Value(link.url));
+			link_children.emplace_back("title", link.title.empty() ? Value() : Value(link.title));
+			link_children.emplace_back("line_number", Value::BIGINT(link.line_number));
+			
+			link_values.emplace_back(Value::STRUCT(link_children));
+		}
+		
+		auto link_struct_type = LogicalType::STRUCT({
+			make_pair("text", LogicalType::VARCHAR),
+			make_pair("href", LogicalType::VARCHAR),
+			make_pair("title", LogicalType::VARCHAR),
+			make_pair("line_number", LogicalType::BIGINT)
+		});
+		
+		Value list_value = Value::LIST(link_struct_type, link_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
+		std::string html_string = html_str.GetString();
+		
+		auto images = XMLUtils::ExtractHTMLImages(html_string);
+		
+		vector<Value> image_values;
+		for (const auto &image : images) {
+			child_list_t<Value> image_children;
+			image_children.emplace_back("alt", Value(image.alt_text));
+			image_children.emplace_back("src", Value(image.src));
+			image_children.emplace_back("title", image.title.empty() ? Value() : Value(image.title));
+			image_children.emplace_back("width", Value::BIGINT(image.width));
+			image_children.emplace_back("height", Value::BIGINT(image.height));
+			image_children.emplace_back("line_number", Value::BIGINT(image.line_number));
+			
+			image_values.emplace_back(Value::STRUCT(image_children));
+		}
+		
+		auto image_struct_type = LogicalType::STRUCT({
+			make_pair("alt", LogicalType::VARCHAR),
+			make_pair("src", LogicalType::VARCHAR),
+			make_pair("title", LogicalType::VARCHAR),
+			make_pair("width", LogicalType::BIGINT),
+			make_pair("height", LogicalType::BIGINT),
+			make_pair("line_number", LogicalType::BIGINT)
+		});
+		
+		Value list_value = Value::LIST(image_struct_type, image_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
+		std::string html_string = html_str.GetString();
+		
+		auto tables = XMLUtils::ExtractHTMLTables(html_string);
+		
+		vector<Value> row_values;
+		
+		// Process each table
+		for (size_t table_idx = 0; table_idx < tables.size(); table_idx++) {
+			const auto &table = tables[table_idx];
+			
+			// Output header cells
+			for (size_t col_idx = 0; col_idx < table.headers.size(); col_idx++) {
+				child_list_t<Value> row_children;
+				row_children.emplace_back("table_index", Value::BIGINT(static_cast<int64_t>(table_idx)));
+				row_children.emplace_back("row_type", Value("header"));
+				row_children.emplace_back("row_index", Value::BIGINT(0));
+				row_children.emplace_back("column_index", Value::BIGINT(static_cast<int64_t>(col_idx)));
+				row_children.emplace_back("cell_value", Value(table.headers[col_idx]));
+				row_children.emplace_back("line_number", Value::BIGINT(table.line_number));
+				row_children.emplace_back("num_columns", Value::BIGINT(table.num_columns));
+				row_children.emplace_back("num_rows", Value::BIGINT(table.num_rows));
+				row_values.emplace_back(Value::STRUCT(row_children));
+			}
+			
+			// Output data rows
+			for (size_t row_idx = 0; row_idx < table.rows.size(); row_idx++) {
+				const auto &row = table.rows[row_idx];
+				for (size_t col_idx = 0; col_idx < row.size(); col_idx++) {
+					child_list_t<Value> row_children;
+					row_children.emplace_back("table_index", Value::BIGINT(static_cast<int64_t>(table_idx)));
+					row_children.emplace_back("row_type", Value("data"));
+					row_children.emplace_back("row_index", Value::BIGINT(static_cast<int64_t>(row_idx + 1)));
+					row_children.emplace_back("column_index", Value::BIGINT(static_cast<int64_t>(col_idx)));
+					row_children.emplace_back("cell_value", Value(row[col_idx]));
+					row_children.emplace_back("line_number", Value::BIGINT(table.line_number));
+					row_children.emplace_back("num_columns", Value::BIGINT(table.num_columns));
+					row_children.emplace_back("num_rows", Value::BIGINT(table.num_rows));
+					row_values.emplace_back(Value::STRUCT(row_children));
+				}
+			}
+		}
+		
+		auto table_row_struct_type = LogicalType::STRUCT({
+			make_pair("table_index", LogicalType::BIGINT),
+			make_pair("row_type", LogicalType::VARCHAR),
+			make_pair("row_index", LogicalType::BIGINT),
+			make_pair("column_index", LogicalType::BIGINT),
+			make_pair("cell_value", LogicalType::VARCHAR),
+			make_pair("line_number", LogicalType::BIGINT),
+			make_pair("num_columns", LogicalType::BIGINT),
+			make_pair("num_rows", LogicalType::BIGINT)
+		});
+		
+		Value list_value = Value::LIST(table_row_struct_type, row_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto count = args.size();
+	
+	for (idx_t i = 0; i < count; i++) {
+		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
+		std::string html_string = html_str.GetString();
+		
+		auto tables = XMLUtils::ExtractHTMLTables(html_string);
+		
+		vector<Value> table_values;
+		
+		// Process each table
+		for (size_t table_idx = 0; table_idx < tables.size(); table_idx++) {
+			const auto &table = tables[table_idx];
+			const auto &headers = table.headers;
+			const auto &rows = table.rows;
+			
+			// Create header values
+			vector<Value> header_values;
+			for (const auto &header : headers) {
+				header_values.push_back(Value(header));
+			}
+			
+			// Create data rows as list of lists
+			vector<Value> row_values;
+			for (const auto &row : rows) {
+				vector<Value> cell_values;
+				for (const auto &cell : row) {
+					cell_values.push_back(Value(cell));
+				}
+				row_values.push_back(Value::LIST(cell_values));
+			}
+			
+			// Build JSON using DuckDB's native JSON construction
+			child_list_t<Value> json_children;
+			
+			// Headers array
+			json_children.push_back({"headers", Value::LIST(header_values)});
+			
+			// Data array (2D)  
+			json_children.push_back({"data", Value::LIST(row_values)});
+			
+			// Rows as objects
+			vector<Value> object_rows;
+			for (const auto &row : rows) {
+				child_list_t<Value> row_obj;
+				for (size_t j = 0; j < headers.size() && j < row.size(); j++) {
+					row_obj.push_back({headers[j], Value(row[j])});
+				}
+				object_rows.push_back(Value::STRUCT(row_obj));
+			}
+			json_children.push_back({"rows", Value::LIST(object_rows)});
+			
+			// Metadata
+			child_list_t<Value> metadata_children;
+			metadata_children.push_back({"line_number", Value::BIGINT(table.line_number)});
+			metadata_children.push_back({"num_columns", Value::BIGINT(table.num_columns)});
+			metadata_children.push_back({"num_rows", Value::BIGINT(table.num_rows)});
+			json_children.push_back({"metadata", Value::STRUCT(metadata_children)});
+			
+			Value json_value = Value::STRUCT(json_children);
+			
+			// Build structure description 
+			child_list_t<Value> structure_children;
+			structure_children.push_back({"table_name", Value("table_" + std::to_string(table_idx))});
+			
+			vector<Value> column_info;
+			for (size_t col_idx = 0; col_idx < headers.size(); col_idx++) {
+				child_list_t<Value> col_children;
+				col_children.push_back({"name", Value(headers[col_idx])});
+				col_children.push_back({"index", Value::BIGINT(static_cast<int64_t>(col_idx))});
+				col_children.push_back({"type", Value("string")});
+				column_info.push_back(Value::STRUCT(col_children));
+			}
+			structure_children.push_back({"columns", Value::LIST(column_info)});
+			structure_children.push_back({"row_count", Value::BIGINT(static_cast<int64_t>(rows.size()))});
+			structure_children.push_back({"source_line", Value::BIGINT(table.line_number)});
+			
+			Value structure_value = Value::STRUCT(structure_children);
+			
+			// Create struct for this table
+			child_list_t<Value> table_struct_children;
+			table_struct_children.push_back({"table_index", Value::BIGINT(static_cast<int64_t>(table_idx))});
+			table_struct_children.push_back({"line_number", Value::BIGINT(table.line_number)});
+			table_struct_children.push_back({"num_columns", Value::BIGINT(static_cast<int64_t>(headers.size()))});
+			table_struct_children.push_back({"num_rows", Value::BIGINT(static_cast<int64_t>(rows.size()))});
+			table_struct_children.push_back({"headers", Value::LIST(header_values)});
+			table_struct_children.push_back({"table_data", Value::LIST(row_values)});
+			table_struct_children.push_back({"table_json", json_value});
+			table_struct_children.push_back({"json_structure", structure_value});
+			
+			table_values.push_back(Value::STRUCT(table_struct_children));
+		}
+		
+		auto table_json_struct_type = LogicalType::STRUCT({
+			make_pair("table_index", LogicalType::BIGINT),
+			make_pair("line_number", LogicalType::BIGINT),
+			make_pair("num_columns", LogicalType::BIGINT),
+			make_pair("num_rows", LogicalType::BIGINT),
+			make_pair("headers", LogicalType::LIST(LogicalType::VARCHAR)),
+			make_pair("table_data", LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR))),
+			make_pair("table_json", LogicalType::STRUCT({})), // Complex nested struct
+			make_pair("json_structure", LogicalType::STRUCT({})) // Complex nested struct
+		});
+		
+		Value list_value = Value::LIST(table_json_struct_type, table_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &file_path_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(file_path_vector, result, args.size(), [&](string_t file_path_str) {
+		std::string file_path = file_path_str.GetString();
+		
+		try {
+			// Read the HTML file using DuckDB's file system
+			auto &fs = FileSystem::GetFileSystem(state.GetContext());
+			auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+			
+			// Handle empty HTML files gracefully (HTML is more permissive than XML)
+			if (file_size == 0) {
+				return string_t("<html></html>");
+			}
+			
+			// Read file content
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void*)content.data(), file_size);
+			
+			// Parse the HTML using the HTML parser to normalize it (removes DOCTYPE)
+			XMLDocRAII html_doc(content, true); // Use HTML parser
+			if (html_doc.IsValid()) {
+				// Serialize the document back to string (without DOCTYPE)
+				xmlChar* html_output = nullptr;
+				int output_size = 0;
+				xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
+				
+				if (html_output) {
+					XMLCharPtr html_ptr(html_output);
+					std::string normalized_html = std::string(reinterpret_cast<const char*>(html_ptr.get()));
+					
+					// Remove XML declaration if present
+					size_t xml_decl_end = normalized_html.find("?>");
+					if (xml_decl_end != std::string::npos) {
+						normalized_html = normalized_html.substr(xml_decl_end + 2);
+						// Remove leading whitespace/newlines
+						normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+					}
+					
+					// Remove DOCTYPE if present
+					size_t doctype_start = normalized_html.find("<!DOCTYPE");
+					if (doctype_start != std::string::npos) {
+						size_t doctype_end = normalized_html.find(">", doctype_start);
+						if (doctype_end != std::string::npos) {
+							normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
+							// Remove leading whitespace/newlines after DOCTYPE removal
+							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+						}
+					}
+					
+					// Minify HTML: remove whitespace between tags
+					std::string minified_html;
+					bool in_tag = false;
+					bool in_content = false;
+					for (size_t i = 0; i < normalized_html.length(); i++) {
+						char c = normalized_html[i];
+						
+						if (c == '<') {
+							in_tag = true;
+							in_content = false;
+							minified_html += c;
+						} else if (c == '>') {
+							in_tag = false;
+							in_content = true;
+							minified_html += c;
+						} else if (in_tag) {
+							// Inside tag: keep all characters
+							minified_html += c;
+						} else if (in_content) {
+							// Between tags: trim whitespace but keep content
+							if (!std::isspace(c)) {
+								minified_html += c;
+							} else if (!minified_html.empty() && minified_html.back() != '>' && 
+							          i + 1 < normalized_html.length() && normalized_html[i + 1] != '<') {
+								// Keep single space between words, but not between tags
+								minified_html += ' ';
+							}
+						}
+					}
+					
+					return StringVector::AddString(result, minified_html);
+				}
+			}
+			
+			// Fallback to original content if parsing fails
+			return StringVector::AddString(result, content);
+			
+		} catch (const std::exception &e) {
+			throw IOException("Failed to read HTML file '%s': %s", file_path, e.what());
+		}
+	});
 }
 
 } // namespace duckdb
