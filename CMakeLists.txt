@@ -15,7 +15,7 @@ project(${TARGET_NAME})
 include_directories(src/include)
 
 set(EXTENSION_SOURCES 
-    src/xml_extension.cpp
+    src/webbed_extension.cpp
     src/xml_types.cpp
     src/xml_utils.cpp
     src/xml_scalar_functions.cpp

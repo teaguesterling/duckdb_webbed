@@ -1,6 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "xml_extension.hpp"
+#include "webbed_extension.hpp"
 #include "xml_types.hpp"
 #include "xml_scalar_functions.hpp"
 #include "xml_reader_functions.hpp"
@@ -32,7 +32,7 @@ static void LoadInternal(DatabaseInstance &instance) {
 	config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
 }
 
-void XmlExtension::Load(DuckDB &db) {
+void WebbedExtension::Load(DuckDB &db) {
 	LoadInternal(*db.instance);
 }
 
@@ -40,11 +40,11 @@ void XmlExtension::Load(DuckDB &db) {
 static void UnloadInternal() {
 	XMLUtils::CleanupLibXML();
 }
-std::string XmlExtension::Name() {
+std::string WebbedExtension::Name() {
 	return "webbed";
 }
 
-std::string XmlExtension::Version() const {
+std::string WebbedExtension::Version() const {
 #ifdef EXT_VERSION_WEBBED
 	return EXT_VERSION_WEBBED;
 #else
@@ -58,7 +58,7 @@ extern "C" {
 
 DUCKDB_EXTENSION_API void webbed_init(duckdb::DatabaseInstance &db) {
 	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadExtension<duckdb::XmlExtension>();
+	db_wrapper.LoadExtension<duckdb::WebbedExtension>();
 }
 
 DUCKDB_EXTENSION_API const char *webbed_version() {

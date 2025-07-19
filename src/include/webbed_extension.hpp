@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-class XmlExtension : public Extension {
+class WebbedExtension : public Extension {
 public:
 	void Load(DuckDB &db) override;
 	std::string Name() override;
