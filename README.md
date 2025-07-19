@@ -66,24 +66,38 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 | `parse_html(content)` | Parse HTML content string | `SELECT parse_html('<p>Hello</p>')` |
 | `xml_valid(content)` | Check if XML is well-formed | `SELECT xml_valid('<root></root>')` |
 | `xml_well_formed(content)` | Alias for xml_valid | `SELECT xml_well_formed('<test/>')` |
+| `to_xml(value)` | Convert any value to XML | `SELECT to_xml('hello')` |
+| `to_xml(value, node_name)` | Convert value to XML with custom node name | `SELECT to_xml('hello', 'greeting')` |
+| `xml(value)` | Alias for to_xml | `SELECT xml('hello')` |
 
 ### 🎯 **Data Extraction Functions**
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `xml_extract_text(xml, xpath)` | Extract text using XPath | `SELECT xml_extract_text(content, '//title')` |
+| `xml_extract_text(xml, xpath)` | Extract first text match using XPath | `SELECT xml_extract_text(content, '//title')` |
 | `xml_extract_all_text(xml)` | Extract all text content | `SELECT xml_extract_all_text('<p>Hello <b>world</b></p>')` |
-| `xml_extract_elements(xml, xpath)` | Extract elements as structs | `SELECT xml_extract_elements(content, '//item')` |
+| `xml_extract_elements(xml, xpath)` | Extract first element as struct | `SELECT xml_extract_elements(content, '//item')` |
+| `xml_extract_elements_string(xml, xpath)` | Extract all elements as text (newline-separated) | `SELECT xml_extract_elements_string(content, '//item')` |
 | `xml_extract_attributes(xml, xpath)` | Extract attributes as structs | `SELECT xml_extract_attributes(content, '//book')` |
+| `xml_extract_comments(xml)` | Extract comments with line numbers | `SELECT xml_extract_comments(content)` |
+| `xml_extract_cdata(xml)` | Extract CDATA sections with line numbers | `SELECT xml_extract_cdata(content)` |
 
 ### 🌐 **HTML Extraction Functions**
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `html_extract_text(html, xpath)` | Extract text from HTML | `SELECT html_extract_text(html, '//h1')` |
+| `html_extract_text(html)` | Extract all text from HTML | `SELECT html_extract_text(html)` |
+| `html_extract_text(html, xpath)` | Extract text from HTML using XPath | `SELECT html_extract_text(html, '//h1')` |
 | `html_extract_links(html)` | Extract all links with metadata | `SELECT html_extract_links('<a href="/">Home</a>')` |
 | `html_extract_images(html)` | Extract all images with metadata | `SELECT html_extract_images('<img src="pic.jpg" alt="Photo">')` |
-| `html_extract_tables(html)` | Extract tables as structured data | `SELECT * FROM html_extract_tables(html_content)` |
+
+### 🗂️ **HTML Table Extraction Functions**
+
+| Function | Return Type | Description | Example |
+|----------|-------------|-------------|---------|
+| `html_extract_tables(html)` | TABLE | Extract tables as rows (table function) | `SELECT * FROM html_extract_tables(html_string)` |
+| `html_extract_table_rows(html)` | LIST<STRUCT> | Extract table data as structured rows | `SELECT html_extract_table_rows(html)` |
+| `html_extract_tables_json(html)` | LIST<STRUCT> | Extract tables with rich JSON structure | `SELECT html_extract_tables_json(html)` |
 
 ### 🔄 **Format Conversion Functions**
 
@@ -99,7 +113,10 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 | `xml_stats(xml)` | Get document statistics | `SELECT xml_stats('<root><item/><item/></root>')` |
 | `xml_namespaces(xml)` | List XML namespaces | `SELECT xml_namespaces(content)` |
 | `xml_pretty_print(xml)` | Format XML with indentation | `SELECT xml_pretty_print('<root><item/></root>')` |
+| `xml_minify(xml)` | Remove whitespace from XML | `SELECT xml_minify('<root>\n  <item/>\n</root>')` |
+| `xml_wrap_fragment(fragment, wrapper)` | Wrap XML fragment with element | `SELECT xml_wrap_fragment('<item/>', 'root')` |
 | `xml_validate_schema(xml, xsd)` | Validate against XSD schema | `SELECT xml_validate_schema(content, schema)` |
+| `xml_libxml2_version(name)` | Get libxml2 version info | `SELECT xml_libxml2_version('xml')` |
 
 ---
 
@@ -182,6 +199,56 @@ SELECT json_extract(xml_to_json(content), '$.config.database.host') as db_host
 FROM xml_config;
 ```
 
+### 🔧 **XML Processing & Utilities**
+
+```sql
+-- Minify XML by removing whitespace
+SELECT xml_minify('<root>
+    <item>
+        <name>Product</name>
+    </item>
+</root>') as minified;
+-- Result: <root><item><name>Product</name></item></root>
+
+-- Wrap XML fragments with a root element  
+SELECT xml_wrap_fragment('<item>Content</item>', 'wrapper') as wrapped;
+-- Result: <wrapper><item>Content</item></wrapper>
+
+-- Extract all matching elements as text
+SELECT xml_extract_elements_string(content, '//book/title') as all_titles
+FROM read_xml_objects('library.xml');
+-- Result: "Title 1\nTitle 2\nTitle 3"
+
+-- Convert values to XML with custom node names
+SELECT to_xml('John Doe', 'author') as xml_author;
+-- Result: <author>John Doe</author>
+
+-- Extract comments and CDATA sections
+SELECT 
+    xml_extract_comments(content) as comments,
+    xml_extract_cdata(content) as cdata_sections
+FROM read_xml_objects('document.xml');
+
+-- Get libxml2 version information
+SELECT xml_libxml2_version('xml') as version_info;
+```
+
+### 📊 **Advanced HTML Table Processing**
+
+```sql
+-- Method 1: Table function (returns rows directly)
+SELECT table_index, row_index, columns
+FROM html_extract_tables('<table><tr><th>Name</th><th>Age</th></tr><tr><td>John</td><td>25</td></tr></table>');
+
+-- Method 2: Scalar function returning structured data
+SELECT html_extract_table_rows(html) as table_data
+FROM read_html_objects('reports/*.html');
+
+-- Method 3: Rich JSON structure with metadata
+SELECT html_extract_tables_json(html) as detailed_tables
+FROM read_html_objects('complex_page.html');
+```
+
 ---
 
 ## Output Formats
@@ -260,9 +327,26 @@ read_xml('pattern',
     ignore_errors=true,           -- Skip files that can't be parsed
     maximum_file_size=1048576,    -- Max file size in bytes  
     filename=true,                -- Include filename column
-    columns=['name', 'value']     -- Specify expected columns
+    columns=['name', 'value'],    -- Specify expected columns
+    root_element='root',          -- Specify root element name
+    include_attributes=true,      -- Include XML attributes in output
+    auto_detect=true,             -- Auto-detect schema structure
+    max_depth=10,                 -- Maximum parsing depth
+    unnest_as='struct'            -- How to unnest nested elements
 );
 ```
+
+#### **Parameter Details:**
+
+- **`ignore_errors`**: Continue processing when individual files fail to parse
+- **`maximum_file_size`**: Skip files larger than specified bytes (default: 1MB)  
+- **`filename`**: Add a `filename` column to output with source file path
+- **`columns`**: Pre-specify expected column names for better performance
+- **`root_element`**: Specify the XML root element for schema inference
+- **`include_attributes`**: Whether to include XML attributes as columns
+- **`auto_detect`**: Enable automatic schema detection and type inference
+- **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion)
+- **`unnest_as`**: How to handle nested elements ('struct', 'json', 'flatten')
 
 ### 🔍 **XPath Support**
 
@@ -385,9 +469,10 @@ make test
 
 ### 🧪 **Testing**
 - 24 comprehensive test suites
-- 400+ test assertions  
+- 437 test assertions passing (100% success rate)
 - Cross-platform CI validation
 - Memory leak testing with Valgrind
+- Complete coverage of all XML/HTML functions
 
 ### 📊 **Performance**
 - Efficient streaming for large files
