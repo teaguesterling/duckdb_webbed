@@ -4,9 +4,9 @@
 
 require xml
 
-# Test parse_html function with simple HTML content
+# Test read_html table function with simple HTML file
 query I
-SELECT parse_html('test/html/simple.html') AS html_content;
+SELECT html FROM read_html('test/html/simple.html');
 ----
 <html><head><title>Simple Page</title></head><body><h1>Welcome</h1><p>This is a test page.</p></body></html>
 
@@ -46,25 +46,25 @@ https://example.com	External Link
 
 # Test malformed HTML handling
 query I
-SELECT parse_html('test/html/malformed.html') AS parsed_html;
+SELECT html FROM read_html('test/html/malformed.html');
 ----
 <html><body><div><p>Unclosed tags<span>More content</span></p></div></body></html>
 
 # Test HTML file that doesn't exist (should error gracefully)
 statement error
-SELECT parse_html('test/html/nonexistent.html');
+SELECT html FROM read_html('test/html/nonexistent.html');
 ----
 IO Error
 
 # Test empty HTML file
 query I  
-SELECT parse_html('test/html/empty.html') AS empty_content;
+SELECT html FROM read_html('test/html/empty.html');
 ----
 <html></html>
 
 
 # Test HTML with encoding issues
 query I
-SELECT html_extract_text(parse_html('test/html/unicode.html'), '//h1');
+SELECT html_extract_text(html, '//h1') FROM read_html('test/html/unicode.html');
 ----
 Héllo Wörld 测试

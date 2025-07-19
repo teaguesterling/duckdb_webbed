@@ -47,8 +47,9 @@ private:
 	static void HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	
-	// HTML file parsing functions
+	// HTML parsing functions
 	static void ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 };
 
 } // namespace duckdb

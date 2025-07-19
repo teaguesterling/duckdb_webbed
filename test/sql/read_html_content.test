@@ -1,0 +1,88 @@
+# name: test/sql/parse_html_content.test
+# description: Test parse_html function for parsing HTML content directly
+# group: [xml]
+
+require xml
+
+# Test basic HTML parsing
+query I
+SELECT parse_html('<html><body><h1>Hello World</h1></body></html>') AS html_content;
+----
+<html><body><h1>Hello World</h1></body></html>
+
+# Test HTML with DOCTYPE (should be removed)
+query I
+SELECT parse_html('<!DOCTYPE html><html><head><title>Test</title></head><body><p>Content</p></body></html>') AS html_content;
+----
+<html><head><title>Test</title></head><body><p>Content</p></body></html>
+
+# Test malformed HTML (should be corrected)
+query I
+SELECT parse_html('<html><body><div><p>Unclosed tags<span>Content</span></div></body></html>') AS html_content;
+----
+<html><body><div><p>Unclosed tags<span>Content</span></p></div></body></html>
+
+# Test empty HTML content
+query I
+SELECT parse_html('') AS html_content;
+----
+<html></html>
+
+# Test HTML with extra whitespace (should be minified)
+query I
+SELECT parse_html('<html>
+    <body>
+        <h1>Title</h1>
+        <p>Some text with   multiple   spaces</p>
+    </body>
+</html>') AS html_content;
+----
+<html><body><h1>Title</h1><p>Some text with multiple spaces</p></body></html>
+
+# Test HTML with self-closing tags
+query I
+SELECT parse_html('<html><body><img src="test.jpg" alt="Test"><br><p>After image</p></body></html>') AS html_content;
+----
+<html><body><img src="test.jpg" alt="Test"><br><p>After image</p></body></html>
+
+# Test HTML with special characters
+query I
+SELECT parse_html('<html><body><p>Special: &lt;script&gt; &amp; &quot;quotes&quot;</p></body></html>') AS html_content;
+----
+<html><body><p>Special: &lt;script&gt; &amp; "quotes"</p></body></html>
+
+# Test HTML fragments (should be wrapped in html/body)
+query I
+SELECT parse_html('<div><p>Just a div</p></div>') AS html_content;
+----
+<html><body><div><p>Just a div</p></div></body></html>
+
+# Test HTML with comments (should be preserved)
+query I
+SELECT parse_html('<html><body><!-- This is a comment --><p>Text</p></body></html>') AS html_content;
+----
+<html><body><!-- This is a comment --><p>Text</p></body></html>
+
+# Test HTML compatibility with extraction functions
+query I
+SELECT html_extract_text(parse_html('<html><body><h1>Title</h1><p>Paragraph</p></body></html>'), '//h1') AS extracted_title;
+----
+Title
+
+# Test HTML with tables for extraction
+query I
+SELECT html_extract_text(parse_html('<html><body><table><tr><td>Cell 1</td><td>Cell 2</td></tr></table></body></html>'), '//td[1]') AS first_cell;
+----
+Cell 1
+
+# Test HTML with links
+query I
+SELECT (unnest(html_extract_links(parse_html('<html><body><a href="https://example.com">Link</a></body></html>')))).href AS link_url;
+----
+https://example.com
+
+# Test HTML type verification
+query I
+SELECT typeof(parse_html('<html><body><p>Test</p></body></html>')) AS type_name;
+----
+HTML

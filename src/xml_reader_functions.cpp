@@ -431,6 +431,14 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	
 	ExtensionUtil::RegisterFunction(db, read_xml_function);
 	
+	// Register read_html table function for reading HTML files
+	TableFunction read_html_function("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, 
+	                                  ReadHTMLBind, ReadHTMLInit);
+	read_html_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_function.named_parameters["filename"] = LogicalType::BOOLEAN;
+	ExtensionUtil::RegisterFunction(db, read_html_function);
+	
 	// Register read_html_objects table function for batch HTML processing
 	TableFunction read_html_objects_function("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction, 
 	                                          ReadHTMLBind, ReadHTMLInit);

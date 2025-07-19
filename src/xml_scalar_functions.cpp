@@ -660,9 +660,9 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 		{XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
 	ExtensionUtil::RegisterFunction(db, html_extract_tables_json_function);
 	
-	// Register parse_html scalar function for parsing HTML files
+	// Register parse_html scalar function for parsing HTML content directly
 	auto parse_html_function = ScalarFunction("parse_html", 
-		{LogicalType::VARCHAR}, XMLTypes::HTMLType(), ParseHTMLFunction);
+		{LogicalType::VARCHAR}, XMLTypes::HTMLType(), ReadHTMLFunction);
 	ExtensionUtil::RegisterFunction(db, parse_html_function);
 }
 
@@ -1028,6 +1028,101 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 			
 		} catch (const std::exception &e) {
 			throw IOException("Failed to read HTML file '%s': %s", file_path, e.what());
+		}
+	});
+}
+
+void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_content_vector = args.data[0];
+	
+	UnaryExecutor::Execute<string_t, string_t>(html_content_vector, result, args.size(), [&](string_t html_content_str) {
+		std::string html_content = html_content_str.GetString();
+		
+		// Handle empty HTML content gracefully
+		if (html_content.empty()) {
+			return string_t("<html></html>");
+		}
+		
+		try {
+			// Parse the HTML using the HTML parser to normalize it
+			XMLDocRAII html_doc(html_content, true); // Use HTML parser
+			if (html_doc.IsValid()) {
+				// Serialize the document back to string
+				xmlChar* html_output = nullptr;
+				int output_size = 0;
+				xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
+				
+				if (html_output) {
+					XMLCharPtr html_ptr(html_output);
+					std::string normalized_html = std::string(reinterpret_cast<const char*>(html_ptr.get()));
+					
+					// Remove XML declaration if present
+					size_t xml_decl_end = normalized_html.find("?>");
+					if (xml_decl_end != std::string::npos) {
+						normalized_html = normalized_html.substr(xml_decl_end + 2);
+						// Remove leading whitespace/newlines
+						normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+					}
+					
+					// Remove DOCTYPE if present
+					size_t doctype_start = normalized_html.find("<!DOCTYPE");
+					if (doctype_start != std::string::npos) {
+						size_t doctype_end = normalized_html.find(">", doctype_start);
+						if (doctype_end != std::string::npos) {
+							normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
+							// Remove leading whitespace/newlines after DOCTYPE removal
+							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+						}
+					}
+					
+					// Minify HTML: remove whitespace between tags
+					std::string minified_html;
+					bool inside_tag = false;
+					bool last_was_space = false;
+					
+					for (size_t i = 0; i < normalized_html.length(); i++) {
+						char c = normalized_html[i];
+						
+						if (c == '<') {
+							inside_tag = true;
+							minified_html += c;
+							last_was_space = false;
+						} else if (c == '>') {
+							inside_tag = false;
+							minified_html += c;
+							last_was_space = false;
+						} else if (inside_tag) {
+							minified_html += c;
+							last_was_space = false;
+						} else {
+							if (std::isspace(c)) {
+								if (!last_was_space) {
+									// Keep single space between words, but not between tags
+									minified_html += ' ';
+								}
+								last_was_space = true;
+							} else {
+								minified_html += c;
+								last_was_space = false;
+							}
+						}
+					}
+					
+					// Trim trailing whitespace
+					if (!minified_html.empty() && std::isspace(minified_html.back())) {
+						minified_html.erase(minified_html.find_last_not_of(" \t\n\r") + 1);
+					}
+					
+					return StringVector::AddString(result, minified_html);
+				}
+			}
+			
+			// Fallback to original content if parsing fails
+			return StringVector::AddString(result, html_content);
+			
+		} catch (const std::exception &e) {
+			// Return original content if there's an error parsing
+			return StringVector::AddString(result, html_content);
 		}
 	});
 }
