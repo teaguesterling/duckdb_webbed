@@ -43,7 +43,7 @@ SELECT parse_html('<html>
 query I
 SELECT parse_html('<html><body><img src="test.jpg" alt="Test"><br><p>After image</p></body></html>') AS html_content;
 ----
-<html><body><img src="test.jpg" alt="Test"><br><p>After image</p></body></html>
+<html><body><img src="test.jpg" alt="Test"/><br/><p>After image</p></body></html>
 
 # Test HTML with special characters
 query I

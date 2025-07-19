@@ -1079,16 +1079,19 @@ void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &stat
 					std::string minified_html;
 					bool inside_tag = false;
 					bool last_was_space = false;
+					bool between_tags = true; // Start assuming we're between tags
 					
 					for (size_t i = 0; i < normalized_html.length(); i++) {
 						char c = normalized_html[i];
 						
 						if (c == '<') {
 							inside_tag = true;
+							between_tags = false;
 							minified_html += c;
 							last_was_space = false;
 						} else if (c == '>') {
 							inside_tag = false;
+							between_tags = true;
 							minified_html += c;
 							last_was_space = false;
 						} else if (inside_tag) {
@@ -1096,12 +1099,16 @@ void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &stat
 							last_was_space = false;
 						} else {
 							if (std::isspace(c)) {
-								if (!last_was_space) {
-									// Keep single space between words, but not between tags
+								if (between_tags) {
+									// Skip all whitespace between tags
+									continue;
+								} else if (!last_was_space) {
+									// Keep single space between words within text content
 									minified_html += ' ';
 								}
 								last_was_space = true;
 							} else {
+								between_tags = false;
 								minified_html += c;
 								last_was_space = false;
 							}

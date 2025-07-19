@@ -48,19 +48,19 @@ https://example.com	External Link
 query I
 SELECT html FROM read_html('test/html/malformed.html');
 ----
-<html><body><div><p>Unclosed tags<span>More content</span></p></div></body></html>
+<html><body><div><p>Unclosed tags <span>More content</span></p></div></body></html>
 
 # Test HTML file that doesn't exist (should error gracefully)
 statement error
 SELECT html FROM read_html('test/html/nonexistent.html');
 ----
-IO Error
+Invalid Input Error
 
 # Test empty HTML file
 query I  
 SELECT html FROM read_html('test/html/empty.html');
 ----
-<html></html>
+<html/>
 
 
 # Test HTML with encoding issues

@@ -553,15 +553,101 @@ void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionI
 				}
 			}
 			
+			// Process HTML content same as parse_html function
+			std::string processed_content = content;
+			try {
+				// Parse the HTML using the HTML parser to normalize it
+				XMLDocRAII html_doc(content, true); // Use HTML parser
+				if (html_doc.IsValid()) {
+					// Serialize the document back to string
+					xmlChar* html_output = nullptr;
+					int output_size = 0;
+					xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
+					
+					if (html_output) {
+						XMLCharPtr html_ptr(html_output);
+						std::string normalized_html = std::string(reinterpret_cast<const char*>(html_ptr.get()));
+						
+						// Remove XML declaration if present
+						size_t xml_decl_end = normalized_html.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							normalized_html = normalized_html.substr(xml_decl_end + 2);
+							// Remove leading whitespace/newlines
+							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+						}
+						
+						// Remove DOCTYPE if present
+						size_t doctype_start = normalized_html.find("<!DOCTYPE");
+						if (doctype_start != std::string::npos) {
+							size_t doctype_end = normalized_html.find(">", doctype_start);
+							if (doctype_end != std::string::npos) {
+								normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
+								// Remove leading whitespace/newlines after DOCTYPE removal
+								normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
+							}
+						}
+						
+						// Minify HTML: remove whitespace between tags
+						std::string minified_html;
+						bool inside_tag = false;
+						bool last_was_space = false;
+						bool between_tags = true; // Start assuming we're between tags
+						
+						for (size_t i = 0; i < normalized_html.length(); i++) {
+							char c = normalized_html[i];
+							
+							if (c == '<') {
+								inside_tag = true;
+								between_tags = false;
+								minified_html += c;
+								last_was_space = false;
+							} else if (c == '>') {
+								inside_tag = false;
+								between_tags = true;
+								minified_html += c;
+								last_was_space = false;
+							} else if (inside_tag) {
+								minified_html += c;
+								last_was_space = false;
+							} else {
+								if (std::isspace(c)) {
+									if (between_tags) {
+										// Skip all whitespace between tags
+										continue;
+									} else if (!last_was_space) {
+										// Keep single space between words within text content
+										minified_html += ' ';
+									}
+									last_was_space = true;
+								} else {
+									between_tags = false;
+									minified_html += c;
+									last_was_space = false;
+								}
+							}
+						}
+						
+						// Trim trailing whitespace
+						if (!minified_html.empty() && std::isspace(minified_html.back())) {
+							minified_html.erase(minified_html.find_last_not_of(" \t\n\r") + 1);
+						}
+						
+						processed_content = minified_html;
+					}
+				}
+			} catch (const std::exception &e) {
+				// Keep original content if processing fails
+			}
+			
 			// Set output values based on schema
 			idx_t col_idx = 0;
 			if (output.data.size() == 2) {
 				// Both filename and html columns
 				output.data[col_idx++].SetValue(output_idx, Value(filename));
-				output.data[col_idx++].SetValue(output_idx, Value(content));
+				output.data[col_idx++].SetValue(output_idx, Value(processed_content));
 			} else {
 				// Only html column
-				output.data[col_idx++].SetValue(output_idx, Value(content));
+				output.data[col_idx++].SetValue(output_idx, Value(processed_content));
 			}
 			output_idx++;
 			
