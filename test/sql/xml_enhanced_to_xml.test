@@ -2,7 +2,7 @@
 # description: Test enhanced to_xml() function with complex type support
 # group: [xml]
 
-require xml
+require webbed
 
 # Test 1: Basic scalar conversion
 query I

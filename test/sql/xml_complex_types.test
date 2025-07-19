@@ -2,7 +2,7 @@
 # description: Test complex type mappings between DuckDB types and XML content
 # group: [xml]
 
-require xml
+require webbed
 
 # Test INTEGER type mapping from XML
 query I

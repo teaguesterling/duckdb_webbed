@@ -2,7 +2,7 @@
 # description: Test basic HTML processing functionality
 # group: [xml]
 
-require xml
+require webbed
 
 # Test HTML type casting with simple HTML
 query I

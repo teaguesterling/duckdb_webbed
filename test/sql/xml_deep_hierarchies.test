@@ -2,7 +2,7 @@
 # description: Test XML extension with deep hierarchical structures
 # group: [xml]
 
-require xml
+require webbed
 
 # Test loading deep hierarchy file
 query I

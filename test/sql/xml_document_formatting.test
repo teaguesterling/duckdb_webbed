@@ -2,7 +2,7 @@
 # description: Test XML document formatting functions (xml_pretty_print, xml_minify)
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_pretty_print with simple XML
 query I

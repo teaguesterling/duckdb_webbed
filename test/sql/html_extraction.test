@@ -2,7 +2,7 @@
 # description: Test HTML content extraction functions
 # group: [xml]
 
-require xml
+require webbed
 
 # Test html_extract_text with simple HTML
 query I

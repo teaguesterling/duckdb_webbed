@@ -9,7 +9,7 @@ SELECT xml('Sam');
 Catalog Error: Scalar Function with name xml does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
-require xml
+require webbed
 
 # Confirm the extension works (xml function now returns proper XML)
 query I

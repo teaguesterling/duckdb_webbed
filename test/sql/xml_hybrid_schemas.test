@@ -2,7 +2,7 @@
 # description: Test hybrid schemas with mixed flattened DuckDB columns and XML columns
 # group: [xml]
 
-require xml
+require webbed
 
 # Test hybrid approach: extract some fields as columns, keep complex parts as XML
 query IIIII

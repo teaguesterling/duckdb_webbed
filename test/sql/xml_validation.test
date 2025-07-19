@@ -2,7 +2,7 @@
 # description: Test basic XML validation functions
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_valid function with valid XML
 query I

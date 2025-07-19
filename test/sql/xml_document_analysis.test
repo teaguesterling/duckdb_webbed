@@ -2,7 +2,7 @@
 # description: Test XML document analysis functions (xml_stats, xml_namespaces)
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_stats with simple document
 query I

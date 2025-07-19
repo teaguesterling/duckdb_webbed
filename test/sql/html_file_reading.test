@@ -2,7 +2,7 @@
 # description: Test reading HTML files and processing them
 # group: [xml]
 
-require xml
+require webbed
 
 # Test read_html table function with simple HTML file
 query I

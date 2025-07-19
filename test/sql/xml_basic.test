@@ -9,7 +9,7 @@ SELECT xml_valid('<test>valid</test>');
 Catalog Error: Scalar Function with name xml_valid does not exist!
 
 # Require statement will ensure this test is run with this extension loaded
-require xml
+require webbed
 
 # Test xml_valid function with valid XML
 query I

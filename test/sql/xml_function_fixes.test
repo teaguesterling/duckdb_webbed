@@ -2,7 +2,7 @@
 # description: Test that xml() function no longer returns toy output and works properly
 # group: [xml]
 
-require xml
+require webbed
 
 # Test 1: Verify xml() function no longer returns toy "Xml ... 🐥" output
 query I

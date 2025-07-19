@@ -2,7 +2,7 @@
 # description: Test basic HTML functions that should work with current XML infrastructure
 # group: [xml]
 
-require xml
+require webbed
 
 # Test that XML functions work on HTML type (compatibility)
 query I

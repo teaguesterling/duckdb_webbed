@@ -1,5 +1,5 @@
 {
-        "name": "duckdb-xml",
+        "name": "duckdb-webbed",
         "version": "0.1.0",
         "dependencies": [
                 "libxml2"

@@ -1,7 +1,7 @@
 -- Test enhanced to_xml() function
 
 -- Load XML extension
-LOAD xml;
+LOAD webbed;
 
 -- Test 1: Basic XML type casting
 SELECT '<h1>Hi</h1>'::XML AS xml_cast_test;

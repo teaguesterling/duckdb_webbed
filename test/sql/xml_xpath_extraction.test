@@ -2,7 +2,7 @@
 # description: Test XPath-based XML extraction functions
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_extract_text with simple XPath
 query I

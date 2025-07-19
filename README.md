@@ -27,7 +27,7 @@ A comprehensive XML and HTML processing extension for DuckDB that enables SQL-na
 
 ```sql
 -- Load the extension
-LOAD xml;
+LOAD webbed;
 
 -- Read XML files directly
 SELECT * FROM 'data.xml';

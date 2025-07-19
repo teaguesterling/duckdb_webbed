@@ -2,7 +2,7 @@
 # description: Test XML replacement scan functionality (direct file querying)
 # group: [sql]
 
-require xml
+require webbed
 
 # Test basic replacement scan - direct file querying
 query I

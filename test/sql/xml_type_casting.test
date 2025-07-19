@@ -2,7 +2,7 @@
 # description: Test XML type registration and casting functionality
 # group: [xml]
 
-require xml
+require webbed
 
 # Test XML type casting with simple XML
 query I

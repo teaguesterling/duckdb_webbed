@@ -2,7 +2,7 @@
 # description: Test parse_html function for parsing HTML content directly
 # group: [xml]
 
-require xml
+require webbed
 
 # Test basic HTML parsing
 query I

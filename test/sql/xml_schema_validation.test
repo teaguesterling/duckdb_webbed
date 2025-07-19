@@ -2,7 +2,7 @@
 # description: Test XML schema validation function
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_validate_schema with valid XML and schema
 query I

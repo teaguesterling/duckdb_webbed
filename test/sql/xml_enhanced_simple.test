@@ -2,7 +2,7 @@
 # description: Simple tests for enhanced XML functionality
 # group: [xml]
 
-require xml
+require webbed
 
 # Test XML type casting works
 statement ok

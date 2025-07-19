@@ -2,7 +2,7 @@
 # description: Test XML-JSON conversion functions
 # group: [xml]
 
-require xml
+require webbed
 
 # Test xml_to_json with simple element
 query I

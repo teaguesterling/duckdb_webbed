@@ -1,7 +1,7 @@
 -- Test original user requirements
 
 -- Load XML extension
-LOAD xml;
+LOAD webbed;
 
 -- Requirement 1: Enable SELECT '<h1>Hi</h1>'::XML
 SELECT '<h1>Hi</h1>'::XML AS requirement_1_xml_cast;

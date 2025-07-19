@@ -41,12 +41,12 @@ static void UnloadInternal() {
 	XMLUtils::CleanupLibXML();
 }
 std::string XmlExtension::Name() {
-	return "xml";
+	return "webbed";
 }
 
 std::string XmlExtension::Version() const {
-#ifdef EXT_VERSION_XML
-	return EXT_VERSION_XML;
+#ifdef EXT_VERSION_WEBBED
+	return EXT_VERSION_WEBBED;
 #else
 	return "";
 #endif
@@ -56,12 +56,12 @@ std::string XmlExtension::Version() const {
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void xml_init(duckdb::DatabaseInstance &db) {
+DUCKDB_EXTENSION_API void webbed_init(duckdb::DatabaseInstance &db) {
 	duckdb::DuckDB db_wrapper(db);
 	db_wrapper.LoadExtension<duckdb::XmlExtension>();
 }
 
-DUCKDB_EXTENSION_API const char *xml_version() {
+DUCKDB_EXTENSION_API const char *webbed_version() {
 	return duckdb::DuckDB::LibraryVersion();
 }
 }

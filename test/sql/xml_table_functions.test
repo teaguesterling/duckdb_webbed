@@ -2,7 +2,7 @@
 # description: Test XML table functions (read_xml_objects, read_xml)
 # group: [sql]
 
-require xml
+require webbed
 
 # Test read_xml_objects function with test files
 query II

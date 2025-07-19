@@ -2,7 +2,7 @@
 # description: Test XML extension with large files for performance and memory handling
 # group: [xml]
 
-require xml
+require webbed
 
 # Test loading large catalog file
 query I

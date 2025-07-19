@@ -399,7 +399,7 @@ public:
 ### Basic XML File Processing
 ```sql
 -- Load extension
-LOAD xml;
+LOAD webbed;
 
 -- Direct file querying (replacement scan)
 SELECT * FROM 'catalog.xml';
