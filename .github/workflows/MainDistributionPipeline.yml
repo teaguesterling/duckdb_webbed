@@ -28,8 +28,7 @@ jobs:
       duckdb_version: v1.3.2
       ci_tools_version: v1.3.2
       extension_name: webbed
-      exclude_archs: 'linux_arm64'
-      vcpkg_commit: 'd30fdf55cfca16e12bc3ad99cbc615997014b61b'
+      vcpkg_commit: 'dd3097e305afa53f7b4312371f62058d2e665320'
 
 #  code-quality-check:
 #    name: Code Quality Check
