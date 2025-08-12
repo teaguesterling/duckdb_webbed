@@ -28,7 +28,7 @@ jobs:
       duckdb_version: v1.3.2
       ci_tools_version: v1.3.2
       extension_name: webbed
-      exclude_archs: 'windows_amd64_mingw;linux_arm64'
+      exclude_archs: 'linux_arm64'
 
 #  code-quality-check:
 #    name: Code Quality Check
