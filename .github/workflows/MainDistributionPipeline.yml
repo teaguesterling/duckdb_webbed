@@ -29,6 +29,7 @@ jobs:
       ci_tools_version: v1.3.2
       extension_name: webbed
       exclude_archs: 'linux_arm64'
+      vcpkg_commit: 'd30fdf55cfca16e12bc3ad99cbc615997014b61b'
 
 #  code-quality-check:
 #    name: Code Quality Check
