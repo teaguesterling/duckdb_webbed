@@ -304,11 +304,11 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	XMLSchemaOptions schema_options;
 	// TODO: Get these from bind_data if we store them there
 	
-	while (output_idx < STANDARD_VECTOR_SIZE) {
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
 		// Check if we need to load data from the next file
 		if (!gstate.file_data_loaded || gstate.current_row_index >= gstate.current_file_rows.size()) {
 			// Move to next file if current file is exhausted
-			if (gstate.current_row_index >= gstate.current_file_rows.size()) {
+			if (gstate.file_data_loaded && gstate.current_row_index >= gstate.current_file_rows.size()) {
 				gstate.file_index++;
 				gstate.file_data_loaded = false;
 			}
@@ -399,6 +399,12 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 			
 			output_idx++;
 			gstate.current_row_index++;
+		}
+		
+		// If we've filled the output vector but still have data, we should break and let DuckDB call us again
+		if (output_idx >= STANDARD_VECTOR_SIZE && 
+		    (gstate.current_row_index < gstate.current_file_rows.size() || gstate.file_index < gstate.files.size())) {
+			break;
 		}
 	}
 	
