@@ -388,7 +388,7 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 			}
 		}
 		
-		// Stream data from current file
+		// Stream data from current file - DON'T break early, let the loop continue
 		while (output_idx < STANDARD_VECTOR_SIZE && gstate.current_row_index < gstate.current_file_rows.size()) {
 			const auto& row = gstate.current_file_rows[gstate.current_row_index];
 			
@@ -401,11 +401,8 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 			gstate.current_row_index++;
 		}
 		
-		// If we've filled the output vector but still have data, we should break and let DuckDB call us again
-		if (output_idx >= STANDARD_VECTOR_SIZE && 
-		    (gstate.current_row_index < gstate.current_file_rows.size() || gstate.file_index < gstate.files.size())) {
-			break;
-		}
+		// Continue to next iteration of outer loop - don't break here!
+		// The outer loop will handle moving to next file when current file is exhausted
 	}
 	
 	output.SetCardinality(output_idx);
