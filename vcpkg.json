@@ -4,11 +4,11 @@
         "dependencies": [
                 {
                         "name": "libxml2",
-                        "platform": "!x64-mingw-static"
+                        "platform": "!mingw"
                 },
                 {
                         "name": "libxml2",
-                        "platform": "x64-mingw-static",
+                        "platform": "mingw",
                         "default-features": false,
                         "features": []
                 }
