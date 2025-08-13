@@ -2,7 +2,16 @@
         "name": "duckdb-webbed",
         "version": "1.0.2",
         "dependencies": [
-                "libxml2"
+                {
+                        "name": "libxml2",
+                        "platform": "!x64-mingw-static"
+                },
+                {
+                        "name": "libxml2",
+                        "platform": "x64-mingw-static",
+                        "default-features": false,
+                        "features": []
+                }
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [
