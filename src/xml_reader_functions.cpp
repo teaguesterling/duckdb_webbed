@@ -297,11 +297,6 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
 	
-	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
-	}
-	
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 	
@@ -309,71 +304,101 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	XMLSchemaOptions schema_options;
 	// TODO: Get these from bind_data if we store them there
 	
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
-		
-		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-			
-			if (file_size > bind_data.max_file_size) {
-				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
-					                           filename, bind_data.max_file_size);
-				}
-				continue; // Skip this file
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		// Check if we need to load data from the next file
+		if (!gstate.file_data_loaded || gstate.current_row_index >= gstate.current_file_rows.size()) {
+			// Move to next file if current file is exhausted
+			if (gstate.current_row_index >= gstate.current_file_rows.size()) {
+				gstate.file_index++;
+				gstate.file_data_loaded = false;
 			}
 			
-			// Read file content
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void*)content.data(), file_size);
-			
-			// Validate XML 
-			if (!XMLUtils::IsValidXML(content)) {
-				if (bind_data.ignore_errors) {
-					continue; // Skip this invalid file
-				} else {
-					throw InvalidInputException("File %s contains invalid XML", filename);
-				}
+			// Check if we've processed all files
+			if (gstate.file_index >= gstate.files.size()) {
+				break; // No more files to process
 			}
 			
-			// Extract structured data using appropriate method
-			std::vector<std::vector<Value>> extracted_rows;
+			// Load data from current file
+			const auto &filename = gstate.files[gstate.file_index];
 			
-			if (bind_data.has_explicit_schema) {
-				// Use explicit schema for extraction
-				extracted_rows = XMLSchemaInference::ExtractDataWithSchema(
-					content, bind_data.column_names, bind_data.column_types, schema_options);
-			} else {
-				// Use schema inference
-				extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
-			}
-			
-			// Fill output vectors with extracted data
-			for (const auto& row : extracted_rows) {
-				if (output_idx >= STANDARD_VECTOR_SIZE) {
-					break;
+			try {
+				// Check file size
+				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+				auto file_size = fs.GetFileSize(*file_handle);
+				
+				if (file_size > bind_data.max_file_size) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", 
+						                           filename, bind_data.max_file_size);
+					}
+					// Skip this file and try next
+					gstate.file_index++;
+					continue;
 				}
 				
-				// Set values for each column in the row
-				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
-					output.data[col_idx].SetValue(output_idx, row[col_idx]);
+				// Read file content
+				string content;
+				content.resize(file_size);
+				file_handle->Read((void*)content.data(), file_size);
+				
+				// Validate XML 
+				if (!XMLUtils::IsValidXML(content)) {
+					if (bind_data.ignore_errors) {
+						// Skip this file and try next
+						gstate.file_index++;
+						continue;
+					} else {
+						throw InvalidInputException("File %s contains invalid XML", filename);
+					}
 				}
-				output_idx++;
+				
+				// Extract structured data using appropriate method
+				std::vector<std::vector<Value>> extracted_rows;
+				if (bind_data.has_explicit_schema) {
+					// Use explicit schema for extraction
+					extracted_rows = XMLSchemaInference::ExtractDataWithSchema(
+						content, bind_data.column_names, bind_data.column_types, schema_options);
+				} else {
+					// Use schema inference
+					extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+				}
+				
+				// Convert std::vector to duckdb::vector
+				gstate.current_file_rows.clear();
+				gstate.current_file_rows.reserve(extracted_rows.size());
+				for (const auto& row : extracted_rows) {
+					vector<Value> duckdb_row;
+					duckdb_row.reserve(row.size());
+					for (const auto& value : row) {
+						duckdb_row.push_back(value);
+					}
+					gstate.current_file_rows.push_back(std::move(duckdb_row));
+				}
+				
+				gstate.current_row_index = 0;
+				gstate.file_data_loaded = true;
+				
+			} catch (const Exception &e) {
+				if (!bind_data.ignore_errors) {
+					throw;
+				}
+				// Skip this file and try next
+				gstate.file_index++;
+				continue;
 			}
-			
-		} catch (const Exception &e) {
-			if (!bind_data.ignore_errors) {
-				throw;
-			}
-			// Skip this file and continue
 		}
 		
-		// If we filled up the output, break
-		if (output_idx >= STANDARD_VECTOR_SIZE) {
-			break;
+		// Stream data from current file
+		while (output_idx < STANDARD_VECTOR_SIZE && gstate.current_row_index < gstate.current_file_rows.size()) {
+			const auto& row = gstate.current_file_rows[gstate.current_row_index];
+			
+			// Set values for each column in the row
+			for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
+				output.data[col_idx].SetValue(output_idx, row[col_idx]);
+			}
+			
+			output_idx++;
+			gstate.current_row_index++;
 		}
 	}
 	

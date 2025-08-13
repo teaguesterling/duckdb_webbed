@@ -1,0 +1,56 @@
+# name: test/sql/xml_streaming_large_dataset.test
+# description: Test XML extension with large datasets that exceed STANDARD_VECTOR_SIZE (2048 rows)
+# group: [xml]
+
+require webbed
+
+# Copy the test file to a temporary location for consistent testing
+statement ok
+COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?>
+<result>') TO 'test_large_dataset.xml'
+
+# Test read_xml with a large dataset (>2048 rows)
+# This test should pass once streaming is implemented
+query I
+SELECT COUNT(*) as total_rows FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list');
+----
+113057
+
+# Test that we can actually retrieve all rows, not just the first 2048
+query I
+SELECT COUNT(DISTINCT corp_code) as unique_corps FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list');
+----
+113057
+
+# Test reading specific data from the large dataset
+query II
+SELECT corp_code, corp_name FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list') 
+WHERE corp_code = '00434003' LIMIT 1;
+----
+00434003	다코
+
+# Verify we can access records beyond the 2048th record
+# This should contain data that would be truncated in the current implementation
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list') 
+    LIMIT 3000
+);
+----
+3000
+
+# Test that offset works correctly for large datasets
+query I
+SELECT COUNT(*) FROM (
+    SELECT * FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list') 
+    OFFSET 5000 LIMIT 1000
+);
+----
+1000
+
+# Test aggregation over the full large dataset
+query I
+SELECT COUNT(*) FROM read_xml('/home/teague/Downloads/extract/CORPCODE.xml', root_element='list')
+WHERE corp_name LIKE '%주식회사%';
+----
+0

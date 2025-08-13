@@ -54,6 +54,11 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t file_index = 0;
 	vector<string> files;
 	
+	// For streaming large datasets within a single file
+	vector<vector<Value>> current_file_rows;
+	idx_t current_row_index = 0;
+	bool file_data_loaded = false;
+	
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now
 	}
