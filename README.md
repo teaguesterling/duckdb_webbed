@@ -114,6 +114,31 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 - `xmlns_key`: Key for namespace declarations (default: empty/disabled)
 - `empty_elements`: How to handle empty elements: `'object'` (default), `'null'`, `'string'`
 
+**Python xmltodict Compatibility:**
+
+For Python-style xmltodict behavior, create a macro with these defaults:
+```sql
+CREATE MACRO xmltodict(xml, 
+                       attr_prefix := '@', 
+                       text_key := '#', 
+                       process_namespaces := false, 
+                       empty_elements := 'object',
+                       force_list := []) AS
+  xml_to_json(xml,
+    attr_prefix := attr_prefix,
+    text_key := text_key,
+    empty_elements := empty_elements,
+    force_list := force_list,
+    namespaces := IF(process_namespaces, 'expand', 'strip')
+  );
+
+-- Usage matches Python's xmltodict.parse()
+SELECT xmltodict('<root><item>Test</item></root>');
+-- With namespace processing
+SELECT xmltodict('<root xmlns:ns="http://ex.com"><ns:item>Test</ns:item></root>',
+                 process_namespaces := true);
+```
+
 ### 📋 **Analysis & Utility Functions**
 
 | Function | Description | Example |
@@ -293,17 +318,81 @@ SELECT xml_libxml2_version('xml') as version_info;
 ### 📊 **Advanced HTML Table Processing**
 
 ```sql
--- Method 1: Table function (returns rows directly)
-SELECT table_index, row_index, columns
-FROM html_extract_tables('<table><tr><th>Name</th><th>Age</th></tr><tr><td>John</td><td>25</td></tr></table>');
+-- Example: Extract product data from an HTML table into a proper DuckDB table
 
--- Method 2: Scalar function returning structured data
-SELECT html_extract_table_rows(html) as table_data
+-- Step 1: Use html_extract_tables to get raw table data
+WITH raw_table AS (
+  SELECT table_index, row_index, columns
+  FROM html_extract_tables(
+    '<table>
+      <tr><th>Product</th><th>Price</th><th>Quantity</th></tr>
+      <tr><td>Laptop</td><td>$999.99</td><td>5</td></tr>
+      <tr><td>Mouse</td><td>$29.99</td><td>15</td></tr>
+      <tr><td>Keyboard</td><td>$79.99</td><td>8</td></tr>
+    </table>'
+  )
+  WHERE table_index = 0  -- First table
+)
+-- Step 2: Transform into a structured table with proper types
+SELECT
+  columns[1] AS product_name,
+  CAST(regexp_replace(columns[2], '[$,]', '', 'g') AS DECIMAL(10,2)) AS price,
+  CAST(columns[3] AS INTEGER) AS quantity,
+  CAST(regexp_replace(columns[2], '[$,]', '', 'g') AS DECIMAL(10,2)) *
+    CAST(columns[3] AS INTEGER) AS total_value
+FROM raw_table
+WHERE row_index > 0  -- Skip header row
+ORDER BY product_name;
+
+-- Result:
+-- ┌──────────────┬────────┬──────────┬─────────────┐
+-- │ product_name │  price │ quantity │ total_value │
+-- ├──────────────┼────────┼──────────┼─────────────┤
+-- │ Keyboard     │  79.99 │        8 │      639.92 │
+-- │ Laptop       │ 999.99 │        5 │     4999.95 │
+-- │ Mouse        │  29.99 │       15 │      449.85 │
+-- └──────────────┴────────┴──────────┴─────────────┘
+
+-- Alternative: Extract tables from HTML files and create a view
+CREATE OR REPLACE VIEW product_inventory AS
+WITH html_data AS (
+  SELECT filename, html FROM read_html_objects('reports/*.html')
+),
+tables AS (
+  SELECT
+    filename,
+    table_index,
+    row_index,
+    columns
+  FROM html_data, html_extract_tables(html)
+  WHERE table_index = 0  -- Assuming product table is first
+    AND row_index > 0    -- Skip headers
+)
+SELECT
+  filename,
+  columns[1] AS product,
+  TRY_CAST(regexp_replace(columns[2], '[^0-9.]', '', 'g') AS DECIMAL(10,2)) AS price,
+  TRY_CAST(columns[3] AS INTEGER) AS stock
+FROM tables;
+
+-- Now query the view like any DuckDB table
+SELECT product, AVG(price) as avg_price, SUM(stock) as total_stock
+FROM product_inventory
+GROUP BY product
+ORDER BY total_stock DESC;
+
+-- Method 2: Using html_extract_table_rows for nested data
+SELECT
+  filename,
+  unnest(html_extract_table_rows(html)) AS table_row
+FROM read_html_objects('data/*.html');
+
+-- Method 3: Get rich table metadata with html_extract_tables_json
+SELECT
+  filename,
+  (unnest(html_extract_tables_json(html))).headers AS table_headers,
+  (unnest(html_extract_tables_json(html))).row_count AS num_rows
 FROM read_html_objects('reports/*.html');
-
--- Method 3: Rich JSON structure with metadata
-SELECT html_extract_tables_json(html) as detailed_tables
-FROM read_html_objects('complex_page.html');
 ```
 
 ---
