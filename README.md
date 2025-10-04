@@ -118,10 +118,10 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 
 For Python-style xmltodict behavior, create a macro with these defaults:
 ```sql
-CREATE MACRO xmltodict(xml, 
-                       attr_prefix := '@', 
-                       text_key := '#', 
-                       process_namespaces := false, 
+CREATE MACRO xmltodict(xml,
+                       attr_prefix := '@',
+                       text_key := '#',
+                       process_namespaces := false,
                        empty_elements := 'object',
                        force_list := []) AS
   xml_to_json(xml,
@@ -137,6 +137,61 @@ SELECT xmltodict('<root><item>Test</item></root>');
 -- With namespace processing
 SELECT xmltodict('<root xmlns:ns="http://ex.com"><ns:item>Test</ns:item></root>',
                  process_namespaces := true);
+```
+
+**HTML Table to DuckDB Table Macro:**
+
+Convert simple HTML tables (no row/col spans) to proper DuckDB tables with automatic type inference:
+```sql
+CREATE MACRO html_table_to_table(html, table_index := 0) AS TABLE (
+  WITH raw_table AS (
+    SELECT row_index, columns
+    FROM html_extract_tables(html)
+    WHERE table_index = table_index
+  ),
+  headers AS (
+    SELECT columns FROM raw_table WHERE row_index = 0
+  ),
+  json_data AS (
+    SELECT to_json(list(map_from_entries(
+      list_transform(
+        range(1, len(columns) + 1),
+        i -> {'key': (SELECT columns[i] FROM headers), 'value': columns[i]}
+      )
+    ))) AS json_str
+    FROM raw_table
+    WHERE row_index > 0
+  )
+  SELECT unnest(
+    json_transform(json_str, json_structure(json_str))
+  ) FROM json_data
+);
+
+-- Usage: Query HTML table directly as a DuckDB table
+SELECT * FROM html_table_to_table('<table>
+  <tr><th>Name</th><th>Age</th><th>City</th></tr>
+  <tr><td>Alice</td><td>30</td><td>NYC</td></tr>
+  <tr><td>Bob</td><td>25</td><td>LA</td></tr>
+</table>');
+-- Result: Proper table with columns Name, Age, City and inferred types
+
+-- With automatic type inference for numbers
+SELECT * FROM html_table_to_table('<table>
+  <tr><th>Product</th><th>Price</th><th>Stock</th></tr>
+  <tr><td>Laptop</td><td>999.99</td><td>5</td></tr>
+  <tr><td>Mouse</td><td>29.99</td><td>15</td></tr>
+</table>');
+-- Result: Price as DOUBLE, Stock as BIGINT (automatically inferred!)
+
+-- Use with WHERE, GROUP BY, etc. like any table
+SELECT City, COUNT(*) as count
+FROM html_table_to_table('<table>...</table>')
+GROUP BY City;
+
+-- Extract from HTML files
+SELECT p.*
+FROM read_html_objects('reports/*.html') h,
+     html_table_to_table(h.html) p;
 ```
 
 ### 📋 **Analysis & Utility Functions**
