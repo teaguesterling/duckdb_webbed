@@ -393,15 +393,15 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 				options.strip_namespaces = BooleanValue::Get(param_value);
 			}
 		} else if (param_name == "empty_elements") {
-			auto empty_val = StringValue::Get(param_value);
-                        auto empty_type = param_value.type().id();
 			if (param_value.IsNull()) {
 				options.empty_elements = "object"; // Default
-			} else if (empty_type != LogicalTypeId::VARCHAR) {
-				throw BinderException("Invalid value for empty_elements: VARCHAR required, got '%s'", empty_type);
-			} else if (empty_val != "object" && empty_val != "null" && empty_val != "string") {
-				throw BinderException("Invalid value for empty_elements parameter: Must be one of: 'object', 'null', or 'string', got '%s'", empty_val);
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("Invalid value for empty_elements: VARCHAR required, got '%s'", param_value.type().ToString());
 			} else {
+				auto empty_val = StringValue::Get(param_value);
+				if (empty_val != "object" && empty_val != "null" && empty_val != "string") {
+					throw BinderException("Invalid value for empty_elements parameter: Must be one of: 'object', 'null', or 'string', got '%s'", empty_val);
+				}
 				options.empty_elements = empty_val;
 			}
 		} else {
@@ -695,6 +695,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Register xml_to_json function with optional named parameters
 	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLToJSONWithSchemaFunction, XMLToJSONWithSchemaBind);
 	xml_to_json_function.varargs = LogicalType::ANY;
+	xml_to_json_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(xml_to_json_function);
 	
 	// Register json_to_xml function

@@ -34,11 +34,17 @@ SELECT xml_to_json('<root><item id="1">content</item></root>', attr_prefix := '�
 ----
 {"root":{"item":{"属性_id":"1","文本":"content"}}}
 
-# Test 6: Attribute prefix conflicts with element names
+# Test 6: Attribute prefix with element name (no conflict - different keys)
 query I
-SELECT xml_to_json('<root><item id="1"><@id>conflict</@id></item></root>', attr_prefix := '@');
+SELECT xml_to_json('<root><item id="1"><id>conflict</id></item></root>', attr_prefix := '@');
 ----
-{"root":{"item":{"@id":"1","@id":{"#text":"conflict"}}}}
+{"root":{"item":{"@id":"1","id":{"#text":"conflict"}}}}
+
+# Test 6b: Attribute prefix creates duplicate key prefix
+query I
+SELECT xml_to_json('<root><item id="1"><Xid>conflict</Xid></item></root>', attr_prefix := 'X');
+----
+{"root":{"item":{"Xid":"1","Xid":{"#text":"conflict"}}}}
 
 # Test 7: Text key conflicts with element names
 query I
