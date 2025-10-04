@@ -139,59 +139,116 @@ SELECT xmltodict('<root xmlns:ns="http://ex.com"><ns:item>Test</ns:item></root>'
                  process_namespaces := true);
 ```
 
-**HTML Table to DuckDB Table Macro:**
+**HTML Table Extraction Macros:**
 
-Convert simple HTML tables (no row/col spans) to proper DuckDB tables with automatic type inference:
+Convert HTML tables to JSON or DuckDB tables with type inference:
+
 ```sql
-CREATE MACRO html_table_to_table(html, table_index := 0) AS TABLE (
+-- Extract HTML table as JSON array
+CREATE MACRO html_table_to_json(html, idx := 0) AS (
   WITH raw_table AS (
     SELECT row_index, columns
     FROM html_extract_tables(html)
-    WHERE table_index = table_index
+    WHERE table_index = idx
   ),
   headers AS (
-    SELECT columns FROM raw_table WHERE row_index = 0
+    SELECT columns AS h FROM raw_table WHERE row_index = 0
   ),
-  json_data AS (
-    SELECT to_json(list(map_from_entries(
-      list_transform(
-        range(1, len(columns) + 1),
-        i -> {'key': (SELECT columns[i] FROM headers), 'value': columns[i]}
-      )
-    ))) AS json_str
+  data_rows AS (
+    SELECT list(columns) AS all_rows, (SELECT h FROM headers) AS header_row
     FROM raw_table
     WHERE row_index > 0
   )
-  SELECT unnest(
-    json_transform(json_str, json_structure(json_str))
-  ) FROM json_data
+  SELECT to_json(list_transform(
+    all_rows,
+    row -> map_from_entries(list_zip(header_row, row))
+  ))
+  FROM data_rows
 );
 
--- Usage: Query HTML table directly as a DuckDB table
-SELECT * FROM html_table_to_table('<table>
-  <tr><th>Name</th><th>Age</th><th>City</th></tr>
-  <tr><td>Alice</td><td>30</td><td>NYC</td></tr>
-  <tr><td>Bob</td><td>25</td><td>LA</td></tr>
-</table>');
--- Result: Proper table with columns Name, Age, City and inferred types
+-- Extract HTML table as struct array (requires schema)
+CREATE MACRO html_table_to_struct(html, idx, schema) AS TABLE (
+  SELECT from_json(html_table_to_json(html, idx), schema) AS result
+);
 
--- With automatic type inference for numbers
-SELECT * FROM html_table_to_table('<table>
-  <tr><th>Product</th><th>Price</th><th>Stock</th></tr>
-  <tr><td>Laptop</td><td>999.99</td><td>5</td></tr>
-  <tr><td>Mouse</td><td>29.99</td><td>15</td></tr>
-</table>');
--- Result: Price as DOUBLE, Stock as BIGINT (automatically inferred!)
+-- Extract HTML table as queryable DuckDB table (requires schema)
+CREATE MACRO html_table_to_table(html, idx, schema) AS TABLE (
+  SELECT unnest(from_json(html_table_to_json(html, idx), schema), recursive := true)
+);
 
--- Use with WHERE, GROUP BY, etc. like any table
-SELECT City, COUNT(*) as count
-FROM html_table_to_table('<table>...</table>')
-GROUP BY City;
+-- Example: Extract specific table from complex HTML document
+WITH sample_html AS (
+  SELECT '<html>
+    <body>
+      <h1>Company Report</h1>
+      <p>Summary statistics for Q4 2024</p>
 
--- Extract from HTML files
-SELECT p.*
+      <h2>Employee Directory</h2>
+      <table id="employees">
+        <tr><th>Name</th><th>Department</th><th>Years</th></tr>
+        <tr><td>Alice Smith</td><td>Engineering</td><td>5</td></tr>
+        <tr><td>Bob Jones</td><td>Sales</td><td>3</td></tr>
+        <tr><td>Carol White</td><td>Engineering</td><td>7</td></tr>
+      </table>
+
+      <h2>Sales Performance</h2>
+      <table id="sales">
+        <tr><th>Product</th><th>Revenue</th><th>Units</th><th>Growth</th></tr>
+        <tr><td>Widget A</td><td>50000.00</td><td>1250</td><td>15.5</td></tr>
+        <tr><td>Widget B</td><td>75000.00</td><td>2100</td><td>23.2</td></tr>
+        <tr><td>Widget C</td><td>32000.00</td><td>800</td><td>-5.1</td></tr>
+      </table>
+
+      <h2>Office Locations</h2>
+      <table id="offices">
+        <tr><th>City</th><th>Country</th><th>Employees</th></tr>
+        <tr><td>New York</td><td>USA</td><td>45</td></tr>
+        <tr><td>London</td><td>UK</td><td>32</td></tr>
+        <tr><td>Tokyo</td><td>Japan</td><td>28</td></tr>
+      </table>
+    </body>
+  </html>' AS html
+)
+
+-- Extract first table (index 0) - Employee Directory
+SELECT * FROM html_table_to_table(
+  (SELECT html FROM sample_html),
+  0,
+  '[{"Name":"VARCHAR","Department":"VARCHAR","Years":"BIGINT"}]'
+);
+-- Result: Name (VARCHAR), Department (VARCHAR), Years (BIGINT)
+
+-- Extract second table (index 1) - Sales Performance with type inference
+SELECT Product, Revenue, Units, Growth
+FROM html_table_to_table(
+  (SELECT html FROM sample_html),
+  1,
+  '[{"Product":"VARCHAR","Revenue":"DOUBLE","Units":"BIGINT","Growth":"DOUBLE"}]'
+)
+WHERE Growth > 0
+ORDER BY Revenue DESC;
+-- Result: Revenue (DOUBLE), Units (BIGINT), Growth (DOUBLE) - types inferred from schema!
+
+-- Extract as JSON for further processing
+SELECT html_table_to_json((SELECT html FROM sample_html), 2);
+-- Result: [{"City":"New York","Country":"USA","Employees":"45"},...]
+
+-- Extract with custom schema (use DECIMAL, INTEGER, FLOAT instead of DOUBLE, BIGINT)
+SELECT * FROM html_table_to_struct(
+  (SELECT html FROM sample_html),
+  1,
+  '[{"Product":"VARCHAR","Revenue":"DECIMAL(10,2)","Units":"INTEGER","Growth":"FLOAT"}]'
+);
+
+-- Query HTML files with table extraction
+SELECT
+  h.filename,
+  t.Department,
+  COUNT(*) as employee_count,
+  AVG(t.Years) as avg_years
 FROM read_html_objects('reports/*.html') h,
-     html_table_to_table(h.html) p;
+     html_table_to_table(h.html, 0, '[{"Name":"VARCHAR","Department":"VARCHAR","Years":"BIGINT"}]') t
+GROUP BY h.filename, t.Department;
 ```
 
 ### 📋 **Analysis & Utility Functions**
