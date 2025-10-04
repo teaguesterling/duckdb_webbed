@@ -103,8 +103,16 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `xml_to_json(xml)` | Convert XML to JSON | `SELECT xml_to_json('<person><name>John</name></person>')` |
+| `xml_to_json(xml, ...)` | Convert XML to JSON with configurable options | `SELECT xml_to_json('<person><name>John</name></person>')` |
 | `json_to_xml(json)` | Convert JSON to XML | `SELECT json_to_xml('{"name":"John"}')` |
+
+**xml_to_json Parameters:**
+- `force_list`: Array of element names to always convert to JSON arrays
+- `attr_prefix`: Prefix for attributes (default: `'@'`)
+- `text_key`: Key for text content (default: `'#text'`)
+- `namespaces`: Namespace handling: `'strip'` (default), `'expand'`, `'keep'`
+- `xmlns_key`: Key for namespace declarations (default: empty/disabled)
+- `empty_elements`: How to handle empty elements: `'object'` (default), `'null'`, `'string'`
 
 ### 📋 **Analysis & Utility Functions**
 
@@ -191,11 +199,60 @@ WITH api_data AS (
 )
 SELECT json_to_xml(json_response) as xml_format FROM api_data;
 
+-- Basic XML to JSON conversion
+SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
+-- Result: {"person":{"name":{"#text":"John"},"age":{"#text":"30"}}}
+
+-- Force specific elements to be arrays
+SELECT xml_to_json(
+    '<catalog><book><title>Book 1</title></book></catalog>',
+    force_list := ['title']
+);
+-- Result: {"catalog":{"book":{"title":[{"#text":"Book 1"}]}}}
+
+-- Custom attribute prefix and text key
+SELECT xml_to_json(
+    '<item id="123">Product Name</item>',
+    attr_prefix := '_',
+    text_key := 'value'
+);
+-- Result: {"item":{"_id":"123","value":"Product Name"}}
+
+-- Namespace handling: strip (default)
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>');
+-- Result: {"root":{"item":{"#text":"Test"}}}
+
+-- Namespace handling: keep prefixes
+SELECT xml_to_json(
+    '<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>',
+    namespaces := 'keep'
+);
+-- Result: {"root":{"ns:item":{"#text":"Test"}}}
+
+-- Namespace handling: expand to full URIs
+SELECT xml_to_json(
+    '<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>',
+    namespaces := 'expand'
+);
+-- Result: {"root":{"http://example.com:item":{"#text":"Test"}}}
+
+-- Include namespace declarations
+SELECT xml_to_json(
+    '<root xmlns:ns="http://example.com" xmlns:svg="http://www.w3.org/2000/svg"><ns:item>Test</ns:item></root>',
+    namespaces := 'keep',
+    xmlns_key := '#xmlns'
+);
+-- Result: {"root":{"#xmlns":{"ns":"http://example.com","svg":"http://www.w3.org/2000/svg"},"ns:item":{"#text":"Test"}}}
+
+-- Handle empty elements as null
+SELECT xml_to_json('<root><item/></root>', empty_elements := 'null');
+-- Result: {"root":{"item":null}}
+
 -- Convert XML configuration to JSON for processing
 WITH xml_config AS (
     SELECT content FROM read_xml_objects('config.xml')
 )
-SELECT json_extract(xml_to_json(content), '$.config.database.host') as db_host 
+SELECT json_extract(xml_to_json(content), '$.config.database.host') as db_host
 FROM xml_config;
 ```
 
@@ -490,7 +547,6 @@ Contributions welcome! The extension is production-ready with opportunities for:
 - 🌟 Additional HTML extraction functions (forms, metadata)
 - 📈 Advanced XPath 2.0+ features
 - 🔄 Enhanced JSON conversion with better type preservation
-- 🌐 XML namespace handling improvements
 
 ## License
 
