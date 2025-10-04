@@ -8,7 +8,7 @@ require webbed
 statement error
 SELECT xml_to_json('<root><item/></root>', empty_elements := 'invalid');
 ----
-Invalid value for empty_elements parameter. Must be 'object', 'null', or 'string'.
+Invalid value for empty_elements parameter: Must be one of: 'object', 'null', or 'string', got 'invalid'
 
 # Test 2: Very long attr_prefix should work (but may be impractical)
 query I

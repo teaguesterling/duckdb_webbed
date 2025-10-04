@@ -393,15 +393,15 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 				options.strip_namespaces = BooleanValue::Get(param_value);
 			}
 		} else if (param_name == "empty_elements") {
+			auto empty_val = StringValue::Get(param_value);
+                        auto empty_type = param_value.type().id();
 			if (param_value.IsNull()) {
 				options.empty_elements = "object"; // Default
-			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("empty_elements parameter must be a string ('object', 'null', or 'string')");
+			} else if (empty_type != LogicalTypeId::VARCHAR) {
+				throw BinderException("Invalid value for empty_elements: VARCHAR required, got '%s'", empty_type);
+			} else if (empty_val != "object" && empty_val != "null" && empty_val != "string") {
+				throw BinderException("Invalid value for empty_elements parameter: Must be one of: 'object', 'null', or 'string', got '%s'", empty_val);
 			} else {
-				std::string empty_val = StringValue::Get(param_value);
-				if (empty_val != "object" && empty_val != "null" && empty_val != "string") {
-					throw BinderException("empty_elements must be 'object', 'null', or 'string', got '%s'", empty_val);
-				}
 				options.empty_elements = empty_val;
 			}
 		} else {
