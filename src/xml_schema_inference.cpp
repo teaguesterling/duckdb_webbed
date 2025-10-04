@@ -863,7 +863,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string& text, const LogicalT
 			}
 			case LogicalTypeId::TIMESTAMP: {
 				// Try to parse timestamp
-				return Value::TIMESTAMP(Timestamp::FromString(text));
+				return Value::TIMESTAMP(Timestamp::FromString(text, false));
 			}
 			case LogicalTypeId::VARCHAR:
 			default:

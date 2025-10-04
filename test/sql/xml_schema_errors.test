@@ -1,0 +1,66 @@
+# name: test/sql/xml_schema_errors.test
+# description: Test xml_to_json error handling and edge cases with schema parameters
+# group: [xml]
+
+require webbed
+
+# Test 1: Invalid empty_elements value should error
+statement error
+SELECT xml_to_json('<root><item/></root>', empty_elements := 'invalid');
+----
+Invalid value for empty_elements parameter. Must be 'object', 'null', or 'string'.
+
+# Test 2: Very long attr_prefix should work (but may be impractical)
+query I
+SELECT xml_to_json('<root><item id="1"/></root>', attr_prefix := 'very_long_prefix_');
+----
+{"root":{"item":{"very_long_prefix_id":"1"}}}
+
+# Test 3: Special characters in attr_prefix should work
+query I
+SELECT xml_to_json('<root><item id="1"/></root>', attr_prefix := '@@');
+----
+{"root":{"item":{"@@id":"1"}}}
+
+# Test 4: Empty string text_key should work (though may cause conflicts)
+query I
+SELECT xml_to_json('<root><item>test</item></root>', text_key := '');
+----
+{"root":{"item":{"":"test"}}}
+
+# Test 5: Unicode characters in parameters should work
+query I
+SELECT xml_to_json('<root><item id="1">content</item></root>', attr_prefix := '属性_', text_key := '文本');
+----
+{"root":{"item":{"属性_id":"1","文本":"content"}}}
+
+# Test 6: Attribute prefix conflicts with element names
+query I
+SELECT xml_to_json('<root><item id="1"><@id>conflict</@id></item></root>', attr_prefix := '@');
+----
+{"root":{"item":{"@id":"1","@id":{"#text":"conflict"}}}}
+
+# Test 7: Text key conflicts with element names
+query I
+SELECT xml_to_json('<root><item>text content<#text>element</#text></item></root>', text_key := '#text');
+----
+{"root":{"item":{"#text":"text content","#text":{"#text":"element"}}}}
+
+# Test 8: Large force_list array (performance test)
+query I
+SELECT xml_to_json('<root><a>1</a><b>2</b><c>3</c></root>', 
+  force_list := ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z']);
+----
+{"root":{"a":[{"#text":"1"}],"b":[{"#text":"2"}],"c":[{"#text":"3"}]}}
+
+# Test 9: Malformed XML with schema parameters should still error gracefully
+query I
+SELECT xml_to_json('<root><unclosed>', force_list := ['test']);
+----
+{}
+
+# Test 10: Empty XML with schema parameters
+query I
+SELECT xml_to_json('', force_list := ['test'], attr_prefix := '_');
+----
+{}

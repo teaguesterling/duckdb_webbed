@@ -2,8 +2,8 @@
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
 #include "duckdb/function/scalar_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 
 namespace duckdb {
 
@@ -317,6 +317,116 @@ void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &sta
 	});
 }
 
+unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientContext &context, ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments) {
+	if (arguments.empty()) {
+		throw BinderException("xml_to_json requires at least one argument (the XML string)");
+	}
+	
+	XMLToJSONOptions options; // Start with defaults
+	
+	// First argument must be the XML string (no alias)
+	if (!arguments[0]->GetAlias().empty()) {
+		throw BinderException("First argument to xml_to_json must be the XML string (without named parameter)");
+	}
+	
+	// Process named parameters (if any)
+	for (idx_t i = 1; i < arguments.size(); i++) {
+		auto &arg = arguments[i];
+		std::string param_name = arg->GetAlias();
+		
+		if (param_name.empty()) {
+			throw BinderException("All arguments after the first must be named parameters (e.g., force_list := ['name'])");
+		}
+		
+		// Check if the argument is foldable (constant)
+		if (arg->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		if (!arg->IsFoldable()) {
+			throw BinderException("Parameter '%s' must be a constant value", param_name);
+		}
+		
+		// Extract the constant value
+		Value param_value = ExpressionExecutor::EvaluateScalar(context, *arg);
+		
+		if (param_name == "force_list") {
+			if (param_value.IsNull()) {
+				options.force_list.clear(); // NULL means empty list
+			} else if (param_value.type().id() != LogicalTypeId::LIST) {
+				throw BinderException("force_list parameter must be a list of strings, e.g., ['name', 'item']");
+			} else {
+				// Check child type only if list is not empty
+				auto &list_children = ListValue::GetChildren(param_value);
+				if (!list_children.empty() && ListType::GetChildType(param_value.type()).id() != LogicalTypeId::VARCHAR) {
+					throw BinderException("force_list parameter must be a list of strings, e.g., ['name', 'item']");
+				}
+				options.force_list.clear();
+				for (const auto &item : list_children) {
+					if (item.IsNull()) {
+						throw BinderException("force_list cannot contain NULL values");
+					}
+					options.force_list.push_back(StringValue::Get(item));
+				}
+			}
+		} else if (param_name == "attr_prefix") {
+			if (param_value.IsNull()) {
+				options.attr_prefix = "@"; // Default
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("attr_prefix parameter must be a string");
+			} else {
+				options.attr_prefix = StringValue::Get(param_value);
+			}
+		} else if (param_name == "text_key") {
+			if (param_value.IsNull()) {
+				options.text_key = "#text"; // Default
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("text_key parameter must be a string");
+			} else {
+				options.text_key = StringValue::Get(param_value);
+			}
+		} else if (param_name == "strip_namespaces") {
+			if (param_value.IsNull()) {
+				options.strip_namespaces = true; // Default
+			} else if (param_value.type().id() != LogicalTypeId::BOOLEAN) {
+				throw BinderException("strip_namespaces parameter must be a boolean");
+			} else {
+				options.strip_namespaces = BooleanValue::Get(param_value);
+			}
+		} else if (param_name == "empty_elements") {
+			if (param_value.IsNull()) {
+				options.empty_elements = "object"; // Default
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("empty_elements parameter must be a string ('object', 'null', or 'string')");
+			} else {
+				std::string empty_val = StringValue::Get(param_value);
+				if (empty_val != "object" && empty_val != "null" && empty_val != "string") {
+					throw BinderException("empty_elements must be 'object', 'null', or 'string', got '%s'", empty_val);
+				}
+				options.empty_elements = empty_val;
+			}
+		} else {
+			throw BinderException("Unknown parameter '%s' for xml_to_json", param_name);
+		}
+	}
+	
+	return make_uniq<XMLToJSONBindData>(options);
+}
+
+void XMLScalarFunctions::XMLToJSONWithSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
+	auto &bind_data = func_expr.bind_info->Cast<XMLToJSONBindData>();
+	auto &xml_vector = args.data[0];
+	
+	// All options were extracted at bind time, just use them
+	const XMLToJSONOptions &options = bind_data.options;
+	
+	UnaryExecutor::Execute<string_t, string_t>(xml_vector, result, args.size(), [&](string_t xml_str) {
+		std::string xml_string = xml_str.GetString();
+		std::string json_string = XMLUtils::XMLToJSON(xml_string, options);
+		return StringVector::AddString(result, json_string);
+	});
+}
+
 void XMLScalarFunctions::JSONToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &json_vector = args.data[0];
 	
@@ -418,19 +528,19 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 	}
 }
 
-void XMLScalarFunctions::Register(DatabaseInstance &db) {
+void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Register xml function (same as to_xml for now) - using VARCHAR for now, will enhance type system later
 	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
-	ExtensionUtil::RegisterFunction(db, xml_function);
+	loader.RegisterFunction(xml_function);
 	
 	// Register to_xml function (single argument) - ANY type variant (unified path)
 	auto to_xml_any_function = ScalarFunction("to_xml", {LogicalType::ANY}, XMLTypes::XMLType(), ValueToXMLFunction);
-	ExtensionUtil::RegisterFunction(db, to_xml_any_function);
+	loader.RegisterFunction(to_xml_any_function);
 	
 	// Register to_xml function (two arguments: value, node_name) - ANY type variant (unified path)
 	auto to_xml_any_with_name_function = ScalarFunction("to_xml", 
 		{LogicalType::ANY, LogicalType::VARCHAR}, XMLTypes::XMLType(), ValueToXMLFunction);
-	ExtensionUtil::RegisterFunction(db, to_xml_any_with_name_function);
+	loader.RegisterFunction(to_xml_any_with_name_function);
 	
 	// Register xml_libxml2_version function 
 	auto xml_libxml2_version_function = ScalarFunction("xml_libxml2_version", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
@@ -440,19 +550,19 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 				return StringVector::AddString(result, "Xml " + name.GetString() + ", my linked libxml2 version is 2.13.8");
 			});
 		});
-	ExtensionUtil::RegisterFunction(db, xml_libxml2_version_function);
+	loader.RegisterFunction(xml_libxml2_version_function);
 	
 	// Register xml_valid function - both XML and VARCHAR overloads
 	auto xml_valid_function = ScalarFunction("xml_valid", {XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLValidFunction);
-	ExtensionUtil::RegisterFunction(db, xml_valid_function);
+	loader.RegisterFunction(xml_valid_function);
 	auto xml_valid_varchar_function = ScalarFunction("xml_valid", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidFunction);
-	ExtensionUtil::RegisterFunction(db, xml_valid_varchar_function);
+	loader.RegisterFunction(xml_valid_varchar_function);
 	
 	// Register xml_well_formed function - both XML and VARCHAR overloads
 	auto xml_well_formed_function = ScalarFunction("xml_well_formed", {XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLWellFormedFunction);
-	ExtensionUtil::RegisterFunction(db, xml_well_formed_function);
+	loader.RegisterFunction(xml_well_formed_function);
 	auto xml_well_formed_varchar_function = ScalarFunction("xml_well_formed", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLWellFormedFunction);
-	ExtensionUtil::RegisterFunction(db, xml_well_formed_varchar_function);
+	loader.RegisterFunction(xml_well_formed_varchar_function);
 	
 	// Register xml_extract_text function with multiple overloads to handle string literals
 	ScalarFunctionSet xml_extract_text_functions("xml_extract_text");
@@ -474,15 +584,15 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	// VARCHAR + STRING_LITERAL (compatibility)
 	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, XMLExtractTextFunction));
 	
-	ExtensionUtil::RegisterFunction(db, xml_extract_text_functions);
+	loader.RegisterFunction(xml_extract_text_functions);
 	
 	// Register xml_extract_all_text function - both XML and VARCHAR overloads
 	auto xml_extract_all_text_function = ScalarFunction("xml_extract_all_text", 
 		{XMLTypes::XMLType()}, LogicalType::VARCHAR, XMLExtractAllTextFunction);
-	ExtensionUtil::RegisterFunction(db, xml_extract_all_text_function);
+	loader.RegisterFunction(xml_extract_all_text_function);
 	auto xml_extract_all_text_varchar_function = ScalarFunction("xml_extract_all_text", 
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractAllTextFunction);
-	ExtensionUtil::RegisterFunction(db, xml_extract_all_text_varchar_function);
+	loader.RegisterFunction(xml_extract_all_text_varchar_function);
 	
 	// Register xml_extract_elements function as a function set
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
@@ -504,18 +614,18 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	// VARCHAR + STRING_LITERAL (compatibility)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
 	
-	ExtensionUtil::RegisterFunction(db, xml_extract_elements_functions);
+	loader.RegisterFunction(xml_extract_elements_functions);
 	
 	// Register xml_extract_elements_string function as a function set
 	ScalarFunctionSet xml_extract_elements_string_functions("xml_extract_elements_string");
 	xml_extract_elements_string_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction));
 	xml_extract_elements_string_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction));
-	ExtensionUtil::RegisterFunction(db, xml_extract_elements_string_functions);
+	loader.RegisterFunction(xml_extract_elements_string_functions);
 	
 	// Register xml_wrap_fragment function (returns XML)
 	auto xml_wrap_fragment_function = ScalarFunction("xml_wrap_fragment", 
 		{LogicalType::VARCHAR, LogicalType::VARCHAR}, XMLTypes::XMLType(), XMLWrapFragmentFunction);
-	ExtensionUtil::RegisterFunction(db, xml_wrap_fragment_function);
+	loader.RegisterFunction(xml_wrap_fragment_function);
 	
 	// Register xml_extract_attributes function (returns LIST<STRUCT>)
 	auto attr_struct_type = LogicalType::STRUCT({
@@ -530,22 +640,22 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	xml_extract_attributes_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
-	ExtensionUtil::RegisterFunction(db, xml_extract_attributes_functions);
+	loader.RegisterFunction(xml_extract_attributes_functions);
 	
 	// Register xml_pretty_print function
 	auto xml_pretty_print_function = ScalarFunction("xml_pretty_print", 
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLPrettyPrintFunction);
-	ExtensionUtil::RegisterFunction(db, xml_pretty_print_function);
+	loader.RegisterFunction(xml_pretty_print_function);
 	
 	// Register xml_minify function
 	auto xml_minify_function = ScalarFunction("xml_minify", 
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLMinifyFunction);
-	ExtensionUtil::RegisterFunction(db, xml_minify_function);
+	loader.RegisterFunction(xml_minify_function);
 	
 	// Register xml_validate_schema function
 	auto xml_validate_schema_function = ScalarFunction("xml_validate_schema", 
 		{LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidateSchemaFunction);
-	ExtensionUtil::RegisterFunction(db, xml_validate_schema_function);
+	loader.RegisterFunction(xml_validate_schema_function);
 	
 	// Register xml_extract_comments function (returns LIST<STRUCT>)
 	auto comment_struct_type = LogicalType::STRUCT({
@@ -554,12 +664,12 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	});
 	auto xml_extract_comments_function = ScalarFunction("xml_extract_comments", 
 		{XMLTypes::XMLType()}, LogicalType::LIST(comment_struct_type), XMLExtractCommentsFunction);
-	ExtensionUtil::RegisterFunction(db, xml_extract_comments_function);
+	loader.RegisterFunction(xml_extract_comments_function);
 	
 	// Register xml_extract_cdata function (returns LIST<STRUCT>)
 	auto xml_extract_cdata_function = ScalarFunction("xml_extract_cdata", 
 		{XMLTypes::XMLType()}, LogicalType::LIST(comment_struct_type), XMLExtractCDataFunction);
-	ExtensionUtil::RegisterFunction(db, xml_extract_cdata_function);
+	loader.RegisterFunction(xml_extract_cdata_function);
 	
 	// Register xml_stats function (returns STRUCT)
 	auto stats_struct_type = LogicalType::STRUCT({
@@ -571,7 +681,7 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	});
 	auto xml_stats_function = ScalarFunction("xml_stats", 
 		{LogicalType::VARCHAR}, stats_struct_type, XMLStatsFunction);
-	ExtensionUtil::RegisterFunction(db, xml_stats_function);
+	loader.RegisterFunction(xml_stats_function);
 	
 	// Register xml_namespaces function (returns LIST<STRUCT>)
 	auto namespace_struct_type = LogicalType::STRUCT({
@@ -580,17 +690,17 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	});
 	auto xml_namespaces_function = ScalarFunction("xml_namespaces", 
 		{LogicalType::VARCHAR}, LogicalType::LIST(namespace_struct_type), XMLNamespacesFunction);
-	ExtensionUtil::RegisterFunction(db, xml_namespaces_function);
+	loader.RegisterFunction(xml_namespaces_function);
 	
-	// Register xml_to_json function
-	auto xml_to_json_function = ScalarFunction("xml_to_json", 
-		{LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLToJSONFunction);
-	ExtensionUtil::RegisterFunction(db, xml_to_json_function);
+	// Register xml_to_json function with optional named parameters
+	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLToJSONWithSchemaFunction, XMLToJSONWithSchemaBind);
+	xml_to_json_function.varargs = LogicalType::ANY;
+	loader.RegisterFunction(xml_to_json_function);
 	
 	// Register json_to_xml function
 	auto json_to_xml_function = ScalarFunction("json_to_xml", 
 		{LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction);
-	ExtensionUtil::RegisterFunction(db, json_to_xml_function);
+	loader.RegisterFunction(json_to_xml_function);
 	
 	// Register HTML extraction functions following markdown extension patterns
 	
@@ -638,32 +748,32 @@ void XMLScalarFunctions::Register(DatabaseInstance &db) {
 	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::VARCHAR, HTMLExtractTextFunction));
 	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
 	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
-	ExtensionUtil::RegisterFunction(db, html_extract_text_functions);
+	loader.RegisterFunction(html_extract_text_functions);
 	
 	// Register html_extract_links function
 	auto html_extract_links_function = ScalarFunction("html_extract_links", 
 		{XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction);
-	ExtensionUtil::RegisterFunction(db, html_extract_links_function);
+	loader.RegisterFunction(html_extract_links_function);
 	
 	// Register html_extract_images function
 	auto html_extract_images_function = ScalarFunction("html_extract_images", 
 		{XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction);
-	ExtensionUtil::RegisterFunction(db, html_extract_images_function);
+	loader.RegisterFunction(html_extract_images_function);
 	
 	// Register html_extract_table_rows function
 	auto html_extract_table_rows_function = ScalarFunction("html_extract_table_rows", 
 		{XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction);
-	ExtensionUtil::RegisterFunction(db, html_extract_table_rows_function);
+	loader.RegisterFunction(html_extract_table_rows_function);
 	
 	// Register html_extract_tables_json function
 	auto html_extract_tables_json_function = ScalarFunction("html_extract_tables_json", 
 		{XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
-	ExtensionUtil::RegisterFunction(db, html_extract_tables_json_function);
+	loader.RegisterFunction(html_extract_tables_json_function);
 	
 	// Register parse_html scalar function for parsing HTML content directly
 	auto parse_html_function = ScalarFunction("parse_html", 
 		{LogicalType::VARCHAR}, XMLTypes::HTMLType(), ReadHTMLFunction);
-	ExtensionUtil::RegisterFunction(db, parse_html_function);
+	loader.RegisterFunction(parse_html_function);
 }
 
 // HTML-specific extraction function implementations

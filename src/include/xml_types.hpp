@@ -14,7 +14,7 @@ public:
 	static bool IsXMLFragmentType(const LogicalType& type);
 	static bool IsXMLArrayType(const LogicalType& type);
 	static bool IsHTMLType(const LogicalType& type);
-	static void Register(DatabaseInstance &db);
+	static void Register(ExtensionLoader &loader);
 	
 private:
 	static bool XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);

@@ -6,7 +6,7 @@ namespace duckdb {
 
 class XMLReaderFunctions {
 public:
-	static void Register(DatabaseInstance &db);
+	static void Register(ExtensionLoader &loader);
 	
 	// Replacement scan function for direct file querying
 	static unique_ptr<TableRef> ReadXMLReplacement(ClientContext &context, ReplacementScanInput &input,

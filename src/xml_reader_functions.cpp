@@ -3,7 +3,6 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/replacement_scan.hpp"
@@ -404,14 +403,14 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	return std::move(table_function);
 }
 
-void XMLReaderFunctions::Register(DatabaseInstance &db) {
+void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Register read_xml_objects table function
 	TableFunction read_xml_objects_function("read_xml_objects", {LogicalType::VARCHAR}, ReadXMLObjectsFunction, 
 	                                          ReadXMLObjectsBind, ReadXMLObjectsInit);
 	read_xml_objects_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_objects_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_xml_objects_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	ExtensionUtil::RegisterFunction(db, read_xml_objects_function);
+	loader.RegisterFunction(read_xml_objects_function);
 	
 	// Register read_xml table function with schema inference
 	TableFunction read_xml_function("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, 
@@ -429,7 +428,7 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	// Explicit schema specification (like JSON extension)
 	read_xml_function.named_parameters["columns"] = LogicalType::ANY;
 	
-	ExtensionUtil::RegisterFunction(db, read_xml_function);
+	loader.RegisterFunction(read_xml_function);
 	
 	// Register read_html table function for reading HTML files
 	TableFunction read_html_function("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, 
@@ -437,7 +436,7 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_html_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	ExtensionUtil::RegisterFunction(db, read_html_function);
+	loader.RegisterFunction(read_html_function);
 	
 	// Register read_html_objects table function for batch HTML processing
 	TableFunction read_html_objects_function("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction, 
@@ -445,12 +444,12 @@ void XMLReaderFunctions::Register(DatabaseInstance &db) {
 	read_html_objects_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_objects_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_objects_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	ExtensionUtil::RegisterFunction(db, read_html_objects_function);
+	loader.RegisterFunction(read_html_objects_function);
 	
 	// Register html_extract_tables table function
 	TableFunction html_extract_tables_function("html_extract_tables", {LogicalType::VARCHAR}, HTMLExtractTablesFunction,
 	                                            HTMLExtractTablesBind, HTMLExtractTablesInit);
-	ExtensionUtil::RegisterFunction(db, html_extract_tables_function);
+	loader.RegisterFunction(html_extract_tables_function);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,

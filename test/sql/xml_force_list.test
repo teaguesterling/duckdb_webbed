@@ -1,0 +1,292 @@
+# name: test/sql/xml_force_list.test
+# description: Test xml_to_json with schema parameters (force_list, attr_prefix, text_key, strip_namespaces, empty_elements)
+# group: [xml]
+
+require webbed
+
+# Test 1: Basic force_list with single element - should create array
+query I
+SELECT xml_to_json('<root><item><name>Product1</name></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"name":[{"#text":"Product1"}]}}}
+
+# Test 2: Basic force_list with multiple elements - should remain array
+query I
+SELECT xml_to_json('<root><item><name>Product1</name><name>Product2</name></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"name":[{"#text":"Product1"},{"#text":"Product2"}]}}}
+
+# Test 3: force_list with no matching elements - should not affect output
+query I
+SELECT xml_to_json('<root><item><title>Test</title></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"title":{"#text":"Test"}}}}
+
+# Test 4: Multiple force_list elements
+query I
+SELECT xml_to_json('<root><item><name>Test</name></item><product><category>Tech</category></product></root>', force_list := ['name', 'category']);
+----
+{"root":{"item":{"name":[{"#text":"Test"}]},"product":{"category":[{"#text":"Tech"}]}}}
+
+# Test 5: force_list with nested structure
+query I
+SELECT xml_to_json('<catalog><book><author>John</author></book><book><author>Jane</author></book></catalog>', force_list := ['author']);
+----
+{"catalog":{"book":[{"author":[{"#text":"John"}]},{"author":[{"#text":"Jane"}]}]}}
+
+# Test 6: force_list with attributes
+query I
+SELECT xml_to_json('<root><item id="1"><name>Test</name></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"@id":"1","name":[{"#text":"Test"}]}}}
+
+# Test 7: force_list with empty elements
+query I
+SELECT xml_to_json('<root><item><name/></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"name":[{}]}}}
+
+# Test 8: force_list with mixed content
+query I
+SELECT xml_to_json('<root><item>text<name>Test</name>more text</item></root>', force_list := ['name']);
+----
+{"root":{"item":{"#text":"textmore text","name":[{"#text":"Test"}]}}}
+
+# Test 9: Empty force_list array - should behave like no force_list
+query I
+SELECT xml_to_json('<root><item><name>Product1</name></item></root>', force_list := []);
+----
+{"root":{"item":{"name":{"#text":"Product1"}}}}
+
+# Test 10: force_list with deeply nested elements
+query I
+SELECT xml_to_json('<root><level1><level2><name>Test</name></level2></level1></root>', force_list := ['name']);
+----
+{"root":{"level1":{"level2":{"name":[{"#text":"Test"}]}}}}
+
+# Test 11: force_list with elements that have attributes and text
+query I
+SELECT xml_to_json('<root><item type="product"><name id="n1">Product1</name></item></root>', force_list := ['name']);
+----
+{"root":{"item":{"@type":"product","name":[{"@id":"n1","#text":"Product1"}]}}}
+
+# Test 12: Multiple instances where some need forcing, some don't
+query I
+SELECT xml_to_json('<root><items><item>A</item><item>B</item></items><names><name>X</name></names></root>', force_list := ['name']);
+----
+{"root":{"items":{"item":[{"#text":"A"},{"#text":"B"}]},"names":{"name":[{"#text":"X"}]}}}
+
+# Test 13: Case sensitivity test
+query I
+SELECT xml_to_json('<root><Name>Test1</Name><name>Test2</name></root>', force_list := ['name']);
+----
+{"root":{"Name":{"#text":"Test1"},"name":[{"#text":"Test2"}]}}
+
+# Test 14: force_list with elements containing only attributes
+query I
+SELECT xml_to_json('<root><item><tag id="1" type="test"/></item></root>', force_list := ['tag']);
+----
+{"root":{"item":{"tag":[{"@id":"1","@type":"test"}]}}}
+
+# Test 15: Complex real-world example - user's original use case
+query I
+SELECT xml_to_json('<root><item><name>Product1</name><category>Electronics</category></item><item><name>Product2</name><name>Product2-Alt</name><category>Books</category></item></root>', force_list := ['name']);
+----
+{"root":{"item":[{"category":{"#text":"Electronics"},"name":[{"#text":"Product1"}]},{"category":{"#text":"Books"},"name":[{"#text":"Product2"},{"#text":"Product2-Alt"}]}]}}
+
+# Test 16: Backward compatibility - existing function without force_list should work unchanged
+query I
+SELECT xml_to_json('<root><item><name>Product1</name></item></root>');
+----
+{"root":{"item":{"name":{"#text":"Product1"}}}}
+
+# Test 17: NULL force_list should behave like no force_list
+query I
+SELECT xml_to_json('<root><item><name>Product1</name></item></root>', force_list := NULL);
+----
+{"root":{"item":{"name":{"#text":"Product1"}}}}
+
+# Test 18: force_list with XML namespaces (should work with current namespace stripping)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', force_list := ['name']);
+----
+{"root":{"item":{"name":[{"#text":"Test"}]}}}
+
+# Test 19: force_list with very deeply nested matching elements
+query I
+SELECT xml_to_json('<a><b><c><d><name>Deep</name></d></c></b></a>', force_list := ['name']);
+----
+{"a":{"b":{"c":{"d":{"name":[{"#text":"Deep"}]}}}}}
+
+# Test 20: force_list performance test with many elements (should still work efficiently)
+query I
+SELECT xml_to_json('<root>' || string_agg('<item><name>Item' || i || '</name></item>', '') || '</root>' , force_list := ['name'])
+FROM range(1, 4) t(i);
+----
+{"root":{"item":[{"name":[{"#text":"Item1"}]},{"name":[{"#text":"Item2"}]},{"name":[{"#text":"Item3"}]}]}}
+
+# =============================================================================
+# ATTR_PREFIX PARAMETER TESTS
+# =============================================================================
+
+# Test 21: Custom attr_prefix with underscore
+query I
+SELECT xml_to_json('<root><item id="1" type="test">content</item></root>', attr_prefix := '_');
+----
+{"root":{"item":{"_id":"1","_type":"test","#text":"content"}}}
+
+# Test 22: Custom attr_prefix with dollar sign
+query I
+SELECT xml_to_json('<root><item id="1" type="test">content</item></root>', attr_prefix := '$');
+----
+{"root":{"item":{"$id":"1","$type":"test","#text":"content"}}}
+
+# Test 23: Empty attr_prefix (no prefix)
+query I
+SELECT xml_to_json('<root><item id="1" type="test">content</item></root>', attr_prefix := '');
+----
+{"root":{"item":{"id":"1","type":"test","#text":"content"}}}
+
+# Test 24: attr_prefix with force_list combination
+query I
+SELECT xml_to_json('<root><item id="1"><name type="product">Test</name></item></root>', attr_prefix := '_', force_list := ['name']);
+----
+{"root":{"item":{"_id":"1","name":[{"_type":"product","#text":"Test"}]}}}
+
+# =============================================================================
+# TEXT_KEY PARAMETER TESTS  
+# =============================================================================
+
+# Test 25: Custom text_key with 'value'
+query I
+SELECT xml_to_json('<root><item id="1">content</item></root>', text_key := 'value');
+----
+{"root":{"item":{"@id":"1","value":"content"}}}
+
+# Test 26: Custom text_key with '$text'
+query I
+SELECT xml_to_json('<root><item>content</item></root>', text_key := '$text');
+----
+{"root":{"item":{"$text":"content"}}}
+
+# Test 27: Custom text_key with 'text' (no prefix)
+query I
+SELECT xml_to_json('<root><item>content</item></root>', text_key := 'text');
+----
+{"root":{"item":{"text":"content"}}}
+
+# Test 28: text_key with force_list combination
+query I
+SELECT xml_to_json('<root><item><name>Test1</name><name>Test2</name></item></root>', text_key := 'content', force_list := ['name']);
+----
+{"root":{"item":{"name":[{"content":"Test1"},{"content":"Test2"}]}}}
+
+# =============================================================================
+# STRIP_NAMESPACES PARAMETER TESTS
+# =============================================================================
+
+# Test 29: strip_namespaces := false (preserve namespaces)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := false);
+----
+{"root":{"ns:item":{"ns:name":{"#text":"Test"}}}}
+
+# Test 30: strip_namespaces := true (default behavior - strip namespaces)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := true);
+----
+{"root":{"item":{"name":{"#text":"Test"}}}}
+
+# Test 31: strip_namespaces with attributes
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1" type="test">content</ns:item></root>', strip_namespaces := false);
+----
+{"root":{"ns:item":{"@ns:id":"1","@type":"test","#text":"content"}}}
+
+# Test 32: strip_namespaces with force_list
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := false, force_list := ['ns:name']);
+----
+{"root":{"ns:item":{"ns:name":[{"#text":"Test"}]}}}
+
+# =============================================================================
+# EMPTY_ELEMENTS PARAMETER TESTS
+# =============================================================================
+
+# Test 33: empty_elements := 'object' (default behavior)
+query I
+SELECT xml_to_json('<root><empty/><item><empty_child/></item></root>', empty_elements := 'object');
+----
+{"root":{"empty":{},"item":{"empty_child":{}}}}
+
+# Test 34: empty_elements := 'null'
+query I
+SELECT xml_to_json('<root><empty/><item><empty_child/></item></root>', empty_elements := 'null');
+----
+{"root":{"empty":null,"item":{"empty_child":null}}}
+
+# Test 35: empty_elements := 'string'
+query I
+SELECT xml_to_json('<root><empty/><item><empty_child/></item></root>', empty_elements := 'string');
+----
+{"root":{"empty":"","item":{"empty_child":""}}}
+
+# Test 36: empty_elements with attributes (should preserve attributes)
+query I
+SELECT xml_to_json('<root><empty id="1" type="test"/></root>', empty_elements := 'null');
+----
+{"root":{"empty":{"@id":"1","@type":"test"}}}
+
+# Test 37: empty_elements with force_list
+query I
+SELECT xml_to_json('<root><item><empty/></item></root>', empty_elements := 'null', force_list := ['empty']);
+----
+{"root":{"item":{"empty":[null]}}}
+
+# =============================================================================
+# COMBINED PARAMETER TESTS
+# =============================================================================
+
+# Test 38: All parameters combined
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1"><ns:name>Test</ns:name><ns:empty/></ns:item></root>', 
+  force_list := ['ns:name'], 
+  attr_prefix := '_', 
+  text_key := 'content', 
+  strip_namespaces := false, 
+  empty_elements := 'null');
+----
+{"root":{"ns:item":{"_ns:id":"1","ns:name":[{"content":"Test"}],"ns:empty":null}}}
+
+# Test 39: Real-world complex example with custom settings
+query I
+SELECT xml_to_json('<catalog xmlns:prod="http://products.com">
+  <prod:product prod:id="1" status="active">
+    <prod:name>Laptop</prod:name>
+    <prod:category>Electronics</prod:category>
+    <prod:specs/>
+  </prod:product>
+  <prod:product prod:id="2" status="inactive">
+    <prod:name>Phone</prod:name>
+    <prod:name>Mobile Phone</prod:name>
+    <prod:category>Electronics</prod:category>
+  </prod:product>
+</catalog>', 
+  force_list := ['prod:name'], 
+  attr_prefix := '', 
+  text_key := 'value', 
+  strip_namespaces := false, 
+  empty_elements := 'string');
+----
+{"catalog":{"prod:product":[{"prod:id":"1","status":"active","prod:name":[{"value":"Laptop"}],"prod:category":{"value":"Electronics"},"prod:specs":""},{"prod:id":"2","status":"inactive","prod:name":[{"value":"Phone"},{"value":"Mobile Phone"}],"prod:category":{"value":"Electronics"}}]}}
+
+# Test 40: Parameter precedence and NULL handling
+query I
+SELECT xml_to_json('<root><item id="1">test</item></root>', 
+  force_list := NULL, 
+  attr_prefix := NULL, 
+  text_key := NULL, 
+  strip_namespaces := NULL, 
+  empty_elements := NULL);
+----
+{"root":{"item":{"@id":"1","#text":"test"}}}

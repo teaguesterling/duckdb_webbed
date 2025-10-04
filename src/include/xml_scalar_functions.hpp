@@ -6,7 +6,7 @@ namespace duckdb {
 
 class XMLScalarFunctions {
 public:
-	static void Register(DatabaseInstance &db);
+	static void Register(ExtensionLoader &loader);
 	
 private:
 	// Validation functions
@@ -32,6 +32,8 @@ private:
 	
 	// Conversion functions
 	static void XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLToJSONWithSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static unique_ptr<FunctionData> XMLToJSONWithSchemaBind(ClientContext &context, ScalarFunction &bound_function, vector<unique_ptr<Expression>> &arguments);
 	static void JSONToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	

@@ -7,39 +7,39 @@
 #include "xml_utils.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include "duckdb/main/config.hpp"
 
 namespace duckdb {
 
-static void LoadInternal(DatabaseInstance &instance) {
-	// JSON extension is automatically available as a dependency
-	
-	// Initialize libxml2
-	XMLUtils::InitializeLibXML();
-	
-	// Register XML types (includes JSON to XML casting)
-	XMLTypes::Register(instance);
-	
-	// Register scalar functions
-	XMLScalarFunctions::Register(instance);
-	
-	// Register table functions
-	XMLReaderFunctions::Register(instance);
-	
-	// Register replacement scan for direct file querying (FROM 'file.xml')
-	auto &config = DBConfig::GetConfig(instance);
-	config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
+static void LoadInternal(ExtensionLoader &loader) {
+    // JSON extension is automatically available as a dependency
+    
+    // Initialize libxml2
+    XMLUtils::InitializeLibXML();
+    
+    // Register XML types (includes JSON to XML casting)
+    XMLTypes::Register(loader);
+    
+    // Register scalar functions
+    XMLScalarFunctions::Register(loader);
+    
+    // Register table functions
+    XMLReaderFunctions::Register(loader);
+    
+    // Register replacement scan for direct file querying (FROM 'file.xml')
+    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+    config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
 }
 
-void WebbedExtension::Load(DuckDB &db) {
-	LoadInternal(*db.instance);
+void WebbedExtension::Load(ExtensionLoader &loader) {
+    LoadInternal(loader);
 }
 
 // Add cleanup when extension is unloaded
 static void UnloadInternal() {
 	XMLUtils::CleanupLibXML();
 }
+
 std::string WebbedExtension::Name() {
 	return "webbed";
 }
@@ -56,9 +56,8 @@ std::string WebbedExtension::Version() const {
 
 extern "C" {
 
-DUCKDB_EXTENSION_API void webbed_init(duckdb::DatabaseInstance &db) {
-	duckdb::DuckDB db_wrapper(db);
-	db_wrapper.LoadExtension<duckdb::WebbedExtension>();
+DUCKDB_CPP_EXTENSION_ENTRY(webbed, loader) {
+    duckdb::LoadInternal(loader);
 }
 
 DUCKDB_EXTENSION_API const char *webbed_version() {

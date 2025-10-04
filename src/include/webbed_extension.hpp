@@ -6,7 +6,7 @@ namespace duckdb {
 
 class WebbedExtension : public Extension {
 public:
-	void Load(DuckDB &db) override;
+	void Load(ExtensionLoader &loader) override;
 	std::string Name() override;
 	std::string Version() const override;
 };

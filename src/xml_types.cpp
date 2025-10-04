@@ -8,7 +8,6 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/extension_util.hpp"
 
 namespace duckdb {
 
@@ -103,7 +102,7 @@ bool XMLTypes::HTMLToXMLCast(Vector &source, Vector &result, idx_t count, CastPa
 	return true;
 }
 
-void XMLTypes::Register(DatabaseInstance &db) {
+void XMLTypes::Register(ExtensionLoader &loader) {
 	// For now, register XML as a simple type alias
 	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
 	
@@ -111,37 +110,37 @@ void XMLTypes::Register(DatabaseInstance &db) {
 	xml_type.SetAlias("XML");
 	
 	// Register the XML type through the extension utility
-	ExtensionUtil::RegisterType(db, "XML", xml_type);
+	loader.RegisterType("XML", xml_type);
 	
 	// Register XMLFragment type
 	auto xml_fragment_type = LogicalType(LogicalType::VARCHAR);
 	xml_fragment_type.SetAlias("XMLFragment");
-	ExtensionUtil::RegisterType(db, "XMLFragment", xml_fragment_type);
+	loader.RegisterType("XMLFragment", xml_fragment_type);
 	
 	// Register HTML type
 	auto html_type = LogicalType(LogicalType::VARCHAR);
 	html_type.SetAlias("HTML");
-	ExtensionUtil::RegisterType(db, "HTML", html_type);
+	loader.RegisterType("HTML", html_type);
 	
 	// Register cast functions for XML type conversion
-	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
-	ExtensionUtil::RegisterCastFunction(db, xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
+	loader.RegisterCastFunction(xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
 	
 	// Register cast functions for XMLFragment type conversion
-	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
-	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
-	ExtensionUtil::RegisterCastFunction(db, xml_fragment_type, xml_type, VarcharToXMLCast);
+	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
+	loader.RegisterCastFunction(xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	loader.RegisterCastFunction(xml_fragment_type, xml_type, VarcharToXMLCast);
 	
 	// Register cast functions for HTML type conversion
-	ExtensionUtil::RegisterCastFunction(db, LogicalType::VARCHAR, html_type, VarcharToHTMLCast);
-	ExtensionUtil::RegisterCastFunction(db, html_type, LogicalType::VARCHAR, HTMLToVarcharCast);
-	ExtensionUtil::RegisterCastFunction(db, xml_type, html_type, XMLToHTMLCast);
-	ExtensionUtil::RegisterCastFunction(db, html_type, xml_type, HTMLToXMLCast);
+	loader.RegisterCastFunction(LogicalType::VARCHAR, html_type, VarcharToHTMLCast);
+	loader.RegisterCastFunction(html_type, LogicalType::VARCHAR, HTMLToVarcharCast);
+	loader.RegisterCastFunction(xml_type, html_type, XMLToHTMLCast);
+	loader.RegisterCastFunction(html_type, xml_type, HTMLToXMLCast);
 	
 	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
 	try {
 		auto json_type = LogicalType::JSON();
-		ExtensionUtil::RegisterCastFunction(db, json_type, xml_type, JSONToXMLCast);
+		loader.RegisterCastFunction(json_type, xml_type, JSONToXMLCast);
 	} catch (...) {
 		// JSON type might not be available, but this shouldn't prevent XML extension from loading
 	}

@@ -8,6 +8,7 @@
 #include <functional>
 #include <set>
 #include <map>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -592,6 +593,132 @@ std::string XMLUtils::XMLToJSON(const std::string& xml_str) {
 				result += "]";
 			}
 			has_content = true;
+		}
+		
+		result += "}";
+		
+		// For the root element, wrap it with the element name
+		if (is_root) {
+			return "{\"" + node_name + "\":" + result + "}";
+		}
+		
+		return result;
+	};
+	
+	xmlNodePtr root = xmlDocGetRootElement(xml_doc.doc);
+	if (root) {
+		return node_to_json(root, true);
+	}
+	
+	return "{}";
+}
+
+std::string XMLUtils::XMLToJSON(const std::string& xml_str, const XMLToJSONOptions& options) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid()) {
+		return "{}";
+	}
+	
+	// Create a set for fast lookup of force_list elements
+	std::unordered_set<std::string> force_list_set(options.force_list.begin(), options.force_list.end());
+	
+	std::function<std::string(xmlNodePtr, bool)> node_to_json = [&](xmlNodePtr node, bool is_root) -> std::string {
+		if (!node || node->type != XML_ELEMENT_NODE) {
+			return "null";
+		}
+		
+		// Get node name and handle namespace stripping
+		std::string node_name = std::string((const char*)node->name);
+		if (options.strip_namespaces) {
+			size_t colon_pos = node_name.find(':');
+			if (colon_pos != std::string::npos) {
+				node_name = node_name.substr(colon_pos + 1);
+			}
+		}
+		
+		std::string result = "{";
+		
+		// Add attributes if any
+		bool has_content = false;
+		for (xmlAttrPtr attr = node->properties; attr; attr = attr->next) {
+			if (has_content) result += ",";
+			
+			std::string attr_name = std::string((const char*)attr->name);
+			if (options.strip_namespaces) {
+				size_t colon_pos = attr_name.find(':');
+				if (colon_pos != std::string::npos) {
+					attr_name = attr_name.substr(colon_pos + 1);
+				}
+			}
+			
+			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1));
+			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char*>(attr_value.get())) : "";
+			
+			result += "\"" + options.attr_prefix + attr_name + "\":\"" + attr_val + "\"";
+			has_content = true;
+		}
+		
+		// Get direct text content only (not including children text)
+		std::string direct_text;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type == XML_TEXT_NODE && child->content) {
+				direct_text += std::string((const char*)child->content);
+			}
+		}
+		
+		// Clean up whitespace
+		direct_text.erase(0, direct_text.find_first_not_of(" \t\n\r"));
+		direct_text.erase(direct_text.find_last_not_of(" \t\n\r") + 1);
+		
+		if (!direct_text.empty()) {
+			if (has_content) result += ",";
+			result += "\"" + options.text_key + "\":\"" + direct_text + "\"";
+			has_content = true;
+		}
+		
+		// Add children elements
+		std::map<std::string, std::vector<std::string>> children_by_name;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				std::string child_name = std::string((const char*)child->name);
+				if (options.strip_namespaces) {
+					size_t colon_pos = child_name.find(':');
+					if (colon_pos != std::string::npos) {
+						child_name = child_name.substr(colon_pos + 1);
+					}
+				}
+				std::string child_json = node_to_json(child, false);
+				children_by_name[child_name].push_back(child_json);
+			}
+		}
+		
+		for (const auto& child_group : children_by_name) {
+			if (has_content) result += ",";
+			
+			// Check if this element should be forced to a list OR has multiple instances
+			bool should_be_array = force_list_set.count(child_group.first) > 0 || child_group.second.size() > 1;
+			
+			if (should_be_array) {
+				result += "\"" + child_group.first + "\":[";
+				for (size_t i = 0; i < child_group.second.size(); i++) {
+					if (i > 0) result += ",";
+					result += child_group.second[i];
+				}
+				result += "]";
+			} else {
+				result += "\"" + child_group.first + "\":" + child_group.second[0];
+			}
+			has_content = true;
+		}
+		
+		// Handle empty elements if no content was added
+		if (!has_content) {
+			if (options.empty_elements == "null") {
+				return "null";
+			} else if (options.empty_elements == "string") {
+				return "\"\"";
+			}
+			// Default "object" case - return empty object
 		}
 		
 		result += "}";

@@ -9,6 +9,35 @@
 
 namespace duckdb {
 
+// Schema options for XML to JSON conversion
+struct XMLToJSONOptions {
+	std::vector<std::string> force_list;    // Element names to always convert to arrays
+	std::string attr_prefix = "@";          // Prefix for attributes (default "@")
+	std::string text_key = "#text";         // Key for text content (default "#text")
+	bool strip_namespaces = true;           // Whether to strip namespace prefixes (default true)
+	std::string empty_elements = "object";  // How to handle empty elements: "object", "null", "string"
+};
+
+// Function bind data for XML to JSON with schema
+struct XMLToJSONBindData : public FunctionData {
+	XMLToJSONOptions options;
+	
+	explicit XMLToJSONBindData(XMLToJSONOptions opts) : options(std::move(opts)) {}
+	
+	unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<XMLToJSONBindData>(options);
+	}
+	
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = other_p.Cast<XMLToJSONBindData>();
+		return options.force_list == other.options.force_list &&
+		       options.attr_prefix == other.options.attr_prefix &&
+		       options.text_key == other.options.text_key &&
+		       options.strip_namespaces == other.options.strip_namespaces &&
+		       options.empty_elements == other.options.empty_elements;
+	}
+};
+
 // RAII wrapper for libxml2 resources
 struct XMLDocRAII {
 	xmlDocPtr doc = nullptr;
@@ -147,6 +176,7 @@ public:
 	
 	// Conversion functions
 	static std::string XMLToJSON(const std::string& xml_str);
+	static std::string XMLToJSON(const std::string& xml_str, const XMLToJSONOptions& options);
 	static std::string JSONToXML(const std::string& json_str);
 	static std::string ScalarToXML(const std::string& value, const std::string& node_name);
 	
