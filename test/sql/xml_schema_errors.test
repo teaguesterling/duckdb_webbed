@@ -46,11 +46,11 @@ SELECT xml_to_json('<root><item id="1"><Xid>conflict</Xid></item></root>', attr_
 ----
 {"root":{"item":{"Xid":"1","Xid":{"#text":"conflict"}}}}
 
-# Test 7: Text key conflicts with element names
+# Test 7: Text key conflicts with element names (invalid XML - # not allowed as first char in element names)
 query I
 SELECT xml_to_json('<root><item>text content<#text>element</#text></item></root>', text_key := '#text');
 ----
-{"root":{"item":{"#text":"text content","#text":{"#text":"element"}}}}
+{}
 
 # Test 8: Large force_list array (performance test)
 query I

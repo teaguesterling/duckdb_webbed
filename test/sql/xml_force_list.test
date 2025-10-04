@@ -1,5 +1,5 @@
 # name: test/sql/xml_force_list.test
-# description: Test xml_to_json with schema parameters (force_list, attr_prefix, text_key, strip_namespaces, empty_elements)
+# description: Test xml_to_json with schema parameters (force_list, attr_prefix, text_key, namespaces, xmlns_key, empty_elements)
 # group: [xml]
 
 require webbed
@@ -185,27 +185,27 @@ SELECT xml_to_json('<root><item><name>Test1</name><name>Test2</name></item></roo
 # STRIP_NAMESPACES PARAMETER TESTS
 # =============================================================================
 
-# Test 29: strip_namespaces := false (preserve namespaces)
+# Test 29: namespaces := 'keep' (preserve namespace prefixes)
 query I
-SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := false);
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', namespaces := 'keep');
 ----
 {"root":{"ns:item":{"ns:name":{"#text":"Test"}}}}
 
-# Test 30: strip_namespaces := true (default behavior - strip namespaces)
+# Test 30: namespaces := 'strip' (default behavior - strip namespaces)
 query I
-SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := true);
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', namespaces := 'strip');
 ----
 {"root":{"item":{"name":{"#text":"Test"}}}}
 
-# Test 31: strip_namespaces with attributes
+# Test 31: namespaces := 'keep' with attributes
 query I
-SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1" type="test">content</ns:item></root>', strip_namespaces := false);
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1" type="test">content</ns:item></root>', namespaces := 'keep');
 ----
 {"root":{"ns:item":{"@ns:id":"1","@type":"test","#text":"content"}}}
 
-# Test 32: strip_namespaces with force_list
+# Test 32: namespaces := 'keep' with force_list
 query I
-SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', strip_namespaces := false, force_list := ['ns:name']);
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item><ns:name>Test</ns:name></ns:item></root>', namespaces := 'keep', force_list := ['ns:name']);
 ----
 {"root":{"ns:item":{"ns:name":[{"#text":"Test"}]}}}
 
@@ -249,14 +249,14 @@ SELECT xml_to_json('<root><item><empty/></item></root>', empty_elements := 'null
 
 # Test 38: All parameters combined
 query I
-SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1"><ns:name>Test</ns:name><ns:empty/></ns:item></root>', 
-  force_list := ['ns:name'], 
-  attr_prefix := '_', 
-  text_key := 'content', 
-  strip_namespaces := false, 
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item ns:id="1"><ns:name>Test</ns:name><ns:empty/></ns:item></root>',
+  force_list := ['ns:name'],
+  attr_prefix := '_',
+  text_key := 'content',
+  namespaces := 'keep',
   empty_elements := 'null');
 ----
-{"root":{"ns:item":{"_ns:id":"1","ns:name":[{"content":"Test"}],"ns:empty":null}}}
+{"root":{"ns:item":{"_ns:id":"1","ns:empty":null,"ns:name":[{"content":"Test"}]}}}
 
 # Test 39: Real-world complex example with custom settings
 query I
@@ -271,22 +271,56 @@ SELECT xml_to_json('<catalog xmlns:prod="http://products.com">
     <prod:name>Mobile Phone</prod:name>
     <prod:category>Electronics</prod:category>
   </prod:product>
-</catalog>', 
-  force_list := ['prod:name'], 
-  attr_prefix := '', 
-  text_key := 'value', 
-  strip_namespaces := false, 
+</catalog>',
+  force_list := ['prod:name'],
+  attr_prefix := '',
+  text_key := 'value',
+  namespaces := 'keep',
   empty_elements := 'string');
 ----
-{"catalog":{"prod:product":[{"prod:id":"1","status":"active","prod:name":[{"value":"Laptop"}],"prod:category":{"value":"Electronics"},"prod:specs":""},{"prod:id":"2","status":"inactive","prod:name":[{"value":"Phone"},{"value":"Mobile Phone"}],"prod:category":{"value":"Electronics"}}]}}
+{"catalog":{"prod:product":[{"prod:id":"1","status":"active","prod:category":{"value":"Electronics"},"prod:name":[{"value":"Laptop"}],"prod:specs":""},{"prod:id":"2","status":"inactive","prod:category":{"value":"Electronics"},"prod:name":[{"value":"Phone"},{"value":"Mobile Phone"}]}]}}
 
 # Test 40: Parameter precedence and NULL handling
 query I
-SELECT xml_to_json('<root><item id="1">test</item></root>', 
-  force_list := NULL, 
-  attr_prefix := NULL, 
-  text_key := NULL, 
-  strip_namespaces := NULL, 
+SELECT xml_to_json('<root><item id="1">test</item></root>',
+  force_list := NULL,
+  attr_prefix := NULL,
+  text_key := NULL,
+  namespaces := NULL,
   empty_elements := NULL);
 ----
 {"root":{"item":{"@id":"1","#text":"test"}}}
+
+# =============================================================================
+# NAMESPACE EXPANSION AND XMLNS_KEY TESTS
+# =============================================================================
+
+# Test 41: namespaces := 'expand' (full URIs)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>', namespaces := 'expand');
+----
+{"root":{"http://example.com:item":{"#text":"Test"}}}
+
+# Test 42: xmlns_key with namespaces := 'keep'
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com" xmlns:svg="http://www.w3.org/2000/svg"><ns:item>Test</ns:item><svg:circle/></root>', namespaces := 'keep', xmlns_key := '#xmlns');
+----
+{"root":{"#xmlns":{"ns":"http://example.com","svg":"http://www.w3.org/2000/svg"},"ns:item":{"#text":"Test"},"svg:circle":{}}}
+
+# Test 43: xmlns_key with namespaces := 'expand'
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>', namespaces := 'expand', xmlns_key := '#xmlns');
+----
+{"root":{"#xmlns":{"ns":"http://example.com"},"http://example.com:item":{"#text":"Test"}}}
+
+# Test 44: xmlns_key disabled (default)
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>', namespaces := 'keep');
+----
+{"root":{"ns:item":{"#text":"Test"}}}
+
+# Test 45: xmlns_key with custom key
+query I
+SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>', namespaces := 'keep', xmlns_key := '@namespaces');
+----
+{"root":{"@namespaces":{"ns":"http://example.com"},"ns:item":{"#text":"Test"}}}

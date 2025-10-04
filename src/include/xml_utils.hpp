@@ -14,7 +14,8 @@ struct XMLToJSONOptions {
 	std::vector<std::string> force_list;    // Element names to always convert to arrays
 	std::string attr_prefix = "@";          // Prefix for attributes (default "@")
 	std::string text_key = "#text";         // Key for text content (default "#text")
-	bool strip_namespaces = true;           // Whether to strip namespace prefixes (default true)
+	std::string namespaces = "strip";       // Namespace handling: "strip", "expand", "keep" (default "strip")
+	std::string xmlns_key = "";             // Key for namespace declarations (default "", empty means disabled)
 	std::string empty_elements = "object";  // How to handle empty elements: "object", "null", "string"
 };
 
@@ -33,7 +34,7 @@ struct XMLToJSONBindData : public FunctionData {
 		return options.force_list == other.options.force_list &&
 		       options.attr_prefix == other.options.attr_prefix &&
 		       options.text_key == other.options.text_key &&
-		       options.strip_namespaces == other.options.strip_namespaces &&
+		       options.namespaces == other.options.namespaces &&
 		       options.empty_elements == other.options.empty_elements;
 	}
 };

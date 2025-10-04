@@ -384,13 +384,25 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 			} else {
 				options.text_key = StringValue::Get(param_value);
 			}
-		} else if (param_name == "strip_namespaces") {
+		} else if (param_name == "namespaces") {
 			if (param_value.IsNull()) {
-				options.strip_namespaces = true; // Default
-			} else if (param_value.type().id() != LogicalTypeId::BOOLEAN) {
-				throw BinderException("strip_namespaces parameter must be a boolean");
+				options.namespaces = "strip"; // Default
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("namespaces parameter must be a string");
 			} else {
-				options.strip_namespaces = BooleanValue::Get(param_value);
+				auto ns_val = StringValue::Get(param_value);
+				if (ns_val != "strip" && ns_val != "expand" && ns_val != "keep") {
+					throw BinderException("Invalid value for namespaces parameter: Must be one of: 'strip', 'expand', or 'keep', got '%s'", ns_val);
+				}
+				options.namespaces = ns_val;
+			}
+		} else if (param_name == "xmlns_key") {
+			if (param_value.IsNull()) {
+				options.xmlns_key = ""; // Default (disabled)
+			} else if (param_value.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("xmlns_key parameter must be a string");
+			} else {
+				options.xmlns_key = StringValue::Get(param_value);
 			}
 		} else if (param_name == "empty_elements") {
 			if (param_value.IsNull()) {
@@ -414,12 +426,16 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 
 void XMLScalarFunctions::XMLToJSONWithSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &bind_data = func_expr.bind_info->Cast<XMLToJSONBindData>();
+
+	// Get options from bind data, or use defaults if not bound
+	XMLToJSONOptions options;
+	if (func_expr.bind_info) {
+		auto &bind_data = func_expr.bind_info->Cast<XMLToJSONBindData>();
+		options = bind_data.options;
+	}
+
 	auto &xml_vector = args.data[0];
-	
-	// All options were extracted at bind time, just use them
-	const XMLToJSONOptions &options = bind_data.options;
-	
+
 	UnaryExecutor::Execute<string_t, string_t>(xml_vector, result, args.size(), [&](string_t xml_str) {
 		std::string xml_string = xml_str.GetString();
 		std::string json_string = XMLUtils::XMLToJSON(xml_string, options);
