@@ -19,6 +19,7 @@ jobs:
       duckdb_version: main
       ci_tools_version: main
       extension_name: webbed
+      vcpkg_commit: 'dd3097e305afa53f7b4312371f62058d2e665320'
 
   duckdb-stable-build:
     name: Build extension binaries
