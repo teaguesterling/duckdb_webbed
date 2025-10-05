@@ -323,12 +323,10 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 	}
 	
 	XMLToJSONOptions options; // Start with defaults
-	
-	// First argument must be the XML string (no alias)
-	if (!arguments[0]->GetAlias().empty()) {
-		throw BinderException("First argument to xml_to_json must be the XML string (without named parameter)");
-	}
-	
+
+	// First argument is the XML string (positional)
+	// Note: We don't check for alias here because column references have aliases by default
+
 	// Process named parameters (if any)
 	for (idx_t i = 1; i < arguments.size(); i++) {
 		auto &arg = arguments[i];
