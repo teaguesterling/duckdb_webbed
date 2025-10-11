@@ -9,6 +9,7 @@
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -17,24 +18,48 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
                                                                 vector<string> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 
-	// Get file pattern from first argument
+	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
-		throw InvalidInputException("read_xml_objects requires at least one argument (file pattern)");
+		throw InvalidInputException(
+		    "read_xml_objects requires at least one argument (file pattern or array of file patterns)");
 	}
 
-	auto file_pattern = input.inputs[0].ToString();
+	vector<string> file_patterns;
 
-	// Expand file pattern using file system
+	// Handle both single string and array of strings
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		// Single file pattern
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		// Array of file patterns
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("read_xml_objects cannot process NULL file patterns");
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("read_xml_objects array parameter must contain only strings");
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("read_xml_objects first argument must be a string or array of strings");
+	}
+
+	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto glob_result = fs.Glob(file_pattern, nullptr);
-
-	// Extract file paths from OpenFileInfo results
-	for (const auto &file_info : glob_result) {
-		result->files.push_back(file_info.path);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		// Extract file paths from OpenFileInfo results
+		for (const auto &file_info : glob_result) {
+			result->files.push_back(file_info.path);
+		}
 	}
 
 	if (result->files.empty()) {
-		throw InvalidInputException("No files found matching pattern: %s", file_pattern);
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
 	}
 
 	// Handle optional parameters
@@ -141,24 +166,47 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
                                                          vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 
-	// Get file pattern from first argument
+	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
-		throw InvalidInputException("read_xml requires at least one argument (file pattern)");
+		throw InvalidInputException("read_xml requires at least one argument (file pattern or array of file patterns)");
 	}
 
-	auto file_pattern = input.inputs[0].ToString();
+	vector<string> file_patterns;
 
-	// Expand file pattern using file system
+	// Handle both single string and array of strings
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		// Single file pattern
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		// Array of file patterns
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("read_xml cannot process NULL file patterns");
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("read_xml array parameter must contain only strings");
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("read_xml first argument must be a string or array of strings");
+	}
+
+	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto glob_result = fs.Glob(file_pattern, nullptr);
-
-	// Extract file paths from OpenFileInfo results
-	for (const auto &file_info : glob_result) {
-		result->files.push_back(file_info.path);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		// Extract file paths from OpenFileInfo results
+		for (const auto &file_info : glob_result) {
+			result->files.push_back(file_info.path);
+		}
 	}
 
 	if (result->files.empty()) {
-		throw InvalidInputException("No files found matching pattern: %s", file_pattern);
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
 	}
 
 	// Handle optional parameters with schema inference defaults
@@ -408,45 +456,101 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 }
 
 void XMLReaderFunctions::Register(ExtensionLoader &loader) {
-	// Register read_xml_objects table function
-	TableFunction read_xml_objects_function("read_xml_objects", {LogicalType::VARCHAR}, ReadXMLObjectsFunction,
-	                                        ReadXMLObjectsBind, ReadXMLObjectsInit);
-	read_xml_objects_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_objects_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_xml_objects_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(read_xml_objects_function);
+	// Register read_xml_objects table function (supports both VARCHAR and VARCHAR[])
+	TableFunctionSet read_xml_objects_set("read_xml_objects");
 
-	// Register read_xml table function with schema inference
-	TableFunction read_xml_function("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, ReadXMLBind, ReadXMLInit);
-	read_xml_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	// Variant 1: Single string parameter
+	TableFunction read_xml_objects_single("read_xml_objects", {LogicalType::VARCHAR}, ReadXMLObjectsFunction,
+	                                      ReadXMLObjectsBind, ReadXMLObjectsInit);
+	read_xml_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_xml_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_xml_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_xml_objects_set.AddFunction(read_xml_objects_single);
 
+	// Variant 2: Array of strings parameter
+	TableFunction read_xml_objects_array("read_xml_objects", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                                     ReadXMLObjectsFunction, ReadXMLObjectsBind, ReadXMLObjectsInit);
+	read_xml_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_xml_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_xml_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_xml_objects_set.AddFunction(read_xml_objects_array);
+
+	loader.RegisterFunction(read_xml_objects_set);
+
+	// Register read_xml table function with schema inference (supports both VARCHAR and VARCHAR[])
+	TableFunctionSet read_xml_set("read_xml");
+
+	// Variant 1: Single string parameter
+	TableFunction read_xml_single("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, ReadXMLBind, ReadXMLInit);
+	read_xml_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	// Schema inference parameters
-	read_xml_function.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_function.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
-	read_xml_function.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_xml_function.named_parameters["max_depth"] = LogicalType::INTEGER;
-	read_xml_function.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-
+	read_xml_single.named_parameters["root_element"] = LogicalType::VARCHAR;
+	read_xml_single.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	// Explicit schema specification (like JSON extension)
-	read_xml_function.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_set.AddFunction(read_xml_single);
 
-	loader.RegisterFunction(read_xml_function);
+	// Variant 2: Array of strings parameter
+	TableFunction read_xml_array("read_xml", {LogicalType::LIST(LogicalType::VARCHAR)}, ReadXMLFunction, ReadXMLBind,
+	                             ReadXMLInit);
+	read_xml_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	// Schema inference parameters
+	read_xml_array.named_parameters["root_element"] = LogicalType::VARCHAR;
+	read_xml_array.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
+	// Explicit schema specification (like JSON extension)
+	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_set.AddFunction(read_xml_array);
 
-	// Register read_html table function for reading HTML files
-	TableFunction read_html_function("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
-	read_html_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(read_html_function);
+	loader.RegisterFunction(read_xml_set);
 
-	// Register read_html_objects table function for batch HTML processing
-	TableFunction read_html_objects_function("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction,
-	                                         ReadHTMLBind, ReadHTMLInit);
-	read_html_objects_function.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_objects_function.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_objects_function.named_parameters["filename"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(read_html_objects_function);
+	// Register read_html table function for reading HTML files (supports both VARCHAR and VARCHAR[])
+	TableFunctionSet read_html_set("read_html");
+
+	// Variant 1: Single string parameter
+	TableFunction read_html_single("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
+	read_html_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_set.AddFunction(read_html_single);
+
+	// Variant 2: Array of strings parameter
+	TableFunction read_html_array("read_html", {LogicalType::LIST(LogicalType::VARCHAR)}, ReadHTMLFunction,
+	                              ReadHTMLBind, ReadHTMLInit);
+	read_html_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_set.AddFunction(read_html_array);
+
+	loader.RegisterFunction(read_html_set);
+
+	// Register read_html_objects table function for batch HTML processing (supports both VARCHAR and VARCHAR[])
+	TableFunctionSet read_html_objects_set("read_html_objects");
+
+	// Variant 1: Single string parameter
+	TableFunction read_html_objects_single("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind,
+	                                       ReadHTMLInit);
+	read_html_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_objects_set.AddFunction(read_html_objects_single);
+
+	// Variant 2: Array of strings parameter
+	TableFunction read_html_objects_array("read_html_objects", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                                      ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
+	read_html_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_objects_set.AddFunction(read_html_objects_array);
+
+	loader.RegisterFunction(read_html_objects_set);
 
 	// Register html_extract_tables table function
 	TableFunction html_extract_tables_function("html_extract_tables", {LogicalType::VARCHAR}, HTMLExtractTablesFunction,
@@ -458,24 +562,48 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context
                                                           vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 
-	// Get file pattern from first argument
+	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
-		throw InvalidInputException("read_html requires at least one argument (file pattern)");
+		throw InvalidInputException(
+		    "read_html requires at least one argument (file pattern or array of file patterns)");
 	}
 
-	auto file_pattern = input.inputs[0].ToString();
+	vector<string> file_patterns;
 
-	// Expand file pattern using file system
+	// Handle both single string and array of strings
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		// Single file pattern
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		// Array of file patterns
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("read_html cannot process NULL file patterns");
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("read_html array parameter must contain only strings");
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("read_html first argument must be a string or array of strings");
+	}
+
+	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto glob_result = fs.Glob(file_pattern, nullptr);
-
-	// Extract file paths from OpenFileInfo results
-	for (const auto &file_info : glob_result) {
-		result->files.push_back(file_info.path);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		// Extract file paths from OpenFileInfo results
+		for (const auto &file_info : glob_result) {
+			result->files.push_back(file_info.path);
+		}
 	}
 
 	if (result->files.empty()) {
-		throw InvalidInputException("No files found matching pattern: %s", file_pattern);
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
 	}
 
 	// Handle optional parameters
