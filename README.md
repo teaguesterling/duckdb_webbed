@@ -700,12 +700,22 @@ CROSS JOIN read_xml_objects('schema.xsd') as schema;
 
 ---
 
-## Installation
+## Local development
 
+Clone the repository and the submodules too:
+```
+$ git clone --recursive https://github.com/teaguesterling/duckdb_webbed
+$ cd duckdb_webbed
+```
+
+### Using devenv
+We have a documented the dependencies with [http://devenv.sh](devenv.sh). When using `devenv` you can be sure that all dependencies for compilation and linting will be available and it will automatically format the files using `clang-format` and `clang-tidy` when you or Claude Code will git commit.
+
+To install devenv for your machine please follow:
+https://devenv.sh/getting-started/
+
+### Building the extension and running tests
 ```bash
-# Install dependencies (vcpkg with libxml2)
-make
-
 # Build extension
 make release
 
