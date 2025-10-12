@@ -5,6 +5,12 @@
 
 namespace duckdb {
 
+// Parse mode for document reading
+enum class ParseMode {
+	XML,  // Strict XML parsing
+	HTML  // Lenient HTML parsing
+};
+
 class XMLReaderFunctions {
 public:
 	static void Register(ExtensionLoader &loader);
@@ -14,20 +20,37 @@ public:
 	                                               optional_ptr<ReplacementScanData> data);
 
 private:
-	// Table functions for reading XML files
+	// Internal unified functions (used by both XML and HTML)
+	static unique_ptr<FunctionData> ReadDocumentObjectsBind(ClientContext &context, TableFunctionBindInput &input,
+	                                                         vector<LogicalType> &return_types, vector<string> &names,
+	                                                         ParseMode mode);
+	static unique_ptr<FunctionData> ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
+	                                                  vector<LogicalType> &return_types, vector<string> &names,
+	                                                  ParseMode mode);
+	static void ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
+	static void ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
+	static unique_ptr<GlobalTableFunctionState> ReadDocumentInit(ClientContext &context,
+	                                                              TableFunctionInitInput &input);
+
+	// Public XML functions (delegate to internal functions)
 	static void ReadXMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
 	                                                   vector<LogicalType> &return_types, vector<string> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadXMLObjectsInit(ClientContext &context,
 	                                                               TableFunctionInitInput &input);
 
-	// Simplified read_xml function (without schema inference for now)
 	static void ReadXMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
 	                                            vector<LogicalType> &return_types, vector<string> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadXMLInit(ClientContext &context, TableFunctionInitInput &input);
 
-	// HTML reading functions
+	// Public HTML functions (delegate to internal functions)
+	static void ReadHTMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
+	static unique_ptr<FunctionData> ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
+	                                                     vector<LogicalType> &return_types, vector<string> &names);
+	static unique_ptr<GlobalTableFunctionState> ReadHTMLObjectsInit(ClientContext &context,
+	                                                                 TableFunctionInitInput &input);
+
 	static void ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
 	                                             vector<LogicalType> &return_types, vector<string> &names);
@@ -46,6 +69,10 @@ struct XMLReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool ignore_errors = false;
 	idx_t max_file_size = 16777216; // 16MB default
+	ParseMode parse_mode = ParseMode::XML; // Parsing mode (XML or HTML)
+
+	// For _objects functions
+	bool include_filename = false;
 
 	// Explicit schema information (when columns parameter is provided)
 	bool has_explicit_schema = false;

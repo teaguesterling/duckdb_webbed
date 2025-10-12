@@ -1,0 +1,299 @@
+# name: test/sql/html_schema_inference.test.future
+# description: FUTURE: Test automatic HTML table extraction (not yet implemented)
+# group: [xml]
+#
+# NOTE: This file contains aspirational tests for automatic HTML table detection.
+# HTML tables are complex (colspan, rowspan, thead/tbody/tfoot, nested headers, etc.)
+# and require specialized extraction logic beyond simple schema inference.
+#
+# Current approach: Use html_extract_tables() function or specify record_element explicitly.
+# Future: May implement read_html_table() function for specialized table extraction.
+#
+# This file is disabled (renamed to .future) until the feature is implemented.
+
+require webbed
+
+# ===========================================================================
+# Test 1: Basic table extraction with schema inference
+# ===========================================================================
+
+# Extract people table with automatic schema inference
+query III
+SELECT * FROM read_html('test/html/schema_tests/people_table.html')
+ORDER BY name;
+----
+Alice	30	NYC
+Bob	25	LA
+Charlie	35	Chicago
+
+# Verify schema is inferred from table headers
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_html('test/html/schema_tests/people_table.html'))
+ORDER BY column_name;
+----
+age	VARCHAR
+city	VARCHAR
+name	VARCHAR
+
+# ===========================================================================
+# Test 2: Multiple tables - should extract all by default
+# ===========================================================================
+
+# Count total rows from all tables
+query I
+SELECT count(*) FROM read_html('test/html/schema_tests/multiple_tables.html');
+----
+8
+
+# Verify we get data from all three tables
+query I
+SELECT count(DISTINCT column_0)
+FROM (SELECT * FROM read_html('test/html/schema_tests/multiple_tables.html'));
+----
+7
+
+# ===========================================================================
+# Test 3: Using root_element to extract specific section
+# ===========================================================================
+
+# Extract only the data-section div's table
+query III
+SELECT * FROM read_html('test/html/schema_tests/nested_tables.html', root_element := '//div[@id="data-section"]')
+ORDER BY Name;
+----
+Alice	30	Engineering
+Bob	25	Sales
+Charlie	35	Marketing
+
+# Verify we get 3 rows (not including the stats table)
+query I
+SELECT count(*) FROM read_html('test/html/schema_tests/nested_tables.html', root_element := '//div[@id="data-section"]');
+----
+3
+
+# ===========================================================================
+# Test 4: Using record_element to extract list items
+# ===========================================================================
+
+# Extract individual li elements from user list
+query I
+SELECT count(*) FROM read_html('test/html/schema_tests/list_data.html', record_element := 'li');
+----
+4
+
+# With include_attributes, we should get data- attributes as columns
+query III
+SELECT * FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := '//ul[@class="users"]/li',
+    attr_mode := 'columns'
+)
+ORDER BY data_name;
+----
+Alice	30	NYC
+Bob	25	LA
+Charlie	35	Chicago
+Diana	28	Seattle
+
+# Verify schema includes attributes
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := '//ul[@class="users"]/li',
+    attr_mode := 'columns'
+))
+ORDER BY column_name;
+----
+data_age	VARCHAR
+data_city	VARCHAR
+data_name	VARCHAR
+
+# ===========================================================================
+# Test 5: Extracting product divs with record_element
+# ===========================================================================
+
+# Extract product divs as individual records
+query I
+SELECT count(*) FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := '//div[@class="product"]'
+);
+----
+3
+
+# Get product data with attributes
+query III
+SELECT data_id, data_price, name
+FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := '//div[@class="product"]',
+    attr_mode := 'columns'
+)
+ORDER BY CAST(data_id AS INTEGER);
+----
+1	99.99	Widget
+2	149.99	Gadget
+3	199.99	Gizmo
+
+# ===========================================================================
+# Test 6: Filename parameter support (like read_xml)
+# ===========================================================================
+
+# Test that filename parameter works with HTML
+query II
+SELECT filename, count(*) as row_count
+FROM read_html('test/html/schema_tests/people_table.html', filename := true)
+GROUP BY filename;
+----
+test/html/schema_tests/people_table.html	3
+
+# Test filename with multiple files
+query I
+SELECT count(DISTINCT filename)
+FROM read_html('test/html/*.html', filename := true);
+----
+5
+
+# ===========================================================================
+# Test 7: Force list parameter for repeating elements
+# ===========================================================================
+
+# Test that items in lists are properly handled
+query I
+SELECT typeof(column_0) FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := 'li',
+    force_list := 'li'
+) LIMIT 1;
+----
+VARCHAR
+
+# ===========================================================================
+# Test 8: Consistency with read_xml API
+# ===========================================================================
+
+# Both should support the same common parameters
+query I
+SELECT count(*) FROM read_html(
+    'test/html/schema_tests/people_table.html',
+    ignore_errors := true,
+    maximum_file_size := 16777216,
+    filename := true,
+    auto_detect := true,
+    max_depth := 10
+);
+----
+3
+
+# ===========================================================================
+# Test 9: Nested table extraction with specific XPath
+# ===========================================================================
+
+# Extract only the employees table using ID
+query I
+SELECT count(*) FROM read_html(
+    'test/html/schema_tests/nested_tables.html',
+    root_element := '//table[@id="employees"]'
+);
+----
+3
+
+# Extract only the stats table
+query II
+SELECT * FROM read_html(
+    'test/html/schema_tests/nested_tables.html',
+    root_element := '//table[@id="stats"]'
+);
+----
+Total Employees	150
+
+# ===========================================================================
+# Test 10: Error handling with ignore_errors
+# ===========================================================================
+
+# Test with non-existent file and ignore_errors
+query I
+SELECT count(*) FROM read_html(
+    'test/html/nonexistent*.html',
+    ignore_errors := true
+);
+----
+0
+
+# ===========================================================================
+# Test 11: Complex file with multiple HTML files
+# ===========================================================================
+
+# Read multiple HTML files and aggregate
+query I
+SELECT count(*) FROM read_html('test/html/schema_tests/people_table.html', 'test/html/schema_tests/multiple_tables.html');
+----
+11
+
+# ===========================================================================
+# Test 12: Attribute modes (columns, prefixed, map, discard)
+# ===========================================================================
+
+# Test attr_mode := 'prefixed' with custom prefix
+query I
+SELECT count(*) > 0 FROM read_html(
+    'test/html/schema_tests/list_data.html',
+    record_element := '//ul[@class="users"]/li',
+    attr_mode := 'prefixed',
+    attr_prefix := '@'
+);
+----
+true
+
+# Test attr_mode := 'discard' (no attributes in schema)
+query I
+SELECT count(*) FROM (
+    DESCRIBE SELECT * FROM read_html(
+        'test/html/schema_tests/list_data.html',
+        record_element := '//ul[@class="users"]/li',
+        attr_mode := 'discard'
+    )
+);
+----
+1
+
+# ===========================================================================
+# Test 13: Max depth parameter
+# ===========================================================================
+
+# Test that max_depth limits nesting
+query I
+SELECT count(*) FROM read_html(
+    'test/html/schema_tests/nested_tables.html',
+    max_depth := 1
+);
+----
+5
+
+# ===========================================================================
+# Test 14: Comparison with read_html_objects (raw HTML)
+# ===========================================================================
+
+# read_html_objects returns raw HTML
+query I
+SELECT typeof(html) FROM read_html_objects('test/html/simple.html');
+----
+HTML
+
+# read_html returns structured data (after schema inference)
+query I
+SELECT typeof(name) FROM read_html('test/html/schema_tests/people_table.html') LIMIT 1;
+----
+VARCHAR
+
+# ===========================================================================
+# Test 15: Empty elements handling
+# ===========================================================================
+
+# Test with empty HTML file
+query I
+SELECT count(*) FROM read_html('test/html/empty.html', ignore_errors := true);
+----
+0
