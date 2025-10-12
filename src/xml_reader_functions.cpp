@@ -1026,6 +1026,40 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	return std::move(table_function);
 }
 
+// =============================================================================
+// Public HTML Functions (delegate to internal unified functions)
+// =============================================================================
+
+unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                  vector<LogicalType> &return_types,
+                                                                  vector<string> &names) {
+	return ReadDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLObjectsInit(ClientContext &context,
+                                                                               TableFunctionInitInput &input) {
+	return ReadDocumentInit(context, input);
+}
+
+void XMLReaderFunctions::ReadHTMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                  DataChunk &output) {
+	return ReadDocumentObjectsFunction(context, data_p, output);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
+	return ReadDocumentBind(context, input, return_types, names, ParseMode::HTML);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLInit(ClientContext &context,
+                                                                       TableFunctionInitInput &input) {
+	return ReadDocumentInit(context, input);
+}
+
+void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	return ReadDocumentFunction(context, data_p, output);
+}
+
 void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Register read_xml_objects table function (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_xml_objects_set("read_xml_objects");
@@ -1118,8 +1152,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunctionSet read_html_objects_set("read_html_objects");
 
 	// Variant 1: Single string parameter
-	TableFunction read_html_objects_single("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind,
-	                                       ReadHTMLInit);
+	TableFunction read_html_objects_single("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLObjectsFunction,
+	                                       ReadHTMLObjectsBind, ReadHTMLObjectsInit);
 	read_html_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
@@ -1127,7 +1161,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 
 	// Variant 2: Array of strings parameter
 	TableFunction read_html_objects_array("read_html_objects", {LogicalType::LIST(LogicalType::VARCHAR)},
-	                                      ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
+	                                      ReadHTMLObjectsFunction, ReadHTMLObjectsBind, ReadHTMLObjectsInit);
 	read_html_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
@@ -1141,239 +1175,6 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	loader.RegisterFunction(html_extract_tables_function);
 }
 
-unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          vector<LogicalType> &return_types, vector<string> &names) {
-	auto result = make_uniq<XMLReadFunctionData>();
-
-	// Get file pattern(s) from first argument
-	if (input.inputs.empty()) {
-		throw InvalidInputException(
-		    "read_html requires at least one argument (file pattern or array of file patterns)");
-	}
-
-	vector<string> file_patterns;
-
-	// Handle both single string and array of strings
-	const auto &first_input = input.inputs[0];
-	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
-		// Single file pattern
-		file_patterns.push_back(first_input.ToString());
-	} else if (first_input.type().id() == LogicalTypeId::LIST) {
-		// Array of file patterns
-		auto &list_children = ListValue::GetChildren(first_input);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_html cannot process NULL file patterns");
-			}
-			if (child.type().id() != LogicalTypeId::VARCHAR) {
-				throw InvalidInputException("read_html array parameter must contain only strings");
-			}
-			file_patterns.push_back(child.ToString());
-		}
-	} else {
-		throw InvalidInputException("read_html first argument must be a string or array of strings");
-	}
-
-	// Expand file patterns using file system
-	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		for (const auto &file_info : glob_result) {
-			result->files.push_back(file_info.path);
-		}
-	}
-
-	if (result->files.empty()) {
-		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
-		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
-	}
-
-	// Handle optional parameters
-	bool include_filename = false; // Default: don't include filename column
-	for (auto &kv : input.named_parameters) {
-		if (kv.first == "ignore_errors") {
-			result->ignore_errors = kv.second.GetValue<bool>();
-		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
-		} else if (kv.first == "filename") {
-			include_filename = kv.second.GetValue<bool>();
-		}
-	}
-
-	// Set return schema based on filename parameter
-	if (include_filename) {
-		return_types.push_back(LogicalType::VARCHAR); // filename
-		names.push_back("filename");
-	}
-	return_types.push_back(XMLTypes::HTMLType()); // HTML content
-	names.push_back("html");
-
-	return std::move(result);
-}
-
-unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLInit(ClientContext &context,
-                                                                      TableFunctionInitInput &input) {
-	auto result = make_uniq<XMLReadGlobalState>();
-	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
-
-	result->files = bind_data.files;
-	result->file_index = 0;
-
-	return std::move(result);
-}
-
-void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
-	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
-
-	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
-	}
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	idx_t output_idx = 0;
-
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
-
-		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-
-			if (file_size > bind_data.max_file_size) {
-				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-					                            bind_data.max_file_size);
-				}
-				continue; // Skip this file
-			}
-
-			// Read file content
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
-
-			// Handle empty HTML files gracefully (HTML is more permissive than XML)
-			if (content.empty()) {
-				if (bind_data.ignore_errors) {
-					continue; // Skip this empty file
-				} else {
-					// For HTML, treat empty file as empty HTML content
-					content = "<html></html>";
-				}
-			}
-
-			// Process HTML content same as parse_html function
-			std::string processed_content = content;
-			try {
-				// Parse the HTML using the HTML parser to normalize it
-				XMLDocRAII html_doc(content, true); // Use HTML parser
-				if (html_doc.IsValid()) {
-					// Serialize the document back to string
-					xmlChar *html_output = nullptr;
-					int output_size = 0;
-					xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
-
-					if (html_output) {
-						XMLCharPtr html_ptr(html_output);
-						std::string normalized_html = std::string(reinterpret_cast<const char *>(html_ptr.get()));
-
-						// Remove XML declaration if present
-						size_t xml_decl_end = normalized_html.find("?>");
-						if (xml_decl_end != std::string::npos) {
-							normalized_html = normalized_html.substr(xml_decl_end + 2);
-							// Remove leading whitespace/newlines
-							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-						}
-
-						// Remove DOCTYPE if present
-						size_t doctype_start = normalized_html.find("<!DOCTYPE");
-						if (doctype_start != std::string::npos) {
-							size_t doctype_end = normalized_html.find(">", doctype_start);
-							if (doctype_end != std::string::npos) {
-								normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
-								// Remove leading whitespace/newlines after DOCTYPE removal
-								normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-							}
-						}
-
-						// Minify HTML: remove whitespace between tags
-						std::string minified_html;
-						bool inside_tag = false;
-						bool last_was_space = false;
-						bool between_tags = true; // Start assuming we're between tags
-
-						for (size_t i = 0; i < normalized_html.length(); i++) {
-							char c = normalized_html[i];
-
-							if (c == '<') {
-								inside_tag = true;
-								between_tags = false;
-								minified_html += c;
-								last_was_space = false;
-							} else if (c == '>') {
-								inside_tag = false;
-								between_tags = true;
-								minified_html += c;
-								last_was_space = false;
-							} else if (inside_tag) {
-								minified_html += c;
-								last_was_space = false;
-							} else {
-								if (std::isspace(c)) {
-									if (between_tags) {
-										// Skip all whitespace between tags
-										continue;
-									} else if (!last_was_space) {
-										// Keep single space between words within text content
-										minified_html += ' ';
-									}
-									last_was_space = true;
-								} else {
-									between_tags = false;
-									minified_html += c;
-									last_was_space = false;
-								}
-							}
-						}
-
-						// Trim trailing whitespace
-						if (!minified_html.empty() && std::isspace(minified_html.back())) {
-							minified_html.erase(minified_html.find_last_not_of(" \t\n\r") + 1);
-						}
-
-						processed_content = minified_html;
-					}
-				}
-			} catch (const std::exception &e) {
-				// Keep original content if processing fails
-			}
-
-			// Set output values based on schema
-			idx_t col_idx = 0;
-			if (output.data.size() == 2) {
-				// Both filename and html columns
-				output.data[col_idx++].SetValue(output_idx, Value(filename));
-				output.data[col_idx++].SetValue(output_idx, Value(processed_content));
-			} else {
-				// Only html column
-				output.data[col_idx++].SetValue(output_idx, Value(processed_content));
-			}
-			output_idx++;
-
-		} catch (const Exception &e) {
-			if (!bind_data.ignore_errors) {
-				throw;
-			}
-			// Skip this file and continue
-		}
-	}
-
-	output.SetCardinality(output_idx);
-}
 
 unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context,
                                                                    TableFunctionBindInput &input,
