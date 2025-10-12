@@ -13,6 +13,527 @@
 
 namespace duckdb {
 
+// =============================================================================
+// Internal Unified Functions (used by both XML and HTML)
+// =============================================================================
+
+unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientContext &context,
+                                                                      TableFunctionBindInput &input,
+                                                                      vector<LogicalType> &return_types,
+                                                                      vector<string> &names, ParseMode mode) {
+	auto result = make_uniq<XMLReadFunctionData>();
+	result->parse_mode = mode;
+
+	// Get file pattern(s) from first argument
+	const char *function_name = (mode == ParseMode::HTML) ? "read_html_objects" : "read_xml_objects";
+	if (input.inputs.empty()) {
+		throw InvalidInputException("%s requires at least one argument (file pattern or array of file patterns)",
+		                            function_name);
+	}
+
+	vector<string> file_patterns;
+
+	// Handle both single string and array of strings
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		// Single file pattern
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		// Array of file patterns
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("%s cannot process NULL file patterns", function_name);
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("%s array parameter must contain only strings", function_name);
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
+	}
+
+	// Expand file patterns using file system
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		// Extract file paths from OpenFileInfo results
+		for (const auto &file_info : glob_result) {
+			result->files.push_back(file_info.path);
+		}
+	}
+
+	if (result->files.empty()) {
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
+	}
+
+	// Handle optional parameters
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+		} else if (kv.first == "maximum_file_size") {
+			result->max_file_size = kv.second.GetValue<idx_t>();
+		} else if (kv.first == "filename") {
+			result->include_filename = kv.second.GetValue<bool>();
+		}
+	}
+
+	// Set return schema based on filename parameter and mode
+	if (result->include_filename) {
+		return_types.push_back(LogicalType::VARCHAR); // filename
+		names.push_back("filename");
+	}
+
+	// Return appropriate type based on mode
+	if (mode == ParseMode::HTML) {
+		return_types.push_back(XMLTypes::HTMLType());
+		names.push_back("html");
+	} else {
+		return_types.push_back(XMLTypes::XMLType());
+		names.push_back("xml");
+	}
+
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadDocumentInit(ClientContext &context,
+                                                                           TableFunctionInitInput &input) {
+	auto result = make_uniq<XMLReadGlobalState>();
+	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
+
+	result->files = bind_data.files;
+	result->file_index = 0;
+
+	return std::move(result);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
+                                                               vector<LogicalType> &return_types, vector<string> &names,
+                                                               ParseMode mode) {
+	auto result = make_uniq<XMLReadFunctionData>();
+	result->parse_mode = mode;
+
+	const char *function_name = (mode == ParseMode::HTML) ? "read_html" : "read_xml";
+
+	// Get file pattern(s) from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("%s requires at least one argument (file pattern or array of file patterns)",
+		                            function_name);
+	}
+
+	vector<string> file_patterns;
+
+	// Handle both single string and array of strings
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		// Single file pattern
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		// Array of file patterns
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("%s cannot process NULL file patterns", function_name);
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("%s array parameter must contain only strings", function_name);
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
+	}
+
+	// Expand file patterns using file system
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		// Extract file paths from OpenFileInfo results
+		for (const auto &file_info : glob_result) {
+			result->files.push_back(file_info.path);
+		}
+	}
+
+	if (result->files.empty()) {
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
+	}
+
+	// Handle optional parameters with schema inference defaults
+	XMLSchemaOptions schema_options;
+	bool has_explicit_columns = false;
+
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "maximum_file_size") {
+			result->max_file_size = kv.second.GetValue<idx_t>();
+			schema_options.maximum_file_size = result->max_file_size;
+		} else if (kv.first == "root_element") {
+			schema_options.root_element = kv.second.ToString();
+		} else if (kv.first == "record_element") {
+			// XPath or tag name for elements that should be rows
+			std::string record_value = kv.second.ToString();
+			// Convert simple tag names to XPath
+			if (record_value.find('/') == std::string::npos) {
+				record_value = "//" + record_value;
+			}
+			schema_options.record_element = record_value;
+		} else if (kv.first == "force_list") {
+			// Handle both VARCHAR and LIST(VARCHAR)
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				// Single tag name or XPath
+				std::string force_value = kv.second.ToString();
+				// Convert simple tag names to XPath
+				if (force_value.find('/') == std::string::npos) {
+					force_value = "//" + force_value;
+				}
+				schema_options.force_list = force_value;
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				// List of tag names - try each one
+				auto &list_children = ListValue::GetChildren(kv.second);
+				std::vector<std::string> xpaths;
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						std::string tag = child.ToString();
+						// Convert simple tag names to XPath
+						if (tag.find('/') == std::string::npos) {
+							tag = "//" + tag;
+						}
+						xpaths.push_back(tag);
+					}
+				}
+				// Combine with XPath OR operator
+				if (!xpaths.empty()) {
+					schema_options.force_list = xpaths[0];
+					for (size_t i = 1; i < xpaths.size(); i++) {
+						schema_options.force_list += " | " + xpaths[i];
+					}
+				}
+			}
+		} else if (kv.first == "attr_mode") {
+			schema_options.attr_mode = kv.second.ToString();
+		} else if (kv.first == "attr_prefix") {
+			schema_options.attr_prefix = kv.second.ToString();
+		} else if (kv.first == "text_key") {
+			schema_options.text_key = kv.second.ToString();
+		} else if (kv.first == "namespaces") {
+			schema_options.namespaces = kv.second.ToString();
+		} else if (kv.first == "empty_elements") {
+			schema_options.empty_elements = kv.second.ToString();
+		} else if (kv.first == "auto_detect") {
+			schema_options.auto_detect = kv.second.GetValue<bool>();
+		} else if (kv.first == "max_depth") {
+			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "unnest_as") {
+			auto unnest_mode = kv.second.ToString();
+			if (unnest_mode == "columns") {
+				schema_options.unnest_as_columns = true;
+			} else if (unnest_mode == "struct") {
+				schema_options.unnest_as_columns = false; // Future: implement struct mode
+			} else {
+				throw BinderException("%s \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
+				                      function_name, unnest_mode);
+			}
+		} else if (kv.first == "columns") {
+			// Handle explicit column schema specification (like JSON extension)
+			auto &child_type = kv.second.type();
+			if (child_type.id() != LogicalTypeId::STRUCT) {
+				throw BinderException("%s \"columns\" parameter requires a struct as input.", function_name);
+			}
+			auto &struct_children = StructValue::GetChildren(kv.second);
+			D_ASSERT(StructType::GetChildCount(child_type) == struct_children.size());
+
+			for (idx_t i = 0; i < struct_children.size(); i++) {
+				auto &name = StructType::GetChildName(child_type, i);
+				auto &val = struct_children[i];
+				if (val.IsNull()) {
+					throw BinderException("%s \"columns\" parameter type specification cannot be NULL.", function_name);
+				}
+				if (val.type().id() != LogicalTypeId::VARCHAR) {
+					throw BinderException("%s \"columns\" parameter type specification must be VARCHAR.",
+					                      function_name);
+				}
+
+				// Parse the type string using DuckDB's type parser
+				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
+
+				return_types.push_back(logical_type);
+				names.push_back(name);
+			}
+
+			if (return_types.empty()) {
+				throw BinderException("%s \"columns\" parameter needs at least one column.", function_name);
+			}
+
+			// Store explicit schema in function data
+			result->has_explicit_schema = true;
+			result->column_names = names;
+			result->column_types = return_types;
+
+			has_explicit_columns = true;
+		}
+	}
+
+	// Store schema options in bind_data for use during execution
+	result->schema_options = schema_options;
+
+	// Perform schema inference only if no explicit columns were provided
+	if (!has_explicit_columns) {
+		try {
+			auto first_file = result->files[0];
+			auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+
+			if (file_size > result->max_file_size) {
+				if (!result->ignore_errors) {
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", first_file,
+					                            result->max_file_size);
+				}
+				// Fallback to simple schema based on mode
+				if (mode == ParseMode::HTML) {
+					return_types.push_back(XMLTypes::HTMLType());
+					names.push_back("html");
+				} else {
+					return_types.push_back(XMLTypes::XMLType());
+					names.push_back("xml");
+				}
+				return std::move(result);
+			}
+
+			// Read file content for schema inference
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void *)content.data(), file_size);
+
+			// For XML mode, validate; for HTML mode, be more lenient
+			if (mode == ParseMode::XML) {
+				if (!XMLUtils::IsValidXML(content)) {
+					if (!result->ignore_errors) {
+						throw InvalidInputException("File %s contains invalid XML", first_file);
+					}
+					// Fallback to simple schema
+					return_types.push_back(XMLTypes::XMLType());
+					names.push_back("xml");
+					return std::move(result);
+				}
+			}
+			// HTML mode: skip validation, let libxml2's HTML parser handle malformed content
+
+			// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
+			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+
+			// Convert to DuckDB schema
+			for (const auto &col_info : inferred_columns) {
+				return_types.push_back(col_info.type);
+				names.push_back(col_info.name);
+			}
+
+		} catch (const Exception &e) {
+			if (!result->ignore_errors) {
+				throw;
+			}
+			// Fallback to simple schema on any error based on mode
+			if (mode == ParseMode::HTML) {
+				return_types.push_back(XMLTypes::HTMLType());
+				names.push_back("html");
+			} else {
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+			}
+		}
+
+		// Ensure we have at least one column if inference failed
+		if (return_types.empty()) {
+			if (mode == ParseMode::HTML) {
+				return_types.push_back(XMLTypes::HTMLType());
+				names.push_back("html");
+			} else {
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+			}
+		}
+	}
+
+	return std::move(result);
+}
+
+void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                      DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
+	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
+
+	if (gstate.file_index >= gstate.files.size()) {
+		// No more files to process
+		return;
+	}
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	idx_t output_idx = 0;
+	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
+
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
+		const auto &filename = gstate.files[gstate.file_index++];
+
+		try {
+			// Check file size
+			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+
+			if (file_size > bind_data.max_file_size) {
+				if (!bind_data.ignore_errors) {
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
+					                            bind_data.max_file_size);
+				}
+				continue; // Skip this file
+			}
+
+			// Read file content
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void *)content.data(), file_size);
+
+			// Validate content based on mode
+			if (is_html) {
+				// HTML mode: be lenient, allow empty files
+				if (content.empty()) {
+					if (bind_data.ignore_errors) {
+						continue; // Skip empty file
+					} else {
+						content = "<html></html>"; // Minimal valid HTML
+					}
+				}
+			} else {
+				// XML mode: strict validation
+				bool is_valid = XMLUtils::IsValidXML(content);
+				if (!is_valid) {
+					if (bind_data.ignore_errors) {
+						continue; // Skip this invalid file
+					} else {
+						throw InvalidInputException("File %s contains invalid XML", filename);
+					}
+				}
+			}
+
+			// Set output values based on schema
+			idx_t col_idx = 0;
+			if (bind_data.include_filename) {
+				output.data[col_idx++].SetValue(output_idx, Value(filename));
+			}
+			output.data[col_idx++].SetValue(output_idx, Value(content));
+			output_idx++;
+
+		} catch (const Exception &e) {
+			if (!bind_data.ignore_errors) {
+				throw;
+			}
+			// Skip this file and continue
+		}
+	}
+
+	output.SetCardinality(output_idx);
+}
+
+void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
+	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
+
+	if (gstate.file_index >= gstate.files.size()) {
+		// No more files to process
+		return;
+	}
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	idx_t output_idx = 0;
+	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
+
+	// Get schema inference options from bind_data
+	const auto &schema_options = bind_data.schema_options;
+
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
+		const auto &filename = gstate.files[gstate.file_index++];
+
+		try {
+			// Check file size
+			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+			auto file_size = fs.GetFileSize(*file_handle);
+
+			if (file_size > bind_data.max_file_size) {
+				if (!bind_data.ignore_errors) {
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
+					                            bind_data.max_file_size);
+				}
+				continue; // Skip this file
+			}
+
+			// Read file content
+			string content;
+			content.resize(file_size);
+			file_handle->Read((void *)content.data(), file_size);
+
+			// Validate content based on mode
+			if (is_html) {
+				// HTML mode: be lenient, skip validation
+				// Let libxml2's HTML parser handle malformed content
+			} else {
+				// XML mode: strict validation
+				if (!XMLUtils::IsValidXML(content)) {
+					if (bind_data.ignore_errors) {
+						continue; // Skip this invalid file
+					} else {
+						throw InvalidInputException("File %s contains invalid XML", filename);
+					}
+				}
+			}
+
+			// Extract structured data using appropriate method
+			std::vector<std::vector<Value>> extracted_rows;
+
+			if (bind_data.has_explicit_schema) {
+				// Use explicit schema for extraction
+				extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
+				                                                           bind_data.column_types, schema_options);
+			} else {
+				// Use schema inference
+				extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+			}
+
+			// Fill output vectors with extracted data
+			for (const auto &row : extracted_rows) {
+				if (output_idx >= STANDARD_VECTOR_SIZE) {
+					break;
+				}
+
+				// Set values for each column in the row
+				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
+					output.data[col_idx].SetValue(output_idx, row[col_idx]);
+				}
+				output_idx++;
+			}
+
+		} catch (const Exception &e) {
+			if (!bind_data.ignore_errors) {
+				throw;
+			}
+			// Skip this file and continue
+		}
+
+		// If we filled up the output, break
+		if (output_idx >= STANDARD_VECTOR_SIZE) {
+			break;
+		}
+	}
+
+	output.SetCardinality(output_idx);
+}
+
+// =============================================================================
+// Public XML Functions (will be refactored to delegate in Phase 3)
+// =============================================================================
+
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
                                                                 vector<LogicalType> &return_types,
                                                                 vector<string> &names) {
