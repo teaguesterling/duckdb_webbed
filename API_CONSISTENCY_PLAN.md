@@ -1,7 +1,28 @@
 # API Consistency Refactoring Plan
 **Date:** 2025-10-12
 **Branch:** api-consistency-check
-**Status:** Planning Phase
+**Status:** Phase 1 Complete ✅ | Phase 2 In Progress 🔄
+
+## Progress Tracking
+
+### ✅ Completed
+- [x] **Phase 1a: Infrastructure** - ParseMode enum, updated structures
+- [x] **Phase 1b: Function Declarations** - Internal unified function signatures
+- [x] **Phase 1c: Test Data** - 4 HTML test files (nested_tables, list_data, multiple_tables, people_table)
+- [x] **Phase 1d: Test Coverage** - Comprehensive html_schema_inference.test with 15 scenarios
+- [x] **Phase 1e: Build Verification** - Confirmed no compilation errors
+
+### 🔄 In Progress
+- [ ] **Phase 2a: ReadDocumentObjectsBind** - Unified bind for raw content
+- [ ] **Phase 2b: ReadDocumentBind** - Unified bind for schema inference
+- [ ] **Phase 2c: ReadDocumentFunction** - Unified execution for schema inference
+- [ ] **Phase 2d: ReadDocumentObjectsFunction** - Unified execution for raw content
+- [ ] **Phase 2e: ReadDocumentInit** - Unified initialization
+
+### ⏳ Pending
+- [ ] **Phase 3: Delegation** - Refactor public functions to call internal
+- [ ] **Phase 4: Registration** - Add filename to read_xml, schema params to read_html
+- [ ] **Phase 5: Testing** - Run full test suite, verify all tests pass
 
 ## Executive Summary
 
@@ -510,43 +531,59 @@ VARCHAR
 
 ## Implementation Checklist
 
-### Pre-Implementation
-- [ ] Merge latest changes from main worktree into api-consistency-check branch
-- [ ] Create test HTML files for root_element, record_element, table_index
-- [ ] Document current test coverage baseline
+### ✅ Pre-Implementation (COMPLETE)
+- [x] Merge latest changes from issue-7-investigation branch
+- [x] Create test HTML files for root_element, record_element, table_index
+- [x] Created comprehensive test file: html_schema_inference.test (15 scenarios)
 
-### Phase 1: Internal Functions
-- [ ] Add `ParseMode` enum to xml_reader_functions.hpp
-- [ ] Update `XMLReadFunctionData` structure with parse_mode and include_filename
-- [ ] Create `ReadDocumentObjectsBind` internal function
-- [ ] Create `ReadDocumentBind` internal function
-- [ ] Create unified `ReadDocumentFunction` implementation
-- [ ] Create unified `ReadDocumentInit` implementation
+### ✅ Phase 1: Infrastructure (COMPLETE - Commit d6cec46)
+- [x] Add `ParseMode` enum to xml_reader_functions.hpp
+- [x] Update `XMLReadFunctionData` structure with parse_mode and include_filename
+- [x] Declare `ReadDocumentObjectsBind` internal function
+- [x] Declare `ReadDocumentBind` internal function
+- [x] Declare unified `ReadDocumentFunction` implementation
+- [x] Declare unified `ReadDocumentObjectsFunction` implementation
+- [x] Declare unified `ReadDocumentInit` implementation
+- [x] Declare separate HTML public functions (ReadHTMLObjectsBind, ReadHTMLBind)
+- [x] Build verification - No compilation errors
 
-### Phase 2: Refactor Existing Functions
-- [ ] Refactor `ReadXMLObjectsBind` to delegate to internal
-- [ ] Refactor `ReadXMLBind` to delegate to internal
-- [ ] Refactor `ReadHTMLObjectsBind` to delegate to internal (rename from `ReadHTMLBind`)
-- [ ] Create new `ReadHTMLBind` with schema inference (delegates to internal)
-- [ ] Remove duplicate `ReadHTMLFunction` implementation
+### 🔄 Phase 2: Implement Internal Functions (IN PROGRESS)
+- [ ] Implement `ReadDocumentObjectsBind` - unified bind for raw content (_objects)
+- [ ] Implement `ReadDocumentBind` - unified bind for schema inference
+- [ ] Implement `ReadDocumentObjectsFunction` - unified execution for raw content
+- [ ] Implement `ReadDocumentFunction` - unified execution for schema inference
+- [ ] Implement `ReadDocumentInit` - unified initialization
 
-### Phase 3: Update Registration
+### ⏳ Phase 3: Refactor Public Functions to Delegate (PENDING)
+- [ ] Refactor `ReadXMLObjectsBind` to delegate to ReadDocumentObjectsBind
+- [ ] Refactor `ReadXMLBind` to delegate to ReadDocumentBind
+- [ ] Refactor `ReadXMLFunction` to delegate to ReadDocumentFunction
+- [ ] Refactor `ReadXMLObjectsFunction` to delegate to ReadDocumentObjectsFunction
+- [ ] Implement `ReadHTMLObjectsBind` to delegate to ReadDocumentObjectsBind
+- [ ] Implement `ReadHTMLBind` to delegate to ReadDocumentBind (NEW - schema inference!)
+- [ ] Implement `ReadHTMLFunction` to delegate to ReadDocumentFunction
+- [ ] Implement `ReadHTMLObjectsFunction` to delegate to ReadDocumentObjectsFunction
+- [ ] Remove old ReadHTMLBind if duplicate
+
+### ⏳ Phase 4: Update Registration (PENDING)
 - [ ] Add `filename` parameter to `read_xml` registration
-- [ ] Add schema inference parameters to `read_html` registration
+- [ ] Add schema inference parameters to `read_html` registration:
+  - [ ] root_element, record_element, attr_mode, attr_prefix
+  - [ ] text_key, namespaces, empty_elements
+  - [ ] auto_detect, max_depth, unnest_as, force_list
+  - [ ] columns (explicit schema)
 - [ ] Ensure `read_html_objects` maintains backward compatibility
 - [ ] Update function documentation comments
 
-### Phase 4: Testing
+### ⏳ Phase 5: Testing (PENDING)
+- [ ] Build with Phase 2 changes - verify compilation
 - [ ] Run existing XML tests - all must pass
 - [ ] Run existing HTML tests - all must pass
-- [ ] Add new test: `xml_filename_support.test`
-- [ ] Add new test: `html_root_element.test`
-- [ ] Add new test: `html_record_element.test`
-- [ ] Add new test: `html_table_index.test`
-- [ ] Add new test: `html_xml_consistency.test`
+- [ ] Run new html_schema_inference.test
 - [ ] Run full test suite with `make test`
+- [ ] Address any test failures
 
-### Phase 5: Documentation
+### ⏳ Phase 6: Documentation (PENDING)
 - [ ] Update README.md with new read_html capabilities
 - [ ] Update inline code comments
 - [ ] Add examples for HTML schema inference
