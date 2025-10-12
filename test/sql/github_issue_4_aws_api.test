@@ -97,11 +97,31 @@ vol-049df61146c4d7901	80	in-use
 vol-0987654321fedcba0	100	available
 vol-abcdef1234567890a	500	in-use
 
-# NOTE: record_element currently has issues with namespaced documents
-# TODO: Fix record_element to work with XML namespaces
-# Expected behavior: Should return 3 rows for 'item' elements
-# Current behavior: Returns 0 rows
+# record_element now works with namespaced documents (uses local-name() for matching)
 query I
 SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item');
 ----
-0
+3
+
+# Verify schema is correct with namespaced XML
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item')) ORDER BY column_name;
+----
+availabilityZone	VARCHAR
+createTime	VARCHAR
+encrypted	BOOLEAN
+iops	INTEGER
+size	INTEGER
+snapshotId	VARCHAR
+status	VARCHAR
+throughput	INTEGER
+volumeId	VARCHAR
+volumeType	VARCHAR
+
+# Verify data extraction works with namespaced XML
+query III
+SELECT volumeId, size, status FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item') ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use

@@ -114,8 +114,28 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
+		std::string xpath_expr = options.record_element;
+
+		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
+		// This allows "item" to match elements regardless of namespace
+		if (xpath_expr.find('/') == std::string::npos &&
+		    xpath_expr.find('[') == std::string::npos &&
+		    xpath_expr.find('@') == std::string::npos) {
+			// Simple tag name - use local-name() for namespace-agnostic matching
+			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
+		} else if (xpath_expr.substr(0, 2) == "//") {
+			// XPath starting with // - check if it's just a simple tag name after //
+			std::string tag_part = xpath_expr.substr(2);
+			if (tag_part.find('/') == std::string::npos &&
+			    tag_part.find('[') == std::string::npos &&
+			    tag_part.find('@') == std::string::npos) {
+				// Simple tag name after // - use local-name()
+				xpath_expr = "//*[local-name()='" + tag_part + "']";
+			}
+		}
+
 		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.record_element.c_str(), doc.xpath_ctx);
+		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), doc.xpath_ctx);
 		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
@@ -233,6 +253,53 @@ std::unordered_map<std::string, ColumnAnalysis> XMLSchemaInference::IdentifyColu
 	return columns;
 }
 
+// Helper: Parse force_list XPath string into set of element names
+static std::unordered_set<std::string> ParseForceListElements(const std::string &force_list_str) {
+	std::unordered_set<std::string> elements;
+	if (force_list_str.empty()) {
+		return elements;
+	}
+
+	// force_list can be:
+	// - "//name" - single element
+	// - "//name | //item" - multiple elements joined with |
+	// Parse each XPath expression and extract the element name
+	size_t start = 0;
+	while (start < force_list_str.size()) {
+		// Find the next | separator or end of string
+		size_t end = force_list_str.find('|', start);
+		if (end == std::string::npos) {
+			end = force_list_str.size();
+		}
+
+		// Extract this XPath segment and trim whitespace
+		std::string xpath_segment = force_list_str.substr(start, end - start);
+		// Trim leading/trailing whitespace
+		size_t first = xpath_segment.find_first_not_of(" \t\n\r");
+		if (first != std::string::npos) {
+			size_t last = xpath_segment.find_last_not_of(" \t\n\r");
+			xpath_segment = xpath_segment.substr(first, last - first + 1);
+
+			// Extract element name from XPath (e.g., "//name" -> "name")
+			if (xpath_segment.substr(0, 2) == "//") {
+				std::string element_name = xpath_segment.substr(2);
+				// Remove any further XPath syntax (/, [, @, etc.)
+				size_t xpath_end = element_name.find_first_of("/[@");
+				if (xpath_end != std::string::npos) {
+					element_name = element_name.substr(0, xpath_end);
+				}
+				if (!element_name.empty()) {
+					elements.insert(element_name);
+				}
+			}
+		}
+
+		start = end + 1;
+	}
+
+	return elements;
+}
+
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
                                                  const XMLSchemaOptions &options) {
@@ -242,6 +309,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		// TODO: Could sample attribute values for type detection
 		return LogicalType::VARCHAR;
 	}
+
+	// Check if this column is in force_list (should always be LIST type)
+	std::unordered_set<std::string> force_list_elements = ParseForceListElements(options.force_list);
+	bool force_as_list = force_list_elements.count(column.name) > 0;
 
 	// Check if all instances are leaf nodes (text only, no children)
 	bool all_leaf = true;
@@ -274,19 +345,27 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 	}
 
-	// If all instances are leaf nodes, infer scalar type
+	// If all instances are leaf nodes, check if we should force to LIST
 	if (all_leaf) {
-		return InferTypeFromSamples(sample_values, options);
+		LogicalType scalar_type = InferTypeFromSamples(sample_values, options);
+		if (force_as_list) {
+			// Force this column to be LIST type even though it doesn't repeat
+			return LogicalType::LIST(scalar_type);
+		}
+		return scalar_type;
 	}
 
 	// Complex element - check depth limit
 	if (remaining_depth <= 0) {
 		// Depth limit reached - return XML type
+		if (force_as_list) {
+			return LogicalType::LIST(XMLTypes::XMLType());
+		}
 		return XMLTypes::XMLType();
 	}
 
-	// Column repeats in a record → LIST type
-	if (column.repeats_in_record) {
+	// Column repeats in a record OR forced to be list → LIST type
+	if (column.repeats_in_record || force_as_list) {
 		// Analyze the structure of the first instance to determine element type
 		xmlNodePtr first = column.instances[0];
 
@@ -416,10 +495,30 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
+		std::string xpath_expr = options.record_element;
+
+		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
+		// This allows "item" to match elements regardless of namespace
+		if (xpath_expr.find('/') == std::string::npos &&
+		    xpath_expr.find('[') == std::string::npos &&
+		    xpath_expr.find('@') == std::string::npos) {
+			// Simple tag name - use local-name() for namespace-agnostic matching
+			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
+		} else if (xpath_expr.substr(0, 2) == "//") {
+			// XPath starting with // - check if it's just a simple tag name after //
+			std::string tag_part = xpath_expr.substr(2);
+			if (tag_part.find('/') == std::string::npos &&
+			    tag_part.find('[') == std::string::npos &&
+			    tag_part.find('@') == std::string::npos) {
+				// Simple tag name after // - use local-name()
+				xpath_expr = "//*[local-name()='" + tag_part + "']";
+			}
+		}
+
 		// Suppress XPath warnings (e.g., undefined namespace prefixes)
 		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.record_element.c_str(), xml_doc.xpath_ctx);
+		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), xml_doc.xpath_ctx);
 
 		// Restore normal error handling
 		xmlSetGenericErrorFunc(nullptr, nullptr);
