@@ -584,12 +584,14 @@ xml_stats(xml) → STRUCT
 All file reading functions support these parameters:
 
 ```sql
-read_xml('pattern', 
+read_xml('pattern',
     ignore_errors=true,           -- Skip files that can't be parsed
-    maximum_file_size=1048576,    -- Max file size in bytes  
+    maximum_file_size=1048576,    -- Max file size in bytes
     filename=true,                -- Include filename column
     columns=['name', 'value'],    -- Specify expected columns
     root_element='root',          -- Specify root element name
+    record_element='item',        -- XPath/tag name for elements that become rows
+    force_list=['tags'],          -- Column names that should always be LIST type
     include_attributes=true,      -- Include XML attributes in output
     auto_detect=true,             -- Auto-detect schema structure
     max_depth=10,                 -- Maximum parsing depth
@@ -600,14 +602,16 @@ read_xml('pattern',
 #### **Parameter Details:**
 
 - **`ignore_errors`**: Continue processing when individual files fail to parse
-- **`maximum_file_size`**: Skip files larger than specified bytes (default: 1MB)  
+- **`maximum_file_size`**: Skip files larger than specified bytes (default: 16MB)
 - **`filename`**: Add a `filename` column to output with source file path
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference
+- **`record_element`**: XPath expression or tag name identifying which elements become table rows (e.g., `'item'` or `'//item'`)
+- **`force_list`**: Element name(s) that should always be inferred as LIST type columns, even if they appear only once (similar to xml_to_json)
 - **`include_attributes`**: Whether to include XML attributes as columns
 - **`auto_detect`**: Enable automatic schema detection and type inference
-- **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion)
-- **`unnest_as`**: How to handle nested elements ('struct', 'json', 'flatten')
+- **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
+- **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 
 ### 🔍 **XPath Support**
 
@@ -632,14 +636,67 @@ xml_extract_text(content, '//book/title/text()')
 
 ### 🏗️ **Schema Inference**
 
-The extension automatically detects and converts:
+The extension uses a **3-phase deterministic approach** for intelligent schema inference:
+
+1. **Phase 1 - Identify Records**: Determines which XML elements represent table rows
+   - Default: Immediate children of root element become rows
+   - Custom: Use `record_element` parameter to specify XPath/tag name for row elements
+
+2. **Phase 2 - Identify Columns**: Analyzes immediate children of record elements to determine columns
+   - Attributes on record elements become columns
+   - Child elements of records become columns
+   - Detects when elements repeat within a record (→ LIST type)
+
+3. **Phase 3 - Infer Types**: Determines the appropriate DuckDB type for each column
+   - Analyzes sample values for type detection
+   - Recursively processes nested structures
+
+**Automatic Type Detection:**
 
 - **Dates**: ISO 8601 formats → DATE type
-- **Timestamps**: ISO 8601 with time → TIMESTAMP type  
+- **Timestamps**: ISO 8601 with time → TIMESTAMP type
 - **Numbers**: Integer and decimal → BIGINT/DOUBLE types
 - **Booleans**: true/false, 1/0 → BOOLEAN type
 - **Lists**: Repeated elements → LIST type
 - **Objects**: Nested elements → STRUCT type
+
+**RSS Feed Example:**
+
+```sql
+-- RSS feed with <channel><item>...</item><item>...</item></channel> structure
+
+-- Default behavior: Returns 1 row with the channel and nested items
+SELECT * FROM read_xml('feed.xml');
+
+-- Use record_element to extract individual items as rows
+SELECT * FROM read_xml('feed.xml', record_element := 'item');
+-- Returns 3 rows (one per <item> element)
+
+-- Equivalent XPath syntax
+SELECT * FROM read_xml('feed.xml', record_element := '//item');
+```
+
+**Understanding record_element vs force_list:**
+
+- **`record_element`**: Identifies which XML elements become **rows** (affects table structure)
+- **`force_list`**: Forces specific column names to be **LIST type** (affects column schema)
+
+```sql
+-- Example: Product catalog with optional tags
+-- XML: <products>
+--        <product><name>Widget</name><tag>new</tag></product>
+--        <product><name>Gadget</name></product>
+--      </products>
+
+-- Without force_list: 'tag' column is VARCHAR (or NULL for Gadget)
+SELECT * FROM read_xml('products.xml', record_element := 'product');
+
+-- With force_list: 'tag' column is always LIST<VARCHAR> (even for single tags)
+SELECT * FROM read_xml('products.xml',
+    record_element := 'product',
+    force_list := ['tag']
+);
+```
 
 ---
 

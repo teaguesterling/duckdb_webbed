@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "xml_schema_inference.hpp"
 
 namespace duckdb {
 
@@ -50,6 +51,9 @@ struct XMLReadFunctionData : public TableFunctionData {
 	bool has_explicit_schema = false;
 	vector<string> column_names;
 	vector<LogicalType> column_types;
+
+	// Schema inference options (for read_xml with auto schema detection)
+	XMLSchemaOptions schema_options;
 };
 
 struct XMLReadGlobalState : public GlobalTableFunctionState {

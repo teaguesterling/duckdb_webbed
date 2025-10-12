@@ -222,6 +222,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();
+		} else if (kv.first == "record_element") {
+			// XPath or tag name for elements that should be rows
+			std::string record_value = kv.second.ToString();
+			// Convert simple tag names to XPath
+			if (record_value.find('/') == std::string::npos) {
+				record_value = "//" + record_value;
+			}
+			schema_options.record_element = record_value;
 		} else if (kv.first == "force_list") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
@@ -317,6 +325,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		}
 	}
 
+	// Store schema options in bind_data for use during execution
+	result->schema_options = schema_options;
+
 	// Perform schema inference only if no explicit columns were provided
 	if (!has_explicit_columns) {
 		try {
@@ -396,9 +407,8 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 
-	// Set up schema inference options (matching what was used in bind)
-	XMLSchemaOptions schema_options;
-	// TODO: Get these from bind_data if we store them there
+	// Get schema inference options from bind_data
+	const auto &schema_options = bind_data.schema_options;
 
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
 		const auto &filename = gstate.files[gstate.file_index++];
@@ -534,7 +544,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): XPath or tag name(s) to treat as repeating records
+	read_xml_single.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_xml_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_single);
@@ -554,7 +565,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): XPath or tag name(s) to treat as repeating records
+	read_xml_array.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_xml_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_array);
