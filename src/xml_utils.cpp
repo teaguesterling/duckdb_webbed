@@ -38,6 +38,13 @@ void XMLSilentSchemaErrorHandler(void *ctx, const char *msg, ...) {
 	xml_parse_error_occurred = true;
 }
 
+// Silent structured error handler for XPath errors (thread-safe, per-context)
+// This handler is set on individual XPath contexts to suppress errors like "Undefined namespace prefix"
+void XMLSilentXPathErrorHandler(void *ctx, const xmlError *error) {
+	// Silently ignore XPath errors without printing to stderr
+	// This is thread-safe because it's set per-context, not globally
+}
+
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Reset error state
 	xml_parse_error_occurred = false;
@@ -61,6 +68,10 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 
 	if (doc) {
 		xpath_ctx = xmlXPathNewContext(doc);
+		// Set silent error handler on XPath context (thread-safe, per-context)
+		if (xpath_ctx) {
+			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+		}
 	}
 }
 
@@ -90,11 +101,17 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		xml_parse_error_occurred = true;
 	} else {
 		xpath_ctx = xmlXPathNewContext(doc);
+		// Set silent error handler on XPath context (thread-safe, per-context)
+		if (xpath_ctx) {
+			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+		}
 	}
 }
 
 XMLDocRAII::~XMLDocRAII() {
 	if (xpath_ctx) {
+		// Reset error handler before freeing context
+		xmlSetStructuredErrorFunc(xpath_ctx, nullptr);
 		xmlXPathFreeContext(xpath_ctx);
 		xpath_ctx = nullptr;
 	}
