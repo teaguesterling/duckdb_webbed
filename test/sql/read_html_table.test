@@ -4,38 +4,38 @@
 
 require webbed
 
-# Test read_html table function with single file
+# Test read_html_objects returns raw HTML type
 query I
 SELECT typeof(html) AS content_type
-FROM read_html('test/html/simple.html');
+FROM read_html_objects('test/html/simple.html');
 ----
 HTML
 
-# Test read_html table function with multiple files
+# Test read_html_objects with multiple files (returns one row per file)
 query I
 SELECT count(*) AS file_count
-FROM read_html('test/html/*.html');
+FROM read_html_objects('test/html/*.html');
 ----
 5
 
-# Test read_html table function with filename column
+# Test read_html_objects with filename column
 query II
 SELECT count(*) AS file_count, count(DISTINCT filename) AS unique_filenames
-FROM read_html('test/html/*.html', filename=true);
+FROM read_html_objects('test/html/*.html', filename=true);
 ----
 5	5
 
-# Test read_html table function content extraction
+# Test read_html_objects content extraction with XPath
 query I
 SELECT html_extract_text(html, '//title') AS page_title
-FROM read_html('test/html/simple.html');
+FROM read_html_objects('test/html/simple.html');
 ----
 Simple Page
 
-# Test read_html table function with complex file
+# Test read_html_objects with complex file
 query I
 SELECT (unnest(html_extract_links(html))).href AS link_url
-FROM read_html('test/html/complex.html')
+FROM read_html_objects('test/html/complex.html')
 WHERE array_length(html_extract_links(html)) > 0;
 ----
 https://example.com
