@@ -1,0 +1,85 @@
+# name: test/sql/github_issue_13_rss_feeds.test
+# description: Test RSS 2.0 feed parsing (GitHub issue #13 - HackerNews RSS)
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Default behavior returns channel with nested items
+# ============================================================================
+
+# Default: Returns 1 row (the channel) with items as LIST<STRUCT>
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/hackernews_rss.xml');
+----
+1
+
+# Check that channel-level fields are accessible
+query III
+SELECT title, link, description FROM read_xml('test/xml/github_issues/hackernews_rss.xml');
+----
+Hacker News	https://news.ycombinator.com/	Links for the intellectually curious, ranked by readers.
+
+# Check that items are returned as LIST<STRUCT>
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/hackernews_rss.xml')) WHERE column_name = 'item';
+----
+item	STRUCT(title VARCHAR, link VARCHAR, pubDate VARCHAR, "comments" VARCHAR, description VARCHAR)[]
+
+# Verify we have 30 items in the array
+query I
+SELECT length(item) FROM read_xml('test/xml/github_issues/hackernews_rss.xml');
+----
+30
+
+# ============================================================================
+# Test 2: Using record_element to extract individual items
+# ============================================================================
+
+# With record_element := 'item', returns 30 rows (one per item)
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/hackernews_rss.xml', record_element := 'item');
+----
+30
+
+# Check schema when extracting items directly
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/hackernews_rss.xml', record_element := 'item')) ORDER BY column_name;
+----
+comments	VARCHAR
+description	VARCHAR
+link	VARCHAR
+pubDate	VARCHAR
+title	VARCHAR
+
+# Sample a few items to verify data quality
+query II
+SELECT title, link FROM read_xml('test/xml/github_issues/hackernews_rss.xml', record_element := 'item') LIMIT 3;
+----
+Macro Gaussian Splats	https://danybittel.ch/macro.html
+Faster LLM inference	https://www.together.ai/blog/adaptive-learning-speculator-system-atlas
+Jeep pushed software update that bricked all 2024 Wrangler 4xe models	https://twitter.com/StephenGutowski/status/1977055831720862101
+
+# ============================================================================
+# Test 3: Working with nested items using UNNEST
+# ============================================================================
+
+# Unnest items from the channel row to get individual items
+query I
+SELECT count(*) FROM (
+  SELECT unnest(item) as article FROM read_xml('test/xml/github_issues/hackernews_rss.xml')
+);
+----
+30
+
+# Access nested item fields
+query II
+SELECT
+  unnest(item).title as title,
+  unnest(item).link as link
+FROM read_xml('test/xml/github_issues/hackernews_rss.xml')
+LIMIT 3;
+----
+Macro Gaussian Splats	https://danybittel.ch/macro.html
+Faster LLM inference	https://www.together.ai/blog/adaptive-learning-speculator-system-atlas
+Jeep pushed software update that bricked all 2024 Wrangler 4xe models	https://twitter.com/StephenGutowski/status/1977055831720862101

@@ -12,7 +12,7 @@ true
 
 # Test replacement scan with schema inference - check specific fields
 query II
-SELECT title, price FROM 'test/xml/simple.xml' WHERE book_id = '1';
+SELECT title, price FROM 'test/xml/simple.xml' WHERE id = '1';
 ----
 Database Systems	49.99
 
@@ -24,7 +24,7 @@ SELECT count(*) FROM 'test/xml/simple.xml';
 
 # Test that alias works with replacement scan
 query I
-SELECT simple.title FROM 'test/xml/simple.xml' as simple WHERE simple.book_id = '1';
+SELECT simple.title FROM 'test/xml/simple.xml' as simple WHERE simple.id = '1';
 ----
 Database Systems
 

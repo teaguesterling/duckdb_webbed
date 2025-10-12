@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DescribeVolumesResponse>
+    <requestId>abc12345-1234-5678-abcd-123456789012</requestId>
+    <volumeSet>
+        <item>
+            <volumeId>vol-049df61146c4d7901</volumeId>
+            <size>80</size>
+            <snapshotId/>
+            <availabilityZone>us-east-1a</availabilityZone>
+            <status>in-use</status>
+            <createTime>2024-01-15T10:30:00.000Z</createTime>
+            <volumeType>gp3</volumeType>
+            <encrypted>false</encrypted>
+            <iops>3000</iops>
+            <throughput>125</throughput>
+        </item>
+        <item>
+            <volumeId>vol-0987654321fedcba0</volumeId>
+            <size>100</size>
+            <snapshotId>snap-1234567890abcdef0</snapshotId>
+            <availabilityZone>us-east-1b</availabilityZone>
+            <status>available</status>
+            <createTime>2024-02-20T14:20:00.000Z</createTime>
+            <volumeType>gp2</volumeType>
+            <encrypted>true</encrypted>
+            <iops>100</iops>
+        </item>
+        <item>
+            <volumeId>vol-abcdef1234567890a</volumeId>
+            <size>500</size>
+            <snapshotId/>
+            <availabilityZone>us-east-1a</availabilityZone>
+            <status>in-use</status>
+            <createTime>2024-03-10T08:15:00.000Z</createTime>
+            <volumeType>io2</volumeType>
+            <encrypted>true</encrypted>
+            <iops>10000</iops>
+            <throughput>500</throughput>
+        </item>
+    </volumeSet>
+</DescribeVolumesResponse>

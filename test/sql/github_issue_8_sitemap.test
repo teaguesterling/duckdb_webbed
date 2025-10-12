@@ -1,0 +1,139 @@
+# name: test/sql/github_issue_8_sitemap.test
+# description: Test sitemap parsing with attribute-only elements (GitHub issue #8 - Ubisoft sitemap)
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Sitemap schema inference - elements with only attributes
+# ============================================================================
+
+# Verify schema correctly identifies link as LIST<STRUCT> with attribute fields
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+) ORDER BY column_name;
+----
+lastmod	DATE
+link	STRUCT(href VARCHAR, hreflang VARCHAR, rel VARCHAR)[]
+loc	VARCHAR
+
+# ============================================================================
+# Test 2: Data extraction - attribute values are properly extracted
+# ============================================================================
+
+# Verify basic data extraction works
+query III
+SELECT
+  loc,
+  lastmod,
+  length(link) as num_links
+FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+ORDER BY loc;
+----
+https://www.example.com/page1	2024-01-15	3
+https://www.example.com/page2	2024-01-20	2
+https://www.example.com/page3	2024-02-01	1
+
+# Verify attribute values are not NULL
+query IIII
+SELECT
+  loc,
+  link[1].href as first_link_href,
+  link[1].hreflang as first_link_lang,
+  link[1].rel as first_link_rel
+FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+ORDER BY loc;
+----
+https://www.example.com/page1	https://www.example.com/de/page1	de	alternate
+https://www.example.com/page2	https://www.example.com/de/page2	de	alternate
+https://www.example.com/page3	https://www.example.com/de/page3	de	alternate
+
+# ============================================================================
+# Test 3: Working with link arrays using UNNEST
+# ============================================================================
+
+# Unnest all alternate links
+query IIII
+SELECT
+  loc,
+  unnest(link).href as alt_href,
+  unnest(link).hreflang as alt_lang,
+  unnest(link).rel as alt_rel
+FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+WHERE loc = 'https://www.example.com/page1'
+ORDER BY alt_href;
+----
+https://www.example.com/page1	https://www.example.com/de/page1	de	alternate
+https://www.example.com/page1	https://www.example.com/es/page1	es	alternate
+https://www.example.com/page1	https://www.example.com/fr/page1	fr	alternate
+
+# ============================================================================
+# Test 4: Filtering and aggregating by language
+# ============================================================================
+
+# Count URLs by language availability
+query II
+WITH links_expanded AS (
+  SELECT
+    loc,
+    unnest(link) as link_data
+  FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+)
+SELECT
+  link_data.hreflang as language,
+  count(*) as url_count
+FROM links_expanded
+GROUP BY language
+ORDER BY url_count DESC, language;
+----
+de	3
+fr	2
+es	1
+
+# Find URLs with French translations
+query I
+SELECT loc
+FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+WHERE list_contains(list_transform(link, x -> x.hreflang), 'fr')
+ORDER BY loc;
+----
+https://www.example.com/page1
+https://www.example.com/page2
+
+# ============================================================================
+# Test 5: Complex queries combining multiple fields
+# ============================================================================
+
+# Get all alternate URLs for a specific page
+query III
+SELECT
+  loc as original_url,
+  unnest(link).hreflang as language,
+  unnest(link).href as localized_url
+FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
+WHERE loc = 'https://www.example.com/page2'
+ORDER BY language;
+----
+https://www.example.com/page2	de	https://www.example.com/de/page2
+https://www.example.com/page2	fr	https://www.example.com/fr/page2
+
+# ============================================================================
+# Test 6: Default behavior (without record_element)
+# ============================================================================
+
+# Default: Returns 3 rows (one per url element, same as with record_element)
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/sitemap_example.xml');
+----
+3
+
+# Verify schema matches record_element mode
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/sitemap_example.xml')
+) ORDER BY column_name;
+----
+lastmod	DATE
+link	STRUCT(href VARCHAR, hreflang VARCHAR, rel VARCHAR)[]
+loc	VARCHAR

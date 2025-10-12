@@ -324,3 +324,50 @@ query I
 SELECT xml_to_json('<root xmlns:ns="http://example.com"><ns:item>Test</ns:item></root>', namespaces := 'keep', xmlns_key := '@namespaces');
 ----
 {"root":{"@namespaces":{"ns":"http://example.com"},"ns:item":{"#text":"Test"}}}
+
+# =============================================================================
+# READ_XML WITH FORCE_LIST TESTS (Schema Inference)
+# =============================================================================
+
+# Test 46: read_xml without force_list - single element becomes VARCHAR
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/force_list_test.xml')
+) WHERE column_name IN ('name', 'category') ORDER BY column_name;
+----
+category	VARCHAR
+name	VARCHAR
+
+# Test 47: read_xml with force_list - single element becomes VARCHAR[]
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/force_list_test.xml', force_list := '//name')
+) WHERE column_name IN ('name', 'category') ORDER BY column_name;
+----
+category	VARCHAR
+name	VARCHAR[]
+
+# Test 48: read_xml with force_list on multiple elements
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/force_list_test.xml', force_list := '//name | //category')
+) WHERE column_name IN ('name', 'category') ORDER BY column_name;
+----
+category	VARCHAR[]
+name	VARCHAR[]
+
+# Test 49: read_xml verify actual data with force_list
+query I
+SELECT name FROM read_xml('test/xml/force_list_test.xml', force_list := '//name');
+----
+[Product1]
+
+# Test 50: read_xml with force_list and record_element on AWS data (namespaced)
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml',
+    record_element := 'item', force_list := '//volumeId')
+) WHERE column_name IN ('volumeId', 'size') ORDER BY column_name;
+----
+size	INTEGER
+volumeId	VARCHAR[]

@@ -1,0 +1,127 @@
+# name: test/sql/github_issue_4_aws_api.test
+# description: Test AWS EC2 API response parsing (GitHub issue #4 - namespace handling)
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: AWS responses without namespace work correctly
+# ============================================================================
+
+# Default behavior: Returns 2 rows (requestId and volumeSet)
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml');
+----
+2
+
+# volumeSet row contains items as LIST<STRUCT>
+query I
+SELECT length(item) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml') WHERE item IS NOT NULL;
+----
+3
+
+# Using record_element to extract individual volumes
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item');
+----
+3
+
+# Check schema for individual volumes
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item')) ORDER BY column_name;
+----
+availabilityZone	VARCHAR
+createTime	VARCHAR
+encrypted	BOOLEAN
+iops	INTEGER
+size	INTEGER
+snapshotId	VARCHAR
+status	VARCHAR
+throughput	INTEGER
+volumeId	VARCHAR
+volumeType	VARCHAR
+
+# Sample volume data
+query III
+SELECT volumeId, size, status FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item') ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
+
+# ============================================================================
+# Test 2: Working with nested items using UNNEST (recommended pattern)
+# ============================================================================
+
+# UNNEST items from the nested structure
+query III
+SELECT
+  unnest(item).volumeId as volumeId,
+  unnest(item).size as size,
+  unnest(item).status as status
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml')
+WHERE item IS NOT NULL
+ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
+
+# ============================================================================
+# Test 3: AWS responses WITH namespace (namespace handling)
+# ============================================================================
+
+# Default behavior works with namespaces (namespaces are stripped by default)
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+2
+
+# volumeSet row contains items as LIST<STRUCT> even with namespace
+query I
+SELECT length(item) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml') WHERE item IS NOT NULL;
+----
+3
+
+# UNNEST pattern works with namespaced documents
+query III
+SELECT
+  unnest(item).volumeId as volumeId,
+  unnest(item).size as size,
+  unnest(item).status as status
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml')
+WHERE item IS NOT NULL
+ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
+
+# record_element now works with namespaced documents (uses local-name() for matching)
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item');
+----
+3
+
+# Verify schema is correct with namespaced XML
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item')) ORDER BY column_name;
+----
+availabilityZone	VARCHAR
+createTime	VARCHAR
+encrypted	BOOLEAN
+iops	INTEGER
+size	INTEGER
+snapshotId	VARCHAR
+status	VARCHAR
+throughput	INTEGER
+volumeId	VARCHAR
+volumeType	VARCHAR
+
+# Verify data extraction works with namespaced XML
+query III
+SELECT volumeId, size, status FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item') ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
