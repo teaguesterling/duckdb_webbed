@@ -222,8 +222,48 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();
-		} else if (kv.first == "include_attributes") {
-			schema_options.include_attributes = kv.second.GetValue<bool>();
+		} else if (kv.first == "force_list") {
+			// Handle both VARCHAR and LIST(VARCHAR)
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				// Single tag name or XPath
+				std::string force_value = kv.second.ToString();
+				// Convert simple tag names to XPath
+				if (force_value.find('/') == std::string::npos) {
+					force_value = "//" + force_value;
+				}
+				schema_options.force_list = force_value;
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				// List of tag names - try each one
+				auto &list_children = ListValue::GetChildren(kv.second);
+				std::vector<std::string> xpaths;
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						std::string tag = child.ToString();
+						// Convert simple tag names to XPath
+						if (tag.find('/') == std::string::npos) {
+							tag = "//" + tag;
+						}
+						xpaths.push_back(tag);
+					}
+				}
+				// Combine with XPath OR operator
+				if (!xpaths.empty()) {
+					schema_options.force_list = xpaths[0];
+					for (size_t i = 1; i < xpaths.size(); i++) {
+						schema_options.force_list += " | " + xpaths[i];
+					}
+				}
+			}
+		} else if (kv.first == "attr_mode") {
+			schema_options.attr_mode = kv.second.ToString();
+		} else if (kv.first == "attr_prefix") {
+			schema_options.attr_prefix = kv.second.ToString();
+		} else if (kv.first == "text_key") {
+			schema_options.text_key = kv.second.ToString();
+		} else if (kv.first == "namespaces") {
+			schema_options.namespaces = kv.second.ToString();
+		} else if (kv.first == "empty_elements") {
+			schema_options.empty_elements = kv.second.ToString();
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -486,10 +526,15 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	// Schema inference parameters
 	read_xml_single.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_single.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_xml_single.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
+	read_xml_single.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
+	read_xml_single.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
+	read_xml_single.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
 	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
+	read_xml_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): XPath or tag name(s) to treat as repeating records
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_single);
@@ -501,10 +546,15 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	// Schema inference parameters
 	read_xml_array.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_array.named_parameters["include_attributes"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_xml_array.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
+	read_xml_array.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
+	read_xml_array.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
+	read_xml_array.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
 	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
+	read_xml_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): XPath or tag name(s) to treat as repeating records
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_array);

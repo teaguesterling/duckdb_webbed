@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Tech News Feed</title>
+    <link>https://example.com/feed</link>
+    <description>Latest technology news and updates</description>
+    <language>en-us</language>
+    <lastBuildDate>Mon, 01 Jan 2024 12:00:00 GMT</lastBuildDate>
+    <item>
+      <title>First Article</title>
+      <link>https://example.com/articles/first</link>
+      <description>This is the first article in our feed</description>
+      <pubDate>Mon, 01 Jan 2024 10:00:00 GMT</pubDate>
+      <guid>article-1</guid>
+    </item>
+    <item>
+      <title>Second Article</title>
+      <link>https://example.com/articles/second</link>
+      <description>This is the second article in our feed</description>
+      <pubDate>Mon, 01 Jan 2024 11:00:00 GMT</pubDate>
+      <guid>article-2</guid>
+    </item>
+    <item>
+      <title>Third Article</title>
+      <link>https://example.com/articles/third</link>
+      <description>This is the third article in our feed</description>
+      <pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+      <guid>article-3</guid>
+    </item>
+  </channel>
+</rss>

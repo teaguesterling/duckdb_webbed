@@ -21,18 +21,19 @@ struct XMLSchemaOptions {
 	// Schema inference controls
 	std::string root_element; // Extract only children of specified root (empty = auto-detect)
 	bool auto_detect = true;  // Automatic type detection
-	int32_t max_depth = -1;   // Maximum analysis depth (-1 = unlimited)
+	int32_t max_depth = -1;   // Maximum analysis depth (-1 = unlimited, capped at 10 for safety)
 	int32_t sample_size = 50; // Number of elements to sample for inference
 
-	// Attribute handling
-	bool include_attributes = true;         // Include attributes as columns
-	std::string attribute_prefix = "";      // Prefix for attribute columns (e.g., 'attr_')
-	std::string attribute_mode = "columns"; // 'columns' | 'map' | 'discard'
+	// Attribute handling (aligned with xml_to_json)
+	std::string attr_mode = "columns";   // 'columns' | 'prefixed' | 'map' | 'discard'
+	std::string attr_prefix = "@";       // Prefix for attributes when attr_mode='prefixed'
 
-	// Content handling
-	std::string text_content_column = "text_content"; // Column name for mixed text content
-	bool preserve_mixed_content = false;              // Handle elements with both text and children
-	bool unnest_as_columns = true; // True: flatten nested elements as columns, False: preserve as structs (future)
+	// Content handling (aligned with xml_to_json)
+	std::string text_key = "#text";      // Key for mixed text content in structured types
+	std::string namespaces = "strip";    // Namespace handling: 'strip' | 'expand' | 'keep'
+	std::string empty_elements = "null"; // How to handle empty elements: 'null' | 'string' | 'object'
+	bool preserve_mixed_content = false; // Handle elements with both text and children
+	bool unnest_as_columns = true;       // True: flatten nested elements as columns, False: preserve as structs
 
 	// Type detection
 	bool temporal_detection = true; // Detect DATE/TIME/TIMESTAMP
@@ -42,6 +43,7 @@ struct XMLSchemaOptions {
 	// Collection handling
 	double array_threshold = 0.8; // Minimum homogeneity for arrays (80%)
 	int32_t max_array_depth = 3;  // Maximum nested array depth
+	std::string force_list = "";  // XPath to element that should be treated as the repeating record (e.g., "//item")
 
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
@@ -131,6 +133,19 @@ struct ElementPattern {
 	}
 };
 
+// Information about a column during schema inference (used in Phase 2)
+struct ColumnAnalysis {
+	std::string name;
+	bool is_attribute;
+	std::vector<xmlNodePtr> instances; // All occurrences of this column across records
+	int occurrence_count;              // Total times this appears
+	bool repeats_in_record;            // True if any record has multiple instances
+
+	ColumnAnalysis(const std::string &name, bool is_attribute = false)
+	    : name(name), is_attribute(is_attribute), occurrence_count(0), repeats_in_record(false) {
+	}
+};
+
 // Core schema inference engine
 class XMLSchemaInference {
 public:
@@ -169,12 +184,22 @@ public:
 	static bool IsTimestamp(const std::string &value);
 
 private:
+	// 3-phase schema inference helpers
+	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
+	                                                       const XMLSchemaOptions &options);
+	static std::unordered_map<std::string, ColumnAnalysis> IdentifyColumns(
+	    const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
+	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
+	                                   const XMLSchemaOptions &options);
+
 	// Internal helper functions
 	static void AnalyzeElement(xmlNodePtr node, std::unordered_map<std::string, ElementPattern> &patterns,
 	                           const XMLSchemaOptions &options, int32_t current_depth = 0);
 
 	static std::string GetElementXPath(const std::string &element_name, bool is_attribute = false,
 	                                   const std::string &attribute_name = "");
+
+	static std::string StripNamespacePrefix(const std::string &name);
 
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 

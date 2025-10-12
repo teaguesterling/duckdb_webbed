@@ -1,0 +1,200 @@
+# name: test/sql/xml_max_depth.test
+# description: Test max_depth parameter with different XML structures
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: RSS Feed at different max_depth levels
+# ============================================================================
+
+# max_depth = 0: Return entire document as XML with root element name as column
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', max_depth := 0));
+----
+rss
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', max_depth := 0);
+----
+1
+
+# max_depth = 1: Return records as XML with record element name as column
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', max_depth := 1));
+----
+channel
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', max_depth := 1);
+----
+1
+
+# max_depth = 2: Return flat columns, item is XML (not introspected)
+query IIIIII
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', max_depth := 2)) ORDER BY column_name;
+----
+description	VARCHAR
+item	XML
+language	VARCHAR
+lastBuildDate	VARCHAR
+link	VARCHAR
+title	VARCHAR
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', max_depth := 2);
+----
+1
+
+# max_depth = 3: item becomes LIST<STRUCT<...>>
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', max_depth := 3)) WHERE column_name = 'item';
+----
+item	STRUCT(title VARCHAR, link VARCHAR, description VARCHAR, pubDate VARCHAR, guid VARCHAR)[]
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', max_depth := 3);
+----
+1
+
+query I
+SELECT length(item) FROM read_xml('test/xml/rss_feed.xml', max_depth := 3);
+----
+3
+
+# ============================================================================
+# Test 2: Simple Books at different max_depth levels
+# ============================================================================
+
+# max_depth = 0: Return entire document as XML
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 0));
+----
+books
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', max_depth := 0);
+----
+1
+
+# max_depth = 1: Return each book as XML
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 1));
+----
+book
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', max_depth := 1);
+----
+2
+
+# max_depth = 2: Return flat columns (attributes + elements)
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 2)) ORDER BY column_name;
+----
+author	VARCHAR
+available	VARCHAR
+id	VARCHAR
+price	DOUBLE
+published	DATE
+title	VARCHAR
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', max_depth := 2);
+----
+2
+
+query III
+SELECT id, title, price FROM read_xml('test/xml/simple.xml', max_depth := 2) ORDER BY id;
+----
+1	Database Systems	49.99
+2	XML Processing	39.95
+
+# max_depth = 3 and higher: Same as depth 2 (no nested structure)
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 3)) ORDER BY column_name;
+----
+author	VARCHAR
+available	VARCHAR
+id	VARCHAR
+price	DOUBLE
+published	DATE
+title	VARCHAR
+
+# ============================================================================
+# Test 3: force_list parameter interaction with max_depth
+# ============================================================================
+
+# force_list with max_depth = 2: Extract items directly, flat columns
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2)) ORDER BY column_name;
+----
+description	VARCHAR
+guid	VARCHAR
+link	VARCHAR
+pubDate	VARCHAR
+title	VARCHAR
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2);
+----
+3
+
+query II
+SELECT title, guid FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2) ORDER BY guid;
+----
+First Article	article-1
+Second Article	article-2
+Third Article	article-3
+
+# ============================================================================
+# Test 4: Attribute handling with attr_mode
+# ============================================================================
+
+# attr_mode = 'columns' (default): Attributes become columns
+query I
+SELECT id, available FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'columns') WHERE id = '1';
+----
+1	true
+
+# attr_mode = 'prefixed': Attributes get @ prefix
+query II
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'prefixed')) WHERE column_name LIKE '@%' ORDER BY column_name;
+----
+@available
+@id
+
+# attr_mode = 'discard': Attributes are ignored
+query II
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'discard')) ORDER BY column_name;
+----
+author
+price
+published
+title
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'discard');
+----
+2
+
+# ============================================================================
+# Test 5: Default max_depth behavior (should be -1, capped at 10)
+# ============================================================================
+
+# Default should fully introspect RSS feed (depth 3 needed)
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml')) WHERE column_name = 'item';
+----
+item	STRUCT(title VARCHAR, link VARCHAR, description VARCHAR, pubDate VARCHAR, guid VARCHAR)[]
+
+# Default should handle books correctly
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml')) ORDER BY column_name;
+----
+author	VARCHAR
+available	VARCHAR
+id	VARCHAR
+price	DOUBLE
+published	DATE
+title	VARCHAR
