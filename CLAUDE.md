@@ -35,3 +35,35 @@ This will run tests in the `tests/` folder.
 When you're fixing a issue from Github commit your changes after you finish. If the git commit hooks return any errors fix them before finishing with the task.
 
 **IMPORTANT: You're not allowed to use `git commit --no-verify` ever**
+
+## Common Patterns and Pitfalls
+
+### Thread-Safety with External C Libraries (GitHub Issue #7)
+
+**Problem**: libxml2's `xmlSetGenericErrorFunc()` sets a GLOBAL error handler affecting all threads, causing race conditions and heap corruption in multi-threaded execution.
+
+**Anti-Pattern** (DO NOT DO THIS):
+```cpp
+// WRONG - Global state modification causes race conditions
+xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);  // GLOBAL!
+xmlXPathEvalExpression(...);
+xmlSetGenericErrorFunc(nullptr, nullptr);  // GLOBAL!
+```
+
+**Correct Pattern** (DuckDB-Style):
+```cpp
+// RIGHT - Use per-operation configuration
+xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(),
+                        nullptr, nullptr,
+                        XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+```
+
+**Key Principles**:
+1. **Avoid global state modification** - Use per-operation or per-thread configuration
+2. **No mutexes unless absolutely necessary** - They're a last resort, not the DuckDB way
+3. **Follow sitting_duck's pattern** - Each thread gets its own resources (like TSParser instances)
+4. **Parsing options > Global handlers** - Configure at creation time, not globally
+5. **Context-specific handlers only** - Use `xmlSchemaSetValidErrors()` for schema validation, not global handlers
+
+**Reference**: The sitting_duck extension shows how to handle treesitter (another stateful C library) in DuckDB - each thread creates its own parser instance instead of sharing global state.
