@@ -1,0 +1,47 @@
+# name: test/sql/xml_rss_feed.test
+# description: Test RSS feed parsing with automatic item detection (issue #13)
+# group: [sql]
+
+require webbed
+
+# Test default behavior: Returns channel row with nested item LIST<STRUCT>
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml');
+----
+1
+
+# Test that using record_element extracts individual items
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', record_element := 'item');
+----
+3
+
+# Test that we get the item titles when using record_element
+query I
+SELECT title FROM read_xml('test/xml/rss_feed.xml', record_element := 'item') ORDER BY title;
+----
+First Article
+Second Article
+Third Article
+
+# Test that we get all item fields when using record_element
+query IIIII
+SELECT title, link, description, pubDate, guid
+FROM read_xml('test/xml/rss_feed.xml', record_element := 'item')
+ORDER BY guid;
+----
+First Article	https://example.com/articles/first	This is the first article in our feed	Mon, 01 Jan 2024 10:00:00 GMT	article-1
+Second Article	https://example.com/articles/second	This is the second article in our feed	Mon, 01 Jan 2024 11:00:00 GMT	article-2
+Third Article	https://example.com/articles/third	This is the third article in our feed	Mon, 01 Jan 2024 12:00:00 GMT	article-3
+
+# Test that record_element parameter works with XPath syntax
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', record_element := '//item');
+----
+3
+
+# Verify read_xml_objects returns the raw XML document
+query I
+SELECT count(*) FROM read_xml_objects('test/xml/rss_feed.xml');
+----
+1

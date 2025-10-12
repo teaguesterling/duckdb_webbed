@@ -12,27 +12,27 @@
 namespace duckdb {
 
 static void LoadInternal(ExtensionLoader &loader) {
-    // JSON extension is automatically available as a dependency
-    
-    // Initialize libxml2
-    XMLUtils::InitializeLibXML();
-    
-    // Register XML types (includes JSON to XML casting)
-    XMLTypes::Register(loader);
-    
-    // Register scalar functions
-    XMLScalarFunctions::Register(loader);
-    
-    // Register table functions
-    XMLReaderFunctions::Register(loader);
-    
-    // Register replacement scan for direct file querying (FROM 'file.xml')
-    auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-    config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
+	// JSON extension is automatically available as a dependency
+
+	// Initialize libxml2
+	XMLUtils::InitializeLibXML();
+
+	// Register XML types (includes JSON to XML casting)
+	XMLTypes::Register(loader);
+
+	// Register scalar functions
+	XMLScalarFunctions::Register(loader);
+
+	// Register table functions
+	XMLReaderFunctions::Register(loader);
+
+	// Register replacement scan for direct file querying (FROM 'file.xml')
+	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	config.replacement_scans.emplace_back(XMLReaderFunctions::ReadXMLReplacement);
 }
 
 void WebbedExtension::Load(ExtensionLoader &loader) {
-    LoadInternal(loader);
+	LoadInternal(loader);
 }
 
 // Add cleanup when extension is unloaded
@@ -57,7 +57,7 @@ std::string WebbedExtension::Version() const {
 extern "C" {
 
 DUCKDB_CPP_EXTENSION_ENTRY(webbed, loader) {
-    duckdb::LoadInternal(loader);
+	duckdb::LoadInternal(loader);
 }
 
 DUCKDB_EXTENSION_API const char *webbed_version() {

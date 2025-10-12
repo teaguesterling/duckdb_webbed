@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://www.example.com/page1</loc>
+    <lastmod>2024-01-15</lastmod>
+    <xhtml:link href="https://www.example.com/de/page1" hreflang="de" rel="alternate"/>
+    <xhtml:link href="https://www.example.com/fr/page1" hreflang="fr" rel="alternate"/>
+    <xhtml:link href="https://www.example.com/es/page1" hreflang="es" rel="alternate"/>
+  </url>
+  <url>
+    <loc>https://www.example.com/page2</loc>
+    <lastmod>2024-01-20</lastmod>
+    <xhtml:link href="https://www.example.com/de/page2" hreflang="de" rel="alternate"/>
+    <xhtml:link href="https://www.example.com/fr/page2" hreflang="fr" rel="alternate"/>
+  </url>
+  <url>
+    <loc>https://www.example.com/page3</loc>
+    <lastmod>2024-02-01</lastmod>
+    <xhtml:link href="https://www.example.com/de/page3" hreflang="de" rel="alternate"/>
+  </url>
+</urlset>

@@ -33,19 +33,19 @@ LogicalType XMLTypes::XMLArrayType() {
 	return LogicalType::LIST(XMLType());
 }
 
-bool XMLTypes::IsXMLType(const LogicalType& type) {
+bool XMLTypes::IsXMLType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "XML";
 }
 
-bool XMLTypes::IsXMLFragmentType(const LogicalType& type) {
+bool XMLTypes::IsXMLFragmentType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "xmlfragment";
 }
 
-bool XMLTypes::IsXMLArrayType(const LogicalType& type) {
+bool XMLTypes::IsXMLArrayType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::LIST && IsXMLType(ListType::GetChildType(type));
 }
 
-bool XMLTypes::IsHTMLType(const LogicalType& type) {
+bool XMLTypes::IsHTMLType(const LogicalType &type) {
 	return type.id() == LogicalTypeId::VARCHAR && type.HasAlias() && type.GetAlias() == "HTML";
 }
 
@@ -105,38 +105,38 @@ bool XMLTypes::HTMLToXMLCast(Vector &source, Vector &result, idx_t count, CastPa
 void XMLTypes::Register(ExtensionLoader &loader) {
 	// For now, register XML as a simple type alias
 	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
-	
+
 	auto xml_type = LogicalType(LogicalType::VARCHAR);
 	xml_type.SetAlias("XML");
-	
+
 	// Register the XML type through the extension utility
 	loader.RegisterType("XML", xml_type);
-	
+
 	// Register XMLFragment type
 	auto xml_fragment_type = LogicalType(LogicalType::VARCHAR);
 	xml_fragment_type.SetAlias("XMLFragment");
 	loader.RegisterType("XMLFragment", xml_fragment_type);
-	
+
 	// Register HTML type
 	auto html_type = LogicalType(LogicalType::VARCHAR);
 	html_type.SetAlias("HTML");
 	loader.RegisterType("HTML", html_type);
-	
+
 	// Register cast functions for XML type conversion
 	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
 	loader.RegisterCastFunction(xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
-	
+
 	// Register cast functions for XMLFragment type conversion
 	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
 	loader.RegisterCastFunction(xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
 	loader.RegisterCastFunction(xml_fragment_type, xml_type, VarcharToXMLCast);
-	
+
 	// Register cast functions for HTML type conversion
 	loader.RegisterCastFunction(LogicalType::VARCHAR, html_type, VarcharToHTMLCast);
 	loader.RegisterCastFunction(html_type, LogicalType::VARCHAR, HTMLToVarcharCast);
 	loader.RegisterCastFunction(xml_type, html_type, XMLToHTMLCast);
 	loader.RegisterCastFunction(html_type, xml_type, HTMLToXMLCast);
-	
+
 	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
 	try {
 		auto json_type = LogicalType::JSON();

@@ -1,0 +1,126 @@
+# name: test/sql/github_issue_7_thread_safety.test
+# description: Test thread-safety with invalid XML (GitHub issue #7 - heap corruption in multi-threaded mode)
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Invalid XML with xml_extract_text in multi-threaded mode
+# ============================================================================
+
+# Enable multi-threading (this was the scenario that caused crashes)
+statement ok
+PRAGMA threads=4
+
+# xml_extract_text on invalid XML should return empty string without crashing
+query I
+SELECT xml_extract_text('<invalid><unclosed>text', '//unclosed');
+----
+(empty)
+
+# Multiple concurrent calls with invalid XML (stress test)
+# All should return empty string (length 0) without crashing
+query I
+SELECT count(*) FROM (
+  SELECT xml_extract_text('<invalid><unclosed>text', '//test') as result
+  FROM range(100)
+) WHERE length(result) = 0;
+----
+100
+
+# ============================================================================
+# Test 2: Valid XML still works correctly in multi-threaded mode
+# ============================================================================
+
+# Valid XML extraction should work normally with multiple threads
+query I
+SELECT xml_extract_text('<books><book><title>Test Book</title></book></books>', '//title');
+----
+Test Book
+
+# Multiple concurrent valid extractions
+query I
+SELECT count(DISTINCT result) FROM (
+  SELECT xml_extract_text('<root><item>value</item></root>', '//item') as result
+  FROM range(100)
+);
+----
+1
+
+# ============================================================================
+# Test 3: xml_valid function with invalid XML (multi-threaded)
+# ============================================================================
+
+# Invalid XML should be detected as invalid
+query I
+SELECT xml_valid('<invalid><unclosed>text');
+----
+false
+
+# Multiple concurrent validation calls
+query I
+SELECT count(*) FROM (
+  SELECT xml_valid('<invalid><unclosed>') as result
+  FROM range(50)
+) WHERE result = false;
+----
+50
+
+# Valid XML should validate correctly
+query I
+SELECT xml_valid('<root><child>text</child></root>');
+----
+true
+
+# ============================================================================
+# Test 4: read_xml with invalid XML file (multi-threaded)
+# ============================================================================
+
+# Reading invalid XML should handle errors gracefully
+# The invalid.xml file has unclosed tags and mismatched elements
+query I
+SELECT count(*) FROM read_xml('test/xml/invalid.xml', ignore_errors := true);
+----
+0
+
+# ============================================================================
+# Test 5: Mixed valid and invalid XML in batch (multi-threaded stress test)
+# ============================================================================
+
+# Process multiple XML strings, some valid and some invalid
+query II
+WITH test_data AS (
+  SELECT
+    CASE WHEN i % 2 = 0
+      THEN '<valid><item>value' || i::VARCHAR || '</item></valid>'
+      ELSE '<invalid><unclosed>text' || i::VARCHAR
+    END as xml_str,
+    i
+  FROM range(20) t(i)
+)
+SELECT
+  count(*) as total,
+  count(CASE WHEN length(xml_extract_text(xml_str, '//item')) > 0 THEN 1 END) as valid_extractions
+FROM test_data;
+----
+20	10
+
+# Reset to single thread for remaining tests
+statement ok
+PRAGMA threads=1
+
+# ============================================================================
+# Test 6: Verify single-threaded mode still works (regression check)
+# ============================================================================
+
+# Single-threaded invalid XML handling
+query I
+SELECT xml_extract_text('<invalid><unclosed>text', '//test');
+----
+(empty)
+
+# Single-threaded valid XML
+query I
+SELECT xml_extract_text('<root><test>success</test></root>', '//test');
+----
+success

@@ -10,12 +10,12 @@ public:
 	static LogicalType XMLFragmentType();
 	static LogicalType XMLArrayType();
 	static LogicalType HTMLType();
-	static bool IsXMLType(const LogicalType& type);
-	static bool IsXMLFragmentType(const LogicalType& type);
-	static bool IsXMLArrayType(const LogicalType& type);
-	static bool IsHTMLType(const LogicalType& type);
+	static bool IsXMLType(const LogicalType &type);
+	static bool IsXMLFragmentType(const LogicalType &type);
+	static bool IsXMLArrayType(const LogicalType &type);
+	static bool IsHTMLType(const LogicalType &type);
 	static void Register(ExtensionLoader &loader);
-	
+
 private:
 	static bool XMLToVarcharCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
 	static bool VarcharToXMLCast(Vector &source, Vector &result, idx_t count, CastParameters &parameters);
