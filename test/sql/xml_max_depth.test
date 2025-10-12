@@ -31,7 +31,7 @@ SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', max_depth := 1);
 1
 
 # max_depth = 2: Return flat columns, item is XML (not introspected)
-query IIIIII
+query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', max_depth := 2)) ORDER BY column_name;
 ----
 description	VARCHAR
@@ -122,12 +122,12 @@ published	DATE
 title	VARCHAR
 
 # ============================================================================
-# Test 3: force_list parameter interaction with max_depth
+# Test 3: record_element parameter interaction with max_depth
 # ============================================================================
 
-# force_list with max_depth = 2: Extract items directly, flat columns
+# record_element with max_depth = 2: Extract items directly, flat columns
 query II
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2)) ORDER BY column_name;
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/rss_feed.xml', record_element := '//item', max_depth := 2)) ORDER BY column_name;
 ----
 description	VARCHAR
 guid	VARCHAR
@@ -136,12 +136,12 @@ pubDate	VARCHAR
 title	VARCHAR
 
 query I
-SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2);
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', record_element := '//item', max_depth := 2);
 ----
 3
 
 query II
-SELECT title, guid FROM read_xml('test/xml/rss_feed.xml', force_list := '//item', max_depth := 2) ORDER BY guid;
+SELECT title, guid FROM read_xml('test/xml/rss_feed.xml', record_element := '//item', max_depth := 2) ORDER BY guid;
 ----
 First Article	article-1
 Second Article	article-2
@@ -152,20 +152,20 @@ Third Article	article-3
 # ============================================================================
 
 # attr_mode = 'columns' (default): Attributes become columns
-query I
+query II
 SELECT id, available FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'columns') WHERE id = '1';
 ----
 1	true
 
 # attr_mode = 'prefixed': Attributes get @ prefix
-query II
+query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'prefixed')) WHERE column_name LIKE '@%' ORDER BY column_name;
 ----
 @available
 @id
 
 # attr_mode = 'discard': Attributes are ignored
-query II
+query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', max_depth := 2, attr_mode := 'discard')) ORDER BY column_name;
 ----
 author

@@ -4,6 +4,7 @@
 #include "duckdb/common/string_util.hpp"
 #include <algorithm>
 #include <regex>
+#include <unordered_set>
 #include <libxml/xpath.h>
 
 namespace duckdb {
@@ -39,23 +40,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 		return columns;
 	}
 
-	// Apply safety cap: max_depth = -1 means unlimited, but cap at 10
-	int effective_depth = options.max_depth;
-	if (effective_depth == -1) {
-		effective_depth = 10; // Safety cap
-	}
-
-	// Special case: max_depth = 0 means return entire document as XML
-	if (effective_depth == 0) {
-		std::string root_name((const char *)root->name);
-		if (options.namespaces == "strip") {
-			root_name = StripNamespacePrefix(root_name);
-		}
-		columns.emplace_back(root_name, XMLTypes::XMLType(), false, "", 1.0);
-		return columns;
-	}
-
 	// Phase 1: Identify Record Elements
+	// At max_depth = 0: root is the only record
+	// At max_depth >= 1: children of root are records
 	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
 	if (record_elements.empty()) {
@@ -64,9 +51,23 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 		return columns;
 	}
 
-	// Special case: max_depth = 1 means return records as XML
-	if (effective_depth == 1) {
-		std::string record_name((const char *)record_elements[0]->name);
+	// Calculate effective depth with safety cap
+	int effective_depth = options.max_depth;
+	if (effective_depth > 20 || effective_depth < 0) {
+		effective_depth = 20;
+	}
+
+	// Calculate remaining depth for column introspection:
+	// max_depth=0: root is record (depth 0), columns at depth 1, remaining = 0-1 = -1 (no depth to introspect)
+	// max_depth=1: children are records (depth 1), columns at depth 2, remaining = 1-2 = -1 (no depth to introspect)
+	// max_depth=2: children are records (depth 1), columns at depth 2, remaining = 2-2 = 0 (can see columns but nested become XML)
+	// max_depth=3: children are records (depth 1), columns at depth 2, remaining = 3-2 = 1 (can introspect 1 level deep)
+	int remaining_depth = effective_depth - 2;
+
+	// If remaining_depth < 0, we don't have depth budget to look inside records
+	// Return a single column with the record element name, typed as XML
+	if (remaining_depth < 0) {
+		std::string record_name = (const char *)record_elements[0]->name;
 		if (options.namespaces == "strip") {
 			record_name = StripNamespacePrefix(record_name);
 		}
@@ -80,10 +81,6 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	// Phase 3: Infer Type for each column
 	for (auto &pair : column_map) {
 		const auto &col_analysis = pair.second;
-
-		// Depth for column type inference starts at effective_depth - 2
-		// (Level 0 = root, Level 1 = records, Level 2+ = columns and nested)
-		int remaining_depth = effective_depth - 2;
 
 		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options);
 
@@ -104,10 +101,21 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
                                                                      const XMLSchemaOptions &options) {
 	std::vector<xmlNodePtr> record_elements;
 
-	// If force_list is specified, use XPath to find those elements
-	if (!options.force_list.empty()) {
+	// Special case: max_depth=0 means root itself is the only record
+	int effective_depth = options.max_depth;
+	if (effective_depth > 20 || effective_depth < 0) {
+		effective_depth = 20; // Safety cap
+	}
+
+	if (effective_depth == 0) {
+		record_elements.push_back(root);
+		return record_elements;
+	}
+
+	// If record_element is specified, use XPath to find those elements
+	if (!options.record_element.empty()) {
 		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.force_list.c_str(), doc.xpath_ctx);
+		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.record_element.c_str(), doc.xpath_ctx);
 		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
@@ -296,37 +304,32 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// If element has children, infer STRUCT type for list elements
 		if (!child_counts.empty()) {
-			// Build STRUCT type from children
+			// Build STRUCT type from children IN DOCUMENT ORDER
 			child_list_t<LogicalType> struct_fields;
+			std::unordered_set<std::string> seen_children;
 
-			for (const auto &child_pair : child_counts) {
-				const std::string &child_name = child_pair.first;
-
-				// Find first instance of this child
-				xmlNodePtr sample_child = nullptr;
-				for (xmlNodePtr child = first->children; child; child = child->next) {
-					if (child->type == XML_ELEMENT_NODE) {
-						std::string name((const char *)child->name);
-						if (options.namespaces == "strip") {
-							name = StripNamespacePrefix(name);
-						}
-						if (name == child_name) {
-							sample_child = child;
-							break;
-						}
+			// Iterate over children in document order to preserve field order
+			for (xmlNodePtr child = first->children; child; child = child->next) {
+				if (child->type == XML_ELEMENT_NODE) {
+					std::string child_name((const char *)child->name);
+					if (options.namespaces == "strip") {
+						child_name = StripNamespacePrefix(child_name);
 					}
-				}
 
-				if (sample_child) {
-					// Create a ColumnAnalysis for this nested child
-					ColumnAnalysis nested_col(child_name, false);
-					nested_col.instances.push_back(sample_child);
-					nested_col.occurrence_count = child_pair.second;
-					nested_col.repeats_in_record = (child_pair.second > 1);
+					// Only process each unique child name once (first occurrence)
+					if (seen_children.find(child_name) == seen_children.end()) {
+						seen_children.insert(child_name);
 
-					// Recursively infer type with decreased depth
-					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
-					struct_fields.push_back(make_pair(child_name, child_type));
+						// Create a ColumnAnalysis for this nested child
+						ColumnAnalysis nested_col(child_name, false);
+						nested_col.instances.push_back(child);
+						nested_col.occurrence_count = child_counts[child_name];
+						nested_col.repeats_in_record = (child_counts[child_name] > 1);
+
+						// Recursively infer type with decreased depth
+						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+						struct_fields.push_back(make_pair(child_name, child_type));
+					}
 				}
 			}
 
@@ -355,37 +358,32 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	if (!child_counts.empty()) {
-		// Build STRUCT type from children
+		// Build STRUCT type from children IN DOCUMENT ORDER
 		child_list_t<LogicalType> struct_fields;
+		std::unordered_set<std::string> seen_children;
 
-		for (const auto &child_pair : child_counts) {
-			const std::string &child_name = child_pair.first;
-
-			// Find first instance
-			xmlNodePtr sample_child = nullptr;
-			for (xmlNodePtr child = first->children; child; child = child->next) {
-				if (child->type == XML_ELEMENT_NODE) {
-					std::string name((const char *)child->name);
-					if (options.namespaces == "strip") {
-						name = StripNamespacePrefix(name);
-					}
-					if (name == child_name) {
-						sample_child = child;
-						break;
-					}
+		// Iterate over children in document order to preserve field order
+		for (xmlNodePtr child = first->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				std::string child_name((const char *)child->name);
+				if (options.namespaces == "strip") {
+					child_name = StripNamespacePrefix(child_name);
 				}
-			}
 
-			if (sample_child) {
-				// Create a ColumnAnalysis for this nested child
-				ColumnAnalysis nested_col(child_name, false);
-				nested_col.instances.push_back(sample_child);
-				nested_col.occurrence_count = child_pair.second;
-				nested_col.repeats_in_record = (child_pair.second > 1);
+				// Only process each unique child name once (first occurrence)
+				if (seen_children.find(child_name) == seen_children.end()) {
+					seen_children.insert(child_name);
 
-				// Recursively infer type with decreased depth
-				LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
-				struct_fields.push_back(make_pair(child_name, child_type));
+					// Create a ColumnAnalysis for this nested child
+					ColumnAnalysis nested_col(child_name, false);
+					nested_col.instances.push_back(child);
+					nested_col.occurrence_count = child_counts[child_name];
+					nested_col.repeats_in_record = (child_counts[child_name] > 1);
+
+					// Recursively infer type with decreased depth
+					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+					struct_fields.push_back(make_pair(child_name, child_type));
+				}
 			}
 		}
 
@@ -416,12 +414,12 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 	// Determine which elements to analyze as records
 	std::vector<xmlNodePtr> record_elements;
 
-	// If force_list is specified, use XPath to find those elements
-	if (!options.force_list.empty()) {
+	// If record_element is specified, use XPath to find those elements
+	if (!options.record_element.empty()) {
 		// Suppress XPath warnings (e.g., undefined namespace prefixes)
 		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.force_list.c_str(), xml_doc.xpath_ctx);
+		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.record_element.c_str(), xml_doc.xpath_ctx);
 
 		// Restore normal error handling
 		xmlSetGenericErrorFunc(nullptr, nullptr);
@@ -947,68 +945,40 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 		return rows; // No root element
 	}
 
-	// Determine which elements to extract as records (using same logic as AnalyzeDocumentStructure)
-	std::vector<xmlNodePtr> record_elements;
+	// Use same record identification logic as InferSchema
+	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
-	// If force_list is specified, use XPath to find those elements
-	if (!options.force_list.empty()) {
-		// Suppress XPath warnings
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
-
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST options.force_list.c_str(), doc.xpath_ctx);
-
-		// Restore normal error handling
-		xmlSetGenericErrorFunc(nullptr, nullptr);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
-			}
-		}
-
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+	// Calculate remaining depth (same logic as InferSchema)
+	int effective_depth = options.max_depth;
+	if (effective_depth > 20 || effective_depth < 0) {
+		effective_depth = 20;
 	}
-	// If a specific root element is specified, find it
-	else if (!options.root_element.empty()) {
-		// Use XPath to find the specified root element
-		std::string xpath = "//" + options.root_element;
+	int remaining_depth = effective_depth - 2;
 
-		// Suppress XPath warnings
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
+	// If remaining_depth < 0, serialize each record as XML
+	if (remaining_depth < 0) {
+		for (xmlNodePtr record : record_elements) {
+			std::vector<Value> row;
 
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), doc.xpath_ctx);
-
-		// Restore normal error handling
-		xmlSetGenericErrorFunc(nullptr, nullptr);
-
-		if (xpath_obj && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
-			root = xpath_obj->nodesetval->nodeTab[0];
-		}
-
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
-
-		// Collect immediate children of the specified root
-		for (xmlNodePtr child = root->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				record_elements.push_back(child);
+			// Serialize the record element to XML string
+			xmlBufferPtr buffer = xmlBufferCreate();
+			if (buffer) {
+				xmlNodeDump(buffer, record->doc, record, 0, 1);
+				const xmlChar *content = xmlBufferContent(buffer);
+				if (content) {
+					std::string xml_string((const char *)content);
+					row.push_back(Value(xml_string));
+				} else {
+					row.push_back(Value()); // NULL
+				}
+				xmlBufferFree(buffer);
+			} else {
+				row.push_back(Value()); // NULL
 			}
+
+			rows.push_back(row);
 		}
-	}
-	// Auto-detect: use deterministic hierarchy (root → rows → columns → nested)
-	else {
-		// Default behavior: immediate children of root are row-level elements
-		// This creates a predictable schema where:
-		// - Level 0 (root): Container, not data
-		// - Level 1 (root's children): Each child becomes one row
-		// - Level 2 (grandchildren): Become columns (scalar or arrays if repeating)
-		// - Level 3+ (deeper): Become nested types (STRUCT, LIST)
-		for (xmlNodePtr child = root->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				record_elements.push_back(child);
-			}
-		}
+		return rows;
 	}
 
 	// Extract data from each record element
@@ -1041,6 +1011,31 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 					xmlNodePtr child = current->children;
 					std::string element_text;
 
+					// Special handling for LIST columns - collect ALL matching children
+					if (column.type.id() == LogicalTypeId::LIST) {
+						vector<Value> list_values;
+						auto element_type = ListType::GetChildType(column.type);
+
+						// Collect all children with matching name
+						for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
+							if (child_iter->type == XML_ELEMENT_NODE &&
+							    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
+								// Extract this list element
+								Value element_value = ExtractValueFromNode(child_iter, element_type);
+								list_values.push_back(element_value);
+							}
+						}
+
+						if (!list_values.empty()) {
+							value = Value::LIST(element_type, list_values);
+						} else {
+							value = Value(); // Empty list becomes NULL
+						}
+						// Skip the rest of the loop since we've handled this column
+						row.push_back(value);
+						continue;
+					}
+
 					while (child) {
 						if (child->type == XML_ELEMENT_NODE &&
 						    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
@@ -1056,9 +1051,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 
 							if (has_element_children) {
 								// Container element - check for structured types first
-								if (column.type.id() == LogicalTypeId::LIST ||
-								    column.type.id() == LogicalTypeId::STRUCT) {
-									// Use structured extraction for LIST and STRUCT types
+								if (column.type.id() == LogicalTypeId::STRUCT) {
+									// Use structured extraction for STRUCT types
 									value = ExtractValueFromNode(child, column.type);
 									element_text = ""; // Clear element_text to avoid double processing
 									break;

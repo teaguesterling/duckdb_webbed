@@ -21,7 +21,7 @@ struct XMLSchemaOptions {
 	// Schema inference controls
 	std::string root_element; // Extract only children of specified root (empty = auto-detect)
 	bool auto_detect = true;  // Automatic type detection
-	int32_t max_depth = -1;   // Maximum analysis depth (-1 = unlimited, capped at 10 for safety)
+	int32_t max_depth = 10;   // Maximum introspection depth (default 10, hard cap at 20)
 	int32_t sample_size = 50; // Number of elements to sample for inference
 
 	// Attribute handling (aligned with xml_to_json)
@@ -30,6 +30,7 @@ struct XMLSchemaOptions {
 
 	// Content handling (aligned with xml_to_json)
 	std::string text_key = "#text";      // Key for mixed text content in structured types
+	std::string tagname_key = "#tagname"; // Key for element tag names in heterogeneous records
 	std::string namespaces = "strip";    // Namespace handling: 'strip' | 'expand' | 'keep'
 	std::string empty_elements = "null"; // How to handle empty elements: 'null' | 'string' | 'object'
 	bool preserve_mixed_content = false; // Handle elements with both text and children
@@ -43,7 +44,8 @@ struct XMLSchemaOptions {
 	// Collection handling
 	double array_threshold = 0.8; // Minimum homogeneity for arrays (80%)
 	int32_t max_array_depth = 3;  // Maximum nested array depth
-	std::string force_list = "";  // XPath to element that should be treated as the repeating record (e.g., "//item")
+	std::string record_element = ""; // XPath or tag name for elements that should be rows (e.g., "//item" or "item")
+	std::string force_list = "";     // Comma-separated list of element names that should always be LIST type (like xml_to_json)
 
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
