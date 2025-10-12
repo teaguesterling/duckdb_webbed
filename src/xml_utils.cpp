@@ -43,23 +43,25 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	xml_parse_error_occurred = false;
 	xml_parse_error_message.clear();
 
-	// Set error handler
-	xmlSetGenericErrorFunc(nullptr, XMLErrorHandler);
-
-	// Parse the XML with default options to preserve comments and CDATA
+	// Parse the XML with options to suppress errors (thread-safe, per-operation config)
+	// XML_PARSE_RECOVER: recover on errors
+	// XML_PARSE_NOERROR: suppress error reports
+	// XML_PARSE_NOWARNING: suppress warning reports
 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 	if (parser_ctx) {
-		// Parse with default options (preserves comments and CDATA by default)
-		doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(), nullptr, nullptr, 0);
+		doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(), nullptr, nullptr,
+		                        XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+
+		// Check if parsing failed (NULL doc means fatal error)
+		if (!doc) {
+			xml_parse_error_occurred = true;
+		}
 		xmlFreeParserCtxt(parser_ctx);
 	}
 
-	if (doc && !xml_parse_error_occurred) {
+	if (doc) {
 		xpath_ctx = xmlXPathNewContext(doc);
 	}
-
-	// Reset error handler
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
@@ -67,28 +69,26 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 	xml_parse_error_occurred = false;
 	xml_parse_error_message.clear();
 
-	// Set error handler
-	xmlSetGenericErrorFunc(nullptr, XMLErrorHandler);
-
 	if (is_html) {
-		// Parse as HTML using libxml2's HTML parser
+		// Parse as HTML using libxml2's HTML parser with error suppression
 		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, nullptr,
 		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
 	} else {
-		// Parse as XML (same as original constructor)
+		// Parse as XML with error suppression (thread-safe, per-operation config)
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
-			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr, 0);
+			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr,
+			                        XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 			xmlFreeParserCtxt(parser_ctx);
 		}
 	}
 
-	if (doc && !xml_parse_error_occurred) {
+	// Check if parsing failed
+	if (!doc) {
+		xml_parse_error_occurred = true;
+	} else {
 		xpath_ctx = xmlXPathNewContext(doc);
 	}
-
-	// Reset error handler
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 }
 
 XMLDocRAII::~XMLDocRAII() {
@@ -231,13 +231,8 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 		return results;
 	}
 
-	// Suppress XPath warnings (e.g., undefined namespace prefixes)
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
-
+	// XPath evaluation (errors already suppressed during document parsing)
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
-
-	// Restore normal error handling
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (xpath_obj && xpath_obj->nodesetval) {
 		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -261,13 +256,8 @@ std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::
 		return "";
 	}
 
-	// Suppress XPath warnings (e.g., undefined namespace prefixes)
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
-
+	// XPath evaluation (errors already suppressed during document parsing)
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
-
-	// Restore normal error handling
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	std::string result;
 	if (xpath_obj) {
@@ -316,13 +306,10 @@ std::string XMLUtils::MinifyXML(const std::string &xml_str) {
 }
 
 bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &xsd_schema) {
-	// Suppress schema validation warnings
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
 	// Parse the XSD schema using DuckDB-style smart pointers
 	XMLSchemaParserPtr parser_ctx(xmlSchemaNewMemParserCtxt(xsd_schema.c_str(), xsd_schema.length()));
 	if (!parser_ctx) {
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 
@@ -331,14 +318,12 @@ bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &
 
 	XMLSchemaPtr schema(xmlSchemaParse(parser_ctx.get()));
 	if (!schema) {
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 
 	// Create validation context
 	XMLSchemaValidPtr valid_ctx(xmlSchemaNewValidCtxt(schema.get()));
 	if (!valid_ctx) {
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 
@@ -348,14 +333,11 @@ bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &
 	// Parse and validate the XML document
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid()) {
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 		return false;
 	}
 
 	int validation_result = xmlSchemaValidateDoc(valid_ctx.get(), xml_doc.doc);
 
-	// Restore normal error handling
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	return (validation_result == 0);
 }
@@ -1128,13 +1110,9 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 		return "";
 	}
 
-	// Suppress XPath warnings (e.g., undefined namespace prefixes)
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
-	// Restore normal error handling
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1196,13 +1174,9 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 		return "";
 	}
 
-	// Suppress XPath warnings (e.g., undefined namespace prefixes)
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
-	// Restore normal error handling
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1575,9 +1549,7 @@ std::vector<HTMLLink> XMLUtils::ExtractHTMLLinks(const std::string &html_str) {
 	}
 
 	// Find all <a> elements with href attributes
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST "//a[@href]", html_doc.xpath_ctx);
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1626,9 +1598,7 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 	}
 
 	// Find all <img> elements
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST "//img", html_doc.xpath_ctx);
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1697,9 +1667,7 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 	}
 
 	// Find all <table> elements
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST "//table", html_doc.xpath_ctx);
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1807,9 +1775,7 @@ std::string XMLUtils::ExtractHTMLText(const std::string &html_str, const std::st
 
 	std::string xpath = selector.empty() ? "//text()" : selector;
 
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1838,9 +1804,7 @@ std::string XMLUtils::ExtractHTMLTextByXPath(const std::string &html_str, const 
 		return "";
 	}
 
-	xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
-	xmlSetGenericErrorFunc(nullptr, nullptr);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
