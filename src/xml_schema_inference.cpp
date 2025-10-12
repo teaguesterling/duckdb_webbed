@@ -134,9 +134,7 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 			}
 		}
 
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), doc.xpath_ctx);
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -149,9 +147,7 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {
 		std::string xpath = "//" + options.root_element;
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), doc.xpath_ctx);
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			root = xpath_obj->nodesetval->nodeTab[0];
@@ -541,13 +537,9 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 			}
 		}
 
-		// Suppress XPath warnings (e.g., undefined namespace prefixes)
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), xml_doc.xpath_ctx);
 
-		// Restore normal error handling
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -563,13 +555,9 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 		// Use XPath to find the specified root element
 		std::string xpath = "//" + options.root_element;
 
-		// Suppress XPath warnings (e.g., undefined namespace prefixes)
-		xmlSetGenericErrorFunc(nullptr, XMLSilentErrorHandler);
 
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
-		// Restore normal error handling
-		xmlSetGenericErrorFunc(nullptr, nullptr);
 
 		if (xpath_obj && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			root = xpath_obj->nodesetval->nodeTab[0];
