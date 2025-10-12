@@ -43,14 +43,14 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	xml_parse_error_occurred = false;
 	xml_parse_error_message.clear();
 
-	// Parse the XML with options to suppress errors (thread-safe, per-operation config)
-	// XML_PARSE_RECOVER: recover on errors
-	// XML_PARSE_NOERROR: suppress error reports
-	// XML_PARSE_NOWARNING: suppress warning reports
+	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
+	// XML_PARSE_NOERROR: suppress error reports to stderr
+	// XML_PARSE_NOWARNING: suppress warning reports to stderr
+	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 	if (parser_ctx) {
 		doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(), nullptr, nullptr,
-		                        XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+		                        XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
@@ -71,14 +71,16 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 
 	if (is_html) {
 		// Parse as HTML using libxml2's HTML parser with error suppression
+		// HTML needs RECOVER flag to handle malformed HTML gracefully
 		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, nullptr,
 		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
 	} else {
-		// Parse as XML with error suppression (thread-safe, per-operation config)
+		// Parse as XML with error message suppression (thread-safe, per-operation config)
+		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
 			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr,
-			                        XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+			                        XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 			xmlFreeParserCtxt(parser_ctx);
 		}
 	}
