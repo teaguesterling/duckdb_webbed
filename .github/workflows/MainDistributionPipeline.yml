@@ -23,10 +23,10 @@ jobs:
 
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.0
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.4.1
     with:
-      duckdb_version: v1.4.0
-      ci_tools_version: v1.4.0
+      duckdb_version: v1.4.1
+      ci_tools_version: v1.4.1
       extension_name: webbed
       vcpkg_commit: 'dd3097e305afa53f7b4312371f62058d2e665320'
 
