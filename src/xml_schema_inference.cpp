@@ -314,20 +314,30 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	std::unordered_set<std::string> force_list_elements = ParseForceListElements(options.force_list);
 	bool force_as_list = force_list_elements.count(column.name) > 0;
 
-	// Check if all instances are leaf nodes (text only, no children)
+	// Check if all instances are leaf nodes (text only, no children and no attributes)
+	// Elements with attributes should be treated as complex (STRUCT), not leaf
 	bool all_leaf = true;
 	std::vector<std::string> sample_values;
 
 	for (xmlNodePtr node : column.instances) {
-		bool has_children = false;
+		bool is_complex = false;
+
+		// Check for child elements
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				has_children = true;
+				is_complex = true;
 				break;
 			}
 		}
 
-		if (has_children) {
+		// Check for attributes (unless we're discarding them)
+		if (!is_complex && options.attr_mode != "discard") {
+			if (node->properties != nullptr) {
+				is_complex = true;
+			}
+		}
+
+		if (is_complex) {
 			all_leaf = false;
 			break;
 		}
@@ -381,10 +391,26 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		// If element has children, infer STRUCT type for list elements
+		// Build STRUCT type: first attributes, then child elements
+		child_list_t<LogicalType> struct_fields;
+
+		// 1. Add attributes as STRUCT fields (unless we're discarding them)
+		if (options.attr_mode != "discard" && first->properties != nullptr) {
+			for (xmlAttrPtr attr = first->properties; attr; attr = attr->next) {
+				if (attr->name) {
+					std::string attr_name((const char *)attr->name);
+					// Strip namespace prefix if configured
+					if (options.namespaces == "strip") {
+						attr_name = StripNamespacePrefix(attr_name);
+					}
+					// Attributes are always VARCHAR
+					struct_fields.push_back(make_pair(attr_name, LogicalType::VARCHAR));
+				}
+			}
+		}
+
+		// 2. Add child elements as STRUCT fields (if any)
 		if (!child_counts.empty()) {
-			// Build STRUCT type from children IN DOCUMENT ORDER
-			child_list_t<LogicalType> struct_fields;
 			std::unordered_set<std::string> seen_children;
 
 			// Iterate over children in document order to preserve field order
@@ -411,10 +437,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					}
 				}
 			}
+		}
 
-			if (!struct_fields.empty()) {
-				return LogicalType::LIST(LogicalType::STRUCT(struct_fields));
-			}
+		if (!struct_fields.empty()) {
+			return LogicalType::LIST(LogicalType::STRUCT(struct_fields));
 		}
 
 		// Fallback: LIST<XML>
@@ -1382,21 +1408,32 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		const auto &field_name = field.first;
 		const auto &field_type = field.second;
 
-		// Find child element with matching name
-		xmlNodePtr child = node->children;
 		Value field_value;
+		bool found = false;
 
-		while (child) {
-			if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-				// Found matching child element - extract recursively
-				field_value = ExtractValueFromNode(child, field_type);
-				break;
+		// First check if this field is an attribute on the node itself
+		xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str());
+		if (attr_value) {
+			std::string str_value = (const char *)attr_value;
+			field_value = ConvertToValue(str_value, field_type);
+			xmlFree(attr_value);
+			found = true;
+		} else {
+			// Look for child element with matching name
+			xmlNodePtr child = node->children;
+			while (child) {
+				if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					// Found matching child element - extract recursively
+					field_value = ExtractValueFromNode(child, field_type);
+					found = true;
+					break;
+				}
+				child = child->next;
 			}
-			child = child->next;
 		}
 
 		// If field not found, use NULL
-		if (child == nullptr) {
+		if (!found) {
 			field_value = Value(field_type);
 		}
 
