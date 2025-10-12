@@ -1136,6 +1136,20 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	// Schema inference parameters (same as read_xml for API consistency)
+	read_html_single.named_parameters["root_element"] = LogicalType::VARCHAR;
+	read_html_single.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_html_single.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
+	read_html_single.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
+	read_html_single.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
+	read_html_single.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_html_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	read_html_single.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_html_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
+	read_html_single.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_html_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	// Explicit schema specification (like JSON extension)
+	read_html_single.named_parameters["columns"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1144,6 +1158,20 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	// Schema inference parameters (same as read_xml for API consistency)
+	read_html_array.named_parameters["root_element"] = LogicalType::VARCHAR;
+	read_html_array.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_html_array.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
+	read_html_array.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
+	read_html_array.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
+	read_html_array.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_html_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	read_html_array.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_html_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
+	read_html_array.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_html_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	// Explicit schema specification (like JSON extension)
+	read_html_array.named_parameters["columns"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);

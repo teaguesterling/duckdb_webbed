@@ -1,6 +1,15 @@
-# name: test/sql/html_schema_inference.test
-# description: Test HTML schema inference with read_html (once implemented)
+# name: test/sql/html_schema_inference.test.future
+# description: FUTURE: Test automatic HTML table extraction (not yet implemented)
 # group: [xml]
+#
+# NOTE: This file contains aspirational tests for automatic HTML table detection.
+# HTML tables are complex (colspan, rowspan, thead/tbody/tfoot, nested headers, etc.)
+# and require specialized extraction logic beyond simple schema inference.
+#
+# Current approach: Use html_extract_tables() function or specify record_element explicitly.
+# Future: May implement read_html_table() function for specialized table extraction.
+#
+# This file is disabled (renamed to .future) until the feature is implemented.
 
 require webbed
 

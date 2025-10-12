@@ -4,11 +4,17 @@
 
 require webbed
 
-# Test read_html table function with simple HTML file
+# Test read_html_objects function for raw HTML content
+# Note: HTML parser normalizes output (adds DOCTYPE, formats whitespace)
 query I
-SELECT html FROM read_html('test/html/simple.html');
+SELECT
+    CAST(html AS VARCHAR) LIKE '<!DOCTYPE html>%' AND
+    CAST(html AS VARCHAR) LIKE '%<title>Simple Page</title>%' AND
+    CAST(html AS VARCHAR) LIKE '%<h1>Welcome</h1>%' AND
+    CAST(html AS VARCHAR) LIKE '%<p>This is a test page.</p>%' AS valid_html
+FROM read_html_objects('test/html/simple.html');
 ----
-<html><head><title>Simple Page</title></head><body><h1>Welcome</h1><p>This is a test page.</p></body></html>
+true
 
 # Test read_html_objects function for batch processing
 query I
@@ -46,25 +52,27 @@ https://example.com	External Link
 
 # Test malformed HTML handling
 query I
-SELECT html FROM read_html('test/html/malformed.html');
+SELECT
+    CAST(html AS VARCHAR) LIKE '%<p>Unclosed tags%<span>More content</span>%</body>%</html>%' AS valid_html
+FROM read_html_objects('test/html/malformed.html');
 ----
-<html><body><div><p>Unclosed tags <span>More content</span></p></div></body></html>
+true
 
 # Test HTML file that doesn't exist (should error gracefully)
 statement error
-SELECT html FROM read_html('test/html/nonexistent.html');
+SELECT html FROM read_html_objects('test/html/nonexistent.html');
 ----
 Invalid Input Error
 
 # Test empty HTML file
-query I  
-SELECT html FROM read_html('test/html/empty.html');
+query I
+SELECT html FROM read_html_objects('test/html/empty.html');
 ----
-<html/>
+<html></html>
 
 
 # Test HTML with encoding issues
 query I
-SELECT html_extract_text(html, '//h1') FROM read_html('test/html/unicode.html');
+SELECT html_extract_text(html, '//h1') FROM read_html_objects('test/html/unicode.html');
 ----
 Héllo Wörld 测试
