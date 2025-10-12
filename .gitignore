@@ -7,6 +7,8 @@ testext
 test/python/__pycache__/
 .Rhistory
 
+make.out
+
 # Devenv
 .devenv*
 devenv.local.nix
