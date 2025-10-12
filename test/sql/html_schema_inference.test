@@ -10,7 +10,7 @@ require webbed
 
 # Extract people table with automatic schema inference
 query III
-SELECT * FROM read_html('test/html/people_table.html')
+SELECT * FROM read_html('test/html/schema_tests/people_table.html')
 ORDER BY name;
 ----
 Alice	30	NYC
@@ -20,7 +20,7 @@ Charlie	35	Chicago
 # Verify schema is inferred from table headers
 query II
 SELECT column_name, column_type
-FROM (DESCRIBE SELECT * FROM read_html('test/html/people_table.html'))
+FROM (DESCRIBE SELECT * FROM read_html('test/html/schema_tests/people_table.html'))
 ORDER BY column_name;
 ----
 age	VARCHAR
@@ -33,14 +33,14 @@ name	VARCHAR
 
 # Count total rows from all tables
 query I
-SELECT count(*) FROM read_html('test/html/multiple_tables.html');
+SELECT count(*) FROM read_html('test/html/schema_tests/multiple_tables.html');
 ----
 8
 
 # Verify we get data from all three tables
 query I
 SELECT count(DISTINCT column_0)
-FROM (SELECT * FROM read_html('test/html/multiple_tables.html'));
+FROM (SELECT * FROM read_html('test/html/schema_tests/multiple_tables.html'));
 ----
 7
 
@@ -50,7 +50,7 @@ FROM (SELECT * FROM read_html('test/html/multiple_tables.html'));
 
 # Extract only the data-section div's table
 query III
-SELECT * FROM read_html('test/html/nested_tables.html', root_element := '//div[@id="data-section"]')
+SELECT * FROM read_html('test/html/schema_tests/nested_tables.html', root_element := '//div[@id="data-section"]')
 ORDER BY Name;
 ----
 Alice	30	Engineering
@@ -59,7 +59,7 @@ Charlie	35	Marketing
 
 # Verify we get 3 rows (not including the stats table)
 query I
-SELECT count(*) FROM read_html('test/html/nested_tables.html', root_element := '//div[@id="data-section"]');
+SELECT count(*) FROM read_html('test/html/schema_tests/nested_tables.html', root_element := '//div[@id="data-section"]');
 ----
 3
 
@@ -69,14 +69,14 @@ SELECT count(*) FROM read_html('test/html/nested_tables.html', root_element := '
 
 # Extract individual li elements from user list
 query I
-SELECT count(*) FROM read_html('test/html/list_data.html', record_element := 'li');
+SELECT count(*) FROM read_html('test/html/schema_tests/list_data.html', record_element := 'li');
 ----
 4
 
 # With include_attributes, we should get data- attributes as columns
 query III
 SELECT * FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := '//ul[@class="users"]/li',
     attr_mode := 'columns'
 )
@@ -91,7 +91,7 @@ Diana	28	Seattle
 query II
 SELECT column_name, column_type
 FROM (DESCRIBE SELECT * FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := '//ul[@class="users"]/li',
     attr_mode := 'columns'
 ))
@@ -108,7 +108,7 @@ data_name	VARCHAR
 # Extract product divs as individual records
 query I
 SELECT count(*) FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := '//div[@class="product"]'
 );
 ----
@@ -118,7 +118,7 @@ SELECT count(*) FROM read_html(
 query III
 SELECT data_id, data_price, name
 FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := '//div[@class="product"]',
     attr_mode := 'columns'
 )
@@ -135,17 +135,17 @@ ORDER BY CAST(data_id AS INTEGER);
 # Test that filename parameter works with HTML
 query II
 SELECT filename, count(*) as row_count
-FROM read_html('test/html/people_table.html', filename := true)
+FROM read_html('test/html/schema_tests/people_table.html', filename := true)
 GROUP BY filename;
 ----
-test/html/people_table.html	3
+test/html/schema_tests/people_table.html	3
 
 # Test filename with multiple files
 query I
 SELECT count(DISTINCT filename)
 FROM read_html('test/html/*.html', filename := true);
 ----
-9
+5
 
 # ===========================================================================
 # Test 7: Force list parameter for repeating elements
@@ -154,7 +154,7 @@ FROM read_html('test/html/*.html', filename := true);
 # Test that items in lists are properly handled
 query I
 SELECT typeof(column_0) FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := 'li',
     force_list := 'li'
 ) LIMIT 1;
@@ -168,7 +168,7 @@ VARCHAR
 # Both should support the same common parameters
 query I
 SELECT count(*) FROM read_html(
-    'test/html/people_table.html',
+    'test/html/schema_tests/people_table.html',
     ignore_errors := true,
     maximum_file_size := 16777216,
     filename := true,
@@ -185,7 +185,7 @@ SELECT count(*) FROM read_html(
 # Extract only the employees table using ID
 query I
 SELECT count(*) FROM read_html(
-    'test/html/nested_tables.html',
+    'test/html/schema_tests/nested_tables.html',
     root_element := '//table[@id="employees"]'
 );
 ----
@@ -194,7 +194,7 @@ SELECT count(*) FROM read_html(
 # Extract only the stats table
 query II
 SELECT * FROM read_html(
-    'test/html/nested_tables.html',
+    'test/html/schema_tests/nested_tables.html',
     root_element := '//table[@id="stats"]'
 );
 ----
@@ -219,7 +219,7 @@ SELECT count(*) FROM read_html(
 
 # Read multiple HTML files and aggregate
 query I
-SELECT count(*) FROM read_html('test/html/people_table.html', 'test/html/multiple_tables.html');
+SELECT count(*) FROM read_html('test/html/schema_tests/people_table.html', 'test/html/schema_tests/multiple_tables.html');
 ----
 11
 
@@ -230,7 +230,7 @@ SELECT count(*) FROM read_html('test/html/people_table.html', 'test/html/multipl
 # Test attr_mode := 'prefixed' with custom prefix
 query I
 SELECT count(*) > 0 FROM read_html(
-    'test/html/list_data.html',
+    'test/html/schema_tests/list_data.html',
     record_element := '//ul[@class="users"]/li',
     attr_mode := 'prefixed',
     attr_prefix := '@'
@@ -242,7 +242,7 @@ true
 query I
 SELECT count(*) FROM (
     DESCRIBE SELECT * FROM read_html(
-        'test/html/list_data.html',
+        'test/html/schema_tests/list_data.html',
         record_element := '//ul[@class="users"]/li',
         attr_mode := 'discard'
     )
@@ -257,7 +257,7 @@ SELECT count(*) FROM (
 # Test that max_depth limits nesting
 query I
 SELECT count(*) FROM read_html(
-    'test/html/nested_tables.html',
+    'test/html/schema_tests/nested_tables.html',
     max_depth := 1
 );
 ----
@@ -275,7 +275,7 @@ HTML
 
 # read_html returns structured data (after schema inference)
 query I
-SELECT typeof(name) FROM read_html('test/html/people_table.html') LIMIT 1;
+SELECT typeof(name) FROM read_html('test/html/schema_tests/people_table.html') LIMIT 1;
 ----
 VARCHAR
 
