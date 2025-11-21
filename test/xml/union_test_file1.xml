@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss>
+  <item>
+    <title>Job 1</title>
+    <link>https://example.com/1</link>
+    <company>Company A</company>
+  </item>
+  <item>
+    <title>Job 2</title>
+    <link>https://example.com/2</link>
+    <company>Company B</company>
+  </item>
+</rss>

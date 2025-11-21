@@ -1,0 +1,106 @@
+# name: test/sql/xml_union_by_name.test
+# description: Test union_by_name parameter for read_xml with files having different schemas
+# group: [sql]
+
+require webbed
+
+# Test 1: Without union_by_name (default behavior - only uses first file schema)
+query II
+SELECT COUNT(*), COUNT(link) as links_count
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml']);
+----
+4	4
+
+# Test 2: With union_by_name=true (creates union of all columns)
+query IIIIII
+SELECT COUNT(*) as total,
+       COUNT(title) as has_title,
+       COUNT(link) as has_link,
+       COUNT(company) as has_company,
+       COUNT(description) as has_description,
+       COUNT(location) as has_location
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name = true);
+----
+4	4	2	2	2	2
+
+# Test 3: Verify NULL handling for missing columns
+query IIII
+SELECT
+  COUNT(*) FILTER (WHERE link IS NULL) as null_links,
+  COUNT(*) FILTER (WHERE company IS NULL) as null_companies,
+  COUNT(*) FILTER (WHERE description IS NULL) as null_descriptions,
+  COUNT(*) FILTER (WHERE location IS NULL) as null_locations
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name = true);
+----
+2	2	2	2
+
+# Test 4: Test with three files having different schemas
+query IIIIIII
+SELECT COUNT(*) as total,
+       COUNT(title) as has_title,
+       COUNT(link) as has_link,
+       COUNT(company) as has_company,
+       COUNT(description) as has_description,
+       COUNT(location) as has_location,
+       COUNT(salary) as has_salary
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml', 'test/xml/union_test_file3.xml'], union_by_name = true);
+----
+5	5	3	2	3	2	1
+
+# Test 5: Verify actual data values with union_by_name
+query TTTTT
+SELECT title, link, company, description, location
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name = true)
+ORDER BY title;
+----
+Job 1	https://example.com/1	Company A	NULL	NULL
+Job 2	https://example.com/2	Company B	NULL	NULL
+Job 3	NULL	NULL	Description for job 3	New York
+Job 4	NULL	NULL	Description for job 4	San Francisco
+
+# Test 6: Test with single file (should work like normal read_xml)
+query III
+SELECT COUNT(*) as total, COUNT(link) as has_link, COUNT(company) as has_company
+FROM read_xml('test/xml/union_test_file1.xml', union_by_name = true);
+----
+2	2	2
+
+# Test 7: Test union_by_name with glob pattern
+query I
+SELECT COUNT(*) >= 5
+FROM read_xml('test/xml/union_test_file*.xml', union_by_name = true);
+----
+true
+
+# Test 8: Test union_by_name with ignore_errors
+query I
+SELECT COUNT(*) >= 4
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml', 'test/xml/invalid.xml'],
+               union_by_name = true, ignore_errors = true);
+----
+true
+
+# Test 9: Verify schema has expected columns from both files
+statement ok
+CREATE TEMP TABLE read_xml_union AS
+  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name = true);
+
+query I
+SELECT COUNT(*) FROM pragma_table_info('read_xml_union')
+WHERE name IN ('title', 'link', 'company', 'description', 'location');
+----
+5
+
+# Test 10: Verify that union_by_name=false gives different column count than union_by_name=true
+statement ok
+CREATE TEMP TABLE without_union AS
+  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml']);
+
+statement ok
+CREATE TEMP TABLE with_union AS
+  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name = true);
+
+query I
+SELECT (SELECT COUNT(*) FROM pragma_table_info('with_union')) > (SELECT COUNT(*) FROM pragma_table_info('without_union'));
+----
+true

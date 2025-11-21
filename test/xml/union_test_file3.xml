@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss>
+  <item>
+    <title>Job 5</title>
+    <link>https://example.com/5</link>
+    <description>Description for job 5</description>
+    <salary>100000</salary>
+  </item>
+</rss>
