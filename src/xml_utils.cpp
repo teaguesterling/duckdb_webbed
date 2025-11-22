@@ -1854,15 +1854,20 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 
 	// Parse using HTML parser with explicit UTF-8 encoding
 	// htmlReadMemory automatically decodes entities and handles UTF-8 correctly
-	xmlDocPtr doc = htmlReadMemory(wrapped.c_str(), wrapped.length(), nullptr, "UTF-8",
-	                               HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
+	// to ensure correct handling of international characters in HTML entities
+	xmlDocPtr raw_doc = htmlReadMemory(wrapped.c_str(), wrapped.length(), nullptr, "UTF-8",
+	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
 
-	if (!doc) {
+	if (!raw_doc) {
 		return html_str; // Fallback to original on error
 	}
 
+	// Use RAII pattern to ensure proper cleanup
+	XMLDocPtr doc(raw_doc);
+
 	// Extract text content from body element
-	xmlNodePtr root = xmlDocGetRootElement(doc);
+	xmlNodePtr root = xmlDocGetRootElement(doc.get());
 	std::string result;
 
 	if (root) {
@@ -1881,12 +1886,13 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 			if (content) {
 				result = std::string(reinterpret_cast<const char *>(content.get()));
 			}
+			// Return decoded result (may be empty if content is empty - this is correct)
+			return result;
 		}
 	}
 
-	xmlFreeDoc(doc);
-
-	return result.empty() ? html_str : result;
+	// Only return original string if parsing failed (body not found)
+	return html_str;
 }
 
 std::string XMLUtils::HTMLEscape(const std::string &text) {
@@ -1895,7 +1901,7 @@ std::string XMLUtils::HTMLEscape(const std::string &text) {
 	}
 
 	// Use libxml2's xmlEncodeSpecialChars to encode HTML entities
-	// Note: xmlEncodeSpecialChars encodes <, >, &, ", and '
+	// Note: xmlEncodeSpecialChars encodes &, <, >, and " (but not single quotes)
 	XMLCharPtr encoded(xmlEncodeSpecialChars(nullptr, BAD_CAST text.c_str()));
 
 	if (!encoded) {

@@ -52,6 +52,12 @@ SELECT html_unescape('');
 ----
 (empty)
 
+# Test 8b: Empty HTML content (should return empty, not original)
+query I
+SELECT html_unescape('&lt;p&gt;&lt;/p&gt;');
+----
+<p></p>
+
 # Test 9: Empty string escaping
 query I
 SELECT html_escape('');
