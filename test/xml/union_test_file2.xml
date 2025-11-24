@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss>
+  <item>
+    <title>Job 3</title>
+    <description>Description for job 3</description>
+    <location>New York</location>
+  </item>
+  <item>
+    <title>Job 4</title>
+    <description>Description for job 4</description>
+    <location>San Francisco</location>
+  </item>
+</rss>
