@@ -1,0 +1,92 @@
+# name: test/sql/xml_all_varchar.test
+# description: Test all_varchar parameter that forces all scalar datatypes to VARCHAR while preserving nested structures
+# group: [sql]
+
+require webbed
+
+# Test 1: Without all_varchar - types should be inferred (INTEGER, DOUBLE, BOOLEAN, DATE, LIST, STRUCT)
+query TTTTTT
+DESCRIBE SELECT id, name, age, salary, active, hired_date, skills, address FROM read_xml('test/xml/all_varchar_test.xml');
+----
+id	VARCHAR	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+age	INTEGER	YES	NULL	NULL	NULL
+salary	DOUBLE	YES	NULL	NULL	NULL
+active	BOOLEAN	YES	NULL	NULL	NULL
+hired_date	DATE	YES	NULL	NULL	NULL
+skills	STRUCT(skill VARCHAR)	YES	NULL	NULL	NULL
+address	STRUCT(street VARCHAR, city VARCHAR, zip INTEGER)	YES	NULL	NULL	NULL
+
+# Test 2: With all_varchar=true - all scalar types should be VARCHAR, but nested structures preserved
+query TTTTTT
+DESCRIBE SELECT id, name, age, salary, active, hired_date, skills, address FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true);
+----
+id	VARCHAR	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+age	VARCHAR	YES	NULL	NULL	NULL
+salary	VARCHAR	YES	NULL	NULL	NULL
+active	VARCHAR	YES	NULL	NULL	NULL
+hired_date	VARCHAR	YES	NULL	NULL	NULL
+skills	STRUCT(skill VARCHAR)	YES	NULL	NULL	NULL
+address	STRUCT(street VARCHAR, city VARCHAR, zip VARCHAR)	YES	NULL	NULL	NULL
+
+# Test 3: Verify actual data values with all_varchar=true
+query IIIIIIII
+SELECT id, name, age, salary, active, hired_date, skills, address
+FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true)
+WHERE id = '1';
+----
+1	Alice Johnson	28	75000.50	true	2020-01-15	{'skill': Python}	{'street': 123 Main St, 'city': Portland, 'zip': 97201}
+
+# Test 4: Verify that nested STRUCT fields are still VARCHAR
+query I
+SELECT address.street FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true) WHERE id = '2';
+----
+456 Oak Ave
+
+# Test 5: Verify that STRUCT fields are still VARCHAR
+query I
+SELECT skills.skill FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true) WHERE id = '3';
+----
+JavaScript
+
+# Test 6: Verify that using both columns and all_varchar raises an error
+statement error
+SELECT * FROM read_xml('test/xml/all_varchar_test.xml',
+    columns={
+        'id': 'INTEGER',
+        'name': 'VARCHAR',
+        'age': 'INTEGER'
+    },
+    all_varchar=true
+);
+----
+cannot use both "columns" parameter and "all_varchar" option
+
+# Test 7: Test with read_html function - verify parameter is accepted
+statement ok
+SELECT * FROM read_html('test/xml/test_all_varchar.html', all_varchar=true) WHERE 1=0;
+
+# Test 8: Verify VARCHAR types can still be cast back to original types if needed
+query III
+SELECT CAST(id AS INTEGER) as id_int, CAST(age AS INTEGER) as age_int, CAST(salary AS DOUBLE) as salary_dbl
+FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true)
+WHERE id = '1';
+----
+1	28	75000.5
+
+# Test 9: Test all_varchar with union_by_name (both should work together)
+query TTTTTT
+DESCRIBE SELECT a, b, c FROM read_xml(['test/xml/xml_file1.xml', 'test/xml/xml_file2.xml'], union_by_name=true, all_varchar=true);
+----
+a	VARCHAR	YES	NULL	NULL	NULL
+b	VARCHAR	YES	NULL	NULL	NULL
+c	VARCHAR	YES	NULL	NULL	NULL
+
+# Test 10: Verify all_varchar parameter default is false
+query TTTTT
+SELECT typeof(id), typeof(age), typeof(salary), typeof(active), typeof(hired_date)
+FROM read_xml('test/xml/all_varchar_test.xml')
+LIMIT 1;
+----
+VARCHAR	INTEGER	DOUBLE	BOOLEAN	DATE
