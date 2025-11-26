@@ -815,6 +815,16 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto parse_html_function =
 	    ScalarFunction("parse_html", {LogicalType::VARCHAR}, XMLTypes::HTMLType(), ReadHTMLFunction);
 	loader.RegisterFunction(parse_html_function);
+
+	// Register html_unescape function
+	auto html_unescape_function =
+	    ScalarFunction("html_unescape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLUnescapeFunction);
+	loader.RegisterFunction(html_unescape_function);
+
+	// Register html_escape function
+	auto html_escape_function =
+	    ScalarFunction("html_escape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLEscapeFunction);
+	loader.RegisterFunction(html_escape_function);
 }
 
 // HTML-specific extraction function implementations
@@ -1269,6 +1279,26 @@ void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &stat
 			    return StringVector::AddString(result, html_content);
 		    }
 	    });
+}
+
+void XMLScalarFunctions::HTMLUnescapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+
+	UnaryExecutor::Execute<string_t, string_t>(html_vector, result, args.size(), [&](string_t html_str) {
+		std::string html_string = html_str.GetString();
+		std::string unescaped = XMLUtils::HTMLUnescape(html_string);
+		return StringVector::AddString(result, unescaped);
+	});
+}
+
+void XMLScalarFunctions::HTMLEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &text_vector = args.data[0];
+
+	UnaryExecutor::Execute<string_t, string_t>(text_vector, result, args.size(), [&](string_t text_str) {
+		std::string text = text_str.GetString();
+		std::string escaped = XMLUtils::HTMLEscape(text);
+		return StringVector::AddString(result, escaped);
+	});
 }
 
 } // namespace duckdb
