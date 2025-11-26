@@ -1092,6 +1092,7 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 						// Skip this file - move to next
 						gstate.file_index++;
 						gstate.current_row_in_file = 0;
+						gstate.current_file_rows.clear();
 						continue;
 					} else {
 						throw InvalidInputException("File %s contains invalid XML", filename);
