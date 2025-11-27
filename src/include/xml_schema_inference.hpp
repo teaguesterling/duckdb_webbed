@@ -206,6 +206,10 @@ private:
 
 	static std::string StripNamespacePrefix(const std::string &name);
 
+	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name,
+	                                 const XMLSchemaOptions &options,
+	                                 std::vector<xmlNodePtr> &result);
+
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 
 	static std::string CleanTextContent(const std::string &text);
