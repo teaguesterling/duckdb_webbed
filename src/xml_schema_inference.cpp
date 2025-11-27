@@ -823,19 +823,24 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 			continue; // Skip empty values
 		}
 
-		// Test types in order of specificity
-		if (options.boolean_detection && IsBoolean(sample)) {
-			detected_types.push_back(LogicalType::BOOLEAN);
-		} else if (options.numeric_detection && IsInteger(sample)) {
-			detected_types.push_back(LogicalType::INTEGER);
-		} else if (options.numeric_detection && IsDouble(sample)) {
-			detected_types.push_back(LogicalType::DOUBLE);
-		} else if (options.temporal_detection && IsDate(sample)) {
+		// Test types in order of specificity (most specific to least specific)
+		// Temporal types first (very specific format requirements)
+		if (options.temporal_detection && IsDate(sample)) {
 			detected_types.push_back(LogicalType::DATE);
 		} else if (options.temporal_detection && IsTimestamp(sample)) {
 			detected_types.push_back(LogicalType::TIMESTAMP);
 		} else if (options.temporal_detection && IsTime(sample)) {
 			detected_types.push_back(LogicalType::TIME);
+		}
+		// Numeric types before boolean to avoid "1"/"0" being detected as boolean
+		else if (options.numeric_detection && IsInteger(sample)) {
+			detected_types.push_back(LogicalType::INTEGER);
+		} else if (options.numeric_detection && IsDouble(sample)) {
+			detected_types.push_back(LogicalType::DOUBLE);
+		}
+		// Boolean after numeric types (avoids ambiguity with 0/1)
+		else if (options.boolean_detection && IsBoolean(sample)) {
+			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
 		}
@@ -1018,6 +1023,14 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 		if (static_cast<double>(pair.second) / total >= threshold) {
 			return LogicalType(pair.first);
 		}
+	}
+
+	// Special case: if we have a mix of INTEGER and DOUBLE, promote to DOUBLE
+	// (INTEGER is a subset of DOUBLE, so this is a safe widening conversion)
+	if (type_counts.size() == 2 &&
+	    type_counts.count(LogicalTypeId::INTEGER) &&
+	    type_counts.count(LogicalTypeId::DOUBLE)) {
+		return LogicalType::DOUBLE;
 	}
 
 	// Fallback: if we have mixed types, prefer VARCHAR for safety
