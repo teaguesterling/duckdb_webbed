@@ -747,6 +747,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
                                                          vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 
+	const char *function_name = "read_xml";
+
 	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
 		throw InvalidInputException("read_xml requires at least one argument (file pattern or array of file patterns)");
@@ -912,8 +914,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 	// Check for conflicting parameters
 	if (has_explicit_columns && schema_options.all_varchar) {
-		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
-		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
+		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
+		                      function_name);
 	}
 
 	// Store schema options in bind_data for use during execution
