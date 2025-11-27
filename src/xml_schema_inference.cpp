@@ -21,6 +21,26 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 	return name;
 }
 
+// Helper: Collect all child elements with a specific name from a parent node
+void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::string &child_name,
+                                              const XMLSchemaOptions &options,
+                                              std::vector<xmlNodePtr> &result) {
+	if (!parent) {
+		return;
+	}
+	for (xmlNodePtr sibling = parent->children; sibling; sibling = sibling->next) {
+		if (sibling->type == XML_ELEMENT_NODE) {
+			std::string sibling_name((const char *)sibling->name);
+			if (options.namespaces == "strip") {
+				sibling_name = StripNamespacePrefix(sibling_name);
+			}
+			if (sibling_name == child_name) {
+				result.push_back(sibling);
+			}
+		}
+	}
+}
+
 // NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
                                                            const XMLSchemaOptions &options) {
@@ -425,17 +445,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						ColumnAnalysis nested_col(child_name, false);
 
 						// Collect ALL instances of this child element (not just the first)
-						for (xmlNodePtr sibling = first->children; sibling; sibling = sibling->next) {
-							if (sibling->type == XML_ELEMENT_NODE) {
-								std::string sibling_name((const char *)sibling->name);
-								if (options.namespaces == "strip") {
-									sibling_name = StripNamespacePrefix(sibling_name);
-								}
-								if (sibling_name == child_name) {
-									nested_col.instances.push_back(sibling);
-								}
-							}
-						}
+						CollectChildElements(first, child_name, options, nested_col.instances);
 
 						nested_col.occurrence_count = child_counts[child_name];
 						nested_col.repeats_in_record = (child_counts[child_name] > 1);
@@ -492,17 +502,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					ColumnAnalysis nested_col(child_name, false);
 
 					// Collect ALL instances of this child element (not just the first)
-					for (xmlNodePtr sibling = first->children; sibling; sibling = sibling->next) {
-						if (sibling->type == XML_ELEMENT_NODE) {
-							std::string sibling_name((const char *)sibling->name);
-							if (options.namespaces == "strip") {
-								sibling_name = StripNamespacePrefix(sibling_name);
-							}
-							if (sibling_name == child_name) {
-								nested_col.instances.push_back(sibling);
-							}
-						}
-					}
+					CollectChildElements(first, child_name, options, nested_col.instances);
 
 					nested_col.occurrence_count = child_counts[child_name];
 					nested_col.repeats_in_record = (child_counts[child_name] > 1);
