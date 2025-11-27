@@ -284,8 +284,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 	// Check for conflicting parameters
 	if (has_explicit_columns && schema_options.all_varchar) {
-		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
-		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
+		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
+		                      function_name);
 	}
 
 	// Store schema options in bind_data for use during execution
