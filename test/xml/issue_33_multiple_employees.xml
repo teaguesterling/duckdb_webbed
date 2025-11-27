@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<employees>
+  <employee>
+    <id>1</id>
+    <name>Alice Johnson</name>
+    <skills>
+      <skill>Python</skill>
+      <skill>SQL</skill>
+      <skill>DuckDB</skill>
+    </skills>
+  </employee>
+  <employee>
+    <id>2</id>
+    <name>Bob Smith</name>
+    <skills>
+      <skill>Java</skill>
+      <skill>C++</skill>
+    </skills>
+  </employee>
+  <employee>
+    <id>3</id>
+    <name>Carol White</name>
+    <skills>
+      <skill>JavaScript</skill>
+      <skill>TypeScript</skill>
+      <skill>React</skill>
+    </skills>
+  </employee>
+</employees>

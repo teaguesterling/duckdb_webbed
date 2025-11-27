@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<people>
+  <person>
+    <id>1</id>
+    <contact>
+      <address>123 Main St</address>
+      <phones>
+        <phone>555-1234</phone>
+        <phone>555-5678</phone>
+      </phones>
+    </contact>
+  </person>
+</people>

@@ -14,7 +14,7 @@ age	INTEGER	YES	NULL	NULL	NULL
 salary	DOUBLE	YES	NULL	NULL	NULL
 active	BOOLEAN	YES	NULL	NULL	NULL
 hired_date	DATE	YES	NULL	NULL	NULL
-skills	STRUCT(skill VARCHAR)	YES	NULL	NULL	NULL
+skills	STRUCT(skill VARCHAR[])	YES	NULL	NULL	NULL
 address	STRUCT(street VARCHAR, city VARCHAR, zip INTEGER)	YES	NULL	NULL	NULL
 
 # Test 2: With all_varchar=true - all scalar types should be VARCHAR, but nested structures preserved
@@ -27,7 +27,7 @@ age	VARCHAR	YES	NULL	NULL	NULL
 salary	VARCHAR	YES	NULL	NULL	NULL
 active	VARCHAR	YES	NULL	NULL	NULL
 hired_date	VARCHAR	YES	NULL	NULL	NULL
-skills	STRUCT(skill VARCHAR)	YES	NULL	NULL	NULL
+skills	STRUCT(skill VARCHAR[])	YES	NULL	NULL	NULL
 address	STRUCT(street VARCHAR, city VARCHAR, zip VARCHAR)	YES	NULL	NULL	NULL
 
 # Test 3: Verify actual data values with all_varchar=true
@@ -36,7 +36,7 @@ SELECT id, name, age, salary, active, hired_date, skills, address
 FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true)
 WHERE id = '1';
 ----
-1	Alice Johnson	28	75000.50	true	2020-01-15	{'skill': Python}	{'street': 123 Main St, 'city': Portland, 'zip': 97201}
+1	Alice Johnson	28	75000.50	true	2020-01-15	{'skill': [Python, SQL, DuckDB]}	{'street': 123 Main St, 'city': Portland, 'zip': 97201}
 
 # Test 4: Verify that nested STRUCT fields are still VARCHAR
 query I
@@ -44,11 +44,13 @@ SELECT address.street FROM read_xml('test/xml/all_varchar_test.xml', all_varchar
 ----
 456 Oak Ave
 
-# Test 5: Verify that STRUCT fields are still VARCHAR
+# Test 5: Verify that repeated skill elements are properly collected as a list
 query I
-SELECT skills.skill FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true) WHERE id = '3';
+SELECT unnest(skills.skill) FROM read_xml('test/xml/all_varchar_test.xml', all_varchar=true) WHERE id = '3' ORDER BY 1;
 ----
 JavaScript
+React
+TypeScript
 
 # Test 6: Verify that using both columns and all_varchar raises an error
 statement error
