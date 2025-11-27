@@ -89,6 +89,10 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t file_index = 0;
 	vector<string> files;
 
+	// Track position within current file's extracted rows
+	idx_t current_row_in_file = 0;
+	std::vector<std::vector<Value>> current_file_rows; // Cached extracted rows for current file
+
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now
 	}
