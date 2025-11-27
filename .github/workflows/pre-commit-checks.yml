@@ -1,0 +1,82 @@
+name: Pre-commit Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format-and-test:
+    name: Format Check & Unit Tests
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v14
+        with:
+          name: devenv
+
+      - name: Install devenv
+        run: |
+          nix profile install --accept-flake-config nixpkgs#devenv
+
+      - name: Cache vcpkg
+        uses: actions/cache@v3
+        with:
+          path: |
+            vcpkg
+            ~/.cache/vcpkg
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Setup vcpkg
+        run: |
+          if [ ! -d "vcpkg" ]; then
+            git clone https://github.com/Microsoft/vcpkg.git
+          fi
+          if [ ! -f "vcpkg/vcpkg" ]; then
+            ./vcpkg/bootstrap-vcpkg.sh
+          fi
+
+      - name: Cache build directory
+        uses: actions/cache@v3
+        with:
+          path: build/release
+          key: ${{ runner.os }}-build-${{ hashFiles('src/**', 'CMakeLists.txt', 'vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+
+      - name: Build project
+        run: |
+          devenv shell bash -c "make release GEN=ninja VCPKG_TOOLCHAIN_PATH=\$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Install pre-commit hooks
+        run: |
+          devenv shell bash -c "pre-commit install"
+
+      - name: Run clang-format check
+        run: |
+          devenv shell bash -c "pre-commit run clang-format --all-files"
+
+      - name: Run unit tests
+        run: |
+          devenv shell bash -c "make test"

@@ -7,8 +7,8 @@ namespace duckdb {
 
 // Parse mode for document reading
 enum class ParseMode {
-	XML,  // Strict XML parsing
-	HTML  // Lenient HTML parsing
+	XML, // Strict XML parsing
+	HTML // Lenient HTML parsing
 };
 
 class XMLReaderFunctions {
@@ -22,15 +22,14 @@ public:
 private:
 	// Internal unified functions (used by both XML and HTML)
 	static unique_ptr<FunctionData> ReadDocumentObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                         vector<LogicalType> &return_types, vector<string> &names,
-	                                                         ParseMode mode);
+	                                                        vector<LogicalType> &return_types, vector<string> &names,
+	                                                        ParseMode mode);
 	static unique_ptr<FunctionData> ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                  vector<LogicalType> &return_types, vector<string> &names,
-	                                                  ParseMode mode);
+	                                                 vector<LogicalType> &return_types, vector<string> &names,
+	                                                 ParseMode mode);
 	static void ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static void ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
-	static unique_ptr<GlobalTableFunctionState> ReadDocumentInit(ClientContext &context,
-	                                                              TableFunctionInitInput &input);
+	static unique_ptr<GlobalTableFunctionState> ReadDocumentInit(ClientContext &context, TableFunctionInitInput &input);
 
 	// Public XML functions (delegate to internal functions)
 	static void ReadXMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
@@ -47,9 +46,9 @@ private:
 	// Public HTML functions (delegate to internal functions)
 	static void ReadHTMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                     vector<LogicalType> &return_types, vector<string> &names);
+	                                                    vector<LogicalType> &return_types, vector<string> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadHTMLObjectsInit(ClientContext &context,
-	                                                                 TableFunctionInitInput &input);
+	                                                                TableFunctionInitInput &input);
 
 	static void ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
@@ -68,7 +67,7 @@ private:
 struct XMLReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool ignore_errors = false;
-	idx_t max_file_size = 16777216; // 16MB default
+	idx_t max_file_size = 16777216;        // 16MB default
 	ParseMode parse_mode = ParseMode::XML; // Parsing mode (XML or HTML)
 
 	// For _objects functions
@@ -81,11 +80,18 @@ struct XMLReadFunctionData : public TableFunctionData {
 
 	// Schema inference options (for read_xml with auto schema detection)
 	XMLSchemaOptions schema_options;
+
+	// Union by name - combine files with different schemas
+	bool union_by_name = false;
 };
 
 struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t file_index = 0;
 	vector<string> files;
+
+	// Track position within current file's extracted rows
+	idx_t current_row_in_file = 0;
+	std::vector<std::vector<Value>> current_file_rows; // Cached extracted rows for current file
 
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now

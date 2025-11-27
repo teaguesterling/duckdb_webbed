@@ -18,9 +18,9 @@ namespace duckdb {
 // =============================================================================
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientContext &context,
-                                                                      TableFunctionBindInput &input,
-                                                                      vector<LogicalType> &return_types,
-                                                                      vector<string> &names, ParseMode mode) {
+                                                                     TableFunctionBindInput &input,
+                                                                     vector<LogicalType> &return_types,
+                                                                     vector<string> &names, ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
 	result->parse_mode = mode;
 
@@ -99,7 +99,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadDocumentInit(ClientContext &context,
-                                                                           TableFunctionInitInput &input) {
+                                                                          TableFunctionInitInput &input) {
 	auto result = make_uniq<XMLReadGlobalState>();
 	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
 
@@ -110,8 +110,8 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadDocumentInit(Client
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-                                                               vector<LogicalType> &return_types, vector<string> &names,
-                                                               ParseMode mode) {
+                                                              vector<LogicalType> &return_types, vector<string> &names,
+                                                              ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
 	result->parse_mode = mode;
 
@@ -169,6 +169,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "union_by_name") {
+			result->union_by_name = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
@@ -238,6 +240,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				throw BinderException("%s \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
 				                      function_name, unnest_mode);
 			}
+		} else if (kv.first == "all_varchar") {
+			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -278,22 +282,107 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		}
 	}
 
+	// Check for conflicting parameters
+	if (has_explicit_columns && schema_options.all_varchar) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
+		                      function_name);
+	}
+
 	// Store schema options in bind_data for use during execution
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
 	if (!has_explicit_columns) {
 		try {
-			auto first_file = result->files[0];
-			auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
+			// Determine which files to scan for schema inference
+			std::vector<std::string> files_to_scan;
+			if (result->union_by_name) {
+				// Scan all files to build union schema
+				files_to_scan = result->files;
+			} else {
+				// Scan only first file
+				files_to_scan.push_back(result->files[0]);
+			}
 
-			if (file_size > result->max_file_size) {
-				if (!result->ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", first_file,
-					                            result->max_file_size);
+			// Map to track all unique columns and their types across files
+			std::unordered_map<std::string, LogicalType> union_schema;
+			std::vector<std::string> column_order; // Track order of first appearance
+
+			// Scan each file for schema
+			for (const auto &file_path : files_to_scan) {
+				try {
+					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+					auto file_size = fs.GetFileSize(*file_handle);
+
+					if (file_size > result->max_file_size) {
+						if (!result->ignore_errors) {
+							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
+							                            result->max_file_size);
+						}
+						continue; // Skip this file
+					}
+
+					// Read file content for schema inference
+					string content;
+					content.resize(file_size);
+					file_handle->Read((void *)content.data(), file_size);
+
+					// For XML mode, validate; for HTML mode, be more lenient
+					if (mode == ParseMode::XML) {
+						if (!XMLUtils::IsValidXML(content)) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s contains invalid XML", file_path);
+							}
+							continue; // Skip this file
+						}
+					}
+					// HTML mode: skip validation, let libxml2's HTML parser handle malformed content
+
+					// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
+					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+
+					// Merge columns into union schema
+					for (const auto &col_info : inferred_columns) {
+						auto it = union_schema.find(col_info.name);
+						if (it == union_schema.end()) {
+							// New column - add it
+							union_schema[col_info.name] = col_info.type;
+							column_order.push_back(col_info.name);
+						} else {
+							// Column exists - check if type needs to be generalized
+							// If types differ, use VARCHAR as the most general type
+							if (it->second != col_info.type) {
+								// For now, use VARCHAR for conflicting types
+								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
+								it->second = LogicalType::VARCHAR;
+							}
+						}
+					}
+
+				} catch (const Exception &e) {
+					if (!result->ignore_errors) {
+						throw;
+					}
+					// Skip this file and continue
 				}
-				// Fallback to simple schema based on mode
+			}
+
+			// Convert union schema to return types
+			if (!union_schema.empty()) {
+				for (const auto &col_name : column_order) {
+					names.push_back(col_name);
+					return_types.push_back(union_schema[col_name]);
+				}
+
+				// Store union schema as explicit schema for execution
+				if (result->union_by_name) {
+					result->has_explicit_schema = true;
+					result->column_names = names;
+					result->column_types = return_types;
+				}
+			} else {
+				// Fallback to simple schema if no columns were inferred
 				if (mode == ParseMode::HTML) {
 					return_types.push_back(XMLTypes::HTMLType());
 					names.push_back("html");
@@ -301,35 +390,6 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					return_types.push_back(XMLTypes::XMLType());
 					names.push_back("xml");
 				}
-				return std::move(result);
-			}
-
-			// Read file content for schema inference
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
-
-			// For XML mode, validate; for HTML mode, be more lenient
-			if (mode == ParseMode::XML) {
-				if (!XMLUtils::IsValidXML(content)) {
-					if (!result->ignore_errors) {
-						throw InvalidInputException("File %s contains invalid XML", first_file);
-					}
-					// Fallback to simple schema
-					return_types.push_back(XMLTypes::XMLType());
-					names.push_back("xml");
-					return std::move(result);
-				}
-			}
-			// HTML mode: skip validation, let libxml2's HTML parser handle malformed content
-
-			// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
-			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
-
-			// Convert to DuckDB schema
-			for (const auto &col_info : inferred_columns) {
-				return_types.push_back(col_info.type);
-				names.push_back(col_info.name);
 			}
 
 		} catch (const Exception &e) {
@@ -362,7 +422,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 }
 
 void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
-                                                      DataChunk &output) {
+                                                     DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
 
@@ -454,71 +514,95 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 	const auto &schema_options = bind_data.schema_options;
 
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
+		// DON'T increment file_index yet - we may not finish this file in one chunk
+		const auto &filename = gstate.files[gstate.file_index];
 
 		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
+			// Check if we need to extract rows for current file
+			if (gstate.current_file_rows.empty()) {
+				// Need to extract rows from current file
+				// Check file size
+				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+				auto file_size = fs.GetFileSize(*file_handle);
 
-			if (file_size > bind_data.max_file_size) {
-				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-					                            bind_data.max_file_size);
+				if (file_size > bind_data.max_file_size) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
+						                            bind_data.max_file_size);
+					}
+					// Skip this file - move to next
+					gstate.file_index++;
+					gstate.current_row_in_file = 0;
+					gstate.current_file_rows.clear();
+					continue;
 				}
-				continue; // Skip this file
-			}
 
-			// Read file content
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
+				// Read file content
+				string content;
+				content.resize(file_size);
+				file_handle->Read((void *)content.data(), file_size);
 
-			// Validate content based on mode
-			if (is_html) {
-				// HTML mode: be lenient, skip validation
-				// Let libxml2's HTML parser handle malformed content
-			} else {
-				// XML mode: strict validation
-				if (!XMLUtils::IsValidXML(content)) {
-					if (bind_data.ignore_errors) {
-						continue; // Skip this invalid file
-					} else {
-						throw InvalidInputException("File %s contains invalid XML", filename);
+				// Validate content based on mode
+				if (is_html) {
+					// HTML mode: be lenient, skip validation
+					// Let libxml2's HTML parser handle malformed content
+				} else {
+					// XML mode: strict validation
+					if (!XMLUtils::IsValidXML(content)) {
+						if (bind_data.ignore_errors) {
+							// Skip this file - move to next
+							gstate.file_index++;
+							gstate.current_row_in_file = 0;
+							continue;
+						} else {
+							throw InvalidInputException("File %s contains invalid XML", filename);
+						}
 					}
 				}
-			}
 
-			// Extract structured data using appropriate method
-			std::vector<std::vector<Value>> extracted_rows;
-
-			if (bind_data.has_explicit_schema) {
-				// Use explicit schema for extraction
-				extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
-				                                                           bind_data.column_types, schema_options);
-			} else {
-				// Use schema inference
-				extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
-			}
-
-			// Fill output vectors with extracted data
-			for (const auto &row : extracted_rows) {
-				if (output_idx >= STANDARD_VECTOR_SIZE) {
-					break;
+				// Extract structured data using appropriate method
+				if (bind_data.has_explicit_schema) {
+					// Use explicit schema for extraction
+					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
+					    content, bind_data.column_names, bind_data.column_types, schema_options);
+				} else {
+					// Use schema inference
+					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
 				}
+
+				// Reset row offset for this file
+				gstate.current_row_in_file = 0;
+			}
+
+			// Fill output vectors with extracted data, starting from current_row_in_file
+			while (gstate.current_row_in_file < gstate.current_file_rows.size() && output_idx < STANDARD_VECTOR_SIZE) {
+				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
 
 				// Set values for each column in the row
 				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
 					output.data[col_idx].SetValue(output_idx, row[col_idx]);
 				}
+
 				output_idx++;
+				gstate.current_row_in_file++;
+			}
+
+			// Check if we've finished all rows from this file
+			if (gstate.current_row_in_file >= gstate.current_file_rows.size()) {
+				// Finished this file - move to next file
+				gstate.file_index++;
+				gstate.current_row_in_file = 0;
+				gstate.current_file_rows.clear(); // Free memory
 			}
 
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
 			}
-			// Skip this file and continue
+			// Skip this file and continue - move to next file
+			gstate.file_index++;
+			gstate.current_row_in_file = 0;
+			gstate.current_file_rows.clear();
 		}
 
 		// If we filled up the output, break
@@ -738,6 +822,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "union_by_name") {
+			result->union_by_name = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
@@ -807,6 +893,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				throw BinderException("read_xml \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
 				                      unnest_mode);
 			}
+		} else if (kv.first == "all_varchar") {
+			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -846,50 +934,105 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		}
 	}
 
+	// Check for conflicting parameters
+	if (has_explicit_columns && schema_options.all_varchar) {
+		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
+	}
+
 	// Store schema options in bind_data for use during execution
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
 	if (!has_explicit_columns) {
 		try {
-			auto first_file = result->files[0];
-			auto file_handle = fs.OpenFile(first_file, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-
-			if (file_size > result->max_file_size) {
-				if (!result->ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", first_file,
-					                            result->max_file_size);
-				}
-				// Fallback to simple schema
-				return_types.push_back(XMLTypes::XMLType());
-				names.push_back("xml");
-				return std::move(result);
+			// Determine which files to scan for schema inference
+			std::vector<std::string> files_to_scan;
+			if (result->union_by_name) {
+				// Scan all files to build union schema
+				files_to_scan = result->files;
+			} else {
+				// Scan only first file
+				files_to_scan.push_back(result->files[0]);
 			}
 
-			// Read file content for schema inference
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
+			// Map to track all unique columns and their types across files
+			std::unordered_map<std::string, LogicalType> union_schema;
+			std::vector<std::string> column_order; // Track order of first appearance
 
-			// Validate XML
-			if (!XMLUtils::IsValidXML(content)) {
-				if (!result->ignore_errors) {
-					throw InvalidInputException("File %s contains invalid XML", first_file);
+			// Scan each file for schema
+			for (const auto &file_path : files_to_scan) {
+				try {
+					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+					auto file_size = fs.GetFileSize(*file_handle);
+
+					if (file_size > result->max_file_size) {
+						if (!result->ignore_errors) {
+							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
+							                            result->max_file_size);
+						}
+						continue; // Skip this file
+					}
+
+					// Read file content for schema inference
+					string content;
+					content.resize(file_size);
+					file_handle->Read((void *)content.data(), file_size);
+
+					// Validate XML
+					if (!XMLUtils::IsValidXML(content)) {
+						if (!result->ignore_errors) {
+							throw InvalidInputException("File %s contains invalid XML", file_path);
+						}
+						continue; // Skip this file
+					}
+
+					// Perform schema inference
+					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+
+					// Merge columns into union schema
+					for (const auto &col_info : inferred_columns) {
+						auto it = union_schema.find(col_info.name);
+						if (it == union_schema.end()) {
+							// New column - add it
+							union_schema[col_info.name] = col_info.type;
+							column_order.push_back(col_info.name);
+						} else {
+							// Column exists - check if type needs to be generalized
+							// If types differ, use VARCHAR as the most general type
+							if (it->second != col_info.type) {
+								// For now, use VARCHAR for conflicting types
+								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
+								it->second = LogicalType::VARCHAR;
+							}
+						}
+					}
+
+				} catch (const Exception &e) {
+					if (!result->ignore_errors) {
+						throw;
+					}
+					// Skip this file and continue
 				}
-				// Fallback to simple schema
-				return_types.push_back(XMLTypes::XMLType());
-				names.push_back("xml");
-				return std::move(result);
 			}
 
-			// Perform schema inference
-			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+			// Convert union schema to return types
+			if (!union_schema.empty()) {
+				for (const auto &col_name : column_order) {
+					names.push_back(col_name);
+					return_types.push_back(union_schema[col_name]);
+				}
 
-			// Convert to DuckDB schema
-			for (const auto &col_info : inferred_columns) {
-				return_types.push_back(col_info.type);
-				names.push_back(col_info.name);
+				// Store union schema as explicit schema for execution
+				if (result->union_by_name) {
+					result->has_explicit_schema = true;
+					result->column_names = names;
+					result->column_types = return_types;
+				}
+			} else {
+				// Fallback to simple schema if no columns were inferred
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
 			}
 
 		} catch (const Exception &e) {
@@ -932,65 +1075,90 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 	const auto &schema_options = bind_data.schema_options;
 
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
+		// DON'T increment file_index yet - we may not finish this file in one chunk
+		const auto &filename = gstate.files[gstate.file_index];
 
 		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
+			// Check if we need to extract rows for current file
+			if (gstate.current_file_rows.empty()) {
+				// Need to extract rows from current file
+				// Check file size
+				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+				auto file_size = fs.GetFileSize(*file_handle);
 
-			if (file_size > bind_data.max_file_size) {
-				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-					                            bind_data.max_file_size);
+				if (file_size > bind_data.max_file_size) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
+						                            bind_data.max_file_size);
+					}
+					// Skip this file - move to next
+					gstate.file_index++;
+					gstate.current_row_in_file = 0;
+					gstate.current_file_rows.clear();
+					continue;
 				}
-				continue; // Skip this file
-			}
 
-			// Read file content
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
+				// Read file content
+				string content;
+				content.resize(file_size);
+				file_handle->Read((void *)content.data(), file_size);
 
-			// Validate XML
-			if (!XMLUtils::IsValidXML(content)) {
-				if (bind_data.ignore_errors) {
-					continue; // Skip this invalid file
+				// Validate XML
+				if (!XMLUtils::IsValidXML(content)) {
+					if (bind_data.ignore_errors) {
+						// Skip this file - move to next
+						gstate.file_index++;
+						gstate.current_row_in_file = 0;
+						gstate.current_file_rows.clear();
+						continue;
+					} else {
+						throw InvalidInputException("File %s contains invalid XML", filename);
+					}
+				}
+
+				// Extract structured data using appropriate method
+				if (bind_data.has_explicit_schema) {
+					// Use explicit schema for extraction
+					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
+					    content, bind_data.column_names, bind_data.column_types, schema_options);
 				} else {
-					throw InvalidInputException("File %s contains invalid XML", filename);
+					// Use schema inference
+					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
 				}
+
+				// Reset row offset for this file
+				gstate.current_row_in_file = 0;
 			}
 
-			// Extract structured data using appropriate method
-			std::vector<std::vector<Value>> extracted_rows;
-
-			if (bind_data.has_explicit_schema) {
-				// Use explicit schema for extraction
-				extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
-				                                                           bind_data.column_types, schema_options);
-			} else {
-				// Use schema inference
-				extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
-			}
-
-			// Fill output vectors with extracted data
-			for (const auto &row : extracted_rows) {
-				if (output_idx >= STANDARD_VECTOR_SIZE) {
-					break;
-				}
+			// Fill output vectors with extracted data, starting from current_row_in_file
+			while (gstate.current_row_in_file < gstate.current_file_rows.size() && output_idx < STANDARD_VECTOR_SIZE) {
+				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
 
 				// Set values for each column in the row
 				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
 					output.data[col_idx].SetValue(output_idx, row[col_idx]);
 				}
+
 				output_idx++;
+				gstate.current_row_in_file++;
+			}
+
+			// Check if we've finished all rows from this file
+			if (gstate.current_row_in_file >= gstate.current_file_rows.size()) {
+				// Finished this file - move to next file
+				gstate.file_index++;
+				gstate.current_row_in_file = 0;
+				gstate.current_file_rows.clear(); // Free memory
 			}
 
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
 			}
-			// Skip this file and continue
+			// Skip this file and continue - move to next file
+			gstate.file_index++;
+			gstate.current_row_in_file = 0;
+			gstate.current_file_rows.clear();
 		}
 
 		// If we filled up the output, break
@@ -1031,28 +1199,28 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 // =============================================================================
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                  vector<LogicalType> &return_types,
-                                                                  vector<string> &names) {
+                                                                 vector<LogicalType> &return_types,
+                                                                 vector<string> &names) {
 	return ReadDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLObjectsInit(ClientContext &context,
-                                                                               TableFunctionInitInput &input) {
+                                                                             TableFunctionInitInput &input) {
 	return ReadDocumentInit(context, input);
 }
 
 void XMLReaderFunctions::ReadHTMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
-                                                  DataChunk &output) {
+                                                 DataChunk &output) {
 	return ReadDocumentObjectsFunction(context, data_p, output);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types, vector<string> &names) {
 	return ReadDocumentBind(context, input, return_types, names, ParseMode::HTML);
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadHTMLInit(ClientContext &context,
-                                                                       TableFunctionInitInput &input) {
+                                                                      TableFunctionInitInput &input) {
 	return ReadDocumentInit(context, input);
 }
 
@@ -1089,20 +1257,25 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunction read_xml_single("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, ReadXMLBind, ReadXMLInit);
 	read_xml_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_xml_single.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	// Schema inference parameters
 	read_xml_single.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_single.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_xml_single.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
-	read_xml_single.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
-	read_xml_single.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
-	read_xml_single.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_xml_single.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_xml_single.named_parameters["attr_prefix"] =
+	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
+	read_xml_single.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
+	read_xml_single.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
+	read_xml_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_single.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_xml_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	read_xml_single.named_parameters["record_element"] =
+	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_xml_single.named_parameters["force_list"] =
+	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1110,20 +1283,25 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                             ReadXMLInit);
 	read_xml_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_xml_array.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	// Schema inference parameters
 	read_xml_array.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_array.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_xml_array.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
-	read_xml_array.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
-	read_xml_array.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
-	read_xml_array.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_xml_array.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_xml_array.named_parameters["attr_prefix"] =
+	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
+	read_xml_array.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
+	read_xml_array.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
+	read_xml_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_array.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_xml_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	read_xml_array.named_parameters["record_element"] =
+	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_xml_array.named_parameters["force_list"] =
+	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -1135,21 +1313,26 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunction read_html_single("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
 	read_html_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_single.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["filename"] = LogicalType::BOOLEAN;
 	// Schema inference parameters (same as read_xml for API consistency)
 	read_html_single.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_html_single.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_html_single.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
-	read_html_single.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
-	read_html_single.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
-	read_html_single.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_html_single.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_html_single.named_parameters["attr_prefix"] =
+	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
+	read_html_single.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
+	read_html_single.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
+	read_html_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_html_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_html_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_html_single.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_html_single.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	read_html_single.named_parameters["record_element"] =
+	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_html_single.named_parameters["force_list"] =
+	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_html_single.named_parameters["columns"] = LogicalType::ANY;
+	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1157,21 +1340,26 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                              ReadHTMLBind, ReadHTMLInit);
 	read_html_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_array.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["filename"] = LogicalType::BOOLEAN;
 	// Schema inference parameters (same as read_xml for API consistency)
 	read_html_array.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_html_array.named_parameters["attr_mode"] = LogicalType::VARCHAR;       // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_html_array.named_parameters["attr_prefix"] = LogicalType::VARCHAR;     // Prefix for attributes when attr_mode='prefixed'
-	read_html_array.named_parameters["text_key"] = LogicalType::VARCHAR;        // Key for mixed text content
-	read_html_array.named_parameters["namespaces"] = LogicalType::VARCHAR;      // 'strip' | 'expand' | 'keep'
-	read_html_array.named_parameters["empty_elements"] = LogicalType::VARCHAR;  // 'null' | 'string' | 'object'
+	read_html_array.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
+	read_html_array.named_parameters["attr_prefix"] =
+	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
+	read_html_array.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
+	read_html_array.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
+	read_html_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_html_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_html_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_html_array.named_parameters["record_element"] = LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_html_array.named_parameters["force_list"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	read_html_array.named_parameters["record_element"] =
+	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
+	read_html_array.named_parameters["force_list"] =
+	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_html_array.named_parameters["columns"] = LogicalType::ANY;
+	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);
@@ -1202,7 +1390,6 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                           HTMLExtractTablesBind, HTMLExtractTablesInit);
 	loader.RegisterFunction(html_extract_tables_function);
 }
-
 
 unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context,
                                                                    TableFunctionBindInput &input,

@@ -1,0 +1,101 @@
+# name: test/sql/html_entity_encoding.test
+# description: Test html_escape and html_unescape functions with UTF-8 characters
+# group: [sql]
+
+require webbed
+
+# Test 1: Basic HTML entity unescaping
+query I
+SELECT html_unescape('&lt;p&gt;Hello &amp; goodbye&lt;/p&gt;');
+----
+<p>Hello & goodbye</p>
+
+# Test 2: Basic HTML entity escaping
+query I
+SELECT html_escape('<p>Hello & goodbye</p>');
+----
+&lt;p&gt;Hello &amp; goodbye&lt;/p&gt;
+
+# Test 3: UTF-8 characters with HTML entities (Finnish)
+query I
+SELECT html_unescape('&lt;p&gt;Lähde mukaan&lt;/p&gt;');
+----
+<p>Lähde mukaan</p>
+
+# Test 4: UTF-8 characters with HTML entities (Finnish - longer text)
+query I
+SELECT html_unescape('&lt;p&gt;Tervetuloa Suomen kauneimpaan kaupunkiin! &lt;/p&gt;&lt;h2&gt;Myymäläpäällikkö&lt;/h2&gt;');
+----
+<p>Tervetuloa Suomen kauneimpaan kaupunkiin! </p><h2>Myymäläpäällikkö</h2>
+
+# Test 5: UTF-8 characters without HTML entities (should pass through unchanged)
+query I
+SELECT html_unescape('Lähde mukaan');
+----
+Lähde mukaan
+
+# Test 6: UTF-8 characters with HTML entity escaping
+query I
+SELECT html_escape('Lähde mukaan <myymälä>');
+----
+Lähde mukaan &lt;myymälä&gt;
+
+# Test 7: Mixed UTF-8 and HTML entities (Finnish with ä, ö)
+query I
+SELECT html_unescape('&lt;li&gt;&lt;strong&gt;Työskentely myymälässä&lt;/strong&gt; on mukavaa ja mielenkiintoista.&lt;/li&gt;');
+----
+<li><strong>Työskentely myymälässä</strong> on mukavaa ja mielenkiintoista.</li>
+
+# Test 8: Empty string
+query I
+SELECT html_unescape('');
+----
+(empty)
+
+# Test 8b: Empty HTML content (should return empty, not original)
+query I
+SELECT html_unescape('&lt;p&gt;&lt;/p&gt;');
+----
+<p></p>
+
+# Test 9: Empty string escaping
+query I
+SELECT html_escape('');
+----
+(empty)
+
+# Test 10: Special characters only
+query I
+SELECT html_unescape('&lt;&gt;&amp;&quot;');
+----
+<>&"
+
+# Test 11: Special characters escaping
+query I
+SELECT html_escape('<>&"');
+----
+&lt;&gt;&amp;&quot;
+
+# Test 12: Non-breaking space entity (verify correct decoding using hex - C2A0 is UTF-8 for U+00A0)
+query I
+SELECT hex(html_unescape('Hei&nbsp;maailma'));
+----
+486569C2A06D6161696C6D61
+
+# Test 13: Swedish characters (å, ä, ö)
+query I
+SELECT html_unescape('&lt;p&gt;Välkommen till vårt företag&lt;/p&gt;');
+----
+<p>Välkommen till vårt företag</p>
+
+# Test 14: German characters (ü, ö, ä, ß)
+query I
+SELECT html_unescape('&lt;p&gt;Grüße aus München&lt;/p&gt;');
+----
+<p>Grüße aus München</p>
+
+# Test 15: Round-trip test (escape then unescape)
+query I
+SELECT html_unescape(html_escape('<p>Lähde mukaan & myymälä</p>'));
+----
+<p>Lähde mukaan & myymälä</p>

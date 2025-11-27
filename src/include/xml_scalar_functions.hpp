@@ -53,6 +53,10 @@ private:
 	// HTML parsing functions
 	static void ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
+
+	// HTML entity escaping/unescaping functions
+	static void HTMLUnescapeFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result);
 };
 
 } // namespace duckdb

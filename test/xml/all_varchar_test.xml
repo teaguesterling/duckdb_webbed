@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<employees>
+  <employee>
+    <id>1</id>
+    <name>Alice Johnson</name>
+    <age>28</age>
+    <salary>75000.50</salary>
+    <active>true</active>
+    <hired_date>2020-01-15</hired_date>
+    <skills>
+      <skill>Python</skill>
+      <skill>SQL</skill>
+      <skill>DuckDB</skill>
+    </skills>
+    <address>
+      <street>123 Main St</street>
+      <city>Portland</city>
+      <zip>97201</zip>
+    </address>
+  </employee>
+  <employee>
+    <id>2</id>
+    <name>Bob Smith</name>
+    <age>35</age>
+    <salary>95000.00</salary>
+    <active>false</active>
+    <hired_date>2018-06-20</hired_date>
+    <skills>
+      <skill>Java</skill>
+      <skill>C++</skill>
+    </skills>
+    <address>
+      <street>456 Oak Ave</street>
+      <city>Seattle</city>
+      <zip>98101</zip>
+    </address>
+  </employee>
+  <employee>
+    <id>3</id>
+    <name>Carol White</name>
+    <age>42</age>
+    <salary>110000.75</salary>
+    <active>true</active>
+    <hired_date>2015-03-10</hired_date>
+    <skills>
+      <skill>JavaScript</skill>
+      <skill>TypeScript</skill>
+      <skill>React</skill>
+    </skills>
+    <address>
+      <street>789 Pine Rd</street>
+      <city>Eugene</city>
+      <zip>97401</zip>
+    </address>
+  </employee>
+</employees>

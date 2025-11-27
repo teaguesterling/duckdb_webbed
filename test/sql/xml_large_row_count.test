@@ -1,0 +1,146 @@
+# name: test/sql/xml_large_row_count.test
+# description: Test read_xml() with files containing >2048 rows (STANDARD_VECTOR_SIZE)
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Verify row count exceeds STANDARD_VECTOR_SIZE (2048)
+# ============================================================================
+
+# Test file contains 3000 rows - verifies fix for chunking bug
+# Before fix: Would return only 2048 rows (first chunk)
+# After fix: Returns all 3000 rows
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/large_row_count.xml');
+----
+3000
+
+# ============================================================================
+# Test 2: Verify all rows are unique (no duplicates from chunking)
+# ============================================================================
+
+query I
+SELECT COUNT(DISTINCT loc) FROM read_xml('test/xml/large_row_count.xml');
+----
+3000
+
+# ============================================================================
+# Test 3: Verify data integrity across chunk boundaries
+# ============================================================================
+
+# Check first row (chunk 1)
+query III
+SELECT loc, lastmod, priority
+FROM read_xml('test/xml/large_row_count.xml')
+WHERE loc = 'https://example.com/page0';
+----
+https://example.com/page0	2025-01-01	0.0
+
+# Check row at chunk boundary (row 2048 - first row of chunk 2)
+query III
+SELECT loc, lastmod, priority
+FROM read_xml('test/xml/large_row_count.xml')
+WHERE loc = 'https://example.com/page2048';
+----
+https://example.com/page2048	2025-01-05	0.8
+
+# Check last row (chunk 2)
+query III
+SELECT loc, lastmod, priority
+FROM read_xml('test/xml/large_row_count.xml')
+WHERE loc = 'https://example.com/page2999';
+----
+https://example.com/page2999	2025-01-04	0.9
+
+# ============================================================================
+# Test 4: Verify aggregations work across all chunks
+# ============================================================================
+
+# Count by priority value (should span both chunks)
+query II
+SELECT priority, COUNT(*) as count
+FROM read_xml('test/xml/large_row_count.xml')
+GROUP BY priority
+ORDER BY priority;
+----
+0.0	300
+0.1	300
+0.2	300
+0.3	300
+0.4	300
+0.5	300
+0.6	300
+0.7	300
+0.8	300
+0.9	300
+
+# ============================================================================
+# Test 5: Verify ORDER BY works across chunks
+# ============================================================================
+
+# Get first 3 and last 3 by URL
+query I
+SELECT loc FROM read_xml('test/xml/large_row_count.xml')
+ORDER BY loc
+LIMIT 3;
+----
+https://example.com/page0
+https://example.com/page1
+https://example.com/page10
+
+query I
+SELECT loc FROM read_xml('test/xml/large_row_count.xml')
+ORDER BY loc DESC
+LIMIT 3;
+----
+https://example.com/page999
+https://example.com/page998
+https://example.com/page997
+
+# ============================================================================
+# Test 6: Verify schema inference works correctly
+# ============================================================================
+
+query II
+SELECT column_name, column_type FROM (
+  DESCRIBE SELECT * FROM read_xml('test/xml/large_row_count.xml')
+) ORDER BY column_name;
+----
+lastmod	DATE
+loc	VARCHAR
+priority	DOUBLE
+
+# ============================================================================
+# Test 7: Verify filtering works across chunks
+# ============================================================================
+
+# Filter for specific priority (0.5) - should span both chunks
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/large_row_count.xml')
+WHERE priority = 0.5;
+----
+300
+
+# ============================================================================
+# Test 8: Verify MIN/MAX work across chunks
+# ============================================================================
+
+query II
+SELECT MIN(loc), MAX(loc) FROM read_xml('test/xml/large_row_count.xml');
+----
+https://example.com/page0	https://example.com/page999
+
+# ============================================================================
+# Test 9: Verify JOIN operations work with large result sets
+# ============================================================================
+
+# Self-join test (ensures chunk state is properly managed)
+query I
+SELECT COUNT(*) FROM
+  read_xml('test/xml/large_row_count.xml') a
+  INNER JOIN read_xml('test/xml/large_row_count.xml') b
+  ON a.priority = b.priority
+WHERE a.priority = 0.1;
+----
+90000

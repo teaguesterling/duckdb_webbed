@@ -4,6 +4,7 @@
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
+#include <libxml/entities.h>
 #include <iostream>
 #include <functional>
 #include <set>
@@ -356,7 +357,6 @@ bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &
 	}
 
 	int validation_result = xmlSchemaValidateDoc(valid_ctx.get(), xml_doc.doc);
-
 
 	return (validation_result == 0);
 }
@@ -1129,9 +1129,7 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 		return "";
 	}
 
-
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
-
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1193,9 +1191,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 		return "";
 	}
 
-
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
-
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1845,6 +1841,75 @@ std::string XMLUtils::ExtractHTMLTextByXPath(const std::string &html_str, const 
 
 	xmlXPathFreeObject(xpath_obj);
 	return text_content;
+}
+
+std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
+	if (html_str.empty()) {
+		return html_str;
+	}
+
+	// Use libxml2's HTML parser to decode entities
+	// Wrap the string in a minimal HTML document to parse it
+	std::string wrapped = "<html><body>" + html_str + "</body></html>";
+
+	// Parse using HTML parser with explicit UTF-8 encoding
+	// htmlReadMemory automatically decodes entities and handles UTF-8 correctly
+	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
+	// to ensure correct handling of international characters in HTML entities
+	xmlDocPtr raw_doc = htmlReadMemory(wrapped.c_str(), wrapped.length(), nullptr, "UTF-8",
+	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+
+	if (!raw_doc) {
+		return html_str; // Fallback to original on error
+	}
+
+	// Use RAII pattern to ensure proper cleanup
+	XMLDocPtr doc(raw_doc);
+
+	// Extract text content from body element
+	xmlNodePtr root = xmlDocGetRootElement(doc.get());
+	std::string result;
+
+	if (root) {
+		// Find body element
+		xmlNodePtr body = nullptr;
+		for (xmlNodePtr child = root->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, BAD_CAST "body") == 0) {
+				body = child;
+				break;
+			}
+		}
+
+		if (body) {
+			// Get content which has entities decoded
+			XMLCharPtr content(xmlNodeGetContent(body));
+			if (content) {
+				result = std::string(reinterpret_cast<const char *>(content.get()));
+			}
+			// Return decoded result (may be empty if content is empty - this is correct)
+			return result;
+		}
+	}
+
+	// Only return original string if parsing failed (body not found)
+	return html_str;
+}
+
+std::string XMLUtils::HTMLEscape(const std::string &text) {
+	if (text.empty()) {
+		return text;
+	}
+
+	// Use libxml2's xmlEncodeSpecialChars to encode HTML entities
+	// Note: xmlEncodeSpecialChars encodes &, <, >, and " (but not single quotes)
+	XMLCharPtr encoded(xmlEncodeSpecialChars(nullptr, BAD_CAST text.c_str()));
+
+	if (!encoded) {
+		return text; // Fallback to original on error
+	}
+
+	std::string result = std::string(reinterpret_cast<const char *>(encoded.get()));
+	return result;
 }
 
 } // namespace duckdb

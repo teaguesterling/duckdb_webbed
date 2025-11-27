@@ -206,6 +206,10 @@ public:
 	static std::string ExtractHTMLText(const std::string &html_str, const std::string &selector = "");
 	static std::string ExtractHTMLTextByXPath(const std::string &html_str, const std::string &xpath);
 
+	// HTML entity escaping/unescaping
+	static std::string HTMLUnescape(const std::string &html_str);
+	static std::string HTMLEscape(const std::string &text);
+
 	// Internal helper functions
 	static XMLElement ProcessXMLNode(xmlNodePtr node);
 	static std::string GetNodePath(xmlNodePtr node);
