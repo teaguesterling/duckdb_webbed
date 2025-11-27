@@ -87,3 +87,46 @@ query TTTT
 SELECT typeof(a), typeof(b), typeof(c), typeof(d) FROM read_xml('test/xml/type_inference/numeric_sequence.xml') LIMIT 1;
 ----
 INTEGER	INTEGER	INTEGER	INTEGER
+
+# Test 14: Critical edge case - 8 integers + 1 double should be DOUBLE (not INTEGER)
+# This tests that INTEGER+DOUBLE promotion happens before 80% threshold check
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/mostly_int_one_double.xml') LIMIT 1;
+----
+DOUBLE
+
+# Test 15: Verify data integrity - the DOUBLE value should not be truncated
+query I
+SELECT value FROM read_xml('test/xml/type_inference/mostly_int_one_double.xml') WHERE value > 3 AND value < 4;
+----
+3.5
+
+# Test 16: Extreme case - 19 integers + 1 double (95% INTEGER) should still be DOUBLE
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/extreme_int_one_double.xml') LIMIT 1;
+----
+DOUBLE
+
+# Test 17: Verify the rare DOUBLE value is preserved
+query I
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_double.xml') WHERE value > 99;
+----
+99.99
+
+# Test 18: Edge case - 3 integers + 2 text (60% INTEGER, below 80% threshold) should be VARCHAR
+# Note: With >80% integers and ignore_errors parameter (future enhancement),
+# could infer as INTEGER with invalid casts converted to NULL
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') LIMIT 1;
+----
+VARCHAR
+
+# Test 19: Verify both integer and text values are accessible as VARCHAR
+query I
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') WHERE value = '1'
+UNION ALL
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') WHERE value = 'hello'
+ORDER BY value;
+----
+1
+hello

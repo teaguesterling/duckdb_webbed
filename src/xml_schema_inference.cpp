@@ -1015,6 +1015,14 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 		type_counts[type.id()]++;
 	}
 
+	// Special case: if we have a mix of INTEGER and DOUBLE, promote to DOUBLE
+	// (INTEGER is a subset of DOUBLE, so this is a safe widening conversion)
+	// This check must happen BEFORE the threshold check to prevent data loss
+	if (type_counts.count(LogicalTypeId::INTEGER) &&
+	    type_counts.count(LogicalTypeId::DOUBLE)) {
+		return LogicalType::DOUBLE;
+	}
+
 	// If more than 80% of values are the same type, use that type
 	double threshold = 0.8;
 	int total = types.size();
@@ -1023,14 +1031,6 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 		if (static_cast<double>(pair.second) / total >= threshold) {
 			return LogicalType(pair.first);
 		}
-	}
-
-	// Special case: if we have a mix of INTEGER and DOUBLE, promote to DOUBLE
-	// (INTEGER is a subset of DOUBLE, so this is a safe widening conversion)
-	if (type_counts.size() == 2 &&
-	    type_counts.count(LogicalTypeId::INTEGER) &&
-	    type_counts.count(LogicalTypeId::DOUBLE)) {
-		return LogicalType::DOUBLE;
 	}
 
 	// Fallback: if we have mixed types, prefer VARCHAR for safety
