@@ -1,0 +1,53 @@
+# name: test/sql/html_union_by_name.test
+# description: Test union_by_name parameter for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Without union_by_name - should get only common columns (intersection)
+query TTTTTT
+DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item');
+----
+field-a	VARCHAR	YES	NULL	NULL	NULL
+field-b	INTEGER	YES	NULL	NULL	NULL
+
+# Test 2: With union_by_name - should get all columns (union)
+query TTTTTT
+DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true);
+----
+field-a	VARCHAR	YES	NULL	NULL	NULL
+field-b	INTEGER	YES	NULL	NULL	NULL
+field-c	VARCHAR	YES	NULL	NULL	NULL
+
+# Test 3: Verify data from both files is present
+query I
+SELECT count(*) FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true);
+----
+4
+
+# Test 4: Verify NULL values for missing columns
+query III
+SELECT "field-a", "field-b", "field-c"
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
+ORDER BY COALESCE("field-a", ''), COALESCE("field-b", 0);
+----
+NULL	300	extra1
+value1	100	NULL
+value2	200	NULL
+value3	NULL	extra2
+
+# Test 5: Verify column types are correctly inferred across files
+query TTT
+SELECT typeof("field-a"), typeof("field-b"), typeof("field-c")
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
+LIMIT 1;
+----
+VARCHAR	INTEGER	VARCHAR
+
+# Test 6: Test with all_varchar and union_by_name together
+query TTTTTT
+DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true, all_varchar:=true);
+----
+field-a	VARCHAR	YES	NULL	NULL	NULL
+field-b	VARCHAR	YES	NULL	NULL	NULL
+field-c	VARCHAR	YES	NULL	NULL	NULL

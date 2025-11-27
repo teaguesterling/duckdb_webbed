@@ -1,0 +1,72 @@
+# name: test/sql/html_type_inference.test
+# description: Test type inference for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Verify numeric types are inferred correctly (INTEGER before BOOLEAN for 0/1)
+query TTTTTT
+DESCRIBE SELECT span FROM read_html('test/html/type_inference_test.html', record_element:='li');
+----
+span	STRUCT(id INTEGER, name VARCHAR, age INTEGER, salary DOUBLE, active BOOLEAN)	YES	NULL	NULL	NULL
+
+# Test 2: Verify actual types with typeof
+query TTTTT
+SELECT
+    typeof(span.id),
+    typeof(span.name),
+    typeof(span.age),
+    typeof(span.salary),
+    typeof(span.active)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+INTEGER	VARCHAR	INTEGER	DOUBLE	BOOLEAN
+
+# Test 3: Verify INTEGER values (1, 2, 3) are not misdetected as BOOLEAN
+query T
+SELECT typeof(span.id)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+INTEGER
+
+# Test 4: Verify DOUBLE type for decimal values
+query T
+SELECT typeof(span.salary)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+DOUBLE
+
+# Test 5: Verify BOOLEAN type for true/false strings
+query T
+SELECT typeof(span.active)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+BOOLEAN
+
+# Test 6: Verify DATE type detection for time element
+query T
+SELECT typeof(time)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+DATE
+
+# Test 7: Verify all values are correctly typed
+query IIIDBT
+SELECT
+    span.id,
+    span.name,
+    span.age,
+    span.salary,
+    span.active,
+    time
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+ORDER BY span.id;
+----
+1	Alice	28	75000.5	true	2020-01-15
+2	Bob	35	95000.0	false	2018-06-20
+3	Carol	42	110000.75	true	2015-03-10

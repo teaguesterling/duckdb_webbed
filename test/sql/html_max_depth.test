@@ -1,0 +1,54 @@
+# name: test/sql/html_max_depth.test
+# description: Test max_depth parameter for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Default max_depth should handle reasonable nesting
+query I
+SELECT typeof(div)
+FROM read_html('test/html/deep_nesting.html', record_element:='article');
+----
+STRUCT(div STRUCT(div STRUCT(div STRUCT(div STRUCT("data-value" VARCHAR)))))
+
+# Test 2: max_depth=1 should stop at first level
+query I
+SELECT typeof(div)
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=1);
+----
+HTML
+
+# Test 3: max_depth=2 should allow one level of nesting
+query I
+SELECT typeof(div)
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=2);
+----
+STRUCT(div HTML)
+
+# Test 4: max_depth=3 should allow two levels
+query I
+SELECT typeof(div)
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=3);
+----
+STRUCT(div STRUCT(div HTML))
+
+# Test 5: Verify data is still accessible with limited depth
+query I
+SELECT CAST(div AS VARCHAR) LIKE '%Deep Value%' as has_data
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=1);
+----
+true
+
+# Test 6: Full depth should reach the innermost value
+query I
+SELECT div.div.div.div."data-value"
+FROM read_html('test/html/deep_nesting.html', record_element:='article');
+----
+Deep Value
+
+# Test 7: Limited depth should convert remaining structure to HTML type
+query T
+SELECT typeof(div.div)
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=2);
+----
+HTML
