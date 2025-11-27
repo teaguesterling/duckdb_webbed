@@ -25,6 +25,9 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::string &child_name,
                                               const XMLSchemaOptions &options,
                                               std::vector<xmlNodePtr> &result) {
+	if (!parent) {
+		return;
+	}
 	for (xmlNodePtr sibling = parent->children; sibling; sibling = sibling->next) {
 		if (sibling->type == XML_ELEMENT_NODE) {
 			std::string sibling_name((const char *)sibling->name);

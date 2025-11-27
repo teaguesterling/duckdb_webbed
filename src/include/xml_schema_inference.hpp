@@ -206,6 +206,8 @@ private:
 
 	static std::string StripNamespacePrefix(const std::string &name);
 
+	// Collect all child elements with a specific name from a parent node into the result vector.
+	// Handles namespace stripping based on options.
 	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name,
 	                                 const XMLSchemaOptions &options,
 	                                 std::vector<xmlNodePtr> &result);
