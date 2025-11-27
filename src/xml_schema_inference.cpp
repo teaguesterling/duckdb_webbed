@@ -1009,32 +1009,14 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 		return LogicalType::VARCHAR;
 	}
 
-	// Count occurrences of each type
-	std::unordered_map<LogicalTypeId, int> type_counts;
-	for (const auto &type : types) {
-		type_counts[type.id()]++;
+	// Use DuckDB's built-in type resolution which handles all type promotions
+	// (INTEGER->DOUBLE, DATE->TIMESTAMP, etc.)
+	LogicalType result = types[0];
+	for (size_t i = 1; i < types.size(); i++) {
+		result = LogicalType::ForceMaxLogicalType(result, types[i]);
 	}
 
-	// Special case: if we have a mix of INTEGER and DOUBLE, promote to DOUBLE
-	// (INTEGER is a subset of DOUBLE, so this is a safe widening conversion)
-	// This check must happen BEFORE the threshold check to prevent data loss
-	if (type_counts.count(LogicalTypeId::INTEGER) &&
-	    type_counts.count(LogicalTypeId::DOUBLE)) {
-		return LogicalType::DOUBLE;
-	}
-
-	// If more than 80% of values are the same type, use that type
-	double threshold = 0.8;
-	int total = types.size();
-
-	for (const auto &pair : type_counts) {
-		if (static_cast<double>(pair.second) / total >= threshold) {
-			return LogicalType(pair.first);
-		}
-	}
-
-	// Fallback: if we have mixed types, prefer VARCHAR for safety
-	return LogicalType::VARCHAR;
+	return result;
 }
 
 std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
