@@ -1,0 +1,69 @@
+# name: test/sql/html_all_varchar.test
+# description: Test all_varchar parameter for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Without all_varchar - types should be inferred from HTML document
+query TTTTTT
+DESCRIBE SELECT id, name, age, salary, active FROM read_html('test/html/all_varchar_data.html', record_element:='employee');
+----
+id	INTEGER	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+age	INTEGER	YES	NULL	NULL	NULL
+salary	DOUBLE	YES	NULL	NULL	NULL
+active	BOOLEAN	YES	NULL	NULL	NULL
+
+# Test 2: With all_varchar=true - all scalar types should be VARCHAR
+query TTTTTT
+DESCRIBE SELECT id, name, age, salary, active FROM read_html('test/html/all_varchar_data.html', record_element:='employee', all_varchar=true);
+----
+id	VARCHAR	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+age	VARCHAR	YES	NULL	NULL	NULL
+salary	VARCHAR	YES	NULL	NULL	NULL
+active	VARCHAR	YES	NULL	NULL	NULL
+
+# Test 3: Verify actual data values with all_varchar=true
+query IIIII
+SELECT id, name, age, salary, active
+FROM read_html('test/html/all_varchar_data.html', record_element:='employee', all_varchar=true)
+WHERE id = '1';
+----
+1	Alice	28	75000.50	true
+
+# Test 4: Verify VARCHAR types can still be cast back to original types
+query III
+SELECT CAST(id AS INTEGER) as id_int, CAST(age AS INTEGER) as age_int, CAST(salary AS DOUBLE) as salary_dbl
+FROM read_html('test/html/all_varchar_data.html', record_element:='employee', all_varchar=true)
+WHERE id = '1';
+----
+1	28	75000.5
+
+# Test 5: Verify all_varchar parameter default is false
+query TTTTT
+SELECT typeof(id), typeof(name), typeof(age), typeof(salary), typeof(active)
+FROM read_html('test/html/all_varchar_data.html', record_element:='employee')
+LIMIT 1;
+----
+INTEGER	VARCHAR	INTEGER	DOUBLE	BOOLEAN
+
+# Test 6: Verify that using both columns and all_varchar raises an error
+statement error
+SELECT * FROM read_html('test/html/all_varchar_data.html',
+    record_element:='employee',
+    columns={
+        'id': 'INTEGER',
+        'name': 'VARCHAR',
+        'age': 'INTEGER'
+    },
+    all_varchar=true
+);
+----
+cannot use both "columns" parameter and "all_varchar" option
+
+# Test 7: Verify count matches expected rows
+query I
+SELECT count(*) FROM read_html('test/html/all_varchar_data.html', record_element:='employee');
+----
+2
