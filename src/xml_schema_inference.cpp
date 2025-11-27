@@ -812,6 +812,11 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
                                                      const XMLSchemaOptions &options) {
+	// If all_varchar is enabled, skip type detection and return VARCHAR directly
+	if (options.all_varchar) {
+		return LogicalType::VARCHAR;
+	}
+
 	if (samples.empty()) {
 		return LogicalType::VARCHAR;
 	}

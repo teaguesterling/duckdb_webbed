@@ -240,6 +240,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				throw BinderException("%s \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
 				                      function_name, unnest_mode);
 			}
+		} else if (kv.first == "all_varchar") {
+			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -278,6 +280,13 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 			has_explicit_columns = true;
 		}
+	}
+
+	// Check for conflicting parameters
+	if (has_explicit_columns && schema_options.all_varchar) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
+		                      function_name);
 	}
 
 	// Store schema options in bind_data for use during execution
@@ -884,6 +893,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				throw BinderException("read_xml \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
 				                      unnest_mode);
 			}
+		} else if (kv.first == "all_varchar") {
+			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -921,6 +932,12 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 			has_explicit_columns = true;
 		}
+	}
+
+	// Check for conflicting parameters
+	if (has_explicit_columns && schema_options.all_varchar) {
+		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
+		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
 	}
 
 	// Store schema options in bind_data for use during execution
@@ -1258,6 +1275,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1283,6 +1301,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
+	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -1313,6 +1332,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_html_single.named_parameters["columns"] = LogicalType::ANY;
+	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1339,6 +1359,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
 	// Explicit schema specification (like JSON extension)
 	read_html_array.named_parameters["columns"] = LogicalType::ANY;
+	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);

@@ -595,7 +595,8 @@ read_xml('pattern',
     include_attributes=true,      -- Include XML attributes in output
     auto_detect=true,             -- Auto-detect schema structure
     max_depth=10,                 -- Maximum parsing depth
-    unnest_as='struct'            -- How to unnest nested elements
+    unnest_as='struct',           -- How to unnest nested elements
+    all_varchar=false             -- Force all scalar types to VARCHAR (nested preserved)
 );
 ```
 
@@ -612,6 +613,7 @@ read_xml('pattern',
 - **`auto_detect`**: Enable automatic schema detection and type inference
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
+- **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
 
 ### 🔍 **XPath Support**
 
@@ -696,6 +698,37 @@ SELECT * FROM read_xml('products.xml',
     record_element := 'product',
     force_list := ['tag']
 );
+```
+
+**Using all_varchar for Type Safety:**
+
+```sql
+-- Example: Employee data with various data types
+-- XML: <employees>
+--        <employee><id>1</id><age>28</age><salary>75000.50</salary><active>true</active></employee>
+--      </employees>
+
+-- Default behavior: Type inference
+SELECT * FROM read_xml('employees.xml');
+-- Schema: id INTEGER, age INTEGER, salary DOUBLE, active BOOLEAN
+
+-- With all_varchar: All scalars become VARCHAR (prevents data loss during inference)
+SELECT * FROM read_xml('employees.xml', all_varchar := true);
+-- Schema: id VARCHAR, age VARCHAR, salary VARCHAR, active VARCHAR
+
+-- With nested structures: Structure preserved, scalars become VARCHAR
+-- XML: <employee><address><street>123 Main</street><zip>97201</zip></address></employee>
+SELECT * FROM read_xml('employees.xml', all_varchar := true);
+-- Schema: address STRUCT(street VARCHAR, zip VARCHAR)
+
+-- Cast types explicitly when needed for calculations
+SELECT
+    id,
+    name,
+    CAST(age AS INTEGER) as age,
+    CAST(salary AS DOUBLE) as salary
+FROM read_xml('employees.xml', all_varchar := true)
+WHERE CAST(age AS INTEGER) > 30;
 ```
 
 ---

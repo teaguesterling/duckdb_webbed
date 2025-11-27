@@ -50,6 +50,9 @@ struct XMLSchemaOptions {
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
 	idx_t maximum_file_size = 16777216; // 16MB default
+
+	// Type forcing
+	bool all_varchar = false; // Force all scalar types to VARCHAR (nested structure preserved)
 };
 
 // Information about an inferred column
