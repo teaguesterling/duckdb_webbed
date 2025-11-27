@@ -8,7 +8,7 @@ require webbed
 query TTTTTT
 DESCRIBE SELECT id, name, age, salary, active, hired_date, skills, address FROM read_xml('test/xml/all_varchar_test.xml');
 ----
-id	VARCHAR	YES	NULL	NULL	NULL
+id	INTEGER	YES	NULL	NULL	NULL
 name	VARCHAR	YES	NULL	NULL	NULL
 age	INTEGER	YES	NULL	NULL	NULL
 salary	DOUBLE	YES	NULL	NULL	NULL
@@ -89,4 +89,4 @@ SELECT typeof(id), typeof(age), typeof(salary), typeof(active), typeof(hired_dat
 FROM read_xml('test/xml/all_varchar_test.xml')
 LIMIT 1;
 ----
-VARCHAR	INTEGER	DOUBLE	BOOLEAN	DATE
+INTEGER	INTEGER	DOUBLE	BOOLEAN	DATE
