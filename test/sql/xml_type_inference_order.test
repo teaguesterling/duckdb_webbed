@@ -1,0 +1,132 @@
+# name: test/sql/xml_type_inference_order.test
+# description: Test that type inference order correctly prioritizes numeric types over boolean
+# group: [sql]
+
+require webbed
+
+# Test 1: ID field with values 1, 2, 3 should be INTEGER (not VARCHAR due to boolean conflict)
+query I
+SELECT typeof(id) FROM read_xml('test/xml/type_inference/id_numeric.xml') LIMIT 1;
+----
+INTEGER
+
+# Test 2: Verify actual values are correct
+query I
+SELECT id FROM read_xml('test/xml/type_inference/id_numeric.xml') ORDER BY id;
+----
+1
+2
+3
+
+# Test 3: Values that are ONLY 0 and 1 should be INTEGER (not BOOLEAN)
+query I
+SELECT typeof(flag) FROM read_xml('test/xml/type_inference/binary_values.xml') LIMIT 1;
+----
+INTEGER
+
+# Test 4: String boolean values (true/false) should still be BOOLEAN
+query I
+SELECT typeof(active) FROM read_xml('test/xml/type_inference/bool_strings.xml') LIMIT 1;
+----
+BOOLEAN
+
+# Test 5: Verify boolean values work correctly
+query I
+SELECT active FROM read_xml('test/xml/type_inference/bool_strings.xml') ORDER BY active;
+----
+false
+true
+true
+
+# Test 6: Mixed numeric values should be DOUBLE
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/mixed_numeric.xml') LIMIT 1;
+----
+DOUBLE
+
+# Test 7: Date values should be detected as DATE (most specific type)
+query I
+SELECT typeof(hired_date) FROM read_xml('test/xml/type_inference/dates.xml') LIMIT 1;
+----
+DATE
+
+# Test 8: yes/no should be BOOLEAN (after numeric check fails)
+query I
+SELECT typeof(answer) FROM read_xml('test/xml/type_inference/yes_no.xml') LIMIT 1;
+----
+BOOLEAN
+
+# Test 9: Verify the employee example from issue #35
+query TTT
+SELECT typeof(id), typeof(name), typeof(age) FROM read_xml('test/xml/type_inference/employees.xml') LIMIT 1;
+----
+INTEGER	VARCHAR	INTEGER
+
+# Test 10: Verify employee data values
+query III
+SELECT id, name, age FROM read_xml('test/xml/type_inference/employees.xml') ORDER BY id;
+----
+1	Alice	28
+2	Bob	35
+3	Carol	42
+
+# Test 11: Pure boolean strings with mixed case should work
+query I
+SELECT typeof(status) FROM read_xml('test/xml/type_inference/bool_mixed_case.xml') LIMIT 1;
+----
+BOOLEAN
+
+# Test 12: on/off should be BOOLEAN
+query I
+SELECT typeof(power) FROM read_xml('test/xml/type_inference/on_off.xml') LIMIT 1;
+----
+BOOLEAN
+
+# Test 13: Integer should be preferred over boolean for numeric sequences
+query TTTT
+SELECT typeof(a), typeof(b), typeof(c), typeof(d) FROM read_xml('test/xml/type_inference/numeric_sequence.xml') LIMIT 1;
+----
+INTEGER	INTEGER	INTEGER	INTEGER
+
+# Test 14: Critical edge case - 8 integers + 1 double should be DOUBLE (not INTEGER)
+# This tests that INTEGER+DOUBLE promotion happens before 80% threshold check
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/mostly_int_one_double.xml') LIMIT 1;
+----
+DOUBLE
+
+# Test 15: Verify data integrity - the DOUBLE value should not be truncated
+query I
+SELECT value FROM read_xml('test/xml/type_inference/mostly_int_one_double.xml') WHERE value > 3 AND value < 4;
+----
+3.5
+
+# Test 16: Extreme case - 19 integers + 1 double (95% INTEGER) should still be DOUBLE
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/extreme_int_one_double.xml') LIMIT 1;
+----
+DOUBLE
+
+# Test 17: Verify the rare DOUBLE value is preserved
+query I
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_double.xml') WHERE value > 99;
+----
+99.99
+
+# Test 18: Edge case - 3 integers + 2 text (60% INTEGER, below 80% threshold) should be VARCHAR
+# Note: With >80% integers and ignore_errors parameter (future enhancement),
+# could infer as INTEGER with invalid casts converted to NULL
+query I
+SELECT typeof(value) FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') LIMIT 1;
+----
+VARCHAR
+
+# Test 19: Verify both integer and text values are accessible as VARCHAR
+query I
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') WHERE value = '1'
+UNION ALL
+SELECT value FROM read_xml('test/xml/type_inference/extreme_int_one_varchar.xml') WHERE value = 'hello'
+ORDER BY value;
+----
+1
+hello
