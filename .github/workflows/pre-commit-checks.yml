@@ -61,7 +61,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: build/release
-          key: ${{ runner.os }}-build-${{ github.sha }}
+          key: ${{ runner.os }}-build-${{ hashFiles('src/**', 'CMakeLists.txt', 'vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
             ${{ runner.os }}-build-
 
