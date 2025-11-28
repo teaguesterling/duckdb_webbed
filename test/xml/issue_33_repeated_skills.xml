@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<employees>
+  <employee>
+    <id>1</id>
+    <skills>
+      <skill>Python</skill>
+      <skill>SQL</skill>
+      <skill>DuckDB</skill>
+    </skills>
+  </employee>
+</employees>
