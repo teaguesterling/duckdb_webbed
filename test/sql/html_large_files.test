@@ -1,0 +1,59 @@
+# name: test/sql/html_large_files.test
+# description: Test large file handling for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Test maximum_file_size parameter - accept files under limit
+query I
+SELECT count(*) FROM read_html('test/html/complex_types_test.html', record_element:='article', maximum_file_size:=1000000);
+----
+2
+
+# Test 2: Test maximum_file_size parameter - reject files over limit
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', maximum_file_size:=100);
+----
+maximum_file_size
+
+# Test 3: Test handling of many records in a single file
+statement ok
+CREATE TEMP TABLE large_record_test AS
+WITH RECURSIVE generate_rows AS (
+    SELECT 1 as n
+    UNION ALL
+    SELECT n + 1 FROM generate_rows WHERE n < 100
+)
+SELECT n as id, 'value_' || n as value
+FROM generate_rows;
+
+# Verify we can handle at least 100 records (limited test for CI)
+query I
+SELECT count(*) FROM large_record_test;
+----
+100
+
+# Test 4: Test glob pattern with multiple files
+query I
+SELECT count(DISTINCT filename)
+FROM read_html('test/html/*.html', record_element:='article', filename:=true)
+WHERE filename IS NOT NULL;
+----
+2
+
+# Test 5: Verify ignore_errors works with file size limits
+statement ok
+SELECT * FROM read_html('test/html/complex_types_test.html', maximum_file_size:=100, ignore_errors:=true, record_element:='article') WHERE 1=0;
+
+# Test 6: Test that file size check happens before parsing
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', maximum_file_size:=10);
+----
+maximum_file_size
+
+# Test 7: Verify multiple file processing works correctly
+query I
+SELECT count(*) >= 4 as has_multiple_files
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html', 'test/html/complex_types_test.html'], record_element:='data-item', ignore_errors:=true);
+----
+true

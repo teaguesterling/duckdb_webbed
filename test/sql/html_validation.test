@@ -1,0 +1,50 @@
+# name: test/sql/html_validation.test
+# description: Test validation and constraints for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Verify parameter validation - max_depth must be positive
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', max_depth:=-1);
+
+# Test 2: Verify parameter validation - maximum_file_size must be positive
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', maximum_file_size:=-100);
+
+# Test 3: Empty file list should return empty result set
+statement ok
+CREATE TEMP TABLE empty_files AS
+SELECT * FROM read_html(CAST([] AS VARCHAR[]), record_element:='item');
+
+query I
+SELECT count(*) FROM empty_files;
+----
+0
+
+# Test 4: Verify attr_mode parameter accepts only valid values
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='invalid_mode');
+
+# Test 5: Verify namespaces parameter accepts only valid values
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', namespaces:='invalid_value');
+
+# Test 6: Verify empty_elements parameter accepts only valid values
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', empty_elements:='invalid_value');
+
+# Test 7: Test that HTML files are properly validated before processing
+query I
+SELECT typeof(header)
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+LIMIT 1;
+----
+STRUCT("employee-id" INTEGER, "full-name" VARCHAR)
+
+# Test 8: Verify read_html works with filename parameter
+query II
+SELECT count(*), count(DISTINCT filename)
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', filename:=true);
+----
+4	2

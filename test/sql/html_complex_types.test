@@ -1,0 +1,77 @@
+# name: test/sql/html_complex_types.test
+# description: Test complex nested types for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: Verify nested STRUCT types are inferred correctly
+query TTTTTT
+DESCRIBE SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article');
+----
+header	STRUCT("employee-id" INTEGER, "full-name" VARCHAR)	YES	NULL	NULL	NULL
+section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" INTEGER, "phone-numbers" STRUCT("phone-number" VARCHAR[])), "skill-item" VARCHAR[])[]	YES	NULL	NULL	NULL
+
+# Test 2: Access nested struct fields
+query III
+SELECT
+    header."employee-id" as id,
+    header."full-name" as name,
+    section[1].address."city-name" as city
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+ORDER BY header."employee-id";
+----
+1	Alice Johnson	Portland
+2	Bob Smith	Seattle
+
+# Test 3: Access deeply nested phone numbers
+query II
+SELECT
+    header."employee-id" as id,
+    section[1].address."phone-numbers"."phone-number" as phones
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+WHERE header."employee-id" = 1;
+----
+1	[555-1234, 555-5678]
+
+# Test 4: Access repeated skill-item elements
+query II
+SELECT
+    header."employee-id" as id,
+    section[2]."skill-item" as skills
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+ORDER BY header."employee-id";
+----
+1	[Python, SQL, DuckDB]
+2	[Java, C++]
+
+# Test 5: Unnest skills from complex structure
+query II
+SELECT
+    header."employee-id" as id,
+    unnest(section[2]."skill-item") as skill
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+WHERE header."employee-id" = 1
+ORDER BY skill;
+----
+1	DuckDB
+1	Python
+1	SQL
+
+# Test 6: Verify array lengths in complex structures
+query III
+SELECT
+    header."employee-id" as id,
+    array_length(section[1].address."phone-numbers"."phone-number") as phone_count,
+    array_length(section[2]."skill-item") as skill_count
+FROM read_html('test/html/complex_types_test.html', record_element:='article')
+ORDER BY header."employee-id";
+----
+1	2	3
+2	1	2
+
+# Test 7: Test with all_varchar - nested structures should remain as STRUCT but scalars become VARCHAR
+query TTTTTT
+DESCRIBE SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', all_varchar:=true);
+----
+header	STRUCT("employee-id" VARCHAR, "full-name" VARCHAR)	YES	NULL	NULL	NULL
+section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" VARCHAR, "phone-numbers" STRUCT("phone-number" VARCHAR[])), "skill-item" VARCHAR[])[]	YES	NULL	NULL	NULL

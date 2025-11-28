@@ -1,0 +1,53 @@
+# name: test/sql/html_schema_errors.test
+# description: Test error handling in schema inference for read_html (feature parity with read_xml)
+# group: [sql]
+
+require webbed
+
+# Test 1: HTML parser should recover from malformed HTML (libxml2 HTML mode)
+query I
+SELECT count(*) FROM read_html('test/html/invalid_html.html', record_element:='data-item');
+----
+3
+
+# Test 2: Verify malformed content is still accessible after HTML recovery
+query I
+SELECT value FROM read_html('test/html/invalid_html.html', record_element:='data-item') ORDER BY value;
+----
+unclosed
+valid1
+valid2
+
+# Test 3: Test with ignore_errors=true on non-existent file should not crash
+statement ok
+SELECT * FROM read_html('test/html/does_not_exist.html', ignore_errors:=true, record_element:='item') WHERE 1=0;
+
+# Test 4: Without ignore_errors, non-existent file should error
+statement error
+SELECT * FROM read_html('test/html/does_not_exist.html', record_element:='item');
+----
+No files found
+
+# Test 5: Invalid XPath in record_element should provide clear error
+statement error
+SELECT * FROM read_html('test/html/invalid_html.html', record_element:='[[[invalid xpath');
+
+# Test 6: Conflicting parameters (columns + all_varchar) should error
+statement error
+SELECT * FROM read_html('test/html/invalid_html.html',
+    record_element:='data-item',
+    columns={'value': 'INTEGER'},
+    all_varchar:=true
+);
+----
+cannot use both "columns" parameter and "all_varchar" option
+
+# Test 7: Test empty HTML document handling
+statement ok
+CREATE TEMP TABLE empty_result AS
+SELECT * FROM read_html('test/html/invalid_html.html', record_element:='nonexistent-element');
+
+query I
+SELECT count(*) FROM empty_result;
+----
+0

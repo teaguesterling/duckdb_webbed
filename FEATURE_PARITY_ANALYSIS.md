@@ -193,10 +193,30 @@ Add remaining applicable tests:
 
 - [x] Parameter audit completed
 - [x] Test coverage analysis completed
-- [ ] Create Priority 1 tests
-- [ ] Create Priority 2 tests
+- [x] Create Priority 1 tests (5 test suites, 34 test cases)
+- [x] Create Priority 2 tests (4 test suites, 28 test cases)
 - [ ] Document any HTML-specific limitations
 - [ ] Update README with HTML feature documentation
+
+### Test Suites Added
+
+**Priority 1 (Critical Features):**
+1. ✅ html_all_varchar.test - 7 tests
+2. ✅ html_force_list.test - 7 tests
+3. ✅ html_union_by_name.test - 6 tests
+4. ✅ html_type_inference.test - 7 tests
+5. ✅ html_max_depth.test - 7 tests
+
+**Priority 2 (Important Features):**
+6. ✅ html_complex_types.test - 7 tests
+7. ✅ html_schema_errors.test - 7 tests
+8. ✅ html_validation.test - 8 tests
+9. ✅ html_large_files.test - 7 tests
+
+**Total New Coverage:** 9 test suites, 62 test cases
+
+**HTML Test Files:** 5 → 14 files (180% increase)
+**Test Case Count:** ~25 → ~87 cases (248% increase)
 
 ## Notes
 
