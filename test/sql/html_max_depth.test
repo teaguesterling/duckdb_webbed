@@ -39,9 +39,9 @@ FROM read_html('test/html/deep_nesting.html', record_element:='article', max_dep
 ----
 true
 
-# Test 6: Full depth should reach the innermost value
+# Test 6: Full depth should reach the innermost value (5 levels of div)
 query I
-SELECT div.div.div.div."data-value"
+SELECT div.div.div.div.div."data-value"
 FROM read_html('test/html/deep_nesting.html', record_element:='article');
 ----
 Deep Value

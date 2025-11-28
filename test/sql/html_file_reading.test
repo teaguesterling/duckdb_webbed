@@ -22,7 +22,7 @@ SELECT count(*), typeof(html) AS content_type
 FROM read_html_objects('test/html/*.html')
 GROUP BY typeof(html);
 ----
-14	HTML
+16	HTML
 
 # Test extracting data from read HTML files
 query I

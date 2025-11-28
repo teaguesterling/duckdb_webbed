@@ -16,7 +16,7 @@ query I
 SELECT count(*) AS file_count
 FROM read_html_objects('test/html/*.html');
 ----
-14
+16
 
 # Test read_html_objects with filename column
 query II
