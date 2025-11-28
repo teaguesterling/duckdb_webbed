@@ -1,0 +1,59 @@
+# name: test/sql/github_issue_33_repeated_elements.test
+# description: Test that repeated child elements are properly collected (not just the first instance)
+# group: [sql]
+
+require webbed
+
+# Test 1: Verify that multiple <skill> elements under <skills> are all collected
+query I
+SELECT skills FROM read_xml('test/xml/issue_33_repeated_skills.xml');
+----
+{'skill': [Python, SQL, DuckDB]}
+
+# Test 2: Verify the inferred type is STRUCT with LIST field
+query TTTTTT
+DESCRIBE SELECT id, skills FROM read_xml('test/xml/issue_33_repeated_skills.xml');
+----
+id	INTEGER	YES	NULL	NULL	NULL
+skills	STRUCT(skill VARCHAR[])	YES	NULL	NULL	NULL
+
+# Test 3: Verify we can unnest the repeated elements
+query I
+SELECT unnest(skills.skill) as skill FROM read_xml('test/xml/issue_33_repeated_skills.xml') ORDER BY skill;
+----
+DuckDB
+Python
+SQL
+
+# Test 4: Verify that repeated elements are automatically detected (force_list not needed)
+# Note: force_list parameter would force the parent element to be a list, not the repeated children
+query I
+SELECT skills FROM read_xml('test/xml/issue_33_repeated_skills.xml');
+----
+{'skill': [Python, SQL, DuckDB]}
+
+# Test 5: Test with multiple employees, each with multiple skills
+query II
+SELECT id, skills FROM read_xml('test/xml/issue_33_multiple_employees.xml') ORDER BY id;
+----
+1	{'skill': [Python, SQL, DuckDB]}
+2	{'skill': [Java, C++]}
+3	{'skill': [JavaScript, TypeScript, React]}
+
+# Test 6: Verify that single-element children don't become lists
+query I
+SELECT name FROM read_xml('test/xml/issue_33_multiple_employees.xml') WHERE id = 1;
+----
+Alice Johnson
+
+# Test 7: Test nested repeated elements (address with multiple phone numbers)
+query I
+SELECT contact FROM read_xml('test/xml/issue_33_nested_repeated.xml');
+----
+{'address': 123 Main St, 'phones': {'phone': [555-1234, 555-5678]}}
+
+# Test 8: Verify the type for nested repeated elements
+query TTTTTT
+DESCRIBE SELECT contact FROM read_xml('test/xml/issue_33_nested_repeated.xml');
+----
+contact	STRUCT(address VARCHAR, phones STRUCT(phone VARCHAR[]))	YES	NULL	NULL	NULL

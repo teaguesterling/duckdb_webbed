@@ -21,6 +21,26 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 	return name;
 }
 
+// Helper: Collect all child elements with a specific name from a parent node
+void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::string &child_name,
+                                              const XMLSchemaOptions &options,
+                                              std::vector<xmlNodePtr> &result) {
+	if (!parent) {
+		return;
+	}
+	for (xmlNodePtr sibling = parent->children; sibling; sibling = sibling->next) {
+		if (sibling->type == XML_ELEMENT_NODE) {
+			std::string sibling_name((const char *)sibling->name);
+			if (options.namespaces == "strip") {
+				sibling_name = StripNamespacePrefix(sibling_name);
+			}
+			if (sibling_name == child_name) {
+				result.push_back(sibling);
+			}
+		}
+	}
+}
+
 // NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
                                                            const XMLSchemaOptions &options) {
@@ -351,11 +371,11 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 	}
 
-	// If all instances are leaf nodes, check if we should force to LIST
+	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
 		LogicalType scalar_type = InferTypeFromSamples(sample_values, options);
-		if (force_as_list) {
-			// Force this column to be LIST type even though it doesn't repeat
+		// Return as LIST if forced OR if element repeats within a record
+		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
 		}
 		return scalar_type;
@@ -423,7 +443,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 						// Create a ColumnAnalysis for this nested child
 						ColumnAnalysis nested_col(child_name, false);
-						nested_col.instances.push_back(child);
+
+						// Collect ALL instances of this child element (not just the first)
+						CollectChildElements(first, child_name, options, nested_col.instances);
+
 						nested_col.occurrence_count = child_counts[child_name];
 						nested_col.repeats_in_record = (child_counts[child_name] > 1);
 
@@ -477,7 +500,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 					// Create a ColumnAnalysis for this nested child
 					ColumnAnalysis nested_col(child_name, false);
-					nested_col.instances.push_back(child);
+
+					// Collect ALL instances of this child element (not just the first)
+					CollectChildElements(first, child_name, options, nested_col.instances);
+
 					nested_col.occurrence_count = child_counts[child_name];
 					nested_col.repeats_in_record = (child_counts[child_name] > 1);
 
@@ -1407,16 +1433,39 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			xmlFree(attr_value);
 			found = true;
 		} else {
-			// Look for child element with matching name
-			xmlNodePtr child = node->children;
-			while (child) {
-				if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-					// Found matching child element - extract recursively
-					field_value = ExtractValueFromNode(child, field_type);
-					found = true;
-					break;
+			// Look for child element(s) with matching name
+			// If field_type is LIST, collect all matching children; otherwise just the first
+			if (field_type.id() == LogicalTypeId::LIST) {
+				// Field is a LIST - collect ALL matching child elements
+				auto element_type = ListType::GetChildType(field_type);
+				vector<Value> list_values;
+
+				xmlNodePtr child = node->children;
+				while (child) {
+					if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+						// Extract each matching child element
+						Value element_value = ExtractValueFromNode(child, element_type);
+						list_values.push_back(element_value);
+						found = true;
+					}
+					child = child->next;
 				}
-				child = child->next;
+
+				if (found) {
+					field_value = Value::LIST(element_type, list_values);
+				}
+			} else {
+				// Field is not a LIST - extract only the first matching child
+				xmlNodePtr child = node->children;
+				while (child) {
+					if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+						// Found matching child element - extract recursively
+						field_value = ExtractValueFromNode(child, field_type);
+						found = true;
+						break;
+					}
+					child = child->next;
+				}
 			}
 		}
 
