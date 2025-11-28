@@ -16,14 +16,14 @@ query I
 SELECT count(*) AS file_count
 FROM read_html_objects('test/html/*.html');
 ----
-5
+14
 
 # Test read_html_objects with filename column
 query II
 SELECT count(*) AS file_count, count(DISTINCT filename) AS unique_filenames
 FROM read_html_objects('test/html/*.html', filename=true);
 ----
-5	5
+14	14
 
 # Test read_html_objects content extraction with XPath
 query I
