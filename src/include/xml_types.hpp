@@ -10,6 +10,7 @@ public:
 	static LogicalType XMLFragmentType();
 	static LogicalType XMLArrayType();
 	static LogicalType HTMLType();
+	static LogicalType OpaqueType(const std::string &type_name); // Get opaque type by name ("XML" or "HTML")
 	static bool IsXMLType(const LogicalType &type);
 	static bool IsXMLFragmentType(const LogicalType &type);
 	static bool IsXMLArrayType(const LogicalType &type);

@@ -1,0 +1,61 @@
+# name: test/sql/html_union_by_name_bug.test.disabled
+# description: Documents union_by_name bug where HTML returns NULL data when reading multiple files
+# group: [sql]
+# status: DISABLED - Bug to be fixed in future issue
+# This test is disabled because it demonstrates a known bug
+
+require webbed
+
+# BUG: When reading multiple HTML files with union_by_name, data comes back as NULL
+# This works fine for XML but not HTML
+
+# Test 1: Single HTML file works correctly
+query III
+SELECT "field-a", "field-b", "field-c"
+FROM read_html('test/html/union_file1.html', record_element:='data-item', union_by_name:=true)
+ORDER BY COALESCE("field-b", 0);
+----
+value1	100	NULL
+value2	200	NULL
+
+# Test 2: XML with multiple files works correctly
+query III
+SELECT "field-a", "field-b", "field-c"
+FROM read_xml(['test/xml/union_file1.xml', 'test/xml/union_file2.xml'], record_element:='data-item', union_by_name:=true)
+ORDER BY COALESCE("field-a", ''), COALESCE("field-b", 0);
+----
+NULL	300	extra1
+value1	100	NULL
+value2	200	NULL
+value3	NULL	extra2
+
+# Test 3: HTML with multiple files - BUG: Returns NULL data instead of actual values
+# EXPECTED BEHAVIOR (same as XML above):
+# NULL	300	extra1
+# value1	100	NULL
+# value2	200	NULL
+# value3	NULL	extra2
+#
+# ACTUAL BEHAVIOR:
+query III
+SELECT "field-a", "field-b", "field-c"
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
+ORDER BY COALESCE("field-a", ''), COALESCE("field-b", 0);
+----
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+NULL	NULL	NULL
+
+# Test 4: Even without union_by_name, multiple HTML files only return 2 records instead of 4
+# Each file has 2 data-item elements, so we should get 4 total
+query I
+SELECT count(*)
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item');
+----
+2
+
+# EXPECTED: 4 (2 from each file)
+# ACTUAL: 2 (only getting records from one file?)
+
+# Root cause appears to be in ReadDocumentFunction - multiple file processing for HTML

@@ -11,30 +11,30 @@ FROM read_html('test/html/deep_nesting.html', record_element:='article');
 ----
 STRUCT(div STRUCT(div STRUCT(div STRUCT(div STRUCT("data-value" VARCHAR)))))
 
-# Test 2: max_depth=1 should stop at first level
+# Test 2: max_depth=1 should stop at first level (article column becomes HTML type)
 query I
-SELECT typeof(div)
+SELECT typeof(article)
 FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=1);
 ----
 HTML
 
-# Test 3: max_depth=2 should allow one level of nesting
+# Test 3: max_depth=2 should allow one level of nesting (div becomes HTML)
 query I
 SELECT typeof(div)
 FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=2);
 ----
-STRUCT(div HTML)
+HTML
 
-# Test 4: max_depth=3 should allow two levels
+# Test 4: max_depth=3 should allow two levels (div.div becomes HTML)
 query I
 SELECT typeof(div)
 FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=3);
 ----
-STRUCT(div STRUCT(div HTML))
+STRUCT(div HTML)
 
-# Test 5: Verify data is still accessible with limited depth
+# Test 5: Verify data is still accessible with limited depth (max_depth=1 means article becomes HTML)
 query I
-SELECT CAST(div AS VARCHAR) LIKE '%Deep Value%' as has_data
+SELECT CAST(article AS VARCHAR) LIKE '%Deep Value%' as has_data
 FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=1);
 ----
 true
@@ -46,9 +46,9 @@ FROM read_html('test/html/deep_nesting.html', record_element:='article');
 ----
 Deep Value
 
-# Test 7: Limited depth should convert remaining structure to HTML type
+# Test 7: With max_depth=3, nested div.div should be HTML type
 query T
 SELECT typeof(div.div)
-FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=2);
+FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=3);
 ----
 HTML

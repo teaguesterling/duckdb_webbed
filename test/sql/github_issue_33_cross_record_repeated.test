@@ -1,0 +1,56 @@
+# name: test/sql/github_issue_33_cross_record_repeated.test
+# description: Test that repeated elements are detected across ALL records, not just the first
+# group: [sql]
+
+require webbed
+
+# Test 1: XML - First record has 1 element, later records have multiple
+# Schema inference should detect repetition across all records
+query I
+SELECT tags FROM read_xml('test/xml/issue_33_cross_record.xml', record_element:='item');
+----
+{'tag': [a]}
+{'tag': [b, c]}
+{'tag': [d, e, f]}
+
+# Test 2: Verify the inferred type is STRUCT with LIST field (not scalar)
+query TTTTTT
+DESCRIBE SELECT tags FROM read_xml('test/xml/issue_33_cross_record.xml', record_element:='item');
+----
+tags	STRUCT(tag VARCHAR[])	YES	NULL	NULL	NULL
+
+# Test 3: HTML - First record has 1 element, later records have multiple
+query I
+SELECT tags FROM read_html('test/html/issue_33_cross_record.html', record_element:='item');
+----
+{'tag': [a]}
+{'tag': [b, c]}
+{'tag': [d, e, f]}
+
+# Test 4: Verify HTML also infers LIST type
+query TTTTTT
+DESCRIBE SELECT tags FROM read_html('test/html/issue_33_cross_record.html', record_element:='item');
+----
+tags	STRUCT(tag VARCHAR[])	YES	NULL	NULL	NULL
+
+# Test 5: Unnest works correctly with cross-record detection
+query I
+SELECT unnest(tags.tag) as tag
+FROM read_xml('test/xml/issue_33_cross_record.xml', record_element:='item')
+ORDER BY tag;
+----
+a
+b
+c
+d
+e
+f
+
+# Test 6: Verify each record gets correct data (not just first element)
+query II
+SELECT row_number() OVER () as record_num, tags.tag
+FROM read_xml('test/xml/issue_33_cross_record.xml', record_element:='item');
+----
+1	[a]
+2	[b, c]
+3	[d, e, f]

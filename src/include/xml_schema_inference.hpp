@@ -53,6 +53,9 @@ struct XMLSchemaOptions {
 
 	// Type forcing
 	bool all_varchar = false; // Force all scalar types to VARCHAR (nested structure preserved)
+
+	// Source type tracking
+	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
 };
 
 // Information about an inferred column

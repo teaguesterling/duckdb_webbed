@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<data-records>
+    <data-item>
+        <field-b>300</field-b>
+        <field-c>extra1</field-c>
+    </data-item>
+    <data-item>
+        <field-a>value3</field-a>
+        <field-c>extra2</field-c>
+    </data-item>
+</data-records>

@@ -163,6 +163,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	// Set opaque type name based on parse mode
+	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {
@@ -770,6 +772,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
+	result->parse_mode = ParseMode::XML;
 
 	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
@@ -816,6 +819,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	// Set opaque type name based on parse mode
+	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {

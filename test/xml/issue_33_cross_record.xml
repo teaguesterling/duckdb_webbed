@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<root>
+  <item>
+    <tags>
+      <tag>a</tag>
+    </tags>
+  </item>
+  <item>
+    <tags>
+      <tag>b</tag>
+      <tag>c</tag>
+    </tags>
+  </item>
+  <item>
+    <tags>
+      <tag>d</tag>
+      <tag>e</tag>
+      <tag>f</tag>
+    </tags>
+  </item>
+</root>

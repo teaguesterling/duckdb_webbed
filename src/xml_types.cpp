@@ -29,6 +29,14 @@ LogicalType XMLTypes::HTMLType() {
 	return html_type;
 }
 
+LogicalType XMLTypes::OpaqueType(const std::string &type_name) {
+	if (type_name == "HTML") {
+		return HTMLType();
+	}
+	// Default to XML for any other value (including "XML")
+	return XMLType();
+}
+
 LogicalType XMLTypes::XMLArrayType() {
 	return LogicalType::LIST(XMLType());
 }

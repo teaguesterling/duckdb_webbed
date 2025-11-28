@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<root>
+  <item id="1">
+    <data>First</data>
+  </item>
+  <item id="2" priority="high">
+    <data>Second</data>
+  </item>
+  <item id="3" priority="low" status="active">
+    <data>Third</data>
+  </item>
+</root>

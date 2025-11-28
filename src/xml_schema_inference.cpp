@@ -85,13 +85,13 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	int remaining_depth = effective_depth - 2;
 
 	// If remaining_depth < 0, we don't have depth budget to look inside records
-	// Return a single column with the record element name, typed as XML
+	// Return a single column with the record element name, typed as opaque (XML or HTML)
 	if (remaining_depth < 0) {
 		std::string record_name = (const char *)record_elements[0]->name;
 		if (options.namespaces == "strip") {
 			record_name = StripNamespacePrefix(record_name);
 		}
-		columns.emplace_back(record_name, XMLTypes::XMLType(), false, "", 1.0);
+		columns.emplace_back(record_name, XMLTypes::OpaqueType(options.opaque_type_name), false, "", 1.0);
 		return columns;
 	}
 
@@ -383,27 +383,34 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Complex element - check depth limit
 	if (remaining_depth <= 0) {
-		// Depth limit reached - return XML type
+		// Depth limit reached - return opaque type (XML or HTML)
 		if (force_as_list) {
-			return LogicalType::LIST(XMLTypes::XMLType());
+			return LogicalType::LIST(XMLTypes::OpaqueType(options.opaque_type_name));
 		}
-		return XMLTypes::XMLType();
+		return XMLTypes::OpaqueType(options.opaque_type_name);
 	}
 
 	// Column repeats in a record OR forced to be list → LIST type
 	if (column.repeats_in_record || force_as_list) {
-		// Analyze the structure of the first instance to determine element type
+		// Analyze the structure across ALL instances to determine element type
 		xmlNodePtr first = column.instances[0];
 
-		// Check what this element contains
-		std::unordered_map<std::string, int> child_counts;
-		for (xmlNodePtr child = first->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				std::string child_name((const char *)child->name);
-				if (options.namespaces == "strip") {
-					child_name = StripNamespacePrefix(child_name);
+		// Check what child elements exist across ALL instances and track max count per record
+		std::unordered_map<std::string, int> child_max_counts;
+		for (xmlNodePtr instance : column.instances) {
+			std::unordered_map<std::string, int> instance_counts;
+			for (xmlNodePtr child = instance->children; child; child = child->next) {
+				if (child->type == XML_ELEMENT_NODE) {
+					std::string child_name((const char *)child->name);
+					if (options.namespaces == "strip") {
+						child_name = StripNamespacePrefix(child_name);
+					}
+					instance_counts[child_name]++;
 				}
-				child_counts[child_name]++;
+			}
+			// Track maximum occurrence across all instances
+			for (const auto &pair : instance_counts) {
+				child_max_counts[pair.first] = std::max(child_max_counts[pair.first], pair.second);
 			}
 		}
 
@@ -426,7 +433,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 
 		// 2. Add child elements as STRUCT fields (if any)
-		if (!child_counts.empty()) {
+		if (!child_max_counts.empty()) {
 			std::unordered_set<std::string> seen_children;
 
 			// Iterate over children in document order to preserve field order
@@ -444,11 +451,13 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						// Create a ColumnAnalysis for this nested child
 						ColumnAnalysis nested_col(child_name, false);
 
-						// Collect ALL instances of this child element (not just the first)
-						CollectChildElements(first, child_name, options, nested_col.instances);
+						// Collect ALL instances of this child element from ALL parent instances
+						for (xmlNodePtr instance : column.instances) {
+							CollectChildElements(instance, child_name, options, nested_col.instances);
+						}
 
-						nested_col.occurrence_count = child_counts[child_name];
-						nested_col.repeats_in_record = (child_counts[child_name] > 1);
+						nested_col.occurrence_count = child_max_counts[child_name];
+						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 						// Recursively infer type with decreased depth
 						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
@@ -462,26 +471,34 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			return LogicalType::LIST(LogicalType::STRUCT(struct_fields));
 		}
 
-		// Fallback: LIST<XML>
-		return LogicalType::LIST(XMLTypes::XMLType());
+		// Fallback: LIST<opaque type>
+		return LogicalType::LIST(XMLTypes::OpaqueType(options.opaque_type_name));
 	}
 
 	// Single complex element per record → could be STRUCT
-	// Analyze its children
+	// Analyze children across ALL instances
 	xmlNodePtr first = column.instances[0];
-	std::unordered_map<std::string, int> child_counts;
+	std::unordered_map<std::string, int> child_max_counts;
 
-	for (xmlNodePtr child = first->children; child; child = child->next) {
-		if (child->type == XML_ELEMENT_NODE) {
-			std::string child_name((const char *)child->name);
-			if (options.namespaces == "strip") {
-				child_name = StripNamespacePrefix(child_name);
+	// Check what child elements exist across ALL instances and track max count per record
+	for (xmlNodePtr instance : column.instances) {
+		std::unordered_map<std::string, int> instance_counts;
+		for (xmlNodePtr child = instance->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				std::string child_name((const char *)child->name);
+				if (options.namespaces == "strip") {
+					child_name = StripNamespacePrefix(child_name);
+				}
+				instance_counts[child_name]++;
 			}
-			child_counts[child_name]++;
+		}
+		// Track maximum occurrence across all instances
+		for (const auto &pair : instance_counts) {
+			child_max_counts[pair.first] = std::max(child_max_counts[pair.first], pair.second);
 		}
 	}
 
-	if (!child_counts.empty()) {
+	if (!child_max_counts.empty()) {
 		// Build STRUCT type from children IN DOCUMENT ORDER
 		child_list_t<LogicalType> struct_fields;
 		std::unordered_set<std::string> seen_children;
@@ -501,11 +518,13 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					// Create a ColumnAnalysis for this nested child
 					ColumnAnalysis nested_col(child_name, false);
 
-					// Collect ALL instances of this child element (not just the first)
-					CollectChildElements(first, child_name, options, nested_col.instances);
+					// Collect ALL instances of this child element from ALL parent instances
+					for (xmlNodePtr instance : column.instances) {
+						CollectChildElements(instance, child_name, options, nested_col.instances);
+					}
 
-					nested_col.occurrence_count = child_counts[child_name];
-					nested_col.repeats_in_record = (child_counts[child_name] > 1);
+					nested_col.occurrence_count = child_max_counts[child_name];
+					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 					// Recursively infer type with decreased depth
 					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
@@ -519,8 +538,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 	}
 
-	// Fallback: XML type
-	return XMLTypes::XMLType();
+	// Fallback: opaque type
+	return XMLTypes::OpaqueType(options.opaque_type_name);
 }
 
 std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const std::string &xml_content,

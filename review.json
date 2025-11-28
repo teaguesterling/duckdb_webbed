@@ -1,0 +1,11 @@
+{
+  "comment_content": "The 80% threshold check (lines 1018-1026) executes before the INTEGER+DOUBLE promotion logic (lines 1028-1034). This means if a column has 8 INTEGER values and 1 DOUBLE value (e.g., \"1\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"3.5\"), the function will return INTEGER (since 8/9 = 88.8% > 80%) and never reach the INTEGER+DOUBLE special case.\n\nThis would cause data loss when the DOUBLE value \"3.5\" is read as INTEGER (likely truncating to 3 or causing a conversion error).\n\nThe fix is to check for INTEGER+DOUBLE mixture BEFORE applying the 80% threshold, or add a special condition to exclude INTEGER from the threshold check if any DOUBLE values are present.",
+  "comment_type": "bug",
+  "end_line": 1034,
+  "file_location": "src/xml_schema_inference.cpp",
+  "fixed": false,
+  "severity": "critical",
+  "start_line": 1018,
+  "subjective": false
+}
+

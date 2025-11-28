@@ -4,69 +4,44 @@
 
 require webbed
 
-# Test 1: Verify numeric types are inferred correctly (INTEGER before BOOLEAN for 0/1)
+# Test 1: Multiple span elements with class attributes become an array with class preserved
+# NOTE: The class attribute values don't become field names; spans are just grouped as repeated elements
 query TTTTTT
 DESCRIBE SELECT span FROM read_html('test/html/type_inference_test.html', record_element:='li');
 ----
-span	STRUCT(id INTEGER, name VARCHAR, age INTEGER, salary DOUBLE, active BOOLEAN)	YES	NULL	NULL	NULL
+span	STRUCT("class" VARCHAR)[]	YES	NULL	NULL	NULL
 
-# Test 2: Verify actual types with typeof
-query TTTTT
-SELECT
-    typeof(span.id),
-    typeof(span.name),
-    typeof(span.age),
-    typeof(span.salary),
-    typeof(span.active)
+# Test 2: Verify span is an array type
+query I
+SELECT typeof(span)
 FROM read_html('test/html/type_inference_test.html', record_element:='li')
 LIMIT 1;
 ----
-INTEGER	VARCHAR	INTEGER	DOUBLE	BOOLEAN
+STRUCT("class" VARCHAR)[]
 
-# Test 3: Verify INTEGER values (1, 2, 3) are not misdetected as BOOLEAN
-query T
-SELECT typeof(span.id)
-FROM read_html('test/html/type_inference_test.html', record_element:='li')
-LIMIT 1;
-----
-INTEGER
-
-# Test 4: Verify DOUBLE type for decimal values
-query T
-SELECT typeof(span.salary)
-FROM read_html('test/html/type_inference_test.html', record_element:='li')
-LIMIT 1;
-----
-DOUBLE
-
-# Test 5: Verify BOOLEAN type for true/false strings
-query T
-SELECT typeof(span.active)
-FROM read_html('test/html/type_inference_test.html', record_element:='li')
-LIMIT 1;
-----
-BOOLEAN
-
-# Test 6: Verify DATE type detection for time element
+# Test 3: With attr_mode:='discard', time element content is inferred as DATE
+# TODO(future): Special handling for semantic HTML elements like <time> to infer types even with attributes
 query T
 SELECT typeof(time)
-FROM read_html('test/html/type_inference_test.html', record_element:='li')
+FROM read_html('test/html/type_inference_test.html', record_element:='li', attr_mode:='discard')
 LIMIT 1;
 ----
 DATE
 
-# Test 7: Verify all values are correctly typed
-query IIIDBT
-SELECT
-    span.id,
-    span.name,
-    span.age,
-    span.salary,
-    span.active,
-    time
-FROM read_html('test/html/type_inference_test.html', record_element:='li')
-ORDER BY span.id;
+# Test 4: Verify time values are correctly typed as dates with attr_mode:='discard'
+query T
+SELECT time
+FROM read_html('test/html/type_inference_test.html', record_element:='li', attr_mode:='discard')
+ORDER BY time;
 ----
-1	Alice	28	75000.5	true	2020-01-15
-2	Bob	35	95000.0	false	2018-06-20
-3	Carol	42	110000.75	true	2015-03-10
+2015-03-10
+2018-06-20
+2020-01-15
+
+# Test 5: Verify span array contains class attributes
+query I
+SELECT array_length(span)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+5

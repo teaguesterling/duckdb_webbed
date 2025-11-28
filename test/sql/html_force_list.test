@@ -5,19 +5,21 @@
 require webbed
 
 # Test 1: Without force_list - discard attributes to focus on structure
+# Note: Column order is non-deterministic, so we order by column name
+# Schema inference looks at all records, so custom-tag becomes VARCHAR[] (records 2&3 have multiple)
 query TTTTTT
-DESCRIBE SELECT * FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard');
+SELECT * FROM (DESCRIBE SELECT * FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard')) ORDER BY column_name;
 ----
-header	STRUCT(h2 VARCHAR, span VARCHAR)	YES	NULL	NULL	NULL
+header	STRUCT(h2 VARCHAR, span INTEGER)	YES	NULL	NULL	NULL
 section	STRUCT("custom-tag" VARCHAR[])	YES	NULL	NULL	NULL
 
-# Test 2: Verify the first record has single tag as array (due to repeated elements fix)
+# Test 2: Verify the first record (single custom-tag element becomes array)
 query II
 SELECT
     header.span as id,
     section."custom-tag" as tags
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard')
-WHERE header.span = '1';
+WHERE header.span = 1;
 ----
 1	[important]
 
@@ -25,11 +27,11 @@ WHERE header.span = '1';
 query II
 SELECT
     header.span as id,
-    array_length(section."custom-tag") as tag_count
+    section."custom-tag" as tags
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard')
-WHERE header.span = '2';
+WHERE header.span = 2;
 ----
-2	2
+2	[urgent, review]
 
 # Test 4: Use force_list to ensure section is always a LIST
 query T
@@ -37,7 +39,7 @@ SELECT typeof(section)
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard', force_list:='section')
 LIMIT 1;
 ----
-STRUCT("custom-tag" VARCHAR[])[]
+STRUCT("custom-tag" VARCHAR)[]
 
 # Test 5: Verify force_list with XPath-style selector
 query I
@@ -52,13 +54,13 @@ SELECT typeof(header)
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard', force_list:=['header', 'section'])
 LIMIT 1;
 ----
-STRUCT(h2 VARCHAR, span VARCHAR)[]
+STRUCT(h2 VARCHAR, span INTEGER)[]
 
 # Test 7: Verify unnesting works with repeated custom-tag elements
 query I
 SELECT unnest(section."custom-tag") as tag
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard')
-WHERE header.span = '3'
+WHERE header.span = 3
 ORDER BY tag;
 ----
 backlog

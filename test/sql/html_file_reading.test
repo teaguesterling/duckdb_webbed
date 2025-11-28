@@ -17,16 +17,12 @@ FROM read_html_objects('test/html/simple.html');
 true
 
 # Test read_html_objects function for batch processing
-query I
-SELECT 
-    typeof(html) AS content_type
-FROM read_html_objects('test/html/*.html');
+query II
+SELECT count(*), typeof(html) AS content_type
+FROM read_html_objects('test/html/*.html')
+GROUP BY typeof(html);
 ----
-HTML
-HTML
-HTML
-HTML
-HTML
+14	HTML
 
 # Test extracting data from read HTML files
 query I

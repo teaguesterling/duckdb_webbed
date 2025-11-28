@@ -1,0 +1,54 @@
+# name: test/sql/cross_record_attributes.test
+# description: Test cross-record attribute discovery (documents current behavior)
+# group: [sql]
+
+require webbed
+
+# Test 1: Attributes discovered across records (top-level, attr_mode=columns)
+# When later records introduce new attributes, they're discovered with NULL for earlier records
+query IIII
+SELECT id, priority, status, data
+FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item')
+ORDER BY id;
+----
+1	NULL	NULL	First
+2	high	NULL	Second
+3	low	active	Third
+
+# Test 2: Verify schema includes all attributes from all records
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item')) ORDER BY column_name;
+----
+data	VARCHAR	YES	NULL	NULL	NULL
+id	VARCHAR	YES	NULL	NULL	NULL
+priority	VARCHAR	YES	NULL	NULL	NULL
+status	VARCHAR	YES	NULL	NULL	NULL
+
+# Test 3: Nested elements with attributes appearing in later records
+# When a nested element gets attributes in later records, it becomes XML type (opaque)
+query T
+SELECT typeof(contact)
+FROM read_xml('test/xml/cross_record_nested_attrs.xml', record_element:='item')
+LIMIT 1;
+----
+STRUCT(phone XML)
+
+# Test 4: Same behavior for HTML
+query T
+SELECT typeof(contact)
+FROM read_html('test/html/cross_record_nested_attrs.html', record_element:='item')
+LIMIT 1;
+----
+STRUCT(phone XML)
+
+# Test 5: With attr_mode=discard, nested elements stay queryable even across records
+query I
+SELECT contact.phone
+FROM read_xml('test/xml/cross_record_nested_attrs.xml', record_element:='item', attr_mode:='discard')
+ORDER BY contact.phone;
+----
+555-1234
+555-5678
+
+# Note: The XML type for mixed content (attributes + text) is current expected behavior
+# Future enhancement: Implement structured mixed-content type like STRUCT(text VARCHAR, attributes MAP)
