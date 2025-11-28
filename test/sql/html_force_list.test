@@ -39,7 +39,7 @@ SELECT typeof(section)
 FROM read_html('test/html/force_list_test.html', record_element:='article', attr_mode:='discard', force_list:='section')
 LIMIT 1;
 ----
-STRUCT("custom-tag" VARCHAR)[]
+STRUCT("custom-tag" VARCHAR[])[]
 
 # Test 5: Verify force_list with XPath-style selector
 query I
