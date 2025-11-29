@@ -17,11 +17,12 @@ This file tracks known issues where tests have been updated to reflect current (
 **Expected Behavior**: Should return filename column with distinct values for each file
 **Impact**: Cannot track which file records came from when reading multiple HTML files
 
-### Cross-record Attribute Discovery (Issue #50)
-**Files**: `test/sql/cross_record_attributes.test:37`
-**Current Behavior**: Attributes only discovered from first record
-**Expected Behavior**: Should examine all records to discover attributes that appear in later records
-**Impact**: Missing data when attributes don't appear consistently across all records
+### Cross-record Attribute Discovery for Nested Elements (Issue #50)
+**Files**: `test/sql/cross_record_attributes.test:29, 37`
+**Current Behavior**: When nested elements gain attributes in later records, they become opaque XML/HTML types (e.g., `STRUCT(phone XML)` instead of `STRUCT(phone VARCHAR, phone_type VARCHAR)`)
+**Expected Behavior**: Should discover attributes from nested elements across all records and create structured types with attribute columns
+**Impact**: Data becomes inaccessible without using `attr_mode:='discard'` or XPath extraction
+**Note**: Top-level attribute discovery works correctly (Test 1-2), only nested elements are affected
 
 ## Medium Priority - Error Handling
 
