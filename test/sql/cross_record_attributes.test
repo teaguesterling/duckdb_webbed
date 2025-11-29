@@ -39,7 +39,7 @@ SELECT typeof(contact)
 FROM read_html('test/html/cross_record_nested_attrs.html', record_element:='item')
 LIMIT 1;
 ----
-STRUCT(phone XML)
+STRUCT(phone HTML)
 
 # Test 5: With attr_mode=discard, nested elements stay queryable even across records
 query I
