@@ -377,12 +377,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					return_types.push_back(union_schema[col_name]);
 				}
 
-				// Store union schema as explicit schema for execution
-				if (result->union_by_name) {
-					result->has_explicit_schema = true;
-					result->column_names = names;
-					result->column_types = return_types;
-				}
+				// Always store schema for execution to ensure consistent column ordering
+				// across multiple files (fixes non-determinism from unordered_map iteration)
+				result->has_explicit_schema = true;
+				result->column_names = names;
+				result->column_types = return_types;
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				if (mode == ParseMode::HTML) {
@@ -1028,12 +1027,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					return_types.push_back(union_schema[col_name]);
 				}
 
-				// Store union schema as explicit schema for execution
-				if (result->union_by_name) {
-					result->has_explicit_schema = true;
-					result->column_names = names;
-					result->column_types = return_types;
-				}
+				// Always store schema for execution to ensure consistent column ordering
+				// across multiple files (fixes non-determinism from unordered_map iteration)
+				result->has_explicit_schema = true;
+				result->column_names = names;
+				result->column_types = return_types;
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				return_types.push_back(XMLTypes::XMLType());

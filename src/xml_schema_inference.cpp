@@ -46,8 +46,10 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
                                                            const XMLSchemaOptions &options) {
 	std::vector<XMLColumnInfo> columns;
 
-	// Parse XML document
-	XMLDocRAII doc(xml_content);
+	// Parse document using appropriate parser based on opaque type name
+	// HTML mode uses libxml2's HTML parser which handles malformed content better
+	bool is_html = (options.opaque_type_name == "HTML");
+	XMLDocRAII doc(xml_content, is_html);
 	if (!doc.IsValid()) {
 		// Fallback
 		columns.emplace_back("content", LogicalType::VARCHAR, false, "", 1.0);
@@ -1092,10 +1094,11 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 		return rows; // No data to extract
 	}
 
-	// Parse XML document
-	XMLDocRAII doc(xml_content);
+	// Parse document using appropriate parser based on opaque type name
+	bool is_html = (options.opaque_type_name == "HTML");
+	XMLDocRAII doc(xml_content, is_html);
 	if (!doc.IsValid()) {
-		return rows; // Invalid XML
+		return rows; // Invalid document
 	}
 
 	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
@@ -1298,10 +1301,11 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 		return rows; // No columns to extract
 	}
 
-	// Parse XML document
-	XMLDocRAII doc(xml_content);
+	// Parse document using appropriate parser based on opaque type name
+	bool is_html = (options.opaque_type_name == "HTML");
+	XMLDocRAII doc(xml_content, is_html);
 	if (!doc.IsValid()) {
-		return rows; // Invalid XML
+		return rows; // Invalid document
 	}
 
 	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
@@ -1309,53 +1313,51 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 		return rows; // No root element
 	}
 
-	// Find the repeating element pattern (e.g., "employee" elements)
-	// For now, assume the first child elements are the records
-	xmlNodePtr current = root->children;
+	// Use same record identification logic as InferSchema/ExtractData
+	// This properly handles record_element XPath for nested records (e.g., //data-item)
+	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
-	while (current) {
-		if (current->type == XML_ELEMENT_NODE) {
-			// Extract data for this record according to explicit schema
-			std::vector<Value> row;
+	// Extract data from each record element
+	for (xmlNodePtr current : record_elements) {
+		// Extract data for this record according to explicit schema
+		std::vector<Value> row;
 
-			for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
-				const auto &column_name = column_names[col_idx];
-				const auto &column_type = column_types[col_idx];
+		for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
+			const auto &column_name = column_names[col_idx];
+			const auto &column_type = column_types[col_idx];
 
-				// Find the specific child element or attribute for this column
-				Value value;
+			// Find the specific child element or attribute for this column
+			Value value;
 
-				// First check if it's an attribute
-				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
-				if (attr_value) {
-					std::string str_value = (const char *)attr_value;
-					value = ConvertToValue(str_value, column_type);
-					xmlFree(attr_value);
-				} else {
-					// Look for child element with matching name
-					xmlNodePtr child = current->children;
-					while (child) {
-						if (child->type == XML_ELEMENT_NODE &&
-						    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
-							// Found matching child element - extract recursively
-							value = ExtractValueFromNode(child, column_type);
-							break;
-						}
-						child = child->next;
+			// First check if it's an attribute
+			xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
+			if (attr_value) {
+				std::string str_value = (const char *)attr_value;
+				value = ConvertToValue(str_value, column_type);
+				xmlFree(attr_value);
+			} else {
+				// Look for child element with matching name
+				xmlNodePtr child = current->children;
+				while (child) {
+					if (child->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
+						// Found matching child element - extract recursively
+						value = ExtractValueFromNode(child, column_type);
+						break;
 					}
-
-					// If no matching child found, use NULL
-					if (child == nullptr) {
-						value = Value(column_type);
-					}
+					child = child->next;
 				}
 
-				row.push_back(value);
+				// If no matching child found, use NULL
+				if (child == nullptr) {
+					value = Value(column_type);
+				}
 			}
 
-			rows.push_back(row);
+			row.push_back(value);
 		}
-		current = current->next;
+
+		rows.push_back(row);
 	}
 
 	return rows;
