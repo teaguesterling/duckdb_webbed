@@ -4,12 +4,14 @@
 
 require webbed
 
-# Test 1: Without union_by_name (default behavior - only uses first file schema)
+# Test 1: Without union_by_name (default behavior - uses first file schema, matches by name)
+# First file has (company, link, title), second file has (description, location, title)
+# So link column only matches in first file's 2 records
 query II
 SELECT COUNT(*), COUNT(link) as links_count
 FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml']);
 ----
-4	4
+4	2
 
 # Test 2: With union_by_name=true (creates union of all columns)
 query IIIIII

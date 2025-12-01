@@ -46,9 +46,8 @@ exceeds maximum size limit
 # Test 6: Verify multiple file processing with ignore_errors
 # Note: complex_types_test.html has <article> not <data-item>, so it's ignored
 # union_file1 has 2 data-items, union_file2 has 2 data-items = 4 total
-# TODO(union_by_name-html): Returns 2 instead of 4 when using multiple files
 query I
 SELECT count(*)
 FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html', 'test/html/complex_types_test.html'], record_element:='data-item', ignore_errors:=true);
 ----
-2
+4

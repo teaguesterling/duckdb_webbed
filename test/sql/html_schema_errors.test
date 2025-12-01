@@ -5,19 +5,20 @@
 require webbed
 
 # Test 1: HTML parser should recover from malformed HTML (libxml2 HTML mode)
-# TODO(GitHub #51): Custom HTML elements like data-item are not recognized by HTML parser
+# Custom HTML elements like data-item are now recognized by HTML parser
 query I
 SELECT count(*) FROM read_html('test/html/invalid_html.html', record_element:='data-item');
 ----
-0
+3
 
 # Test 2: Verify malformed content is still accessible after HTML recovery
-# TODO(GitHub #51): Custom HTML elements like data-item are not recognized by HTML parser
-# When this is fixed, we expect: unclosed, valid1, valid2
-statement error
+# HTML parser recovers from unclosed tags and extracts all 3 records
+query T
 SELECT value FROM read_html('test/html/invalid_html.html', record_element:='data-item') ORDER BY value;
 ----
-Binder Error
+unclosed
+valid1
+valid2
 
 # Test 3: Test with ignore_errors=true on non-existent file should not crash
 # TODO: ignore_errors currently doesn't prevent "No files found" error

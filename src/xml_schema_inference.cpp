@@ -1336,7 +1336,31 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 				value = ConvertToValue(str_value, column_type);
 				xmlFree(attr_value);
 			} else {
-				// Look for child element with matching name
+				// Special handling for LIST columns - collect ALL matching children
+				if (column_type.id() == LogicalTypeId::LIST) {
+					vector<Value> list_values;
+					auto element_type = ListType::GetChildType(column_type);
+
+					// Collect all children with matching name
+					for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
+						if (child_iter->type == XML_ELEMENT_NODE &&
+						    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
+							// Extract this list element
+							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							list_values.push_back(element_value);
+						}
+					}
+
+					if (!list_values.empty()) {
+						value = Value::LIST(element_type, list_values);
+					} else {
+						value = Value(); // Empty list becomes NULL
+					}
+					row.push_back(value);
+					continue;
+				}
+
+				// Look for child element with matching name (non-LIST types)
 				xmlNodePtr child = current->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
@@ -1348,9 +1372,16 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 					child = child->next;
 				}
 
-				// If no matching child found, use NULL
+				// If no matching child found, check if column name matches the record element itself
+				// This happens when max_depth is so limited that the record element becomes an opaque type
 				if (child == nullptr) {
-					value = Value(column_type);
+					std::string record_name = (const char *)current->name;
+					if (record_name == column_name) {
+						// Column refers to the record element itself - serialize it
+						value = ExtractValueFromNode(current, column_type);
+					} else {
+						value = Value(column_type); // NULL for truly missing columns
+					}
 				}
 			}
 
