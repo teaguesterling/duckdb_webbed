@@ -27,25 +27,23 @@ SELECT count(*) FROM read_html(['test/html/union_file1.html', 'test/html/union_f
 4
 
 # Test 4: Verify NULL values for missing columns
-# TODO(union_by_name-html): union_by_name returns NULL data for HTML with multiple files - bug to fix
-# query III
-# SELECT "field-a", "field-b", "field-c"
-# FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
-# ORDER BY COALESCE("field-a", ''), COALESCE("field-b", 0);
-# ----
-# NULL	300	extra1
-# value1	100	NULL
-# value2	200	NULL
-# value3	NULL	extra2
+query ITT
+SELECT "field-b", "field-a", "field-c"
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
+ORDER BY COALESCE("field-a", ''), COALESCE("field-b", 0);
+----
+300	NULL	extra1
+100	value1	NULL
+200	value2	NULL
+NULL	value3	extra2
 
 # Test 5: Verify column types are correctly inferred across files
-# TODO(union_by_name-html): union_by_name returns NULL data for HTML with multiple files - bug to fix
-# query TTT
-# SELECT typeof("field-a"), typeof("field-b"), typeof("field-c")
-# FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
-# LIMIT 1;
-# ----
-# VARCHAR	INTEGER	VARCHAR
+query TTT
+SELECT typeof("field-a"), typeof("field-b"), typeof("field-c")
+FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true)
+LIMIT 1;
+----
+VARCHAR	INTEGER	VARCHAR
 
 # Test 6: Test with all_varchar and union_by_name together
 query TTTTTT

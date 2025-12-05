@@ -4,19 +4,6 @@ This file tracks known issues where tests have been updated to reflect current (
 
 ## High Priority - Feature Gaps
 
-### Custom HTML Elements Not Recognized (Issue #51)
-**Files**: `test/sql/html_schema_errors.test:8, 17`
-**Current Behavior**: HTML parser doesn't recognize custom elements like `<data-item>`, `<data-records>`
-**Expected Behavior**: Custom HTML elements should be accessible via XPath and `record_element` parameter
-**Impact**: Cannot use `read_html` with web components or custom HTML elements
-**Related**: Feature parity with `read_xml` which handles custom elements correctly
-
-### HTML union_by_name Returns NULL Data (Issue #48)
-**Files**: `test/sql/html_validation.test:50`
-**Current Behavior**: `filename` parameter doesn't work with multiple HTML files using `union_by_name`
-**Expected Behavior**: Should return filename column with distinct values for each file
-**Impact**: Cannot track which file records came from when reading multiple HTML files
-
 ### Cross-record Attribute Discovery for Nested Elements (Issue #50)
 **Files**: `test/sql/cross_record_attributes.test:29, 37`
 **Current Behavior**: When nested elements gain attributes in later records, they become opaque XML/HTML types (e.g., `STRUCT(phone XML)` instead of `STRUCT(phone VARCHAR, phone_type VARCHAR)`)
@@ -70,17 +57,28 @@ This file tracks known issues where tests have been updated to reflect current (
 **Files**: Multiple test files updated
 **Description**: HTML files now correctly show "HTML" type instead of "XML" for opaque elements
 
+### Custom HTML Elements Not Recognized (Issue #51)
+**Status**: ✅ FIXED
+**Description**: HTML parser now correctly recognizes custom elements like `<data-item>`, `<data-records>`
+**Fix**: Use HTML parser based on `opaque_type_name` in schema inference and extraction
+
+### HTML union_by_name Returns NULL Data (Issue #48 partial)
+**Status**: ✅ FIXED
+**Description**: `union_by_name` now correctly extracts data from multiple HTML files
+**Fix**: Fixed LIST extraction and record element serialization in ExtractDataWithSchema
+**Remaining**: filename parameter tracking still needs work
+
 ## Summary
 
-**Total Issues**: 9 items requiring fixes
-- High Priority: 3 items (feature gaps, data loss)
+**Total Issues**: 7 items requiring fixes
+- High Priority: 1 item (feature gaps)
 - Medium Priority: 3 items (error handling)
 - Low Priority: 3 items (input validation)
 
 **GitHub Issues Created**:
 - #46: Type inference for semantic HTML elements with attributes
 - #47: Schema inference fails for heterogeneous repeated elements
-- #48: HTML union_by_name returns NULL data with multiple files
+- #48: HTML union_by_name returns NULL data with multiple files (partially fixed)
 - #49: Enable type inference for elements with attributes
 - #50: Cross-record attribute discovery and mixed-content handling
-- #51: Custom HTML elements not recognized by HTML parser
+- #51: Custom HTML elements not recognized by HTML parser (FIXED)
