@@ -73,22 +73,13 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 		return columns;
 	}
 
-	// Calculate effective depth with safety cap
-	int effective_depth = options.max_depth;
-	if (effective_depth > 20 || effective_depth < 0) {
-		effective_depth = 20;
-	}
-
 	// Calculate remaining depth for column introspection:
-	// max_depth=0: root is record (depth 0), columns at depth 1, remaining = 0-1 = -1 (no depth to introspect)
-	// max_depth=1: children are records (depth 1), columns at depth 2, remaining = 1-2 = -1 (no depth to introspect)
-	// max_depth=2: children are records (depth 1), columns at depth 2, remaining = 2-2 = 0 (can see columns but nested become XML)
-	// max_depth=3: children are records (depth 1), columns at depth 2, remaining = 3-2 = 1 (can introspect 1 level deep)
-	int remaining_depth = effective_depth - 2;
-
-	// If remaining_depth < 0, we don't have depth budget to look inside records
-	// Return a single column with the record element name, typed as opaque (XML or HTML)
-	if (remaining_depth < 0) {
+	// max_depth=0: root is record (depth 0), columns at depth 1, remaining < 0 (no depth to introspect)
+	// max_depth=1: children are records (depth 1), columns at depth 2, remaining < 0 (no depth to introspect)
+	// max_depth=2: children are records (depth 1), columns at depth 2, remaining = 0 (can see columns but nested become XML)
+	// max_depth=3: children are records (depth 1), columns at depth 2, remaining = 1 (can introspect 1 level deep)
+	// With idx_t (unsigned), we check if max_depth < 2 first to avoid underflow
+	if (options.max_depth < 2) {
 		std::string record_name = (const char *)record_elements[0]->name;
 		if (options.namespaces == "strip") {
 			record_name = StripNamespacePrefix(record_name);
@@ -96,6 +87,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 		columns.emplace_back(record_name, XMLTypes::OpaqueType(options.opaque_type_name), false, "", 1.0);
 		return columns;
 	}
+
+	// Now safe to compute remaining_depth (max_depth >= 2)
+	idx_t remaining_depth = options.max_depth - 2;
 
 	// Phase 2: Identify Columns (immediate children of records)
 	auto column_map = IdentifyColumns(record_elements, options);
@@ -124,12 +118,7 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 	std::vector<xmlNodePtr> record_elements;
 
 	// Special case: max_depth=0 means root itself is the only record
-	int effective_depth = options.max_depth;
-	if (effective_depth > 20 || effective_depth < 0) {
-		effective_depth = 20; // Safety cap
-	}
-
-	if (effective_depth == 0) {
+	if (options.max_depth == 0) {
 		record_elements.push_back(root);
 		return record_elements;
 	}
@@ -328,7 +317,7 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 }
 
 // Phase 3: Infer Column Type
-LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
+LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, idx_t remaining_depth,
                                                  const XMLSchemaOptions &options) {
 
 	// Attributes are always VARCHAR (or type-detected if enabled)
@@ -393,7 +382,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	// Complex element - check depth limit
-	if (remaining_depth <= 0) {
+	if (remaining_depth == 0) {
 		// Depth limit reached - return opaque type (XML or HTML)
 		if (force_as_list) {
 			return LogicalType::LIST(XMLTypes::OpaqueType(options.opaque_type_name));
@@ -800,8 +789,8 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 		return;
 	}
 
-	// Optional depth limiting for performance (unlimited by default)
-	if (options.max_depth >= 0 && current_depth >= options.max_depth) {
+	// Optional depth limiting for performance
+	if (static_cast<idx_t>(current_depth) >= options.max_depth) {
 		return;
 	}
 
@@ -1169,14 +1158,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
 	// Calculate remaining depth (same logic as InferSchema)
-	int effective_depth = options.max_depth;
-	if (effective_depth > 20 || effective_depth < 0) {
-		effective_depth = 20;
-	}
-	int remaining_depth = effective_depth - 2;
-
-	// If remaining_depth < 0, serialize each record as XML
-	if (remaining_depth < 0) {
+	// If max_depth < 2, serialize each record as XML
+	if (options.max_depth < 2) {
 		for (xmlNodePtr record : record_elements) {
 			std::vector<Value> row;
 

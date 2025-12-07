@@ -24,17 +24,7 @@ This file tracks known issues where tests have been updated to reflect current (
 
 ## Low Priority - Input Validation
 
-### Parameter Validation Not Implemented
-**Files**: `test/sql/html_validation.test:29, 35, 41`
-**Current Behavior**: Invalid values for `attr_mode`, `namespaces`, `empty_elements` are silently ignored
-**Expected Behavior**: Should validate and throw errors for invalid parameter values
-**Impact**: Typos in parameters go unnoticed, leading to unexpected behavior
-
-### Negative max_depth Validation
-**Files**: `test/sql/html_validation.test:10`
-**Current Behavior**: `max_depth:=-1` is allowed (treated as very large depth)
-**Expected Behavior**: TBD - either validate and reject negative values, or document that -1 means unlimited
-**Impact**: Unclear API behavior
+(None currently)
 
 ## Fixed - No Action Needed
 
@@ -70,12 +60,22 @@ This file tracks known issues where tests have been updated to reflect current (
 **Description**: Invalid XPath expressions in `record_element` now throw clear errors instead of silently returning 0 rows
 **Fix**: Added XPath validation in `IdentifyRecordElements` with clear error messages
 
+### Parameter Validation for attr_mode, namespaces, empty_elements
+**Status**: ✅ FIXED
+**Description**: Invalid parameter values now throw clear errors with valid options listed
+**Tests**: `test/sql/html_validation.test:31-47`
+
+### max_depth Validation and idx_t Type
+**Status**: ✅ FIXED
+**Description**: `max_depth` now uses `idx_t` (consistent with DuckDB JSON extension), `-1` means unlimited, other negative values throw an error
+**Tests**: `test/sql/html_validation.test:7-15`
+
 ## Summary
 
-**Total Issues**: 3 items requiring fixes
+**Total Issues**: 0 items requiring fixes
 - High Priority: 0 items
 - Medium Priority: 0 items
-- Low Priority: 3 items (input validation)
+- Low Priority: 0 items
 
 **GitHub Issues Created**:
 - #46: Type inference for semantic HTML elements with attributes
