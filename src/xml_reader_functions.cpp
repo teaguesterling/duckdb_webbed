@@ -181,8 +181,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "record_element") {
 			// XPath or tag name for elements that should be rows
 			std::string record_value = kv.second.ToString();
-			// Convert simple tag names to XPath
-			if (record_value.find('/') == std::string::npos) {
+			// Convert simple tag names to XPath (only if no XPath syntax characters)
+			if (record_value.find('/') == std::string::npos &&
+			    record_value.find('[') == std::string::npos &&
+			    record_value.find('@') == std::string::npos) {
 				record_value = "//" + record_value;
 			}
 			schema_options.record_element = record_value;
@@ -836,8 +838,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "record_element") {
 			// XPath or tag name for elements that should be rows
 			std::string record_value = kv.second.ToString();
-			// Convert simple tag names to XPath
-			if (record_value.find('/') == std::string::npos) {
+			// Convert simple tag names to XPath (only if no XPath syntax characters)
+			if (record_value.find('/') == std::string::npos &&
+			    record_value.find('[') == std::string::npos &&
+			    record_value.find('@') == std::string::npos) {
 				record_value = "//" + record_value;
 			}
 			schema_options.record_element = record_value;

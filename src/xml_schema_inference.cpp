@@ -158,13 +158,22 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), doc.xpath_ctx);
 
-		if (xpath_obj && xpath_obj->nodesetval) {
+		if (!xpath_obj) {
+			// XPath compilation failed - likely invalid syntax
+			if (!options.ignore_errors) {
+				throw InvalidInputException("Invalid XPath expression in record_element: '%s' (expanded to: '%s')",
+				                            options.record_element, xpath_expr);
+			}
+			// With ignore_errors, return empty record set
+			return record_elements;
+		}
+
+		if (xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
 				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
 			}
 		}
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+		xmlXPathFreeObject(xpath_obj);
 	}
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {

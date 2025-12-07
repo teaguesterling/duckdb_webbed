@@ -8,23 +8,19 @@ This file tracks known issues where tests have been updated to reflect current (
 
 ## Medium Priority - Error Handling
 
-### Empty File List Should Return Empty Result
+(None currently)
+
+## Intentional Behavior (Consistent with read_json)
+
+### Empty File List Throws Error
 **Files**: `test/sql/html_validation.test:19`
-**Current Behavior**: `read_html(CAST([] AS VARCHAR[]))` throws "No files found" error
-**Expected Behavior**: Should return empty result set (0 rows)
-**Impact**: Makes it harder to handle dynamic file lists
+**Behavior**: `read_html(CAST([] AS VARCHAR[]))` throws "No files found" error
+**Rationale**: Consistent with `read_json` behavior - empty file list is likely a user error
 
 ### ignore_errors Doesn't Prevent "No Files Found" Error
 **Files**: `test/sql/html_schema_errors.test:23`
-**Current Behavior**: `ignore_errors:=true` still throws error for non-existent files
-**Expected Behavior**: Should handle gracefully and return empty result or skip missing files
-**Impact**: Less robust error handling for batch processing
-
-### Invalid XPath Returns 0 Rows Instead of Error
-**Files**: `test/sql/html_schema_errors.test:37`
-**Current Behavior**: Invalid XPath like `'[[[invalid xpath'` returns 0 rows silently
-**Expected Behavior**: Should throw clear error message about invalid XPath syntax
-**Impact**: Silent failures make debugging difficult
+**Behavior**: `ignore_errors:=true` still throws error for non-existent files
+**Rationale**: Consistent with `read_json` - `ignore_errors` handles parsing errors, not missing files
 
 ## Low Priority - Input Validation
 
@@ -69,11 +65,16 @@ This file tracks known issues where tests have been updated to reflect current (
 **Fix**: Added cross-record attribute collection in `InferColumnType` and `#text` handling in `ExtractStructFromNode`
 **Schema**: Elements like `<phone type="mobile">555-1234</phone>` become `STRUCT("#text" VARCHAR, "type" VARCHAR)`
 
+### Invalid XPath Now Returns Error
+**Status**: ✅ FIXED
+**Description**: Invalid XPath expressions in `record_element` now throw clear errors instead of silently returning 0 rows
+**Fix**: Added XPath validation in `IdentifyRecordElements` with clear error messages
+
 ## Summary
 
-**Total Issues**: 6 items requiring fixes
+**Total Issues**: 3 items requiring fixes
 - High Priority: 0 items
-- Medium Priority: 3 items (error handling)
+- Medium Priority: 0 items
 - Low Priority: 3 items (input validation)
 
 **GitHub Issues Created**:
