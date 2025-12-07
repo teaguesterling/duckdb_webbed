@@ -540,6 +540,56 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 	}
 
+	// Check for text content with attributes (discovered across records)
+	// This handles elements like <phone type="mobile">555-1234</phone> where
+	// some instances have attributes and some don't
+	if (options.attr_mode != "discard") {
+		// Collect all unique attributes across ALL instances
+		std::unordered_set<std::string> all_attrs;
+		bool has_any_attrs = false;
+		bool has_text_content = false;
+
+		for (xmlNodePtr instance : column.instances) {
+			// Check for attributes
+			for (xmlAttrPtr attr = instance->properties; attr; attr = attr->next) {
+				if (attr->name) {
+					std::string attr_name((const char *)attr->name);
+					if (options.namespaces == "strip") {
+						attr_name = StripNamespacePrefix(attr_name);
+					}
+					all_attrs.insert(attr_name);
+					has_any_attrs = true;
+				}
+			}
+			// Check for text content
+			xmlChar *content = xmlNodeGetContent(instance);
+			if (content) {
+				std::string text = CleanTextContent((const char *)content);
+				if (!text.empty()) {
+					has_text_content = true;
+				}
+				xmlFree(content);
+			}
+		}
+
+		// If we have attributes discovered across records, build STRUCT with text + attrs
+		if (has_any_attrs && has_text_content) {
+			child_list_t<LogicalType> struct_fields;
+
+			// Add text content field
+			struct_fields.push_back(make_pair(options.text_key, LogicalType::VARCHAR));
+
+			// Add attribute fields (sorted for determinism)
+			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());
+			std::sort(sorted_attrs.begin(), sorted_attrs.end());
+			for (const auto &attr_name : sorted_attrs) {
+				struct_fields.push_back(make_pair(attr_name, LogicalType::VARCHAR));
+			}
+
+			return LogicalType::STRUCT(struct_fields);
+		}
+	}
+
 	// Fallback: opaque type
 	return XMLTypes::OpaqueType(options.opaque_type_name);
 }
@@ -1477,9 +1527,20 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		Value field_value;
 		bool found = false;
 
-		// First check if this field is an attribute on the node itself
-		xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str());
-		if (attr_value) {
+		// Special handling for #text field - extract text content of the node itself
+		if (field_name == "#text") {
+			xmlChar *content = xmlNodeGetContent(node);
+			if (content) {
+				std::string text = CleanTextContent((const char *)content);
+				if (!text.empty()) {
+					field_value = ConvertToValue(text, field_type);
+					found = true;
+				}
+				xmlFree(content);
+			}
+		}
+		// Check if this field is an attribute on the node itself
+		else if (xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			field_value = ConvertToValue(str_value, field_type);
 			xmlFree(attr_value);

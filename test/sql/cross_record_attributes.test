@@ -25,13 +25,13 @@ priority	VARCHAR	YES	NULL	NULL	NULL
 status	VARCHAR	YES	NULL	NULL	NULL
 
 # Test 3: Nested elements with attributes appearing in later records
-# When a nested element gets attributes in later records, it becomes XML type (opaque)
+# Cross-record attribute discovery creates STRUCT with #text and attribute columns
 query T
 SELECT typeof(contact)
 FROM read_xml('test/xml/cross_record_nested_attrs.xml', record_element:='item')
 LIMIT 1;
 ----
-STRUCT(phone XML)
+STRUCT(phone STRUCT("#text" VARCHAR, "type" VARCHAR))
 
 # Test 4: Same behavior for HTML
 query T
@@ -39,16 +39,22 @@ SELECT typeof(contact)
 FROM read_html('test/html/cross_record_nested_attrs.html', record_element:='item')
 LIMIT 1;
 ----
-STRUCT(phone HTML)
+STRUCT(phone STRUCT("#text" VARCHAR, "type" VARCHAR))
 
-# Test 5: With attr_mode=discard, nested elements stay queryable even across records
-query I
+# Test 5: Verify data is accessible with cross-record discovered attributes
+query TT
+SELECT contact.phone."#text" as phone_number, contact.phone.type as phone_type
+FROM read_xml('test/xml/cross_record_nested_attrs.xml', record_element:='item')
+ORDER BY contact.phone."#text";
+----
+555-1234	NULL
+555-5678	mobile
+
+# Test 6: With attr_mode=discard, nested elements stay as simple VARCHAR
+query T
 SELECT contact.phone
 FROM read_xml('test/xml/cross_record_nested_attrs.xml', record_element:='item', attr_mode:='discard')
 ORDER BY contact.phone;
 ----
 555-1234
 555-5678
-
-# Note: The XML type for mixed content (attributes + text) is current expected behavior
-# Future enhancement: Implement structured mixed-content type like STRUCT(text VARCHAR, attributes MAP)

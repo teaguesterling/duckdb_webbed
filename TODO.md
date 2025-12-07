@@ -4,12 +4,7 @@ This file tracks known issues where tests have been updated to reflect current (
 
 ## High Priority - Feature Gaps
 
-### Cross-record Attribute Discovery for Nested Elements (Issue #50)
-**Files**: `test/sql/cross_record_attributes.test:29, 37`
-**Current Behavior**: When nested elements gain attributes in later records, they become opaque XML/HTML types (e.g., `STRUCT(phone XML)` instead of `STRUCT(phone VARCHAR, phone_type VARCHAR)`)
-**Expected Behavior**: Should discover attributes from nested elements across all records and create structured types with attribute columns
-**Impact**: Data becomes inaccessible without using `attr_mode:='discard'` or XPath extraction
-**Note**: Top-level attribute discovery works correctly (Test 1-2), only nested elements are affected
+(None currently)
 
 ## Medium Priority - Error Handling
 
@@ -68,10 +63,16 @@ This file tracks known issues where tests have been updated to reflect current (
 **Fix**: Fixed LIST extraction and record element serialization in ExtractDataWithSchema
 **Remaining**: filename parameter tracking still needs work
 
+### Cross-record Attribute Discovery for Nested Elements (Issue #50)
+**Status**: ✅ FIXED
+**Description**: Nested elements with attributes discovered in later records now create proper STRUCT types
+**Fix**: Added cross-record attribute collection in `InferColumnType` and `#text` handling in `ExtractStructFromNode`
+**Schema**: Elements like `<phone type="mobile">555-1234</phone>` become `STRUCT("#text" VARCHAR, "type" VARCHAR)`
+
 ## Summary
 
-**Total Issues**: 7 items requiring fixes
-- High Priority: 1 item (feature gaps)
+**Total Issues**: 6 items requiring fixes
+- High Priority: 0 items
 - Medium Priority: 3 items (error handling)
 - Low Priority: 3 items (input validation)
 
@@ -80,5 +81,5 @@ This file tracks known issues where tests have been updated to reflect current (
 - #47: Schema inference fails for heterogeneous repeated elements
 - #48: HTML union_by_name returns NULL data with multiple files (partially fixed)
 - #49: Enable type inference for elements with attributes
-- #50: Cross-record attribute discovery and mixed-content handling
+- #50: Cross-record attribute discovery and mixed-content handling (FIXED)
 - #51: Custom HTML elements not recognized by HTML parser (FIXED)
