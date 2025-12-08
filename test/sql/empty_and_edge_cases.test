@@ -1,0 +1,132 @@
+# name: test/sql/empty_and_edge_cases.test
+# description: Test empty files, whitespace files, and other edge cases
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Empty file list errors (consistent with read_json)
+# ============================================================================
+
+statement error
+SELECT * FROM read_xml(CAST([] AS VARCHAR[]));
+----
+No files found
+
+statement error
+SELECT * FROM read_html(CAST([] AS VARCHAR[]));
+----
+No files found
+
+# ============================================================================
+# Test 2: Truly empty files (0 bytes) should return empty or error gracefully
+# ============================================================================
+
+# Empty HTML file returns 0 rows
+query I
+SELECT count(*) FROM read_html('test/html/empty.html', record_element:='item');
+----
+0
+
+# ============================================================================
+# Test 3: Minimal valid documents with no matching records
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_html('test/html/minimal_valid.html', record_element:='nonexistent');
+----
+0
+
+query I
+SELECT count(*) FROM read_xml('test/xml/minimal_valid.xml', record_element:='nonexistent');
+----
+0
+
+# ============================================================================
+# Test 4: Document with only whitespace content elements
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_html('test/html/whitespace_content.html', record_element:='item');
+----
+2
+
+# Whitespace-only content becomes NULL
+query T
+SELECT coalesce(trim(value), 'NULL') FROM read_html('test/html/whitespace_content.html', record_element:='item') ORDER BY id;
+----
+NULL
+actual content
+
+# ============================================================================
+# Test 5: Document with self-closing/void elements
+# ============================================================================
+
+query II
+SELECT id, length(content) as content_len
+FROM read_html('test/html/void_elements.html', record_element:='item')
+ORDER BY id;
+----
+1	NULL
+2	11
+
+# ============================================================================
+# Test 6: Very deeply nested single path (stress test)
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/deep_single_path.xml', record_element:='level10');
+----
+1
+
+query T
+SELECT value FROM read_xml('test/xml/deep_single_path.xml', record_element:='level10');
+----
+deep value
+
+# ============================================================================
+# Test 7: Document with only attributes (no text content)
+# ============================================================================
+
+query III
+SELECT id, status, priority
+FROM read_xml('test/xml/attributes_only.xml', record_element:='item')
+ORDER BY id;
+----
+1	active	high
+2	inactive	low
+3	pending	medium
+
+# ============================================================================
+# Test 8: Mixed empty and non-empty records
+# ============================================================================
+
+query II
+SELECT id, coalesce(value, 'NULL') as value
+FROM read_xml('test/xml/mixed_empty_records.xml', record_element:='item')
+ORDER BY id;
+----
+1	first
+2	NULL
+3	third
+
+# ============================================================================
+# Test 9: Very long element/attribute names
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/long_names.xml', record_element:='this-is-a-very-long-element-name-that-exceeds-typical-lengths');
+----
+1
+
+# ============================================================================
+# Test 10: Special XML characters in content (should be unescaped)
+# ============================================================================
+
+query T
+SELECT content FROM read_xml('test/xml/special_chars.xml', record_element:='item') ORDER BY id;
+----
+<tag>
+"quoted"
+5 > 3 & 3 < 5
+

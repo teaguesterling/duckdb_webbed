@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Custom Elements Test</title>
+</head>
+<body>
+    <!-- Simple custom elements as records -->
+    <data-item>
+        <name>Widget</name>
+        <category>tools</category>
+        <price>19.99</price>
+        <tags>
+            <custom-tag>popular</custom-tag>
+            <custom-tag>sale</custom-tag>
+        </tags>
+    </data-item>
+    <data-item>
+        <name>Gadget A</name>
+        <category>electronics</category>
+        <price>29.99</price>
+        <tags>
+            <custom-tag>new</custom-tag>
+        </tags>
+    </data-item>
+    <data-item>
+        <name>Gadget B</name>
+        <category>electronics</category>
+        <price>49.99</price>
+        <tags>
+            <custom-tag>premium</custom-tag>
+            <custom-tag>featured</custom-tag>
+        </tags>
+    </data-item>
+
+    <!-- Nested custom elements -->
+    <data-record>
+        <product>
+            <product-name>Basic Widget</product-name>
+            <product-details>
+                <sku-code>SKU-001</sku-code>
+                <in-stock>true</in-stock>
+            </product-details>
+        </product>
+    </data-record>
+    <data-record>
+        <product>
+            <product-name>Advanced Widget</product-name>
+            <product-details>
+                <sku-code>SKU-002</sku-code>
+                <in-stock>false</in-stock>
+            </product-details>
+        </product>
+    </data-record>
+
+    <!-- Web component style elements -->
+    <my-custom-component>
+        <title>Component A</title>
+        <content>This is component A content</content>
+    </my-custom-component>
+    <my-custom-component>
+        <title>Component B</title>
+        <content>This is component B content</content>
+    </my-custom-component>
+</body>
+</html>

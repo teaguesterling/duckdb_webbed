@@ -1,0 +1,159 @@
+# name: test/sql/parameter_combinations.test
+# description: Test combinations of parameters to ensure they work together correctly
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: attr_mode + all_varchar
+# ============================================================================
+
+# attr_mode=columns with all_varchar should make attribute values VARCHAR
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', attr_mode:='columns', all_varchar:=true)) ORDER BY column_name;
+----
+author	VARCHAR	YES	NULL	NULL	NULL
+available	VARCHAR	YES	NULL	NULL	NULL
+id	VARCHAR	YES	NULL	NULL	NULL
+price	VARCHAR	YES	NULL	NULL	NULL
+published	VARCHAR	YES	NULL	NULL	NULL
+title	VARCHAR	YES	NULL	NULL	NULL
+
+# attr_mode=discard with all_varchar should exclude attributes entirely
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', attr_mode:='discard', all_varchar:=true)) ORDER BY column_name;
+----
+author	VARCHAR	YES	NULL	NULL	NULL
+price	VARCHAR	YES	NULL	NULL	NULL
+published	VARCHAR	YES	NULL	NULL	NULL
+title	VARCHAR	YES	NULL	NULL	NULL
+
+# ============================================================================
+# Test 2: max_depth + force_list
+# ============================================================================
+
+# max_depth=2 with force_list should still create LIST types for specified elements
+query T
+SELECT typeof(item)
+FROM read_xml('test/xml/rss_feed.xml', max_depth:=2, force_list:=['item'])
+LIMIT 1;
+----
+XML[]
+
+# Higher max_depth with force_list should have proper nested structure
+query T
+SELECT typeof(item)
+FROM read_xml('test/xml/rss_feed.xml', max_depth:=5, force_list:=['item'])
+LIMIT 1;
+----
+STRUCT(title VARCHAR, link VARCHAR, description VARCHAR, pubDate VARCHAR, guid VARCHAR)[]
+
+# ============================================================================
+# Test 3: record_element + max_depth
+# ============================================================================
+
+# record_element with low max_depth
+query T
+SELECT typeof(title)
+FROM read_xml('test/xml/rss_feed.xml', record_element:='item', max_depth:=2)
+LIMIT 1;
+----
+VARCHAR
+
+# record_element with unlimited max_depth
+query T
+SELECT typeof(title)
+FROM read_xml('test/xml/rss_feed.xml', record_element:='item', max_depth:=-1)
+LIMIT 1;
+----
+VARCHAR
+
+# ============================================================================
+# Test 4: union_by_name + all_varchar
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml(['test/xml/union_file1.xml', 'test/xml/union_file2.xml'], record_element:='data-item', union_by_name:=true, all_varchar:=true);
+----
+4
+
+# Verify all types are VARCHAR
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_xml(['test/xml/union_file1.xml', 'test/xml/union_file2.xml'], record_element:='data-item', union_by_name:=true, all_varchar:=true)) ORDER BY column_name;
+----
+field-a	VARCHAR	YES	NULL	NULL	NULL
+field-b	VARCHAR	YES	NULL	NULL	NULL
+field-c	VARCHAR	YES	NULL	NULL	NULL
+
+# ============================================================================
+# Test 5: attr_mode + record_element
+# ============================================================================
+
+# attr_mode=columns should include attributes from record elements
+query I
+SELECT count(DISTINCT id) FROM read_xml('test/xml/simple.xml', record_element:='book', attr_mode:='columns');
+----
+2
+
+# attr_mode=discard should exclude attributes (id column won't exist)
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', record_element:='book', attr_mode:='discard')) WHERE column_name = 'id';
+----
+
+# ============================================================================
+# Test 6: force_list + attr_mode
+# ============================================================================
+
+# force_list with attr_mode=discard
+query T
+SELECT typeof(item)
+FROM read_xml('test/xml/rss_feed.xml', force_list:=['item'], attr_mode:='discard')
+LIMIT 1;
+----
+STRUCT(title VARCHAR, link VARCHAR, description VARCHAR, pubDate VARCHAR, guid VARCHAR)[]
+
+# ============================================================================
+# Test 7: Multiple files + record_element + force_list
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', union_by_name:=true);
+----
+4
+
+# ============================================================================
+# Test 8: ignore_errors + other parameters
+# ============================================================================
+
+# ignore_errors should work with other parameters
+query I
+SELECT count(*) FROM read_html('test/html/invalid_html.html', record_element:='data-item', ignore_errors:=true, all_varchar:=true);
+----
+3
+
+# ============================================================================
+# Test 9: empty_elements + attr_mode combinations
+# ============================================================================
+
+# Note: empty_elements affects how empty tags are handled
+query I
+SELECT count(*) FROM read_xml('test/xml/attributes_only.xml', record_element:='item', empty_elements:='null', attr_mode:='columns');
+----
+3
+
+# ============================================================================
+# Test 10: Conflicting parameters should error
+# ============================================================================
+
+# columns + all_varchar is not allowed
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', columns:={'id': 'VARCHAR'}, all_varchar:=true);
+----
+cannot use both
+
+# columns + all_varchar for HTML
+statement error
+SELECT * FROM read_html('test/html/simple.html', columns:={'id': 'VARCHAR'}, all_varchar:=true);
+----
+cannot use both
+

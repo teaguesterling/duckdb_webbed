@@ -198,3 +198,35 @@ id	VARCHAR
 price	DOUBLE
 published	DATE
 title	VARCHAR
+
+# ============================================================================
+# Test 6: Parameter Validation
+# ============================================================================
+
+# max_depth=-1 means unlimited (consistent with read_json)
+statement ok
+SELECT * FROM read_xml('test/xml/simple.xml', max_depth:=-1) LIMIT 0;
+
+# Other negative values for max_depth should throw an error
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', max_depth:=-5) LIMIT 0;
+----
+max_depth must be -1
+
+# Invalid attr_mode should throw an error
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', attr_mode:='invalid_mode');
+----
+Invalid attr_mode
+
+# Invalid namespaces should throw an error
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', namespaces:='invalid_value');
+----
+Invalid namespaces
+
+# Invalid empty_elements should throw an error
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', empty_elements:='invalid_value');
+----
+Invalid empty_elements

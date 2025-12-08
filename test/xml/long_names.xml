@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <this-is-a-very-long-element-name-that-exceeds-typical-lengths this-is-a-very-long-attribute-name-for-testing="value">
+        <content>test</content>
+    </this-is-a-very-long-element-name-that-exceeds-typical-lengths>
+</root>

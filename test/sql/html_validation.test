@@ -4,10 +4,15 @@
 
 require webbed
 
-# Test 1: max_depth=-1 is actually allowed (treated as very large depth)
-# TODO: Add validation if negative max_depth should be rejected
+# Test 1: max_depth=-1 means unlimited depth (consistent with read_json)
 statement ok
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', max_depth:=-1) LIMIT 0;
+
+# Test 1b: Other negative values for max_depth should throw an error
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', max_depth:=-5) LIMIT 0;
+----
+max_depth must be -1
 
 # Test 2: Verify parameter validation - maximum_file_size must be positive
 statement error
@@ -24,19 +29,22 @@ SELECT * FROM read_html(CAST([] AS VARCHAR[]), record_element:='item');
 No files found
 
 # Test 4: Verify attr_mode parameter accepts only valid values
-# TODO: Add parameter validation for attr_mode
-statement ok
+statement error
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='invalid_mode');
+----
+Invalid attr_mode
 
 # Test 5: Verify namespaces parameter accepts only valid values
-# TODO: Add parameter validation for namespaces
-statement ok
+statement error
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', namespaces:='invalid_value');
+----
+Invalid namespaces
 
 # Test 6: Verify empty_elements parameter accepts only valid values
-# TODO: Add parameter validation for empty_elements
-statement ok
+statement error
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', empty_elements:='invalid_value');
+----
+Invalid empty_elements
 
 # Test 7: Test that HTML files are properly validated before processing
 query I
