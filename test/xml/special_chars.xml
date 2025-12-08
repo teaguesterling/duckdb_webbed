@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<items>
+    <item>
+        <id>1</id>
+        <content>&lt;tag&gt;</content>
+    </item>
+    <item>
+        <id>2</id>
+        <content>&quot;quoted&quot;</content>
+    </item>
+    <item>
+        <id>3</id>
+        <content>5 &gt; 3 &amp; 3 &lt; 5</content>
+    </item>
+</items>

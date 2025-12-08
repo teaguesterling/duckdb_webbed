@@ -1,0 +1,84 @@
+# name: test/sql/github_issue_51_custom_html_elements.test
+# description: Test custom HTML elements are properly recognized by HTML parser (Issue #51)
+# group: [sql]
+
+require webbed
+
+# Test 1: Simple custom element as record element
+query I
+SELECT count(*) FROM read_html('test/html/custom_elements.html', record_element:='data-item');
+----
+3
+
+# Test 2: Custom element with attributes
+query III
+SELECT name, category, price
+FROM read_html('test/html/custom_elements.html', record_element:='data-item')
+ORDER BY name;
+----
+Gadget A	electronics	29.99
+Gadget B	electronics	49.99
+Widget	tools	19.99
+
+# Test 3: Nested custom elements
+query II
+SELECT product."product-name", product."product-details"."sku-code"
+FROM read_html('test/html/custom_elements.html', record_element:='data-record')
+ORDER BY product."product-name";
+----
+Advanced Widget	SKU-002
+Basic Widget	SKU-001
+
+# Test 4: Custom elements with hyphenated names (web components style)
+query I
+SELECT count(*) FROM read_html('test/html/custom_elements.html', record_element:='my-custom-component');
+----
+2
+
+# Test 5: Verify schema includes all custom element children
+query T
+SELECT typeof(product)
+FROM read_html('test/html/custom_elements.html', record_element:='data-record')
+LIMIT 1;
+----
+STRUCT("product-name" VARCHAR, "product-details" STRUCT("sku-code" VARCHAR, "in-stock" BOOLEAN))
+
+# Test 6: Custom elements work with force_list
+query T
+SELECT typeof(tags)
+FROM read_html('test/html/custom_elements.html', record_element:='data-item', force_list:=['custom-tag'])
+LIMIT 1;
+----
+STRUCT("custom-tag" VARCHAR[])
+
+# Test 7: Custom elements work with all_varchar
+query TTTTTT
+SELECT * FROM (DESCRIBE SELECT * FROM read_html('test/html/custom_elements.html', record_element:='data-item', all_varchar:=true)) ORDER BY column_name;
+----
+category	VARCHAR	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+price	VARCHAR	YES	NULL	NULL	NULL
+tags	STRUCT("custom-tag" VARCHAR[])	YES	NULL	NULL	NULL
+
+# Test 8: Custom elements with mixed content (text + child elements)
+query II
+SELECT title, content
+FROM read_html('test/html/custom_elements.html', record_element:='my-custom-component')
+ORDER BY title;
+----
+Component A	This is component A content
+Component B	This is component B content
+
+# Test 9: Record element matching is case-sensitive (XPath is case-sensitive)
+# Note: HTML elements ARE case-insensitive in the DOM, but XPath matching is exact
+query I
+SELECT count(*) FROM read_html('test/html/custom_elements.html', record_element:='data-item');
+----
+3
+
+# Test 10: Verify custom elements work in union_by_name across files
+query I
+SELECT count(*) FROM read_html(['test/html/custom_elements.html', 'test/html/custom_elements2.html'], record_element:='data-item', union_by_name:=true);
+----
+5
+
