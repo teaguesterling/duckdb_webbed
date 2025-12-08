@@ -70,6 +70,13 @@ This file tracks known issues where tests have been updated to reflect current (
 **Description**: `max_depth` now uses `idx_t` (consistent with DuckDB JSON extension), `-1` means unlimited, other negative values throw an error
 **Tests**: `test/sql/html_validation.test:7-15`
 
+### Schema Inference for Heterogeneous Repeated Elements (Issue #47)
+**Status**: ✅ FIXED
+**Description**: Repeated elements with completely different child schemas now correctly merge all children
+**Example**: `<section>` with `address` child and `<section>` with `skill-item` children now both appear in schema
+**Fix**: Modified `InferColumnType` to iterate ALL instances when discovering child elements, not just the first instance
+**Tests**: `test/sql/html_complex_types.test`
+
 ## Summary
 
 **Total Issues**: 0 items requiring fixes
@@ -79,7 +86,7 @@ This file tracks known issues where tests have been updated to reflect current (
 
 **GitHub Issues Created**:
 - #46: Type inference for semantic HTML elements with attributes
-- #47: Schema inference fails for heterogeneous repeated elements
+- #47: Schema inference fails for heterogeneous repeated elements (FIXED)
 - #48: HTML union_by_name returns NULL data with multiple files (partially fixed)
 - #49: Enable type inference for elements with attributes
 - #50: Cross-record attribute discovery and mixed-content handling (FIXED)
