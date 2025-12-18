@@ -34,11 +34,10 @@ SELECT * FROM read_html('test/html/does_not_exist.html', record_element:='item')
 No files found
 
 # Test 5: Invalid XPath in record_element should provide clear error
-# TODO: Invalid XPath currently returns 0 rows instead of erroring
-query I
+statement error
 SELECT count(*) FROM read_html('test/html/invalid_html.html', record_element:='[[[invalid xpath');
 ----
-0
+Invalid XPath expression
 
 # Test 6: Conflicting parameters (columns + all_varchar) should error
 statement error

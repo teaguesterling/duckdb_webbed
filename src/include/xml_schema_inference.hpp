@@ -21,7 +21,7 @@ struct XMLSchemaOptions {
 	// Schema inference controls
 	std::string root_element; // Extract only children of specified root (empty = auto-detect)
 	bool auto_detect = true;  // Automatic type detection
-	int32_t max_depth = 10;   // Maximum introspection depth (default 10, hard cap at 20)
+	idx_t max_depth = 10;     // Maximum introspection depth (default 10, -1 or MaxValue = unlimited)
 	int32_t sample_size = 50; // Number of elements to sample for inference
 
 	// Attribute handling (aligned with xml_to_json)
@@ -197,7 +197,7 @@ private:
 	                                                       const XMLSchemaOptions &options);
 	static std::unordered_map<std::string, ColumnAnalysis> IdentifyColumns(
 	    const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
-	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
+	static LogicalType InferColumnType(const ColumnAnalysis &column, idx_t remaining_depth,
 	                                   const XMLSchemaOptions &options);
 
 	// Internal helper functions

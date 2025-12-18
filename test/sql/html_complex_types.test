@@ -6,17 +6,15 @@ require webbed
 
 # Test 1: Verify nested STRUCT types are inferred correctly
 # Note: Column order is non-deterministic, so we order by column name
-# LIMITATION: When repeated elements have completely different child schemas (no overlap),
-# only the first schema is captured. The section elements have two different schemas:
+# The section elements have two different schemas that are now correctly merged:
 # - section[1] has address child
 # - section[2] has skill-item child
-# Currently only address is in the inferred schema (skill-item is lost).
-# This is a known schema inference limitation with heterogeneous repeated elements.
+# Both children are now included in the inferred schema (Issue #47 FIXED)
 query TTTTTT
 SELECT * FROM (DESCRIBE SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='discard')) ORDER BY column_name;
 ----
 header	STRUCT("employee-id" INTEGER, "full-name" VARCHAR)	YES	NULL	NULL	NULL
-section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" INTEGER, "phone-numbers" STRUCT("phone-number" VARCHAR[])))[]	YES	NULL	NULL	NULL
+section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" INTEGER, "phone-numbers" STRUCT("phone-number" VARCHAR[])), "skill-item" VARCHAR[])[]	YES	NULL	NULL	NULL
 
 # Test 2: Access nested struct fields
 query III
@@ -40,33 +38,31 @@ WHERE header."employee-id" = 1;
 ----
 1	[555-1234, 555-5678]
 
-# Test 4: Cannot access skill-item because it's not in the schema (heterogeneous section limitation)
-# TODO(future): When heterogeneous repeated element schemas are supported, uncomment this test
-# query II
-# SELECT
-#     header."employee-id" as id,
-#     section[2]."skill-item" as skills
-# FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='discard')
-# ORDER BY header."employee-id";
-# ----
-# 1	[Python, SQL, DuckDB]
-# 2	[Java, PostgreSQL]
+# Test 4: Access skill-item from heterogeneous section (Issue #47 FIXED)
+query II
+SELECT
+    header."employee-id" as id,
+    section[2]."skill-item" as skills
+FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='discard')
+ORDER BY header."employee-id";
+----
+1	[Python, SQL, DuckDB]
+2	[Java, C++]
 
-# Test 5: Cannot unnest skills because skill-item is not in the schema (heterogeneous section limitation)
-# TODO(future): When heterogeneous repeated element schemas are supported, uncomment this test
-# query II
-# SELECT
-#     header."employee-id" as id,
-#     unnest(section[2]."skill-item") as skill
-# FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='discard')
-# WHERE header."employee-id" = 1
-# ORDER BY skill;
-# ----
-# 1	DuckDB
-# 1	Python
-# 1	SQL
+# Test 5: Unnest skills from heterogeneous section (Issue #47 FIXED)
+query II
+SELECT
+    header."employee-id" as id,
+    unnest(section[2]."skill-item") as skill
+FROM read_html('test/html/complex_types_test.html', record_element:='article', attr_mode:='discard')
+WHERE header."employee-id" = 1
+ORDER BY skill;
+----
+1	DuckDB
+1	Python
+1	SQL
 
-# Test 6: Verify array lengths work for phone numbers (skill-item not available due to limitation)
+# Test 6: Verify array lengths work for phone numbers
 query II
 SELECT
     header."employee-id" as id,
@@ -79,9 +75,9 @@ ORDER BY header."employee-id";
 
 # Test 7: Test with all_varchar - nested structures should remain as STRUCT but scalars become VARCHAR
 # With cross-record fix, phone-number is now VARCHAR[] as expected
-# Note: skill-item still not in schema due to heterogeneous section limitation
+# With Issue #47 fix, skill-item is now in schema
 query TTTTTT
 SELECT * FROM (DESCRIBE SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', all_varchar:=true, attr_mode:='discard')) ORDER BY column_name;
 ----
 header	STRUCT("employee-id" VARCHAR, "full-name" VARCHAR)	YES	NULL	NULL	NULL
-section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" VARCHAR, "phone-numbers" STRUCT("phone-number" VARCHAR[])))[]	YES	NULL	NULL	NULL
+section	STRUCT(address STRUCT("street-address" VARCHAR, "city-name" VARCHAR, "zip-code" VARCHAR, "phone-numbers" STRUCT("phone-number" VARCHAR[])), "skill-item" VARCHAR[])[]	YES	NULL	NULL	NULL

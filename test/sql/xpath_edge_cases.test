@@ -1,0 +1,143 @@
+# name: test/sql/xpath_edge_cases.test
+# description: Test XPath validation and edge cases for record_element parameter
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Test 1: Invalid XPath expressions should error
+# ============================================================================
+
+# Unclosed brackets
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', record_element:='//book[');
+----
+Invalid XPath expression
+
+# Malformed predicate
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', record_element:='//book[@id=]');
+----
+Invalid XPath expression
+
+# Invalid characters in XPath
+statement error
+SELECT * FROM read_html('test/html/simple.html', record_element:='[[[invalid');
+----
+Invalid XPath expression
+
+# ============================================================================
+# Test 2: Non-existent record elements return 0 rows (not an error)
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='nonexistent-element');
+----
+0
+
+query I
+SELECT count(*) FROM read_html('test/html/simple.html', record_element:='nonexistent-element');
+----
+0
+
+# ============================================================================
+# Test 3: Simple tag names work (auto-converted to XPath)
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
+----
+2
+
+query I
+SELECT count(*) FROM read_html('test/html/custom_elements.html', record_element:='data-item');
+----
+3
+
+# ============================================================================
+# Test 4: Full XPath expressions work
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='//book');
+----
+2
+
+# Note: Parent path XPath (//parent/child) is not currently supported
+# The record_element parameter works with simple element names or direct descendant patterns
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='//catalog/book');
+----
+0
+
+# ============================================================================
+# Test 5: XPath with predicates
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='//book[@id="1"]');
+----
+1
+
+query T
+SELECT title FROM read_xml('test/xml/simple.xml', record_element:='//book[@id="1"]');
+----
+Database Systems
+
+# ============================================================================
+# Test 6: XPath with position predicates
+# ============================================================================
+
+query T
+SELECT title FROM read_xml('test/xml/simple.xml', record_element:='//book[1]');
+----
+Database Systems
+
+query T
+SELECT title FROM read_xml('test/xml/simple.xml', record_element:='//book[last()]');
+----
+XML Processing
+
+# ============================================================================
+# Test 7: Record element matching root returns the root as record
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='books');
+----
+1
+
+# ============================================================================
+# Test 8: Deeply nested record elements
+# ============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/rss_feed.xml', record_element:='//channel/item');
+----
+3
+
+# ============================================================================
+# Test 9: XPath with namespace-agnostic matching (local-name)
+# ============================================================================
+
+# Simple tag name should match elements regardless of default namespace
+# aws_ec2_volumes.xml has xmlns="http://ec2.amazonaws.com/doc/2016-11-15/" default namespace
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml', record_element:='item');
+----
+5
+
+# ============================================================================
+# Test 10: Empty result handling
+# ============================================================================
+
+# Create temp table from empty result
+statement ok
+CREATE TEMP TABLE empty_result AS
+SELECT * FROM read_xml('test/xml/simple.xml', record_element:='nonexistent');
+
+query I
+SELECT count(*) FROM empty_result;
+----
+0
+

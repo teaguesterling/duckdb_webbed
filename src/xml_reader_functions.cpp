@@ -181,8 +181,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "record_element") {
 			// XPath or tag name for elements that should be rows
 			std::string record_value = kv.second.ToString();
-			// Convert simple tag names to XPath
-			if (record_value.find('/') == std::string::npos) {
+			// Convert simple tag names to XPath (only if no XPath syntax characters)
+			if (record_value.find('/') == std::string::npos &&
+			    record_value.find('[') == std::string::npos &&
+			    record_value.find('@') == std::string::npos) {
 				record_value = "//" + record_value;
 			}
 			schema_options.record_element = record_value;
@@ -219,19 +221,39 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				}
 			}
 		} else if (kv.first == "attr_mode") {
-			schema_options.attr_mode = kv.second.ToString();
+			std::string mode = kv.second.ToString();
+			if (mode != "columns" && mode != "prefixed" && mode != "map" && mode != "discard") {
+				throw InvalidInputException("Invalid attr_mode '%s'. Valid values: 'columns', 'prefixed', 'map', 'discard'", mode);
+			}
+			schema_options.attr_mode = mode;
 		} else if (kv.first == "attr_prefix") {
 			schema_options.attr_prefix = kv.second.ToString();
 		} else if (kv.first == "text_key") {
 			schema_options.text_key = kv.second.ToString();
 		} else if (kv.first == "namespaces") {
-			schema_options.namespaces = kv.second.ToString();
+			std::string ns = kv.second.ToString();
+			if (ns != "strip" && ns != "expand" && ns != "keep") {
+				throw InvalidInputException("Invalid namespaces '%s'. Valid values: 'strip', 'expand', 'keep'", ns);
+			}
+			schema_options.namespaces = ns;
 		} else if (kv.first == "empty_elements") {
-			schema_options.empty_elements = kv.second.ToString();
+			std::string ee = kv.second.ToString();
+			if (ee != "null" && ee != "string" && ee != "object") {
+				throw InvalidInputException("Invalid empty_elements '%s'. Valid values: 'null', 'string', 'object'", ee);
+			}
+			schema_options.empty_elements = ee;
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
-			schema_options.max_depth = kv.second.GetValue<int32_t>();
+			auto depth_value = kv.second.GetValue<int64_t>();
+			if (depth_value == -1) {
+				// -1 means unlimited (consistent with read_json)
+				schema_options.max_depth = NumericLimits<idx_t>::Maximum();
+			} else if (depth_value < 0) {
+				throw InvalidInputException("max_depth must be -1 (unlimited) or a non-negative integer, got %lld", (long long)depth_value);
+			} else {
+				schema_options.max_depth = static_cast<idx_t>(depth_value);
+			}
 		} else if (kv.first == "unnest_as") {
 			auto unnest_mode = kv.second.ToString();
 			if (unnest_mode == "columns") {
@@ -836,8 +858,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "record_element") {
 			// XPath or tag name for elements that should be rows
 			std::string record_value = kv.second.ToString();
-			// Convert simple tag names to XPath
-			if (record_value.find('/') == std::string::npos) {
+			// Convert simple tag names to XPath (only if no XPath syntax characters)
+			if (record_value.find('/') == std::string::npos &&
+			    record_value.find('[') == std::string::npos &&
+			    record_value.find('@') == std::string::npos) {
 				record_value = "//" + record_value;
 			}
 			schema_options.record_element = record_value;
@@ -874,19 +898,39 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				}
 			}
 		} else if (kv.first == "attr_mode") {
-			schema_options.attr_mode = kv.second.ToString();
+			std::string mode = kv.second.ToString();
+			if (mode != "columns" && mode != "prefixed" && mode != "map" && mode != "discard") {
+				throw InvalidInputException("Invalid attr_mode '%s'. Valid values: 'columns', 'prefixed', 'map', 'discard'", mode);
+			}
+			schema_options.attr_mode = mode;
 		} else if (kv.first == "attr_prefix") {
 			schema_options.attr_prefix = kv.second.ToString();
 		} else if (kv.first == "text_key") {
 			schema_options.text_key = kv.second.ToString();
 		} else if (kv.first == "namespaces") {
-			schema_options.namespaces = kv.second.ToString();
+			std::string ns = kv.second.ToString();
+			if (ns != "strip" && ns != "expand" && ns != "keep") {
+				throw InvalidInputException("Invalid namespaces '%s'. Valid values: 'strip', 'expand', 'keep'", ns);
+			}
+			schema_options.namespaces = ns;
 		} else if (kv.first == "empty_elements") {
-			schema_options.empty_elements = kv.second.ToString();
+			std::string ee = kv.second.ToString();
+			if (ee != "null" && ee != "string" && ee != "object") {
+				throw InvalidInputException("Invalid empty_elements '%s'. Valid values: 'null', 'string', 'object'", ee);
+			}
+			schema_options.empty_elements = ee;
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
-			schema_options.max_depth = kv.second.GetValue<int32_t>();
+			auto depth_value = kv.second.GetValue<int64_t>();
+			if (depth_value == -1) {
+				// -1 means unlimited (consistent with read_json)
+				schema_options.max_depth = NumericLimits<idx_t>::Maximum();
+			} else if (depth_value < 0) {
+				throw InvalidInputException("max_depth must be -1 (unlimited) or a non-negative integer, got %lld", (long long)depth_value);
+			} else {
+				schema_options.max_depth = static_cast<idx_t>(depth_value);
+			}
 		} else if (kv.first == "unnest_as") {
 			auto unnest_mode = kv.second.ToString();
 			if (unnest_mode == "columns") {

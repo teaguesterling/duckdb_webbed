@@ -8,37 +8,23 @@ This file tracks known issues where tests have been updated to reflect current (
 
 ## Medium Priority - Error Handling
 
-### Empty File List Should Return Empty Result
+(None currently)
+
+## Intentional Behavior (Consistent with read_json)
+
+### Empty File List Throws Error
 **Files**: `test/sql/html_validation.test:19`
-**Current Behavior**: `read_html(CAST([] AS VARCHAR[]))` throws "No files found" error
-**Expected Behavior**: Should return empty result set (0 rows)
-**Impact**: Makes it harder to handle dynamic file lists
+**Behavior**: `read_html(CAST([] AS VARCHAR[]))` throws "No files found" error
+**Rationale**: Consistent with `read_json` behavior - empty file list is likely a user error
 
 ### ignore_errors Doesn't Prevent "No Files Found" Error
 **Files**: `test/sql/html_schema_errors.test:23`
-**Current Behavior**: `ignore_errors:=true` still throws error for non-existent files
-**Expected Behavior**: Should handle gracefully and return empty result or skip missing files
-**Impact**: Less robust error handling for batch processing
-
-### Invalid XPath Returns 0 Rows Instead of Error
-**Files**: `test/sql/html_schema_errors.test:37`
-**Current Behavior**: Invalid XPath like `'[[[invalid xpath'` returns 0 rows silently
-**Expected Behavior**: Should throw clear error message about invalid XPath syntax
-**Impact**: Silent failures make debugging difficult
+**Behavior**: `ignore_errors:=true` still throws error for non-existent files
+**Rationale**: Consistent with `read_json` - `ignore_errors` handles parsing errors, not missing files
 
 ## Low Priority - Input Validation
 
-### Parameter Validation Not Implemented
-**Files**: `test/sql/html_validation.test:29, 35, 41`
-**Current Behavior**: Invalid values for `attr_mode`, `namespaces`, `empty_elements` are silently ignored
-**Expected Behavior**: Should validate and throw errors for invalid parameter values
-**Impact**: Typos in parameters go unnoticed, leading to unexpected behavior
-
-### Negative max_depth Validation
-**Files**: `test/sql/html_validation.test:10`
-**Current Behavior**: `max_depth:=-1` is allowed (treated as very large depth)
-**Expected Behavior**: TBD - either validate and reject negative values, or document that -1 means unlimited
-**Impact**: Unclear API behavior
+(None currently)
 
 ## Fixed - No Action Needed
 
@@ -69,16 +55,38 @@ This file tracks known issues where tests have been updated to reflect current (
 **Fix**: Added cross-record attribute collection in `InferColumnType` and `#text` handling in `ExtractStructFromNode`
 **Schema**: Elements like `<phone type="mobile">555-1234</phone>` become `STRUCT("#text" VARCHAR, "type" VARCHAR)`
 
+### Invalid XPath Now Returns Error
+**Status**: ✅ FIXED
+**Description**: Invalid XPath expressions in `record_element` now throw clear errors instead of silently returning 0 rows
+**Fix**: Added XPath validation in `IdentifyRecordElements` with clear error messages
+
+### Parameter Validation for attr_mode, namespaces, empty_elements
+**Status**: ✅ FIXED
+**Description**: Invalid parameter values now throw clear errors with valid options listed
+**Tests**: `test/sql/html_validation.test:31-47`
+
+### max_depth Validation and idx_t Type
+**Status**: ✅ FIXED
+**Description**: `max_depth` now uses `idx_t` (consistent with DuckDB JSON extension), `-1` means unlimited, other negative values throw an error
+**Tests**: `test/sql/html_validation.test:7-15`
+
+### Schema Inference for Heterogeneous Repeated Elements (Issue #47)
+**Status**: ✅ FIXED
+**Description**: Repeated elements with completely different child schemas now correctly merge all children
+**Example**: `<section>` with `address` child and `<section>` with `skill-item` children now both appear in schema
+**Fix**: Modified `InferColumnType` to iterate ALL instances when discovering child elements, not just the first instance
+**Tests**: `test/sql/html_complex_types.test`
+
 ## Summary
 
-**Total Issues**: 6 items requiring fixes
+**Total Issues**: 0 items requiring fixes
 - High Priority: 0 items
-- Medium Priority: 3 items (error handling)
-- Low Priority: 3 items (input validation)
+- Medium Priority: 0 items
+- Low Priority: 0 items
 
 **GitHub Issues Created**:
 - #46: Type inference for semantic HTML elements with attributes
-- #47: Schema inference fails for heterogeneous repeated elements
+- #47: Schema inference fails for heterogeneous repeated elements (FIXED)
 - #48: HTML union_by_name returns NULL data with multiple files (partially fixed)
 - #49: Enable type inference for elements with attributes
 - #50: Cross-record attribute discovery and mixed-content handling (FIXED)
