@@ -46,7 +46,7 @@ SELECT html_extract_text('<html><body><h1>Welcome</h1></body></html>', '//h1');
 
 -- Convert between formats
 SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
--- Result: {"person":{"name":"John","age":"30"}}
+-- Result: {"person":{"name":{"#text":"John"},"age":{"#text":"30"}}}
 ```
 
 ---
@@ -646,6 +646,23 @@ xml_extract_text(xml, '//book[1]/title')
 xml_extract_text(xml, '//book/title/text()')
 ```
 
+**Namespace Handling in XPath:**
+
+For documents with XML namespaces (e.g., `xmlns="http://example.com"`), use `local-name()` to match elements regardless of namespace:
+
+```sql
+-- Won't work on namespaced documents:
+xml_extract_text(xml, '//element')
+
+-- Works with any namespace:
+xml_extract_text(xml, '//*[local-name()="element"]')
+
+-- With predicates:
+xml_extract_text(xml, '//*[local-name()="item" and @id="123"]')
+```
+
+Note: `read_xml()` automatically strips namespaces during schema inference, so column names won't include namespace prefixes.
+
 ### 🏗️ **Schema Inference**
 
 The extension uses a **3-phase deterministic approach** for intelligent schema inference:
@@ -839,15 +856,15 @@ make test
 - **XPath**: Full libxml2 XPath engine integration
 
 ### 🧪 **Testing**
-- 32 comprehensive test suites
-- 807 test assertions passing (100% success rate)
-- Real-world test coverage for GitHub issues (#4, #8, #13)
+- 55 comprehensive test suites
+- 1608 test assertions passing (100% success rate)
+- Real-world test coverage for GitHub issues (#4, #7, #8, #13, #17, #33, #53, #54, #55)
 - Cross-platform CI validation
 - Memory leak testing with Valgrind
 - Complete coverage of all XML/HTML functions
 
 ### 📊 **Performance**
-- Efficient streaming for large files
+- Efficient chunked processing for large files (>2048 rows)
 - Lazy evaluation for XPath expressions
 - Memory pooling for repeated operations
 - Zero-copy string handling where possible
