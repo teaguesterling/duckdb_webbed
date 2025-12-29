@@ -5,64 +5,89 @@
 # GitHub Issue #53: How to extract html tag content with UTF-8 support?
 # https://github.com/teaguesterling/duckdb_webbed/issues/53
 #
-# This test documents two related issues:
-#
-# ISSUE 1: UTF-8 Encoding Problem (BUG - TO BE FIXED)
-# When using html_extract_text with XPath, UTF-8 characters are incorrectly decoded.
-# For example, "chère" becomes "chÃ¨re" (UTF-8 bytes interpreted as Latin-1).
-#
-# ROOT CAUSE: In xml_utils.cpp, htmlReadMemory() is called without specifying
-# the encoding parameter (4th arg is nullptr). libxml2's HTML parser defaults
-# to Latin-1 when no encoding is specified and no BOM/meta charset is detected
-# early enough in the parsing process.
+# ISSUE 1: UTF-8 Encoding (FIXED)
+# Previously, html_extract_text with XPath would garble UTF-8 characters
+# (e.g., "chère" became "chÃ¨re"). This was fixed by specifying UTF-8 encoding
+# explicitly in htmlReadMemory().
 #
 # ISSUE 2: Only First Match Returned (DOCUMENTED BEHAVIOR)
 # html_extract_text with XPath like '//p' only returns the first matching element,
-# not all matching elements as users expect.
-#
-# ROOT CAUSE: In xml_utils.cpp ExtractHTMLTextByXPath(), there's an explicit
-# comment "// Return only the first match" and the code only processes nodeTab[0].
-# This is by design but differs from user expectations.
+# not all matching elements. This is by design.
 
 require webbed
 
 # ============================================================================
-# PART 1: UTF-8 Encoding Bug Tests
+# PART 1: UTF-8 Encoding Tests (verifying the fix works)
 # ============================================================================
 
-# Test 1.1: Verify UTF-8 encoding bug exists
-# CURRENT BUG: "è" (UTF-8 0xC3 0xA8) becomes "Ã¨" when misinterpreted as Latin-1
-# CORRECT VALUE WHEN FIXED: chère
-# We test by checking the output does NOT match the correct UTF-8 string
+# Test 1.1: French accented characters
 query I
-SELECT html_extract_text('<html><body><p>chère</p></body></html>', '//p') != 'chère';
+SELECT html_extract_text('<html><body><p>chère</p></body></html>', '//p');
 ----
-true
+chère
 
-# Test 1.2: Verify the bug produces garbled output with specific pattern
-# When UTF-8 is misread as Latin-1, multi-byte chars expand
-# Original "è" (2 bytes: C3 A8) becomes "Ã¨" (2 chars: Ã=C3, ¨=A8)
+# Test 1.2: Single UTF-8 character preserved correctly
 query I
-SELECT length(html_extract_text('<html><body><p>è</p></body></html>', '//p')) > 1;
+SELECT html_extract_text('<html><body><p>è</p></body></html>', '//p');
 ----
-true
+è
 
-# Test 1.3: File-based test - verify we get some output (non-empty)
+# Test 1.3: German umlauts
+query I
+SELECT html_extract_text('<html><body><span>Größe und Öffnung</span></body></html>', '//span');
+----
+Größe und Öffnung
+
+# Test 1.4: Spanish characters
+query I
+SELECT html_extract_text('<html><body><div>Señor España ¿Cómo está?</div></body></html>', '//div');
+----
+Señor España ¿Cómo está?
+
+# Test 1.5: Nordic characters
+query I
+SELECT html_extract_text('<html><body><p>Ærlig ønsker jeg å være</p></body></html>', '//p');
+----
+Ærlig ønsker jeg å være
+
+# Test 1.6: Mixed accented characters
+query I
+SELECT html_extract_text('<html><body><p>Café résumé naïve</p></body></html>', '//p');
+----
+Café résumé naïve
+
+# Test 1.7: Currency symbols (UTF-8)
+query I
+SELECT html_extract_text('<html><body><p>Price: €50 &amp; £30</p></body></html>', '//p');
+----
+Price: €50 & £30
+
+# Test 1.8: Chinese characters
+query I
+SELECT html_extract_text('<html><body><p>你好世界</p></body></html>', '//p');
+----
+你好世界
+
+# Test 1.9: Japanese characters
+query I
+SELECT html_extract_text('<html><body><p>こんにちは</p></body></html>', '//p');
+----
+こんにちは
+
+# Test 1.10: Emoji (extended UTF-8)
+query I
+SELECT html_extract_text('<html><body><p>Hello 🌍 World 🎉</p></body></html>', '//p');
+----
+Hello 🌍 World 🎉
+
+# Test 1.11: File-based UTF-8 test
 query I
 SELECT length(html_extract_text(html, '//p')) > 0
 FROM read_html_objects('test/html/github_issue_53_utf8.html');
 ----
 true
 
-# Test 1.4: Workaround confirmation - html_unescape handles UTF-8 correctly
-# html_unescape extracts text and decodes entities, preserving UTF-8
-# This demonstrates the workaround mentioned in the issue
-query I
-SELECT html_unescape('<p>chère</p>') = 'chère';
-----
-true
-
-# Test 1.5: ASCII-only content works correctly (no encoding issue)
+# Test 1.12: ASCII content still works
 query I
 SELECT html_extract_text('<html><body><p>hello world</p></body></html>', '//p');
 ----
@@ -72,9 +97,7 @@ hello world
 # PART 2: Multiple Element Matching Tests (DOCUMENTED BEHAVIOR)
 # ============================================================================
 
-# Test 2.1: Original issue - Only first <p> returned
-# DOCUMENTED BEHAVIOR: Only returns first match
-# User expectation may be to get all matching paragraphs
+# Test 2.1: Only first <p> returned (by design)
 query I
 SELECT html_extract_text('<p>First paragraph</p><p>Second paragraph</p>', '//p');
 ----
@@ -103,15 +126,8 @@ FROM read_html_objects('test/html/github_issue_53_multi_match.html');
 ----
 First item
 
-# Test 2.5: Verify we can't get second match with same XPath
-# This confirms the "only first match" behavior
-query I
-SELECT html_extract_text('<div><p>First</p><p>Second</p></div>', '//p') = 'First';
-----
-true
-
 # ============================================================================
-# PART 3: Edge Cases (ASCII only - no encoding issues)
+# PART 3: Edge Cases
 # ============================================================================
 
 # Test 3.1: Empty result when no match
@@ -138,7 +154,7 @@ SELECT html_extract_text(
 ----
 Deep
 
-# Test 3.4: Attribute selector (should still work for first match)
+# Test 3.4: Attribute selector
 query I
 SELECT html_extract_text(
     '<html><body><p class="a">First</p><p class="b">Second</p></body></html>',
@@ -157,10 +173,10 @@ SELECT html_extract_text(
 Hello & goodbye <tag>
 
 # ============================================================================
-# PART 4: Workarounds documented in the issue
+# PART 4: html_unescape also handles UTF-8 correctly
 # ============================================================================
 
-# Test 4.1: html_unescape extracts text and preserves UTF-8 correctly
+# Test 4.1: html_unescape with UTF-8
 query I
 SELECT html_unescape('<p>Café résumé</p>');
 ----

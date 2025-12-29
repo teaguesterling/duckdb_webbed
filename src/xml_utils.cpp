@@ -84,7 +84,11 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 	if (is_html) {
 		// Parse as HTML using libxml2's HTML parser with error suppression
 		// HTML needs RECOVER flag to handle malformed HTML gracefully
-		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, nullptr,
+		// Specify UTF-8 encoding explicitly to prevent libxml2 from defaulting to Latin-1
+		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
+		// TODO: Future enhancement - consider making encoding configurable via parameter
+		// (with UTF-8 as default) or deriving it from database collation settings
+		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, "UTF-8",
 		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
