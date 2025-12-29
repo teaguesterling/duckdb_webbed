@@ -1,0 +1,216 @@
+# name: test/sql/github_issue_54_documentation_mismatch.test
+# description: Test read_xml and read_xml_objects parameters match documentation
+# group: [sql]
+#
+# GitHub Issue #54: Documentation mismatch
+# https://github.com/teaguesterling/duckdb_webbed/issues/54
+#
+# This test documents discrepancies between the README documentation and actual
+# function behavior/parameters.
+#
+# DOCUMENTED BUT MISSING PARAMETERS:
+# - include_attributes: Documented in README but not available in read_xml
+#
+# UNDOCUMENTED PARAMETERS (exist but not in README):
+# - attr_mode: Controls how attributes are handled
+# - attr_prefix: Prefix for attribute columns
+# - empty_elements: How to handle empty elements
+# - namespaces: Namespace handling mode
+# - text_key: Key name for text content in mixed elements
+# - union_by_name: Enable union by name for multiple files
+#
+# OUTPUT COLUMN MISMATCH:
+# - read_xml_objects: README shows "filename, content" columns
+#   Actual: Returns only "xml" column (filename available via filename=true parameter)
+# - read_html_objects: README shows "filename, html" columns
+#   Actual: Returns only "html" column (filename available via filename=true parameter)
+
+require webbed
+
+# ============================================================================
+# PART 1: read_xml_objects Output Column Tests
+# ============================================================================
+
+# Test 1.1: Default output - should have 'xml' column
+query I
+SELECT typeof(xml) FROM read_xml_objects('test/xml/simple.xml') LIMIT 1;
+----
+XML
+
+# Test 1.2: With filename=true - should have both filename and xml columns
+query II
+SELECT typeof(filename), typeof(xml)
+FROM read_xml_objects('test/xml/simple.xml', filename=true) LIMIT 1;
+----
+VARCHAR	XML
+
+# Test 1.3: Verify filename column contains actual filename
+query I
+SELECT filename FROM read_xml_objects('test/xml/simple.xml', filename=true) LIMIT 1;
+----
+test/xml/simple.xml
+
+# ============================================================================
+# PART 2: read_html_objects Output Column Tests
+# ============================================================================
+
+# Test 2.1: Default output - should have 'html' column
+query I
+SELECT typeof(html) FROM read_html_objects('test/html/simple.html', ignore_errors=true) LIMIT 1;
+----
+HTML
+
+# Test 2.2: With filename=true - should have both filename and html columns
+query II
+SELECT typeof(filename), typeof(html)
+FROM read_html_objects('test/html/simple.html', filename=true, ignore_errors=true) LIMIT 1;
+----
+VARCHAR	HTML
+
+# ============================================================================
+# PART 3: Documented Parameter Tests - read_xml
+# ============================================================================
+
+# Test 3.1: ignore_errors parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', ignore_errors=true);
+----
+true
+
+# Test 3.2: maximum_file_size parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', maximum_file_size=1048576);
+----
+true
+
+# Test 3.3: record_element parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', record_element='item');
+----
+true
+
+# Test 3.4: max_depth parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', max_depth=5);
+----
+true
+
+# Test 3.5: auto_detect parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', auto_detect=true);
+----
+true
+
+# Test 3.6: all_varchar parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', all_varchar=true);
+----
+true
+
+# Test 3.7: force_list parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/force_list_test.xml', force_list=['tags']);
+----
+true
+
+# Test 3.8: unnest_as parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', unnest_as='struct');
+----
+true
+
+# Test 3.9: root_element parameter (documented, exists)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', root_element='root');
+----
+true
+
+# ============================================================================
+# PART 4: Undocumented Parameter Tests (exist but not in README)
+# ============================================================================
+
+# Test 4.1: attr_mode parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', attr_mode='prefix');
+----
+true
+
+# Test 4.2: attr_prefix parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', attr_prefix='@');
+----
+true
+
+# Test 4.3: text_key parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', text_key='_text');
+----
+true
+
+# Test 4.4: empty_elements parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', empty_elements='null');
+----
+true
+
+# Test 4.5: union_by_name parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name=true);
+----
+true
+
+# Test 4.6: namespaces parameter (undocumented)
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', namespaces='strip');
+----
+true
+
+# ============================================================================
+# PART 5: Missing Parameter Tests (documented but don't exist)
+# ============================================================================
+
+# Test 5.1: include_attributes parameter - DOCUMENTED BUT MISSING
+# The README documents this parameter but it doesn't exist
+# Uncommenting below would cause: Invalid named parameter "include_attributes"
+# statement error
+# SELECT * FROM read_xml('test/xml/simple.xml', include_attributes=true);
+
+# ============================================================================
+# PART 6: read_html Parameter Parity Tests
+# ============================================================================
+
+# Test 6.1: read_html should have same parameters as read_xml
+query I
+SELECT count(*) >= 0 FROM read_html('test/html/simple.html', ignore_errors=true);
+----
+true
+
+# Test 6.2: read_html with attr_mode (should work like read_xml)
+query I
+SELECT count(*) >= 0 FROM read_html('test/html/simple.html', attr_mode='prefix', ignore_errors=true);
+----
+true
+
+# Test 6.3: read_html with union_by_name
+query I
+SELECT count(*) >= 0 FROM read_html(['test/html/simple.html'], union_by_name=true, ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 7: Edge Cases
+# ============================================================================
+
+# Test 7.1: Multiple files with read_xml_objects and filename
+query I
+SELECT count(DISTINCT filename) >= 1
+FROM read_xml_objects('test/xml/*.xml', filename=true, ignore_errors=true);
+----
+true
+
+# Test 7.2: Glob pattern returns multiple files
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects('test/xml/union_*.xml', filename=true);
+----
+true

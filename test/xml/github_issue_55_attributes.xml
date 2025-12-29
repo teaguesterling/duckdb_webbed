@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <Predicate>
+        <ColumnReference Database="[SMS]" Schema="[dbo]" Table="[SMSresults]" Column="Note"/>
+        <ColumnReference Database="[DB2]" Schema="[schema2]" Table="[Table2]" Column="Col2"/>
+    </Predicate>
+    <Predicate>
+        <ColumnReference Database="[DB3]" Schema="[schema3]" Table="[Table3]" Column="Col3"/>
+    </Predicate>
+    <!-- Self-closing elements with various attribute counts -->
+    <SingleAttr value="test"/>
+    <NoAttrs/>
+    <ManyAttrs a="1" b="2" c="3" d="4" e="5"/>
+</root>

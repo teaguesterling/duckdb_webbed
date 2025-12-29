@@ -1,0 +1,293 @@
+# name: test/sql/github_issue_55_xml_extract_attributes.test
+# description: Test xml_extract_attributes with various element types and workflows
+# group: [sql]
+#
+# GitHub Issue #55: DuckDB crashes with segmentation fault when running xml_extract_attributes
+# https://github.com/teaguesterling/duckdb_webbed/issues/55
+#
+# REPORTED ISSUE:
+# User reported a segmentation fault when using xml_extract_attributes on XML elements
+# that were extracted as strings from xml_extract_elements_string and then split.
+#
+# WORKFLOW THAT CRASHED:
+# 1. Use xml_extract_elements_string() to get matching elements as newline-separated string
+# 2. Split the string by newline using .split(e'\n')
+# 3. Unnest to get individual XML element strings
+# 4. Call xml_extract_attributes() on each string -> SEGFAULT
+#
+# ROOT CAUSE (SUSPECTED):
+# The segfault may have been related to memory management or parsing issues when
+# xml_extract_attributes received certain types of self-closing XML elements.
+# This may have been fixed in recent commits.
+#
+# This test file ensures the workflow doesn't regress and covers edge cases.
+
+require webbed
+
+# ============================================================================
+# PART 1: Basic xml_extract_attributes Tests
+# ============================================================================
+
+# Test 1.1: Original issue - self-closing element with multiple attributes
+query I
+SELECT length(xml_extract_attributes(
+    '<ColumnReference Database="[SMS]" Schema="[dbo]" Table="[SMSresults]" Column="Note"/>',
+    '/ColumnReference'
+)::VARCHAR) > 0;
+----
+true
+
+# Test 1.2: Verify attribute extraction returns correct count
+query I
+SELECT len(xml_extract_attributes(
+    '<ColumnReference Database="[SMS]" Schema="[dbo]" Table="[SMSresults]" Column="Note"/>',
+    '/ColumnReference'
+));
+----
+4
+
+# Test 1.3: Extract attributes from file-based XML
+query I
+SELECT len(xml_extract_attributes(xml::VARCHAR, '//ColumnReference')) > 0
+FROM read_xml_objects('test/xml/github_issue_55_attributes.xml');
+----
+true
+
+# ============================================================================
+# PART 2: User's Workflow Reproduction
+# ============================================================================
+
+# Test 2.1: Extract elements as string
+query I
+SELECT length(xml_extract_elements_string(xml::VARCHAR, '//ColumnReference')) > 0
+FROM read_xml_objects('test/xml/github_issue_55_attributes.xml');
+----
+true
+
+# Test 2.2: Full workflow - extract elements, split, and get attributes
+# This is the exact workflow that caused the segfault
+query I
+SELECT count(*) >= 1
+FROM (
+    SELECT unnest(string_split(
+        rtrim(xml_extract_elements_string(xml::VARCHAR, '//ColumnReference'), chr(10)),
+        chr(10)
+    )) as xml_elem
+    FROM read_xml_objects('test/xml/github_issue_55_attributes.xml')
+) extracted
+WHERE xml_elem != ''
+  AND len(xml_extract_attributes(xml_elem, '/ColumnReference')) > 0;
+----
+true
+
+# Test 2.3: Table-based workflow (as user described)
+statement ok
+CREATE TEMP TABLE issue55_extracted AS
+SELECT unnest(string_split(
+    rtrim(xml_extract_elements_string(xml::VARCHAR, '//ColumnReference'), chr(10)),
+    chr(10)
+)) as xml_elem
+FROM read_xml_objects('test/xml/github_issue_55_attributes.xml');
+
+query I
+SELECT count(*) FROM issue55_extracted WHERE xml_elem != '';
+----
+3
+
+# Test 2.4: Extract attributes from table column
+query I
+SELECT count(*) >= 1
+FROM issue55_extracted
+WHERE xml_elem != ''
+  AND len(xml_extract_attributes(xml_elem, '/ColumnReference')) > 0;
+----
+true
+
+statement ok
+DROP TABLE issue55_extracted;
+
+# ============================================================================
+# PART 3: Self-Closing Element Edge Cases
+# ============================================================================
+
+# Test 3.1: Self-closing element with single attribute
+query I
+SELECT len(xml_extract_attributes('<SingleAttr value="test"/>', '/SingleAttr'));
+----
+1
+
+# Test 3.2: Self-closing element with no attributes
+query I
+SELECT len(xml_extract_attributes('<NoAttrs/>', '/NoAttrs'));
+----
+0
+
+# Test 3.3: Self-closing element with many attributes
+query I
+SELECT len(xml_extract_attributes(
+    '<ManyAttrs a="1" b="2" c="3" d="4" e="5"/>',
+    '/ManyAttrs'
+));
+----
+5
+
+# Test 3.4: Self-closing element with special characters in attributes
+query I
+SELECT len(xml_extract_attributes(
+    '<Elem attr="value with &amp; and &lt;special&gt; chars"/>',
+    '/Elem'
+));
+----
+1
+
+# Test 3.5: Self-closing element with quotes in attribute values
+query I
+SELECT len(xml_extract_attributes(
+    '<Elem attr="value with &quot;quotes&quot;"/>',
+    '/Elem'
+));
+----
+1
+
+# ============================================================================
+# PART 4: Non-Self-Closing Element Tests
+# ============================================================================
+
+# Test 4.1: Regular element with attributes and content
+query I
+SELECT len(xml_extract_attributes(
+    '<Element attr="value">Content</Element>',
+    '/Element'
+));
+----
+1
+
+# Test 4.2: Nested elements - extract from parent
+query I
+SELECT len(xml_extract_attributes(
+    '<Parent id="1"><Child name="test"/></Parent>',
+    '/Parent'
+));
+----
+1
+
+# Test 4.3: Nested elements - extract from child using XPath
+query I
+SELECT len(xml_extract_attributes(
+    '<Parent id="1"><Child name="test"/></Parent>',
+    '//Child'
+));
+----
+1
+
+# ============================================================================
+# PART 5: Multiple Elements Matching XPath
+# ============================================================================
+
+# Test 5.1: Multiple matching elements
+query I
+SELECT len(xml_extract_attributes(
+    '<root><item id="1"/><item id="2"/><item id="3"/></root>',
+    '//item'
+)) >= 3;
+----
+true
+
+# Test 5.2: File-based multiple matches
+# 3 ColumnReference elements x 4 attributes each = 12 total
+query I
+SELECT len(xml_extract_attributes(xml::VARCHAR, '//ColumnReference')) = 12
+FROM read_xml_objects('test/xml/github_issue_55_attributes.xml');
+----
+true
+
+# ============================================================================
+# PART 6: Error Handling and Edge Cases
+# ============================================================================
+
+# Test 6.1: Empty string input
+query I
+SELECT len(xml_extract_attributes('', '/root'));
+----
+0
+
+# Test 6.2: Invalid XML input (should not crash)
+query I
+SELECT len(xml_extract_attributes('<unclosed', '/unclosed'));
+----
+0
+
+# Test 6.3: XPath with no matches
+query I
+SELECT len(xml_extract_attributes('<root><elem/></root>', '//nonexistent'));
+----
+0
+
+# Test 6.4: Whitespace-only content
+query I
+SELECT len(xml_extract_attributes('   ', '/root'));
+----
+0
+
+# Test 6.5: Element with namespace prefix
+# Note: xmlns declarations are not counted as regular attributes
+query I
+SELECT len(xml_extract_attributes(
+    '<ns:Element xmlns:ns="http://example.com" ns:attr="value"/>',
+    '//*[local-name()="Element"]'
+));
+----
+1
+
+# ============================================================================
+# PART 7: Attribute Value Edge Cases
+# ============================================================================
+
+# Test 7.1: Empty attribute value
+query I
+SELECT len(xml_extract_attributes('<Elem attr=""/>', '/Elem'));
+----
+1
+
+# Test 7.2: Attribute with Unicode value
+query I
+SELECT len(xml_extract_attributes('<Elem attr="日本語"/>', '/Elem'));
+----
+1
+
+# Test 7.3: Attribute with numeric value
+query I
+SELECT len(xml_extract_attributes('<Elem count="42" price="19.99"/>', '/Elem'));
+----
+2
+
+# Test 7.4: Attribute with URL value
+query I
+SELECT len(xml_extract_attributes(
+    '<Link href="https://example.com/path?query=1&amp;foo=bar"/>',
+    '/Link'
+));
+----
+1
+
+# ============================================================================
+# PART 8: Large Attribute Count Stress Test
+# ============================================================================
+
+# Test 8.1: Element with 10 attributes
+query I
+SELECT len(xml_extract_attributes(
+    '<Elem a1="1" a2="2" a3="3" a4="4" a5="5" a6="6" a7="7" a8="8" a9="9" a10="10"/>',
+    '/Elem'
+));
+----
+10
+
+# Test 8.2: Long attribute values
+query I
+SELECT len(xml_extract_attributes(
+    '<Elem longval="' || repeat('x', 1000) || '"/>',
+    '/Elem'
+));
+----
+1

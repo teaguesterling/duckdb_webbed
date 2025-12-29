@@ -22,9 +22,9 @@ SELECT count(*), typeof(html) AS content_type
 FROM read_html_objects('test/html/*.html')
 GROUP BY typeof(html);
 ----
-16	HTML
+18	HTML
 
-# Test extracting data from read HTML files (titles from all 12 files with titles)
+# Test extracting data from read HTML files (titles from all HTML files with titles)
 query I
 SELECT
     html_extract_text(html, '//title') AS page_title
@@ -40,9 +40,11 @@ Dataset 2
 Deep Nesting Test
 Force List Test Data
 Invalid HTML Test
+Multiple Match Test
 Simple Page
 Test Data
 Type Inference Test
+UTF-8 Test Document
 Unicode Test
 
 # Test extracting links from HTML files

@@ -79,7 +79,7 @@ true
 # Reading invalid XML should handle errors gracefully
 # The invalid.xml file has unclosed tags and mismatched elements
 query I
-SELECT count(*) FROM read_xml('test/xml/invalid.xml', ignore_errors := true);
+SELECT count(*) FROM read_xml('test/invalid/invalid.xml', ignore_errors := true);
 ----
 0
 

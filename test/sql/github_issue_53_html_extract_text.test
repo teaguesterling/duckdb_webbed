@@ -1,0 +1,174 @@
+# name: test/sql/github_issue_53_html_extract_text.test
+# description: Test html_extract_text UTF-8 support and multiple element matching
+# group: [sql]
+#
+# GitHub Issue #53: How to extract html tag content with UTF-8 support?
+# https://github.com/teaguesterling/duckdb_webbed/issues/53
+#
+# This test documents two related issues:
+#
+# ISSUE 1: UTF-8 Encoding Problem (BUG - TO BE FIXED)
+# When using html_extract_text with XPath, UTF-8 characters are incorrectly decoded.
+# For example, "chère" becomes "chÃ¨re" (UTF-8 bytes interpreted as Latin-1).
+#
+# ROOT CAUSE: In xml_utils.cpp, htmlReadMemory() is called without specifying
+# the encoding parameter (4th arg is nullptr). libxml2's HTML parser defaults
+# to Latin-1 when no encoding is specified and no BOM/meta charset is detected
+# early enough in the parsing process.
+#
+# ISSUE 2: Only First Match Returned (DOCUMENTED BEHAVIOR)
+# html_extract_text with XPath like '//p' only returns the first matching element,
+# not all matching elements as users expect.
+#
+# ROOT CAUSE: In xml_utils.cpp ExtractHTMLTextByXPath(), there's an explicit
+# comment "// Return only the first match" and the code only processes nodeTab[0].
+# This is by design but differs from user expectations.
+
+require webbed
+
+# ============================================================================
+# PART 1: UTF-8 Encoding Bug Tests
+# ============================================================================
+
+# Test 1.1: Verify UTF-8 encoding bug exists
+# CURRENT BUG: "è" (UTF-8 0xC3 0xA8) becomes "Ã¨" when misinterpreted as Latin-1
+# CORRECT VALUE WHEN FIXED: chère
+# We test by checking the output does NOT match the correct UTF-8 string
+query I
+SELECT html_extract_text('<html><body><p>chère</p></body></html>', '//p') != 'chère';
+----
+true
+
+# Test 1.2: Verify the bug produces garbled output with specific pattern
+# When UTF-8 is misread as Latin-1, multi-byte chars expand
+# Original "è" (2 bytes: C3 A8) becomes "Ã¨" (2 chars: Ã=C3, ¨=A8)
+query I
+SELECT length(html_extract_text('<html><body><p>è</p></body></html>', '//p')) > 1;
+----
+true
+
+# Test 1.3: File-based test - verify we get some output (non-empty)
+query I
+SELECT length(html_extract_text(html, '//p')) > 0
+FROM read_html_objects('test/html/github_issue_53_utf8.html');
+----
+true
+
+# Test 1.4: Workaround confirmation - html_unescape handles UTF-8 correctly
+# html_unescape extracts text and decodes entities, preserving UTF-8
+# This demonstrates the workaround mentioned in the issue
+query I
+SELECT html_unescape('<p>chère</p>') = 'chère';
+----
+true
+
+# Test 1.5: ASCII-only content works correctly (no encoding issue)
+query I
+SELECT html_extract_text('<html><body><p>hello world</p></body></html>', '//p');
+----
+hello world
+
+# ============================================================================
+# PART 2: Multiple Element Matching Tests (DOCUMENTED BEHAVIOR)
+# ============================================================================
+
+# Test 2.1: Original issue - Only first <p> returned
+# DOCUMENTED BEHAVIOR: Only returns first match
+# User expectation may be to get all matching paragraphs
+query I
+SELECT html_extract_text('<p>First paragraph</p><p>Second paragraph</p>', '//p');
+----
+First paragraph
+
+# Test 2.2: Multiple list items - only first returned
+query I
+SELECT html_extract_text(
+    '<html><body><ul><li>One</li><li>Two</li><li>Three</li></ul></body></html>',
+    '//li'
+);
+----
+One
+
+# Test 2.3: File-based test - multiple paragraphs (only first returned)
+query I
+SELECT html_extract_text(html, '//p')
+FROM read_html_objects('test/html/github_issue_53_multi_match.html');
+----
+Paragraph one
+
+# Test 2.4: File-based test - multiple list items (only first returned)
+query I
+SELECT html_extract_text(html, '//li')
+FROM read_html_objects('test/html/github_issue_53_multi_match.html');
+----
+First item
+
+# Test 2.5: Verify we can't get second match with same XPath
+# This confirms the "only first match" behavior
+query I
+SELECT html_extract_text('<div><p>First</p><p>Second</p></div>', '//p') = 'First';
+----
+true
+
+# ============================================================================
+# PART 3: Edge Cases (ASCII only - no encoding issues)
+# ============================================================================
+
+# Test 3.1: Empty result when no match
+query I
+SELECT html_extract_text('<html><body><div>No paragraphs here</div></body></html>', '//p');
+----
+(empty)
+
+# Test 3.2: Nested elements - text extraction concatenates
+query I
+SELECT html_extract_text(
+    '<html><body><div><p>Outer <span>inner</span> text</p></div></body></html>',
+    '//p'
+);
+----
+Outer inner text
+
+# Test 3.3: Deep nesting
+query I
+SELECT html_extract_text(
+    '<html><body><div><div><div><p>Deep</p></div></div></div></body></html>',
+    '//p'
+);
+----
+Deep
+
+# Test 3.4: Attribute selector (should still work for first match)
+query I
+SELECT html_extract_text(
+    '<html><body><p class="a">First</p><p class="b">Second</p></body></html>',
+    '//p[@class="b"]'
+);
+----
+Second
+
+# Test 3.5: HTML entities are decoded correctly
+query I
+SELECT html_extract_text(
+    '<html><body><p>Hello &amp; goodbye &lt;tag&gt;</p></body></html>',
+    '//p'
+);
+----
+Hello & goodbye <tag>
+
+# ============================================================================
+# PART 4: Workarounds documented in the issue
+# ============================================================================
+
+# Test 4.1: html_unescape extracts text and preserves UTF-8 correctly
+query I
+SELECT html_unescape('<p>Café résumé</p>');
+----
+Café résumé
+
+# Test 4.2: html_unescape with file content
+query I
+SELECT length(html_unescape(html::VARCHAR)) > 0
+FROM read_html_objects('test/html/github_issue_53_utf8.html');
+----
+true

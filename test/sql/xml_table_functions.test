@@ -18,13 +18,13 @@ true
 
 # Test read_xml_objects with invalid XML (should fail without ignore_errors)
 statement error
-SELECT * FROM read_xml_objects('test/xml/invalid.xml');
+SELECT * FROM read_xml_objects('test/invalid/invalid.xml');
 ----
 contains invalid XML
 
 # Test read_xml_objects with invalid XML and ignore_errors=true
 query I
-SELECT count(*) FROM read_xml_objects('test/xml/invalid.xml', ignore_errors := true);
+SELECT count(*) FROM read_xml_objects('test/invalid/invalid.xml', ignore_errors := true);
 ----
 0
 

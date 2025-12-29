@@ -77,7 +77,7 @@ true
 # Test 8: Test union_by_name with ignore_errors
 query I
 SELECT COUNT(*) >= 4
-FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml', 'test/xml/invalid.xml'],
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml', 'test/invalid/invalid.xml'],
                union_by_name = true, ignore_errors = true);
 ----
 true
