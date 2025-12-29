@@ -58,9 +58,9 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 | Function | Description | Example |
 |----------|-------------|---------|
 | `read_xml(pattern)` | Read XML files into table with schema inference | `SELECT * FROM read_xml('*.xml')` |
-| `read_xml_objects(pattern)` | Read XML files as document objects | `SELECT filename, content FROM read_xml_objects('*.xml')` |
+| `read_xml_objects(pattern)` | Read XML files as document objects | `SELECT xml FROM read_xml_objects('*.xml')` |
 | `read_html(pattern)` | Read HTML files into table | `SELECT * FROM read_html('*.html')` |
-| `read_html_objects(pattern)` | Read HTML files as document objects | `SELECT filename, html FROM read_html_objects('*.html')` |
+| `read_html_objects(pattern)` | Read HTML files as document objects | `SELECT html FROM read_html_objects('*.html')` |
 
 ### 🔧 **Content Parsing Functions**
 
@@ -77,13 +77,13 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `xml_extract_text(xml, xpath)` | Extract first text match using XPath | `SELECT xml_extract_text(content, '//title')` |
+| `xml_extract_text(xml, xpath)` | Extract first text match using XPath | `SELECT xml_extract_text(xml, '//title')` |
 | `xml_extract_all_text(xml)` | Extract all text content | `SELECT xml_extract_all_text('<p>Hello <b>world</b></p>')` |
-| `xml_extract_elements(xml, xpath)` | Extract first element as struct | `SELECT xml_extract_elements(content, '//item')` |
-| `xml_extract_elements_string(xml, xpath)` | Extract all elements as text (newline-separated) | `SELECT xml_extract_elements_string(content, '//item')` |
-| `xml_extract_attributes(xml, xpath)` | Extract attributes as structs | `SELECT xml_extract_attributes(content, '//book')` |
-| `xml_extract_comments(xml)` | Extract comments with line numbers | `SELECT xml_extract_comments(content)` |
-| `xml_extract_cdata(xml)` | Extract CDATA sections with line numbers | `SELECT xml_extract_cdata(content)` |
+| `xml_extract_elements(xml, xpath)` | Extract first element as struct | `SELECT xml_extract_elements(xml, '//item')` |
+| `xml_extract_elements_string(xml, xpath)` | Extract all elements as text (newline-separated) | `SELECT xml_extract_elements_string(xml, '//item')` |
+| `xml_extract_attributes(xml, xpath)` | Extract attributes as structs | `SELECT xml_extract_attributes(xml, '//book')` |
+| `xml_extract_comments(xml)` | Extract comments with line numbers | `SELECT xml_extract_comments(xml)` |
+| `xml_extract_cdata(xml)` | Extract CDATA sections with line numbers | `SELECT xml_extract_cdata(xml)` |
 
 ### 🌐 **HTML Extraction Functions**
 
@@ -259,11 +259,11 @@ GROUP BY h.filename, t.Department;
 | Function | Description | Example |
 |----------|-------------|---------|
 | `xml_stats(xml)` | Get document statistics | `SELECT xml_stats('<root><item/><item/></root>')` |
-| `xml_namespaces(xml)` | List XML namespaces | `SELECT xml_namespaces(content)` |
+| `xml_namespaces(xml)` | List XML namespaces | `SELECT xml_namespaces(xml)` |
 | `xml_pretty_print(xml)` | Format XML with indentation | `SELECT xml_pretty_print('<root><item/></root>')` |
 | `xml_minify(xml)` | Remove whitespace from XML | `SELECT xml_minify('<root>\n  <item/>\n</root>')` |
 | `xml_wrap_fragment(fragment, wrapper)` | Wrap XML fragment with element | `SELECT xml_wrap_fragment('<item/>', 'root')` |
-| `xml_validate_schema(xml, xsd)` | Validate against XSD schema | `SELECT xml_validate_schema(content, schema)` |
+| `xml_validate_schema(xml, xsd)` | Validate against XSD schema | `SELECT xml_validate_schema(xml, schema)` |
 | `xml_libxml2_version(name)` | Get libxml2 version info | `SELECT xml_libxml2_version('xml')` |
 
 ---
@@ -274,18 +274,18 @@ GROUP BY h.filename, t.Department;
 
 ```sql
 -- Load and validate XML files
-SELECT filename, xml_valid(content) as is_valid 
-FROM read_xml_objects('data/*.xml');
+SELECT filename, xml_valid(xml) as is_valid
+FROM read_xml_objects('data/*.xml', filename=true);
 
 -- Extract specific data with XPath
-SELECT 
-    xml_extract_text(content, '//book/title') as title,
-    xml_extract_text(content, '//book/author') as author,
-    xml_extract_text(content, '//book/@isbn') as isbn
+SELECT
+    xml_extract_text(xml, '//book/title') as title,
+    xml_extract_text(xml, '//book/author') as author,
+    xml_extract_text(xml, '//book/@isbn') as isbn
 FROM read_xml_objects('catalog.xml');
 
 -- Convert XML catalog to JSON
-SELECT xml_to_json(content) as json_catalog 
+SELECT xml_to_json(xml) as json_catalog
 FROM read_xml_objects('catalog.xml');
 ```
 
@@ -322,11 +322,11 @@ SELECT * FROM read_xml('products.xml',
     filename=true);
 
 -- Analyze document structure before processing
-SELECT 
-    (xml_stats(content)).element_count,
-    (xml_stats(content)).attribute_count,
-    (xml_stats(content)).text_node_count,
-    (xml_stats(content)).max_depth
+SELECT
+    (xml_stats(xml)).element_count,
+    (xml_stats(xml)).attribute_count,
+    (xml_stats(xml)).text_node_count,
+    (xml_stats(xml)).max_depth
 FROM read_xml_objects('complex.xml');
 ```
 
@@ -390,9 +390,9 @@ SELECT xml_to_json('<root><item/></root>', empty_elements := 'null');
 
 -- Convert XML configuration to JSON for processing
 WITH xml_config AS (
-    SELECT content FROM read_xml_objects('config.xml')
+    SELECT xml FROM read_xml_objects('config.xml')
 )
-SELECT json_extract(xml_to_json(content), '$.config.database.host') as db_host
+SELECT json_extract(xml_to_json(xml), '$.config.database.host') as db_host
 FROM xml_config;
 ```
 
@@ -412,7 +412,7 @@ SELECT xml_wrap_fragment('<item>Content</item>', 'wrapper') as wrapped;
 -- Result: <wrapper><item>Content</item></wrapper>
 
 -- Extract all matching elements as text
-SELECT xml_extract_elements_string(content, '//book/title') as all_titles
+SELECT xml_extract_elements_string(xml, '//book/title') as all_titles
 FROM read_xml_objects('library.xml');
 -- Result: "Title 1\nTitle 2\nTitle 3"
 
@@ -421,9 +421,9 @@ SELECT to_xml('John Doe', 'author') as xml_author;
 -- Result: <author>John Doe</author>
 
 -- Extract comments and CDATA sections
-SELECT 
-    xml_extract_comments(content) as comments,
-    xml_extract_cdata(content) as cdata_sections
+SELECT
+    xml_extract_comments(xml) as comments,
+    xml_extract_cdata(xml) as cdata_sections
 FROM read_xml_objects('document.xml');
 
 -- Get libxml2 version information
@@ -592,11 +592,16 @@ read_xml('pattern',
     root_element='root',          -- Specify root element name
     record_element='item',        -- XPath/tag name for elements that become rows
     force_list=['tags'],          -- Column names that should always be LIST type
-    include_attributes=true,      -- Include XML attributes in output
     auto_detect=true,             -- Auto-detect schema structure
     max_depth=10,                 -- Maximum parsing depth
     unnest_as='struct',           -- How to unnest nested elements
-    all_varchar=false             -- Force all scalar types to VARCHAR (nested preserved)
+    all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
+    attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
+    attr_prefix='@',              -- Prefix for attribute columns (default: '@')
+    text_key='#text',             -- Key for text content in mixed elements (default: '#text')
+    empty_elements='object',      -- How to handle empty elements: 'object' (default), 'null', 'string'
+    namespaces='strip',           -- Namespace handling: 'strip' (default), 'expand', 'keep'
+    union_by_name=false           -- Combine columns by name when reading multiple files (default: false)
 );
 ```
 
@@ -609,11 +614,16 @@ read_xml('pattern',
 - **`root_element`**: Specify the XML root element for schema inference
 - **`record_element`**: XPath expression or tag name identifying which elements become table rows (e.g., `'item'` or `'//item'`)
 - **`force_list`**: Element name(s) that should always be inferred as LIST type columns, even if they appear only once (similar to xml_to_json)
-- **`include_attributes`**: Whether to include XML attributes as columns
 - **`auto_detect`**: Enable automatic schema detection and type inference
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
+- **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
+- **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
+- **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)
+- **`empty_elements`**: How to handle empty elements: `'object'` (default) returns empty struct, `'null'` returns NULL, `'string'` returns empty string
+- **`namespaces`**: Namespace handling mode: `'strip'` (default) removes namespace prefixes, `'expand'` replaces prefixes with full URIs, `'keep'` preserves prefixes as-is
+- **`union_by_name`**: When reading multiple files, combine columns by name (like DuckDB's `union_by_name` for other formats). Useful when XML files have different schemas (default: false)
 
 ### 🔍 **XPath Support**
 
@@ -621,19 +631,19 @@ Full XPath 1.0 expressions are supported:
 
 ```sql
 -- Basic selection
-xml_extract_text(content, '//book/title')
+xml_extract_text(xml, '//book/title')
 
--- Attribute selection  
-xml_extract_text(content, '//book/@isbn')
+-- Attribute selection
+xml_extract_text(xml, '//book/@isbn')
 
 -- Conditional selection
-xml_extract_text(content, '//book[@category="fiction"]/title')
+xml_extract_text(xml, '//book[@category="fiction"]/title')
 
 -- Position-based selection
-xml_extract_text(content, '//book[1]/title')
+xml_extract_text(xml, '//book[1]/title')
 
 -- Text node selection
-xml_extract_text(content, '//book/title/text()')
+xml_extract_text(xml, '//book/title/text()')
 ```
 
 ### 🏗️ **Schema Inference**
@@ -742,20 +752,20 @@ The extension provides robust error handling:
 SELECT * FROM read_xml('*.xml', ignore_errors=true);
 
 -- Validation before processing
-SELECT 
+SELECT
     filename,
-    CASE 
-        WHEN xml_valid(content) THEN xml_extract_text(content, '//title')
+    CASE
+        WHEN xml_valid(xml) THEN xml_extract_text(xml, '//title')
         ELSE 'Invalid XML'
     END as title
-FROM read_xml_objects('mixed/*.xml');
+FROM read_xml_objects('mixed/*.xml', filename=true);
 
 -- Schema validation
-SELECT 
-    filename,
-    xml_validate_schema(content, schema_content) as is_valid
-FROM read_xml_objects('documents/*.xml')
-CROSS JOIN read_xml_objects('schema.xsd') as schema;
+SELECT
+    docs.filename,
+    xml_validate_schema(docs.xml, schema.xml) as is_valid
+FROM read_xml_objects('documents/*.xml', filename=true) AS docs
+CROSS JOIN read_xml_objects('schema.xsd') AS schema;
 ```
 
 ---
@@ -767,25 +777,25 @@ CROSS JOIN read_xml_objects('schema.xsd') as schema;
 1. **Use specific XPath expressions** for better performance:
    ```sql
    -- Good: Specific path
-   xml_extract_text(content, '/catalog/book[1]/title')
-   
+   xml_extract_text(xml, '/catalog/book[1]/title')
+
    -- Slower: Broad search
-   xml_extract_text(content, '//title')
+   xml_extract_text(xml, '//title')
    ```
 
 2. **Filter early** to reduce processing:
    ```sql
-   SELECT * FROM read_xml('*.xml') 
-   WHERE xml_valid(content) AND title IS NOT NULL;
+   SELECT * FROM read_xml('*.xml')
+   WHERE title IS NOT NULL;
    ```
 
 3. **Use read_xml** for structured data, **read_xml_objects** for document analysis:
    ```sql
    -- For data analysis (with schema inference)
    SELECT * FROM read_xml('products.xml');
-   
-   -- For document processing (raw content)  
-   SELECT content FROM read_xml_objects('products.xml');
+
+   -- For document processing (raw content)
+   SELECT xml FROM read_xml_objects('products.xml');
    ```
 
 ---
