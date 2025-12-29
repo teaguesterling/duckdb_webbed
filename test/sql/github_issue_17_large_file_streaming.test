@@ -1,0 +1,235 @@
+# name: test/sql/github_issue_17_large_file_streaming.test
+# description: Test batch file processing and memory efficiency (GitHub Issue #17)
+# group: [sql]
+#
+# GitHub Issue #17: Add large file streaming support
+# https://github.com/teaguesterling/duckdb_webbed/issues/17
+#
+# FEATURE REQUEST:
+# Implement streaming and batch processing for large numbers of files to reduce memory usage.
+#
+# CURRENT BEHAVIOR:
+# - All matching files are loaded into memory when using glob patterns
+# - maximum_file_size parameter can limit individual file sizes
+# - ignore_errors allows skipping problematic files
+#
+# FUTURE IMPROVEMENTS (TO BE IMPLEMENTED):
+# - Stream files one at a time instead of loading all into memory
+# - Batch processing with configurable batch size
+# - Memory usage limits/monitoring
+
+require webbed
+
+# ============================================================================
+# PART 1: Glob Pattern Batch Processing (CURRENT BEHAVIOR)
+# ============================================================================
+
+# Test 1.1: Count all XML files via glob
+query I
+SELECT count(*) >= 10 FROM read_xml_objects('test/xml/*.xml', ignore_errors=true);
+----
+true
+
+# Test 1.2: Count all HTML files via glob
+query I
+SELECT count(*) >= 10 FROM read_html_objects('test/html/*.html', ignore_errors=true);
+----
+true
+
+# Test 1.3: Process multiple files with filename tracking
+query I
+SELECT count(DISTINCT filename) >= 5
+FROM read_xml_objects('test/xml/*.xml', filename=true, ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 2: Maximum File Size Parameter
+# ============================================================================
+
+# Test 2.1: maximum_file_size accepts files under limit
+query I
+SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', maximum_file_size=1000000);
+----
+true
+
+# Test 2.2: maximum_file_size rejects files over limit
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', maximum_file_size=10);
+----
+exceeds maximum size limit
+
+# Test 2.3: ignore_errors bypasses maximum_file_size errors
+query I
+SELECT count(*) = 0
+FROM read_xml('test/xml/simple.xml', maximum_file_size=10, ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 3: Multiple File Processing with Error Handling
+# ============================================================================
+
+# Test 3.1: Process list of specific files
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects(['test/xml/simple.xml', 'test/xml/books.xml'], ignore_errors=true);
+----
+true
+
+# Test 3.2: ignore_errors skips invalid files in batch
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects(['test/xml/simple.xml', 'test/xml/nonexistent.xml'], ignore_errors=true);
+----
+true
+
+# Test 3.3: Glob with ignore_errors handles mixed valid/invalid files
+query I
+SELECT count(*) >= 5
+FROM read_xml_objects('test/xml/*.xml', ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 4: Aggregations Across Multiple Files
+# ============================================================================
+
+# Test 4.1: Aggregate across all XML files
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects('test/xml/*.xml', ignore_errors=true)
+WHERE xml_valid(xml::VARCHAR);
+----
+true
+
+# Test 4.2: Get unique filenames
+query I
+SELECT count(DISTINCT filename) >= 5
+FROM read_xml_objects('test/xml/*.xml', filename=true, ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 5: Large Row Count Handling
+# ============================================================================
+
+# Test 5.1: Files with >2048 rows (STANDARD_VECTOR_SIZE) process correctly
+query I
+SELECT count(*) = 3000 FROM read_xml('test/xml/large_row_count.xml');
+----
+true
+
+# Test 5.2: Aggregation works across chunk boundaries
+query I
+SELECT count(DISTINCT loc) = 3000 FROM read_xml('test/xml/large_row_count.xml');
+----
+true
+
+# ============================================================================
+# PART 6: Memory Efficiency Patterns (WORKAROUNDS)
+# ============================================================================
+
+# Test 6.1: LIMIT clause reduces memory for exploratory queries
+query I
+SELECT count(*) = 5
+FROM (SELECT * FROM read_xml_objects('test/xml/*.xml', ignore_errors=true) LIMIT 5);
+----
+true
+
+# Test 6.2: Filtering by filename reduces processing
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects('test/xml/*.xml', filename=true, ignore_errors=true)
+WHERE filename LIKE '%simple%';
+----
+true
+
+# ============================================================================
+# PART 7: HTML Batch Processing Parity
+# ============================================================================
+
+# Test 7.1: HTML glob processing works like XML
+query I
+SELECT count(*) >= 5
+FROM read_html_objects('test/html/*.html', ignore_errors=true);
+----
+true
+
+# Test 7.2: HTML maximum_file_size works
+query I
+SELECT count(*) >= 0
+FROM read_html('test/html/simple.html', record_element='*', maximum_file_size=1000000, ignore_errors=true);
+----
+true
+
+# Test 7.3: HTML ignore_errors with maximum_file_size
+query I
+SELECT count(*) = 0
+FROM read_html('test/html/simple.html', record_element='*', maximum_file_size=10, ignore_errors=true);
+----
+true
+
+# ============================================================================
+# PART 8: Union By Name with Multiple Files
+# ============================================================================
+
+# Test 8.1: union_by_name combines files with different schemas
+query I
+SELECT count(*) >= 1
+FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], union_by_name=true);
+----
+true
+
+# Test 8.2: union_by_name with glob pattern
+query I
+SELECT count(*) >= 1
+FROM read_xml('test/xml/union_*.xml', union_by_name=true);
+----
+true
+
+# ============================================================================
+# PART 9: Concurrent Read Operations (Stress Test)
+# ============================================================================
+
+# Test 9.1: Multiple read operations in same query
+query I
+SELECT
+  (SELECT count(*) FROM read_xml_objects('test/xml/simple.xml')) +
+  (SELECT count(*) FROM read_xml_objects('test/xml/deep_hierarchy.xml'))
+>= 2;
+----
+true
+
+# Test 9.2: Cross join of file reads (potential memory stress)
+query I
+SELECT count(*) >= 1
+FROM read_xml_objects('test/xml/simple.xml') a,
+     read_xml_objects('test/xml/deep_hierarchy.xml') b;
+----
+true
+
+# ============================================================================
+# PART 10: Edge Cases
+# ============================================================================
+
+# Test 10.1: Empty result set (no matching files with filter)
+query I
+SELECT count(*) = 0
+FROM read_xml_objects('test/xml/*.xml', ignore_errors=true)
+WHERE false;
+----
+true
+
+# Test 10.2: Glob pattern with no matches (should error)
+statement error
+SELECT * FROM read_xml_objects('test/xml/nonexistent_pattern_*.xml');
+----
+Invalid Input Error
+
+# Test 10.3: Single file via array syntax
+query I
+SELECT count(*) = 1 FROM read_xml_objects(['test/xml/simple.xml']);
+----
+true
+

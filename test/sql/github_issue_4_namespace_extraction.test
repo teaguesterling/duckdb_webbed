@@ -1,0 +1,210 @@
+# name: test/sql/github_issue_4_namespace_extraction.test
+# description: Comprehensive tests for namespace handling and nested extraction (GitHub Issue #4)
+# group: [sql]
+#
+# GitHub Issue #4: Extracting documents from a specific element and trouble with namespaces
+# https://github.com/teaguesterling/duckdb_webbed/issues/4
+#
+# REPORTED ISSUES:
+# 1. XPath queries return NULL on namespaced XML documents
+# 2. root_element parameter only affects schema inference, not extraction path
+# 3. No way to get sibling elements (requestId, nextToken) alongside unnested records
+#
+# CURRENT STATUS:
+# - read_xml with record_element works correctly with namespaced documents
+# - XPath functions require local-name() workaround for namespaced documents
+# - Sibling + unnest requires hybrid approach (join read_xml_objects with read_xml)
+
+require webbed
+
+# ============================================================================
+# PART 1: Namespace Handling in read_xml (WORKS)
+# ============================================================================
+
+# Test 1.1: read_xml works with namespaced documents
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+2
+
+# Test 1.2: record_element works with namespaced documents
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item');
+----
+3
+
+# Test 1.3: Data extraction works correctly with namespaces
+query III
+SELECT volumeId, size, status
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item')
+ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
+
+# ============================================================================
+# PART 2: XPath with Namespaces (KNOWN LIMITATION)
+# ============================================================================
+
+# Test 2.1: Simple XPath fails on namespaced documents (returns empty)
+# This is the behavior the user reported - had to manually remove namespaces
+query I
+SELECT xml_extract_text(xml, '//requestId') = ''
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+true
+
+# Test 2.2: Same XPath works on non-namespaced documents
+query I
+SELECT xml_extract_text(xml, '//requestId')
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_no_ns.xml');
+----
+abc12345-1234-5678-abcd-123456789012
+
+# Test 2.3: WORKAROUND - Use local-name() for namespaced XPath queries
+query I
+SELECT xml_extract_text(xml, '//*[local-name()="requestId"]')
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+abc12345-1234-5678-abcd-123456789012
+
+# Test 2.4: local-name() also works for nested elements
+query I
+SELECT xml_extract_text(xml, '//*[local-name()="volumeId"][1]')
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+vol-049df61146c4d7901
+
+# ============================================================================
+# PART 3: Sibling + Unnest Pattern (WORKAROUND)
+# ============================================================================
+
+# Test 3.1: Using record_element at root level gives siblings as columns
+query I
+SELECT requestId IS NOT NULL AND volumeSet IS NOT NULL
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml',
+              record_element := 'DescribeVolumesResponse');
+----
+true
+
+# Test 3.2: RECOMMENDED PATTERN - Hybrid approach for sibling + unnested records
+# Join read_xml_objects (for siblings via XPath) with read_xml (for record extraction)
+query III
+SELECT
+  xml_extract_text(xml, '//*[local-name()="requestId"]') as requestId,
+  r.volumeId,
+  r.size
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml'),
+     read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item') r
+ORDER BY r.size
+LIMIT 3;
+----
+abc12345-1234-5678-abcd-123456789012	vol-049df61146c4d7901	80
+abc12345-1234-5678-abcd-123456789012	vol-0987654321fedcba0	100
+abc12345-1234-5678-abcd-123456789012	vol-abcdef1234567890a	500
+
+# ============================================================================
+# PART 4: UNNEST Pattern for Nested Arrays
+# ============================================================================
+
+# Test 4.1: Default read_xml returns items as nested LIST<STRUCT>
+query I
+SELECT length(item) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml')
+WHERE item IS NOT NULL;
+----
+3
+
+# Test 4.2: UNNEST to flatten nested items
+query III
+SELECT
+  unnest(item).volumeId as volumeId,
+  unnest(item).size as size,
+  unnest(item).status as status
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml')
+WHERE item IS NOT NULL
+ORDER BY size;
+----
+vol-049df61146c4d7901	80	in-use
+vol-0987654321fedcba0	100	available
+vol-abcdef1234567890a	500	in-use
+
+# ============================================================================
+# PART 5: Multiple Namespace Prefixes
+# ============================================================================
+
+# Test 5.1: xml_namespaces shows declared namespaces
+query I
+SELECT length(xml_namespaces(xml::VARCHAR)) >= 1
+FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+true
+
+# ============================================================================
+# PART 6: root_element vs record_element Clarification
+# ============================================================================
+
+# Test 6.1: root_element affects schema inference (column naming), not extraction
+# Both should return the same row count
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml',
+                              root_element := 'volumeSet');
+----
+2
+
+# Test 6.2: record_element controls which elements become rows
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml',
+                              record_element := 'item');
+----
+3
+
+# ============================================================================
+# PART 7: Complex AWS Response with Nested attachmentSet
+# ============================================================================
+
+# Test 7.1: record_element matches ALL elements with that name at ANY depth
+# This file has 3 volume items + 2 attachment items = 5 total
+# NOTE: This behavior may be unexpected - user might want only top-level items
+query I
+SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml',
+                              record_element := 'item');
+----
+5
+
+# Test 7.2: WORKAROUND - Filter by presence of volume-specific fields
+# Volume items have 'size', attachment items don't
+query I
+SELECT count(*)
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml', record_element := 'item')
+WHERE size IS NOT NULL;
+----
+3
+
+# Test 7.3: Attachment items have instanceId at top level
+query I
+SELECT count(*)
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml', record_element := 'item')
+WHERE size IS NULL AND instanceId IS NOT NULL;
+----
+2
+
+# ============================================================================
+# PART 8: Edge Cases
+# ============================================================================
+
+# Test 8.1: Empty namespace prefix (default namespace)
+query I
+SELECT count(*) >= 0
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml');
+----
+true
+
+# Test 8.2: Verify data integrity after namespace stripping
+query I
+SELECT size = 80 AND volumeType = 'gp3'
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item')
+WHERE volumeId = 'vol-049df61146c4d7901';
+----
+true
+
