@@ -93,6 +93,8 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 | `html_extract_text(html, xpath)` | Extract text from HTML using XPath | `SELECT html_extract_text(html, '//h1')` |
 | `html_extract_links(html)` | Extract all links with metadata | `SELECT html_extract_links('<a href="/">Home</a>')` |
 | `html_extract_images(html)` | Extract all images with metadata | `SELECT html_extract_images('<img src="pic.jpg" alt="Photo">')` |
+| `html_escape(text)` | Escape HTML special characters | `SELECT html_escape('<p>Hello</p>')` |
+| `html_unescape(text)` | Decode HTML entities to text | `SELECT html_unescape('&lt;p&gt;Hello&lt;/p&gt;')` |
 
 ### 🗂️ **HTML Table Extraction Functions**
 
