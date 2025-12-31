@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ShowPlanXML>
+  <BatchSequence>
+    <Batch>
+      <Statements>
+        <StmtSimple>
+          <QueryPlan>
+            <RelOp>
+              <IndexScan>
+                <Predicate>
+                  <ScalarOperator>
+                    <Compare>
+                      <ScalarOperator>
+                        <Identifier>
+                          <ColumnReference Database="[TestDB]" Schema="[dbo]" Table="[Users]" Column="Status"/>
+                        </Identifier>
+                      </ScalarOperator>
+                      <ScalarOperator>
+                        <Const ConstValue="'Active'"/>
+                      </ScalarOperator>
+                    </Compare>
+                  </ScalarOperator>
+                </Predicate>
+                <Predicate>
+                  <ScalarOperator>
+                    <Compare>
+                      <ScalarOperator>
+                        <Identifier>
+                          <ColumnReference Database="[TestDB]" Schema="[dbo]" Table="[Orders]" Column="OrderDate"/>
+                        </Identifier>
+                      </ScalarOperator>
+                      <ScalarOperator>
+                        <Const ConstValue="'2024-01-01'"/>
+                      </ScalarOperator>
+                    </Compare>
+                  </ScalarOperator>
+                </Predicate>
+                <Predicate>
+                  <ScalarOperator>
+                    <Compare>
+                      <ScalarOperator>
+                        <Identifier>
+                          <ColumnReference Database="[TestDB]" Schema="[dbo]" Table="[Products]" Column="CategoryId"/>
+                        </Identifier>
+                      </ScalarOperator>
+                      <ScalarOperator>
+                        <Const ConstValue="(5)"/>
+                      </ScalarOperator>
+                    </Compare>
+                  </ScalarOperator>
+                </Predicate>
+              </IndexScan>
+            </RelOp>
+          </QueryPlan>
+        </StmtSimple>
+      </Statements>
+    </Batch>
+  </BatchSequence>
+</ShowPlanXML>

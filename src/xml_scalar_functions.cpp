@@ -442,9 +442,9 @@ void XMLScalarFunctions::XMLCommonNamespacesFunction(DataChunk &args, Expression
 	// Build key and value vectors
 	vector<Value> keys;
 	vector<Value> values;
-	for (const auto &[prefix, uri] : common_ns) {
-		keys.emplace_back(Value(prefix));
-		values.emplace_back(Value(uri));
+	for (const auto &ns_pair : common_ns) {
+		keys.emplace_back(Value(ns_pair.first));
+		values.emplace_back(Value(ns_pair.second));
 	}
 
 	// Create the MAP value once

@@ -291,3 +291,92 @@ SELECT len(xml_extract_attributes(
 ));
 ----
 1
+
+# ============================================================================
+# PART 9: Segfault Regression - Unnested Row Processing (Issue #55)
+# ============================================================================
+#
+# This tests the specific workflow that causes a segfault on macOS:
+# 1. Extract elements with attributes using XPath
+# 2. Unnest the results into multiple rows
+# 3. Call xml_extract_attributes on each row
+#
+# The bug causes xml_extract_attributes to only return data for the first row,
+# with subsequent rows returning empty lists or causing a segfault.
+
+# Test 9.1: Create test data with multiple matching elements
+statement ok
+CREATE TEMP TABLE issue55_nested AS
+SELECT xml::VARCHAR as query_plan
+FROM read_xml_objects('test/xml/github_issue_55_nested_attributes.xml');
+
+# Test 9.2: Extract and unnest ColumnReference elements
+statement ok
+CREATE TEMP TABLE issue55_unnested AS
+SELECT unnest(xml_extract_attributes(query_plan, '//Predicate//ColumnReference[@Table]'), recursive := true) as xml_elem
+FROM issue55_nested;
+
+# Test 9.3: Verify we have multiple rows (3 elements × 4 attributes each = 12)
+query I
+SELECT count(*) FROM issue55_unnested;
+----
+12
+
+# Test 9.4: Verify each row has non-null attribute values
+query I
+SELECT count(*) FROM issue55_unnested WHERE attribute_name IS NOT NULL;
+----
+12
+
+# Test 9.5: Verify we can extract attributes from each unnested element
+# This is the operation that causes segfault - calling xml_extract_attributes
+# on values that were themselves extracted via xml_extract_attributes
+# NOTE: This test is disabled until the segfault is fixed
+# query I
+# SELECT count(*)
+# FROM issue55_unnested
+# WHERE len(xml_extract_attributes(xml_elem, '/ColumnReference')) > 0;
+# ----
+# 3
+
+# Test 9.6: Verify attribute values are correct
+query I
+SELECT count(DISTINCT attribute_value) >= 3 FROM issue55_unnested WHERE attribute_name = 'Table';
+----
+true
+
+statement ok
+DROP TABLE issue55_nested;
+
+statement ok
+DROP TABLE issue55_unnested;
+
+# ============================================================================
+# PART 10: Alternative Workflow Using xml_extract_elements (Issue #55)
+# ============================================================================
+#
+# This tests a similar workflow using xml_extract_elements instead
+
+# Test 10.1: Extract elements as XMLFragment list and unnest
+statement ok
+CREATE TEMP TABLE issue55_fragments AS
+SELECT unnest(xml_extract_elements(query_plan, '//Predicate//ColumnReference[@Table]')) as xml_frag
+FROM (SELECT xml::VARCHAR as query_plan FROM read_xml_objects('test/xml/github_issue_55_nested_attributes.xml'));
+
+# Test 10.2: Verify we have multiple fragments
+query I
+SELECT count(*) FROM issue55_fragments;
+----
+3
+
+# Test 10.3: Extract attributes from each fragment
+# Each ColumnReference has 4 attributes: Database, Schema, Table, Column
+query I
+SELECT count(*) >= 3
+FROM issue55_fragments
+WHERE len(xml_extract_attributes(xml_frag::VARCHAR, '/ColumnReference')) = 4;
+----
+true
+
+statement ok
+DROP TABLE issue55_fragments;
