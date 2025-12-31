@@ -245,6 +245,8 @@ public:
 	static std::string ExtractHTMLText(const std::string &html_str, const std::string &selector = "");
 	static std::string ExtractHTMLTextByXPath(const std::string &html_str, const std::string &xpath);
 	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath);
+	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath,
+	                                                          const case_insensitive_map_t<string> &namespaces);
 
 	// HTML entity escaping/unescaping
 	static std::string HTMLUnescape(const std::string &html_str);

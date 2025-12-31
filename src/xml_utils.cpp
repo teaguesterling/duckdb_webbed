@@ -2290,6 +2290,40 @@ std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &
 	return results;
 }
 
+std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath,
+                                                             const case_insensitive_map_t<string> &namespaces) {
+	std::vector<std::string> results;
+
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return results;
+	}
+
+	// Register custom namespaces
+	html_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLCharPtr content(xmlNodeGetContent(node));
+			if (content) {
+				results.push_back(std::string(reinterpret_cast<const char *>(content.get())));
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return results;
+}
+
 std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	if (html_str.empty()) {
 		return html_str;
