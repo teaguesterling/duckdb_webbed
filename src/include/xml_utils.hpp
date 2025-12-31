@@ -58,6 +58,9 @@ struct XMLDocRAII {
 	bool IsValid() const {
 		return doc != nullptr;
 	}
+
+	// Register custom namespace prefix-to-URI mappings for XPath evaluation
+	void RegisterCustomNamespaces(const case_insensitive_map_t<string> &namespaces);
 };
 
 // Custom deleters for libxml2 resources to use with DuckDB's smart pointers
@@ -191,8 +194,14 @@ public:
 
 	// Extraction functions
 	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath);
+	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath,
+	                                              const case_insensitive_map_t<string> &namespaces);
 	static std::string ExtractTextByXPath(const std::string &xml_str, const std::string &xpath);
+	static std::string ExtractTextByXPath(const std::string &xml_str, const std::string &xpath,
+	                                      const case_insensitive_map_t<string> &namespaces);
 	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath);
+	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
+	                                                      const case_insensitive_map_t<string> &namespaces);
 	static std::vector<XMLComment> ExtractComments(const std::string &xml_str);
 	static std::vector<XMLComment> ExtractCData(const std::string &xml_str);
 	static std::vector<XMLNamespace> ExtractNamespaces(const std::string &xml_str);
@@ -212,8 +221,14 @@ public:
 
 	// XMLFragment extraction
 	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath);
+	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath,
+	                                      const case_insensitive_map_t<string> &namespaces);
 	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath);
+	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath,
+	                                         const case_insensitive_map_t<string> &namespaces);
 	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath);
+	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath,
+	                                                       const case_insensitive_map_t<string> &namespaces);
 
 	// Complex type conversion functions for to_xml()
 	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name);

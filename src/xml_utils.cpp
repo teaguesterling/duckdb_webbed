@@ -189,6 +189,15 @@ XMLDocRAII &XMLDocRAII::operator=(XMLDocRAII &&other) noexcept {
 	return *this;
 }
 
+void XMLDocRAII::RegisterCustomNamespaces(const case_insensitive_map_t<string> &namespaces) {
+	if (!xpath_ctx) {
+		return;
+	}
+	for (const auto &ns_pair : namespaces) {
+		xmlXPathRegisterNs(xpath_ctx, BAD_CAST ns_pair.first.c_str(), BAD_CAST ns_pair.second.c_str());
+	}
+}
+
 void XMLUtils::InitializeLibXML() {
 	xmlInitParser();
 	LIBXML_TEST_VERSION;
@@ -315,6 +324,36 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 	return results;
 }
 
+std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, const std::string &xpath,
+                                                 const case_insensitive_map_t<string> &namespaces) {
+	std::vector<XMLElement> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	// Register custom namespaces
+	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (xpath_obj && xpath_obj->nodesetval) {
+		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+			if (node) {
+				results.push_back(ProcessXMLNode(node));
+			}
+		}
+	}
+
+	if (xpath_obj) {
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return results;
+}
+
 std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::string &xpath) {
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
@@ -342,6 +381,35 @@ std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::
 	return result;
 }
 
+std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::string &xpath,
+                                         const case_insensitive_map_t<string> &namespaces) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+
+	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	std::string result;
+	if (xpath_obj) {
+		if (xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
+			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
+			if (node) {
+				xmlChar *content = xmlNodeGetContent(node);
+				if (content) {
+					result = std::string((const char *)content);
+					xmlFree(content);
+				}
+			}
+		}
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return result;
+}
+
 std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath) {
 	std::vector<std::string> results;
 
@@ -349,6 +417,38 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
 		return results;
 	}
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (xpath_obj) {
+		if (xpath_obj->nodesetval) {
+			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+				xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+				if (node) {
+					xmlChar *content = xmlNodeGetContent(node);
+					if (content) {
+						results.push_back(std::string((const char *)content));
+						xmlFree(content);
+					}
+				}
+			}
+		}
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return results;
+}
+
+std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
+                                                         const case_insensitive_map_t<string> &namespaces) {
+	std::vector<std::string> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xml_doc.RegisterCustomNamespaces(namespaces);
 
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
@@ -1259,6 +1359,64 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 	return fragment_xml;
 }
 
+std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::string &xpath,
+                                         const case_insensitive_map_t<string> &namespaces) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+
+	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+
+	std::string fragment_xml;
+
+	if (xpath_obj->nodesetval->nodeNr > 0) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
+		if (node) {
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				xmlNodePtr copied_node = xmlCopyNode(node, 1);
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						fragment_xml = node_xml;
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return fragment_xml;
+}
+
 std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath) {
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
@@ -1330,6 +1488,72 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 	return fragment_xml;
 }
 
+std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath,
+                                            const case_insensitive_map_t<string> &namespaces) {
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+
+	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+
+	std::string fragment_xml;
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				xmlNodePtr copied_node = xmlCopyNode(node, 1);
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						if (!fragment_xml.empty()) {
+							fragment_xml += "\n";
+						}
+						fragment_xml += node_xml;
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+
+	if (!fragment_xml.empty()) {
+		fragment_xml += "\n";
+	}
+
+	return fragment_xml;
+}
+
 std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath) {
 	std::vector<std::string> results;
 
@@ -1375,6 +1599,64 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 						}
 
 						// Remove trailing whitespace/newlines
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						results.push_back(node_xml);
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return results;
+}
+
+std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath,
+                                                          const case_insensitive_map_t<string> &namespaces) {
+	std::vector<std::string> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				xmlNodePtr copied_node = xmlCopyNode(node, 1);
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
 						size_t end = node_xml.find_last_not_of(" \t\n\r");
 						if (end != std::string::npos) {
 							node_xml = node_xml.substr(0, end + 1);
