@@ -12,19 +12,19 @@ require webbed
 statement ok
 PRAGMA threads=4
 
-# xml_extract_text on invalid XML should return empty string without crashing
+# xml_extract_text on invalid XML should return empty list without crashing
 query I
 SELECT xml_extract_text('<invalid><unclosed>text', '//unclosed');
 ----
-(empty)
+[]
 
 # Multiple concurrent calls with invalid XML (stress test)
-# All should return empty string (length 0) without crashing
+# All should return empty list without crashing
 query I
 SELECT count(*) FROM (
   SELECT xml_extract_text('<invalid><unclosed>text', '//test') as result
   FROM range(100)
-) WHERE length(result) = 0;
+) WHERE len(result) = 0;
 ----
 100
 
@@ -32,13 +32,13 @@ SELECT count(*) FROM (
 # Test 2: Valid XML still works correctly in multi-threaded mode
 # ============================================================================
 
-# Valid XML extraction should work normally with multiple threads
+# Valid XML extraction should work normally with multiple threads (returns list)
 query I
 SELECT xml_extract_text('<books><book><title>Test Book</title></book></books>', '//title');
 ----
-Test Book
+[Test Book]
 
-# Multiple concurrent valid extractions
+# Multiple concurrent valid extractions (returns list)
 query I
 SELECT count(DISTINCT result) FROM (
   SELECT xml_extract_text('<root><item>value</item></root>', '//item') as result
@@ -100,7 +100,7 @@ WITH test_data AS (
 )
 SELECT
   count(*) as total,
-  count(CASE WHEN length(xml_extract_text(xml_str, '//item')) > 0 THEN 1 END) as valid_extractions
+  count(CASE WHEN len(xml_extract_text(xml_str, '//item')) > 0 THEN 1 END) as valid_extractions
 FROM test_data;
 ----
 20	10
@@ -113,14 +113,14 @@ PRAGMA threads=1
 # Test 6: Verify single-threaded mode still works (regression check)
 # ============================================================================
 
-# Single-threaded invalid XML handling
+# Single-threaded invalid XML handling (returns empty list)
 query I
 SELECT xml_extract_text('<invalid><unclosed>text', '//test');
 ----
-(empty)
+[]
 
-# Single-threaded valid XML
+# Single-threaded valid XML (returns list)
 query I
 SELECT xml_extract_text('<root><test>success</test></root>', '//test');
 ----
-success
+[success]

@@ -170,6 +170,7 @@ public:
 	// Extraction functions
 	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath);
 	static std::string ExtractTextByXPath(const std::string &xml_str, const std::string &xpath);
+	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath);
 	static std::vector<XMLComment> ExtractComments(const std::string &xml_str);
 	static std::vector<XMLComment> ExtractCData(const std::string &xml_str);
 	static std::vector<XMLNamespace> ExtractNamespaces(const std::string &xml_str);
@@ -190,6 +191,7 @@ public:
 	// XMLFragment extraction
 	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath);
 	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath);
+	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath);
 
 	// Complex type conversion functions for to_xml()
 	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name);
@@ -205,6 +207,7 @@ public:
 	static std::vector<HTMLTable> ExtractHTMLTables(const std::string &html_str);
 	static std::string ExtractHTMLText(const std::string &html_str, const std::string &selector = "");
 	static std::string ExtractHTMLTextByXPath(const std::string &html_str, const std::string &xpath);
+	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath);
 
 	// HTML entity escaping/unescaping
 	static std::string HTMLUnescape(const std::string &html_str);

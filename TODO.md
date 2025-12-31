@@ -69,6 +69,12 @@ This file tracks known issues where tests have been updated to reflect current (
 **Fix**: Added cross-record attribute collection in `InferColumnType` and `#text` handling in `ExtractStructFromNode`
 **Schema**: Elements like `<phone type="mobile">555-1234</phone>` become `STRUCT("#text" VARCHAR, "type" VARCHAR)`
 
+### XPath Functions Return All Matches (Issue #53)
+**Status**: ✅ FIXED
+**Description**: `xml_extract_text`, `html_extract_text(html, xpath)`, and `xml_extract_elements` now return LIST of all matches instead of just the first match, matching PostgreSQL's `xpath()` behavior
+**Breaking Change**: Return type changed from VARCHAR/XMLFragment to LIST(VARCHAR)/LIST(XMLFragment)
+**Migration**: Use list indexing `[1]` to get single value: `xml_extract_text(xml, '//title')[1]`
+
 ## Summary
 
 **Total Issues**: 6 items requiring fixes

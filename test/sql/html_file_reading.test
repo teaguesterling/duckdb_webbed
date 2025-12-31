@@ -24,12 +24,12 @@ GROUP BY typeof(html);
 ----
 18	HTML
 
-# Test extracting data from read HTML files (titles from all HTML files with titles)
+# Test extracting data from read HTML files (titles from all HTML files with titles, use [1] for scalar)
 query I
 SELECT
-    html_extract_text(html, '//title') AS page_title
+    html_extract_text(html, '//title')[1] AS page_title
 FROM read_html_objects('test/html/*.html')
-WHERE html_extract_text(html, '//title') IS NOT NULL AND html_extract_text(html, '//title') != ''
+WHERE array_length(html_extract_text(html, '//title')) > 0
 ORDER BY page_title;
 ----
 Complex Page
@@ -78,8 +78,8 @@ SELECT html FROM read_html_objects('test/html/empty.html');
 <html></html>
 
 
-# Test HTML with encoding issues
+# Test HTML with encoding issues (returns list)
 query I
 SELECT html_extract_text(html, '//h1') FROM read_html_objects('test/html/unicode.html');
 ----
-Héllo Wörld 测试
+[Héllo Wörld 测试]

@@ -69,6 +69,82 @@ void XMLScalarFunctions::XMLExtractElementsFunction(DataChunk &args, ExpressionS
 	    });
 }
 
+// Returns LIST(VARCHAR) of all matching text content (PostgreSQL-compatible)
+void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	auto count = args.size();
+
+	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat xpath_data;
+	xml_vector.ToUnifiedFormat(count, xml_data);
+	xpath_vector.ToUnifiedFormat(count, xpath_data);
+
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
+
+		// Handle NULL values
+		if (!xml_data.validity.RowIsValid(xml_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value::LIST(LogicalType::VARCHAR, vector<Value>()));
+			continue;
+		}
+
+		std::string xml_string = xml_strings[xml_idx].GetString();
+		std::string xpath_string = xpath_strings[xpath_idx].GetString();
+
+		// Return LIST of all matches
+		auto texts = XMLUtils::ExtractAllTextByXPath(xml_string, xpath_string);
+		vector<Value> text_values;
+		for (const auto &text : texts) {
+			text_values.push_back(Value(text));
+		}
+		result.SetValue(i, Value::LIST(LogicalType::VARCHAR, text_values));
+	}
+}
+
+// Returns LIST(XMLFragment) of all matching elements (PostgreSQL-compatible)
+void XMLScalarFunctions::XMLExtractElementsListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	auto count = args.size();
+
+	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat xpath_data;
+	xml_vector.ToUnifiedFormat(count, xml_data);
+	xpath_vector.ToUnifiedFormat(count, xpath_data);
+
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
+
+		// Handle NULL values
+		if (!xml_data.validity.RowIsValid(xml_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value::LIST(XMLTypes::XMLFragmentType(), vector<Value>()));
+			continue;
+		}
+
+		std::string xml_string = xml_strings[xml_idx].GetString();
+		std::string xpath_string = xpath_strings[xpath_idx].GetString();
+
+		// Return LIST of all matching elements
+		auto fragments = XMLUtils::ExtractXMLFragmentList(xml_string, xpath_string);
+		vector<Value> fragment_values;
+		for (const auto &fragment : fragments) {
+			fragment_values.push_back(Value(fragment));
+		}
+		result.SetValue(i, Value::LIST(XMLTypes::XMLFragmentType(), fragment_values));
+	}
+}
+
 void XMLScalarFunctions::XMLExtractElementsStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
@@ -106,14 +182,34 @@ void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, Expressio
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
 
+	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat xpath_data;
+	xml_vector.ToUnifiedFormat(count, xml_data);
+	xpath_vector.ToUnifiedFormat(count, xpath_data);
+
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	// Define the struct type for attributes upfront
+	auto attr_struct_type = LogicalType::STRUCT(
+	    {make_pair("element_name", LogicalType::VARCHAR), make_pair("element_path", LogicalType::VARCHAR),
+	     make_pair("attribute_name", LogicalType::VARCHAR), make_pair("attribute_value", LogicalType::VARCHAR),
+	     make_pair("line_number", LogicalType::BIGINT)});
+
 	// Extract attributes from elements matching XPath expression
 	for (idx_t i = 0; i < count; i++) {
-		// Get input values
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
 
-		std::string xml_string = xml_str.GetString();
-		std::string xpath_string = xpath_str.GetString();
+		// Handle NULL values
+		if (!xml_data.validity.RowIsValid(xml_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value::LIST(attr_struct_type, vector<Value>()));
+			continue;
+		}
+
+		std::string xml_string = xml_strings[xml_idx].GetString();
+		std::string xpath_string = xpath_strings[xpath_idx].GetString();
 
 		// Extract elements and their attributes using XPath
 		auto elements = XMLUtils::ExtractByXPath(xml_string, xpath_string);
@@ -135,16 +231,8 @@ void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, Expressio
 			}
 		}
 
-		// Create list value
-		auto attr_struct_type = LogicalType::STRUCT(
-		    {make_pair("element_name", LogicalType::VARCHAR), make_pair("element_path", LogicalType::VARCHAR),
-		     make_pair("attribute_name", LogicalType::VARCHAR), make_pair("attribute_value", LogicalType::VARCHAR),
-		     make_pair("line_number", LogicalType::BIGINT)});
-
-		Value list_value = Value::LIST(attr_struct_type, attr_values);
-
 		// Set result
-		result.SetValue(i, list_value);
+		result.SetValue(i, Value::LIST(attr_struct_type, attr_values));
 	}
 }
 
@@ -578,37 +666,34 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction("xml_well_formed", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLWellFormedFunction);
 	loader.RegisterFunction(xml_well_formed_varchar_function);
 
-	// Register xml_extract_text function with multiple overloads to handle string literals
+	// Register xml_extract_text function - returns LIST(VARCHAR) (PostgreSQL-compatible)
+	// Use list[1] or list_extract(list, 1) to get single value
 	ScalarFunctionSet xml_extract_text_functions("xml_extract_text");
 
-	// XML + VARCHAR
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
-	// XML + STRING_LITERAL (for direct string literals)
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR,
-	                   XMLExtractTextFunction));
-	// HTMLType + VARCHAR (use HTML-specific function)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                      LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
-	// HTMLType + STRING_LITERAL (use HTML-specific function)
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR,
-	                   HTMLExtractTextWithXPathFunction));
-	// XMLFragment + VARCHAR (for results from xml_extract_elements)
+	// XML + VARCHAR -> LIST(VARCHAR)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
+	// XML + STRING_LITERAL -> LIST(VARCHAR)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
+	// XMLFragment + VARCHAR -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                      LogicalType::VARCHAR, XMLExtractTextFunction));
-	// XMLFragment + STRING_LITERAL
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR,
-	                   XMLExtractTextFunction));
-	// VARCHAR + VARCHAR (compatibility)
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractTextFunction));
-	// VARCHAR + STRING_LITERAL (compatibility)
-	xml_extract_text_functions.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR,
-	                   XMLExtractTextFunction));
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
+	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
+	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
+	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
+	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
+	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListFunction));
 
 	loader.RegisterFunction(xml_extract_text_functions);
 
@@ -620,37 +705,42 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction("xml_extract_all_text", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractAllTextFunction);
 	loader.RegisterFunction(xml_extract_all_text_varchar_function);
 
-	// Register xml_extract_elements function as a function set
+	// Register xml_extract_elements function - returns LIST(XMLFragment) (PostgreSQL-compatible)
+	// Use list[1] or list_extract(list, 1) to get single value
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
 
-	// XML + VARCHAR
+	// XML + VARCHAR -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                          XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
-	// XML + STRING_LITERAL
-	xml_extract_elements_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(),
-	                   XMLExtractElementsFunction));
-	// HTML + VARCHAR
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// XML + STRING_LITERAL -> LIST(XMLFragment)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// HTML + VARCHAR -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                          XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
-	// HTML + STRING_LITERAL
-	xml_extract_elements_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(),
-	                   XMLExtractElementsFunction));
-	// XMLFragment + VARCHAR (for nested extraction)
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// HTML + STRING_LITERAL -> LIST(XMLFragment)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                          XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
-	// XMLFragment + STRING_LITERAL
-	xml_extract_elements_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
-	// VARCHAR + VARCHAR (compatibility)
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                          XMLTypes::XMLFragmentType(), XMLExtractElementsFunction));
-	// VARCHAR + STRING_LITERAL (compatibility)
-	xml_extract_elements_functions.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)}, XMLTypes::XMLFragmentType(),
-	                   XMLExtractElementsFunction));
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
+	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
+	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListFunction));
 
 	loader.RegisterFunction(xml_extract_elements_functions);
 
@@ -777,14 +867,23 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	});
 
 	// Register html_extract_text function with XPath support
+	// With XPath: returns LIST(VARCHAR) (PostgreSQL-compatible) - use list[1] to get single value
+	// Without XPath: returns VARCHAR (all text content concatenated)
 	ScalarFunctionSet html_extract_text_functions("html_extract_text");
+
+	// HTML only (no XPath) -> VARCHAR (all text concatenated, unchanged behavior)
 	html_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::VARCHAR, HTMLExtractTextFunction));
+
+	// HTML + VARCHAR XPath -> LIST(VARCHAR)
 	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                       LogicalType::VARCHAR, HTMLExtractTextWithXPathFunction));
-	html_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)}, LogicalType::VARCHAR,
-	                   HTMLExtractTextWithXPathFunction));
+	                                                       LogicalType::LIST(LogicalType::VARCHAR),
+	                                                       HTMLExtractTextListFunction));
+	// HTML + STRING_LITERAL XPath -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                                                       LogicalType::LIST(LogicalType::VARCHAR),
+	                                                       HTMLExtractTextListFunction));
+
 	loader.RegisterFunction(html_extract_text_functions);
 
 	// Register html_extract_links function
@@ -849,6 +948,44 @@ void XMLScalarFunctions::HTMLExtractTextWithXPathFunction(DataChunk &args, Expre
 		    std::string extracted_text = XMLUtils::ExtractHTMLTextByXPath(html_string, xpath_string);
 		    return StringVector::AddString(result, extracted_text);
 	    });
+}
+
+// Returns LIST(VARCHAR) of all matching HTML text content (PostgreSQL-compatible)
+void XMLScalarFunctions::HTMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &html_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	auto count = args.size();
+
+	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
+	UnifiedVectorFormat html_data;
+	UnifiedVectorFormat xpath_data;
+	html_vector.ToUnifiedFormat(count, html_data);
+	xpath_vector.ToUnifiedFormat(count, xpath_data);
+
+	auto html_strings = UnifiedVectorFormat::GetData<string_t>(html_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto html_idx = html_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
+
+		// Handle NULL values
+		if (!html_data.validity.RowIsValid(html_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value::LIST(LogicalType::VARCHAR, vector<Value>()));
+			continue;
+		}
+
+		std::string html_string = html_strings[html_idx].GetString();
+		std::string xpath_string = xpath_strings[xpath_idx].GetString();
+
+		// Return LIST of all matches
+		auto texts = XMLUtils::ExtractHTMLAllTextByXPath(html_string, xpath_string);
+		vector<Value> text_values;
+		for (const auto &text : texts) {
+			text_values.push_back(Value(text));
+		}
+		result.SetValue(i, Value::LIST(LogicalType::VARCHAR, text_values));
+	}
 }
 
 void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result) {

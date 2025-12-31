@@ -47,31 +47,31 @@ vol-abcdef1234567890a	500	in-use
 # PART 2: XPath with Namespaces (KNOWN LIMITATION)
 # ============================================================================
 
-# Test 2.1: Simple XPath fails on namespaced documents (returns empty)
+# Test 2.1: Simple XPath fails on namespaced documents (returns empty list)
 # This is the behavior the user reported - had to manually remove namespaces
 query I
-SELECT xml_extract_text(xml, '//requestId') = ''
+SELECT xml_extract_text(xml, '//requestId') = []
 FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
 ----
 true
 
-# Test 2.2: Same XPath works on non-namespaced documents
+# Test 2.2: Same XPath works on non-namespaced documents (returns list)
 query I
 SELECT xml_extract_text(xml, '//requestId')
 FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_no_ns.xml');
 ----
-abc12345-1234-5678-abcd-123456789012
+[abc12345-1234-5678-abcd-123456789012]
 
-# Test 2.3: WORKAROUND - Use local-name() for namespaced XPath queries
+# Test 2.3: WORKAROUND - Use local-name() for namespaced XPath queries (returns list)
 query I
 SELECT xml_extract_text(xml, '//*[local-name()="requestId"]')
 FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
 ----
-abc12345-1234-5678-abcd-123456789012
+[abc12345-1234-5678-abcd-123456789012]
 
-# Test 2.4: local-name() also works for nested elements
+# Test 2.4: local-name() also works for nested elements (use [1] to get first from list)
 query I
-SELECT xml_extract_text(xml, '//*[local-name()="volumeId"][1]')
+SELECT xml_extract_text(xml, '//*[local-name()="volumeId"][1]')[1]
 FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
 ----
 vol-049df61146c4d7901
@@ -90,13 +90,14 @@ true
 
 # Test 3.2: RECOMMENDED PATTERN - Hybrid approach for sibling + unnested records
 # Join read_xml_objects (for siblings via XPath) with read_xml (for record extraction)
+# Note: read_xml_objects returns 1 row, which cross-joins with 3 items
 query III
 SELECT
-  xml_extract_text(xml, '//*[local-name()="requestId"]') as requestId,
+  (SELECT xml_extract_text(x.xml, '//*[local-name()="requestId"]')[1]
+   FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml') x) as requestId,
   r.volumeId,
   r.size
-FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml'),
-     read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item') r
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item') r
 ORDER BY r.size
 LIMIT 3;
 ----

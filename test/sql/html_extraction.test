@@ -4,17 +4,17 @@
 
 require webbed
 
-# Test html_extract_text with simple HTML
+# Test html_extract_text with simple HTML (returns list)
 query I
 SELECT html_extract_text('<h1>Main Title</h1><p>Some content here.</p>', '//h1');
 ----
-Main Title
+[Main Title]
 
-# Test html_extract_text with multiple elements
+# Test html_extract_text with multiple elements (returns all matches as list)
 query I
 SELECT html_extract_text('<div><p>First</p><p>Second</p></div>', '//p');
 ----
-First
+[First, Second]
 
 # Test html_extract_links from HTML content
 query III
@@ -68,26 +68,26 @@ FROM html_extract_tables('<table><tr><td>Table1</td></tr></table><table><tr><td>
 0	0	[Table1]
 1	0	[Table2]
 
-# Test compatibility: XML functions should work on HTML type
+# Test compatibility: XML functions should work on HTML type (cast to VARCHAR, returns list)
 query I
-SELECT xml_extract_text('<div><span>HTML processed as XML</span></div>'::HTML, '//span');
+SELECT xml_extract_text('<div><span>HTML processed as XML</span></div>'::HTML::VARCHAR, '//span');
 ----
-HTML processed as XML
+[HTML processed as XML]
 
-# Test compatibility: xml_extract_elements should work on HTML
+# Test compatibility: xml_extract_elements should work on HTML (cast to VARCHAR, returns list)
 query I
-SELECT xml_extract_elements('<ul><li>Item 1</li><li>Item 2</li></ul>'::HTML, '//li');
+SELECT xml_extract_elements('<ul><li>Item 1</li><li>Item 2</li></ul>'::HTML::VARCHAR, '//li');
 ----
-<li>Item 1</li>
+[<li>Item 1</li>, <li>Item 2</li>]
 
-# Test HTML-specific XPath expressions
-query I  
+# Test HTML-specific XPath expressions (returns list)
+query I
 SELECT html_extract_text('<html><head><title>Page Title</title></head><body><h1>Header</h1></body></html>', '//title');
 ----
-Page Title
+[Page Title]
 
-# Test HTML with complex nested structure
+# Test HTML with complex nested structure (returns list)
 query I
 SELECT html_extract_text('<div><header><h1>Title</h1></header><main><p>Content here.</p></main></div>', '//h1');
 ----
-Title
+[Title]

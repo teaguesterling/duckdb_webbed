@@ -34,11 +34,11 @@ SELECT xml_well_formed('<invalid><mismatched></wrong>');
 ----
 false
 
-# Test xml_extract_text function
+# Test xml_extract_text function (returns list)
 query I
 SELECT xml_extract_text('<books><book><title>Test Book</title></book></books>', '//title');
 ----
-Test Book
+[Test Book]
 
 # Test xml_extract_all_text function
 query I
@@ -64,9 +64,9 @@ true
 query I
 SELECT xml_extract_text(xml_content, '//title') FROM xml_test;
 ----
-Database Systems
+[Database Systems]
 
 query I
 SELECT xml_extract_text(xml_content, '//author') FROM xml_test;
 ----
-John Smith
+[John Smith]

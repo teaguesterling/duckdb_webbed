@@ -36,13 +36,17 @@ LOAD webbed;
 SELECT * FROM 'data.xml';
 SELECT * FROM 'config/*.xml';
 
--- Parse and extract from XML content
+-- Parse and extract from XML content (returns LIST of all matches)
 SELECT xml_extract_text('<book><title>Database Guide</title></book>', '//title');
+-- Result: ["Database Guide"]
+
+-- Get single value using list indexing
+SELECT xml_extract_text('<book><title>Database Guide</title></book>', '//title')[1];
 -- Result: "Database Guide"
 
--- Parse and extract from HTML content  
+-- Parse and extract from HTML content (returns LIST of all matches)
 SELECT html_extract_text('<html><body><h1>Welcome</h1></body></html>', '//h1');
--- Result: "Welcome"
+-- Result: ["Welcome"]
 
 -- Convert between formats
 SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
@@ -77,9 +81,9 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `xml_extract_text(xml, xpath)` | Extract first text match using XPath | `SELECT xml_extract_text(xml, '//title')` |
+| `xml_extract_text(xml, xpath)` | Extract all text matches using XPath → LIST(VARCHAR) | `SELECT xml_extract_text(xml, '//title')[1]` |
 | `xml_extract_all_text(xml)` | Extract all text content | `SELECT xml_extract_all_text('<p>Hello <b>world</b></p>')` |
-| `xml_extract_elements(xml, xpath)` | Extract first element as struct | `SELECT xml_extract_elements(xml, '//item')` |
+| `xml_extract_elements(xml, xpath)` | Extract all elements → LIST(XMLFragment) | `SELECT xml_extract_elements(xml, '//item')[1]` |
 | `xml_extract_elements_string(xml, xpath)` | Extract all elements as text (newline-separated) | `SELECT xml_extract_elements_string(xml, '//item')` |
 | `xml_extract_attributes(xml, xpath)` | Extract attributes as structs | `SELECT xml_extract_attributes(xml, '//book')` |
 | `xml_extract_comments(xml)` | Extract comments with line numbers | `SELECT xml_extract_comments(xml)` |
@@ -89,8 +93,8 @@ SELECT xml_to_json('<person><name>John</name><age>30</age></person>');
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `html_extract_text(html)` | Extract all text from HTML | `SELECT html_extract_text(html)` |
-| `html_extract_text(html, xpath)` | Extract text from HTML using XPath | `SELECT html_extract_text(html, '//h1')` |
+| `html_extract_text(html)` | Extract all text from HTML → VARCHAR | `SELECT html_extract_text(html)` |
+| `html_extract_text(html, xpath)` | Extract text from HTML using XPath → LIST(VARCHAR) | `SELECT html_extract_text(html, '//h1')[1]` |
 | `html_extract_links(html)` | Extract all links with metadata | `SELECT html_extract_links('<a href="/">Home</a>')` |
 | `html_extract_images(html)` | Extract all images with metadata | `SELECT html_extract_images('<img src="pic.jpg" alt="Photo">')` |
 | `html_escape(text)` | Escape HTML special characters | `SELECT html_escape('<p>Hello</p>')` |
@@ -279,11 +283,11 @@ GROUP BY h.filename, t.Department;
 SELECT filename, xml_valid(xml) as is_valid
 FROM read_xml_objects('data/*.xml', filename=true);
 
--- Extract specific data with XPath
+-- Extract specific data with XPath (use [1] to get single value from LIST)
 SELECT
-    xml_extract_text(xml, '//book/title') as title,
-    xml_extract_text(xml, '//book/author') as author,
-    xml_extract_text(xml, '//book/@isbn') as isbn
+    xml_extract_text(xml, '//book/title')[1] as title,
+    xml_extract_text(xml, '//book/author')[1] as author,
+    xml_extract_text(xml, '//book/@isbn')[1] as isbn
 FROM read_xml_objects('catalog.xml');
 
 -- Convert XML catalog to JSON
@@ -307,10 +311,10 @@ SELECT
     columns
 FROM html_extract_tables(parse_html('<table><tr><th>Name</th><th>Age</th></tr><tr><td>John</td><td>30</td></tr></table>'));
 
--- Get page titles and headings
-SELECT 
-    html_extract_text(html, '//title') as page_title,
-    html_extract_text(html, '//h1') as main_heading
+-- Get page titles and headings (use [1] to get single value from LIST)
+SELECT
+    html_extract_text(html, '//title')[1] as page_title,
+    html_extract_text(html, '//h1')[1] as main_heading
 FROM read_html_objects('website/*.html');
 ```
 
@@ -629,23 +633,26 @@ read_xml('pattern',
 
 ### 🔍 **XPath Support**
 
-Full XPath 1.0 expressions are supported:
+Full XPath 1.0 expressions are supported. All XPath functions return LIST types (matching PostgreSQL's `xpath()` behavior):
 
 ```sql
--- Basic selection
-xml_extract_text(xml, '//book/title')
+-- Basic selection (returns LIST of all matches)
+xml_extract_text(xml, '//book/title')         -- Returns: ["Title1", "Title2", ...]
+
+-- Get single value using list indexing
+xml_extract_text(xml, '//book/title')[1]      -- Returns: "Title1"
 
 -- Attribute selection
-xml_extract_text(xml, '//book/@isbn')
+xml_extract_text(xml, '//book/@isbn')[1]
 
 -- Conditional selection
-xml_extract_text(xml, '//book[@category="fiction"]/title')
+xml_extract_text(xml, '//book[@category="fiction"]/title')[1]
 
 -- Position-based selection
-xml_extract_text(xml, '//book[1]/title')
+xml_extract_text(xml, '//book[1]/title')[1]
 
 -- Text node selection
-xml_extract_text(xml, '//book/title/text()')
+xml_extract_text(xml, '//book/title/text()')[1]
 ```
 
 **Namespace Handling in XPath:**
@@ -653,14 +660,14 @@ xml_extract_text(xml, '//book/title/text()')
 For documents with XML namespaces (e.g., `xmlns="http://example.com"`), use `local-name()` to match elements regardless of namespace:
 
 ```sql
--- Won't work on namespaced documents:
-xml_extract_text(xml, '//element')
+-- Won't work on namespaced documents (returns empty list):
+xml_extract_text(xml, '//element')              -- Returns: []
 
 -- Works with any namespace:
-xml_extract_text(xml, '//*[local-name()="element"]')
+xml_extract_text(xml, '//*[local-name()="element"]')[1]
 
 -- With predicates:
-xml_extract_text(xml, '//*[local-name()="item" and @id="123"]')
+xml_extract_text(xml, '//*[local-name()="item" and @id="123"]')[1]
 ```
 
 Note: `read_xml()` automatically strips namespaces during schema inference, so column names won't include namespace prefixes.

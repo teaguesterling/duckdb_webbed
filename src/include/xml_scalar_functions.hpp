@@ -16,10 +16,12 @@ private:
 
 	// Text extraction functions
 	static void XMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAllTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// Element extraction functions
 	static void XMLExtractElementsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLExtractElementsListFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractElementsStringFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLWrapFragmentFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAttributesFunction(DataChunk &args, ExpressionState &state, Vector &result);
@@ -45,6 +47,7 @@ private:
 	// HTML-specific extraction functions
 	static void HTMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTextWithXPathFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void HTMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result);

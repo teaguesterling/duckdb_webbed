@@ -301,6 +301,35 @@ std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::
 	return result;
 }
 
+std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath) {
+	std::vector<std::string> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (xpath_obj) {
+		if (xpath_obj->nodesetval) {
+			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+				xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+				if (node) {
+					xmlChar *content = xmlNodeGetContent(node);
+					if (content) {
+						results.push_back(std::string((const char *)content));
+						xmlFree(content);
+					}
+				}
+			}
+		}
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return results;
+}
+
 std::string XMLUtils::PrettyPrintXML(const std::string &xml_str) {
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid()) {
@@ -1260,6 +1289,67 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 	return fragment_xml;
 }
 
+std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath) {
+	std::vector<std::string> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			// Create a temporary document for dumping this node
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				// Copy the node to avoid ownership issues
+				xmlNodePtr copied_node = xmlCopyNode(node, 1); // 1 = recursive copy
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					// Dump the node as XML string
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						// Remove XML declaration from individual nodes
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							// Remove leading whitespace/newlines
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
+						// Remove trailing whitespace/newlines
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						results.push_back(node_xml);
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return results;
+}
+
 std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &node_name) {
 	// Use RAII-safe libxml2 document creation
 	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
@@ -1845,6 +1935,36 @@ std::string XMLUtils::ExtractHTMLTextByXPath(const std::string &html_str, const 
 
 	xmlXPathFreeObject(xpath_obj);
 	return text_content;
+}
+
+std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath) {
+	std::vector<std::string> results;
+
+	XMLDocRAII html_doc(html_str, true); // Use HTML parser
+	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
+		return results;
+	}
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLCharPtr content(xmlNodeGetContent(node));
+			if (content) {
+				results.push_back(std::string(reinterpret_cast<const char *>(content.get())));
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return results;
 }
 
 std::string XMLUtils::HTMLUnescape(const std::string &html_str) {

@@ -10,27 +10,27 @@ SELECT xml_valid(xml::VARCHAR) FROM read_xml_objects('test/xml/deep_hierarchy.xm
 ----
 true
 
-# Test extracting from deep hierarchy: organization name  
+# Test extracting from deep hierarchy: organization name (returns all matches as list)
 query I
 SELECT xml_extract_text(xml::VARCHAR, '//*[local-name()="division"]/*[local-name()="name"]')
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
-Technology Division
+[Technology Division, Operations Division]
 
-# Test deep nesting: extract manager details from 5+ levels deep
+# Test deep nesting: extract manager details from 5+ levels deep (use [1] for scalars)
 query II
-SELECT 
-    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="name"]'),
-    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="title"]')
+SELECT
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="name"]')[1],
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="team"]/*[local-name()="manager"]/*[local-name()="title"]')[1]
 FROM read_xml_objects('test/xml/deep_hierarchy.xml') LIMIT 1;
 ----
 Sarah Chen	Senior Engineering Manager
 
-# Test extracting from maximum depth: subtask details
+# Test extracting from maximum depth: subtask details (use [1] for scalars)
 query II
-SELECT 
-    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/description'),
-    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/time_spent')
+SELECT
+    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/description')[1],
+    xml_extract_text(xml::VARCHAR, '//subtask[@id="SUB001"]/time_spent')[1]
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 Research API Gateway solutions	8
@@ -98,11 +98,11 @@ FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true
 
-# Test extracting publication information (deeply nested academic data)
+# Test extracting publication information (deeply nested academic data) (use [1] for scalars)
 query II
-SELECT 
-    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="title"]'),
-    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="citations"]')
+SELECT
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="title"]')[1],
+    xml_extract_text(xml::VARCHAR, '//*[local-name()="publications"]/*[local-name()="publication"]/*[local-name()="citations"]')[1]
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 Deep Learning for Time Series Forecasting	127

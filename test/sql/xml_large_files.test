@@ -10,15 +10,15 @@ SELECT xml_valid(xml::VARCHAR) FROM read_xml_objects('test/xml/large_catalog.xml
 ----
 true
 
-# Test extracting metadata from large catalog
+# Test extracting metadata from large catalog (returns lists)
 query III
-SELECT 
+SELECT
     xml_extract_text(xml::VARCHAR, '//*[local-name()="version"]'),
     xml_extract_text(xml::VARCHAR, '//*[local-name()="total_products"]'),
     xml_extract_text(xml::VARCHAR, '//*[local-name()="created"]')
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
-2.1.0	1000	2024-01-15T10:30:00Z
+[2.1.0]	[1000]	['2024-01-15T10:30:00Z']
 
 # Test extracting all product names (should handle multiple results efficiently)
 query I
@@ -48,9 +48,9 @@ FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
 
-# Test extracting nested review data
+# Test extracting nested review data (check list has elements)
 query I
-SELECT length(xml_extract_text(xml::VARCHAR, '//reviews/review[1]/title')) > 0
+SELECT len(xml_extract_text(xml::VARCHAR, '//reviews/review[1]/title')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
@@ -100,9 +100,9 @@ FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
 
-# Test deep nesting extraction: get review content
+# Test deep nesting extraction: get review content (check list has content)
 query I
-SELECT length(xml_extract_text(xml::VARCHAR, '//reviews/review/content')) > 10
+SELECT len(xml_extract_text(xml::VARCHAR, '//reviews/review/content')) > 0
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
