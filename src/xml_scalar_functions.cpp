@@ -5,6 +5,9 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
+#include <regex>
+#include <set>
+
 namespace duckdb {
 
 void XMLScalarFunctions::XMLValidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -361,23 +364,175 @@ void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState 
 
 		auto namespaces = XMLUtils::ExtractNamespaces(xml_string);
 
-		// Create list of namespace structs
-		vector<Value> ns_values;
+		// Create MAP(VARCHAR, VARCHAR) with prefix -> uri mappings
+		vector<Value> keys;
+		vector<Value> values;
 
 		for (const auto &ns : namespaces) {
-			child_list_t<Value> ns_children;
-			ns_children.emplace_back("prefix", Value(ns.prefix));
-			ns_children.emplace_back("uri", Value(ns.uri));
-
-			ns_values.emplace_back(Value::STRUCT(ns_children));
+			// Use empty string for default namespace (no prefix)
+			keys.emplace_back(Value(ns.prefix.empty() ? "" : ns.prefix));
+			values.emplace_back(Value(ns.uri));
 		}
 
-		// Create list value
-		auto ns_struct_type =
-		    LogicalType::STRUCT({make_pair("prefix", LogicalType::VARCHAR), make_pair("uri", LogicalType::VARCHAR)});
+		// Create MAP value
+		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
+		result.SetValue(i, map_value);
+	}
+}
 
-		Value list_value = Value::LIST(ns_struct_type, ns_values);
+void XMLScalarFunctions::XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Returns a MAP of well-known namespace prefixes to their URIs
+	// This is a constant function that returns the same value for all rows
+
+	auto count = args.size();
+
+	// Define common namespace mappings (prefix -> URI)
+	static const vector<pair<string, string>> common_ns = {
+	    // XML core namespaces
+	    {"xml", "http://www.w3.org/XML/1998/namespace"},
+	    {"xmlns", "http://www.w3.org/2000/xmlns/"},
+
+	    // XML Schema
+	    {"xsi", "http://www.w3.org/2001/XMLSchema-instance"},
+	    {"xsd", "http://www.w3.org/2001/XMLSchema"},
+	    {"xs", "http://www.w3.org/2001/XMLSchema"},
+
+	    // Web standards
+	    {"xhtml", "http://www.w3.org/1999/xhtml"},
+	    {"svg", "http://www.w3.org/2000/svg"},
+	    {"xlink", "http://www.w3.org/1999/xlink"},
+	    {"mathml", "http://www.w3.org/1998/Math/MathML"},
+
+	    // Syndication
+	    {"atom", "http://www.w3.org/2005/Atom"},
+	    {"rss", "http://purl.org/rss/1.0/"},
+
+	    // Dublin Core
+	    {"dc", "http://purl.org/dc/elements/1.1/"},
+	    {"dcterms", "http://purl.org/dc/terms/"},
+
+	    // Semantic Web / RDF
+	    {"rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"},
+	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
+	    {"owl", "http://www.w3.org/2002/07/owl#"},
+	    {"skos", "http://www.w3.org/2004/02/skos/core#"},
+	    {"foaf", "http://xmlns.com/foaf/0.1/"},
+
+	    // Geospatial
+	    {"gml", "http://www.opengis.net/gml"},
+	    {"gml32", "http://www.opengis.net/gml/3.2"},
+	    {"kml", "http://www.opengis.net/kml/2.2"},
+	    {"gpx", "http://www.topografix.com/GPX/1/1"},
+	    {"georss", "http://www.georss.org/georss"},
+
+	    // SOAP / Web Services
+	    {"soap", "http://schemas.xmlsoap.org/soap/envelope/"},
+	    {"soap12", "http://www.w3.org/2003/05/soap-envelope"},
+	    {"wsdl", "http://schemas.xmlsoap.org/wsdl/"},
+
+	    // Office / Documents
+	    {"office", "urn:oasis:names:tc:opendocument:xmlns:office:1.0"},
+	    {"odt", "urn:oasis:names:tc:opendocument:xmlns:text:1.0"},
+	    {"ods", "urn:oasis:names:tc:opendocument:xmlns:spreadsheet:1.0"},
+
+	    // Other common namespaces
+	    {"xslt", "http://www.w3.org/1999/XSL/Transform"},
+	    {"exsl", "http://exslt.org/common"}};
+
+	// Build key and value vectors
+	vector<Value> keys;
+	vector<Value> values;
+	for (const auto &[prefix, uri] : common_ns) {
+		keys.emplace_back(Value(prefix));
+		values.emplace_back(Value(uri));
+	}
+
+	// Create the MAP value once
+	Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
+
+	// Set the same value for all rows
+	for (idx_t i = 0; i < count; i++) {
+		result.SetValue(i, map_value);
+	}
+}
+
+void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Detect namespace prefixes used in an XPath expression
+	// Returns LIST<VARCHAR> of unique prefixes found
+
+	auto &xpath_vector = args.data[0];
+	auto count = args.size();
+
+	// Regex pattern to match namespace prefixes in XPath
+	// Matches: prefix:name where prefix is NCName (valid XML name without colon)
+	// NCName pattern: [A-Za-z_][A-Za-z0-9._-]*
+	// We look for prefix: followed by a valid name character
+	// But we need to exclude axis specifiers like "child::", "descendant::", etc.
+	static const std::regex prefix_pattern(
+	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))",
+	    std::regex::optimize);
+
+	// XPath axes to exclude (these use :: not single :)
+	static const std::set<std::string> xpath_axes = {
+	    "ancestor",     "ancestor-or-self", "attribute", "child",      "descendant", "descendant-or-self",
+	    "following",    "following-sibling", "namespace", "parent",     "preceding",  "preceding-sibling",
+	    "self"};
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
+		std::string xpath = xpath_str.GetString();
+
+		// Find all prefixes
+		std::set<std::string> prefixes;
+		std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
+		std::sregex_iterator end;
+
+		while (iter != end) {
+			std::string prefix = (*iter)[1].str();
+			// Don't include XPath axis specifiers
+			if (xpath_axes.find(prefix) == xpath_axes.end()) {
+				prefixes.insert(prefix);
+			}
+			++iter;
+		}
+
+		// Create LIST<VARCHAR> result
+		vector<Value> prefix_values;
+		for (const auto &prefix : prefixes) {
+			prefix_values.emplace_back(Value(prefix));
+		}
+
+		Value list_value = Value::LIST(LogicalType::VARCHAR, prefix_values);
 		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::XMLMockNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Create mock namespace URIs for a list of prefixes
+	// Returns MAP<VARCHAR, VARCHAR> with prefix -> urn:mock:prefix mappings
+
+	auto &prefixes_vector = args.data[0];
+	auto count = args.size();
+
+	for (idx_t i = 0; i < count; i++) {
+		auto prefixes_value = prefixes_vector.GetValue(i);
+
+		vector<Value> keys;
+		vector<Value> values;
+
+		if (!prefixes_value.IsNull() && prefixes_value.type().id() == LogicalTypeId::LIST) {
+			auto &children = ListValue::GetChildren(prefixes_value);
+			for (const auto &child : children) {
+				if (!child.IsNull()) {
+					std::string prefix = child.ToString();
+					keys.emplace_back(Value(prefix));
+					values.emplace_back(Value("urn:mock:" + prefix));
+				}
+			}
+		}
+
+		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
+		result.SetValue(i, map_value);
 	}
 }
 
@@ -812,12 +967,30 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto xml_stats_function = ScalarFunction("xml_stats", {LogicalType::VARCHAR}, stats_struct_type, XMLStatsFunction);
 	loader.RegisterFunction(xml_stats_function);
 
-	// Register xml_namespaces function (returns LIST<STRUCT>)
-	auto namespace_struct_type =
-	    LogicalType::STRUCT({make_pair("prefix", LogicalType::VARCHAR), make_pair("uri", LogicalType::VARCHAR)});
-	auto xml_namespaces_function = ScalarFunction("xml_namespaces", {LogicalType::VARCHAR},
-	                                              LogicalType::LIST(namespace_struct_type), XMLNamespacesFunction);
+	// Register xml_namespaces function (returns MAP<VARCHAR, VARCHAR> with prefix -> uri mappings)
+	auto xml_namespaces_function =
+	    ScalarFunction("xml_namespaces", {LogicalType::VARCHAR},
+	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLNamespacesFunction);
 	loader.RegisterFunction(xml_namespaces_function);
+
+	// Register xml_common_namespaces function (returns MAP<VARCHAR, VARCHAR> of well-known namespace prefixes)
+	// This is a constant function that takes no arguments
+	auto xml_common_namespaces_function =
+	    ScalarFunction("xml_common_namespaces", {},
+	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLCommonNamespacesFunction);
+	loader.RegisterFunction(xml_common_namespaces_function);
+
+	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
+	auto xml_detect_prefixes_function =
+	    ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLDetectPrefixesFunction);
+	loader.RegisterFunction(xml_detect_prefixes_function);
+
+	// Register xml_mock_namespaces function (returns MAP<VARCHAR, VARCHAR> with mock URIs for prefixes)
+	auto xml_mock_namespaces_function =
+	    ScalarFunction("xml_mock_namespaces", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction);
+	loader.RegisterFunction(xml_mock_namespaces_function);
 
 	// Register xml_to_json function with optional named parameters
 	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR,

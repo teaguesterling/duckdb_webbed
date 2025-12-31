@@ -60,50 +60,50 @@ FROM (SELECT xml_stats('<catalog xmlns:book="http://example.com/book"><book:book
 
 # Test xml_namespaces with no namespaces
 query I
-SELECT length(xml_namespaces('<root><item>test</item></root>'));
+SELECT cardinality(xml_namespaces('<root><item>test</item></root>'));
 ----
 0
 
 # Test xml_namespaces with single namespace
 query I
-SELECT length(xml_namespaces('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>'));
+SELECT cardinality(xml_namespaces('<root xmlns:ns="http://example.com"><ns:item>test</ns:item></root>'));
 ----
 1
 
-# Test xml_namespaces namespace extraction
+# Test xml_namespaces namespace extraction (MAP returns key=prefix, value=uri via recursive unnest)
 query II
-SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item>test</book:item></root>')) as ns);
+SELECT unnest(map_entries(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item>test</book:item></root>')), recursive := true);
 ----
 book	http://example.com/book
 
 # Test xml_namespaces with default namespace
 query I
-SELECT length(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>'));
+SELECT cardinality(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>'));
 ----
 1
 
-# Test xml_namespaces with default namespace structure
+# Test xml_namespaces with default namespace structure (MAP uses empty string key for default namespace)
 query II
-SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>')) as ns);
+SELECT unnest(map_entries(xml_namespaces('<root xmlns="http://default.com"><item>test</item></root>')), recursive := true);
 ----
 (empty)	http://default.com
 
 # Test xml_namespaces with multiple namespaces
 query I
-SELECT length(xml_namespaces('<root xmlns:book="http://example.com/book" xmlns:author="http://example.com/author"><book:item>test</book:item><author:name>John</author:name></root>'));
+SELECT cardinality(xml_namespaces('<root xmlns:book="http://example.com/book" xmlns:author="http://example.com/author"><book:item>test</book:item><author:name>John</author:name></root>'));
 ----
 2
 
-# Test xml_namespaces multiple namespace extraction
+# Test xml_namespaces multiple namespace extraction (MAP returns key=prefix, value=uri via recursive unnest)
 query II
-SELECT ns.prefix, ns.uri FROM (SELECT unnest(xml_namespaces('<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:item/><b:item/></root>')) as ns) ORDER BY ns.prefix;
+SELECT * FROM (SELECT unnest(map_entries(xml_namespaces('<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:item/><b:item/></root>')), recursive := true)) ORDER BY 1;
 ----
 a	http://a.com
 b	http://b.com
 
 # Test xml_namespaces with mixed default and prefixed
 query I
-SELECT length(xml_namespaces('<root xmlns="http://default.com" xmlns:pref="http://prefixed.com"><item/><pref:item/></root>'));
+SELECT cardinality(xml_namespaces('<root xmlns="http://default.com" xmlns:pref="http://prefixed.com"><item/><pref:item/></root>'));
 ----
 2
 
@@ -127,13 +127,13 @@ SELECT (xml_stats('<catalog><section><book id="1"><title>Book 1</title><author n
 
 # Test xml_namespaces error handling with invalid XML
 query I
-SELECT length(xml_namespaces('<invalid>unclosed'));
+SELECT cardinality(xml_namespaces('<invalid>unclosed'));
 ----
 0
 
-# Test xml_stats error handling with invalid XML  
+# Test xml_stats error handling with invalid XML
 query IIIII
-SELECT 
+SELECT
     s.element_count,
     s.attribute_count,
     s.max_depth,
@@ -142,3 +142,227 @@ SELECT
 FROM (SELECT xml_stats('<invalid>unclosed') as s);
 ----
 0	0	0	0	0
+
+# ============================================================================
+# MAP-specific tests for xml_namespaces
+# ============================================================================
+
+# Test direct MAP key access with map_extract_value
+query I
+SELECT map_extract_value(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item/></root>'), 'book');
+----
+http://example.com/book
+
+# Test map_keys to get all namespace prefixes
+query I
+SELECT map_keys(xml_namespaces('<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:item/><b:item/></root>'));
+----
+[a, b]
+
+# Test map_values to get all namespace URIs
+query I
+SELECT map_values(xml_namespaces('<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:item/><b:item/></root>'));
+----
+['http://a.com', 'http://b.com']
+
+# Test map_contains to check for namespace prefix
+query I
+SELECT map_contains(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item/></root>'), 'book');
+----
+true
+
+# Test map_contains for non-existent prefix
+query I
+SELECT map_contains(xml_namespaces('<root xmlns:book="http://example.com/book"><book:item/></root>'), 'author');
+----
+false
+
+# Test combining maps with map_concat (useful for namespace merging)
+query I
+SELECT map_extract_value(
+    map_concat(
+        xml_namespaces('<root xmlns:a="http://a.com"><a:item/></root>'),
+        MAP {'custom': 'http://custom.com'}
+    ),
+    'custom'
+);
+----
+http://custom.com
+
+# Test empty MAP for document with no namespaces
+query I
+SELECT xml_namespaces('<root><item>test</item></root>') = MAP {};
+----
+true
+
+# Test default namespace key (empty string)
+query I
+SELECT map_extract_value(xml_namespaces('<root xmlns="http://default.com"><item/></root>'), '');
+----
+http://default.com
+
+# ============================================================================
+# xml_common_namespaces() function tests
+# ============================================================================
+
+# Test xml_common_namespaces returns a MAP
+query I
+SELECT typeof(xml_common_namespaces());
+----
+MAP(VARCHAR, VARCHAR)
+
+# Test xml_common_namespaces contains well-known prefixes
+query I
+SELECT map_contains(xml_common_namespaces(), 'xsd');
+----
+true
+
+# Test xml_common_namespaces xsd URI
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'xsd');
+----
+http://www.w3.org/2001/XMLSchema
+
+# Test xml_common_namespaces contains gml (geospatial)
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'gml');
+----
+http://www.opengis.net/gml
+
+# Test xml_common_namespaces contains svg (web standards)
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'svg');
+----
+http://www.w3.org/2000/svg
+
+# Test xml_common_namespaces contains rdf (semantic web)
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'rdf');
+----
+http://www.w3.org/1999/02/22-rdf-syntax-ns#
+
+# Test xml_common_namespaces contains dc (Dublin Core)
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'dc');
+----
+http://purl.org/dc/elements/1.1/
+
+# Test xml_common_namespaces contains soap (web services)
+query I
+SELECT map_extract_value(xml_common_namespaces(), 'soap');
+----
+http://schemas.xmlsoap.org/soap/envelope/
+
+# Test xml_common_namespaces can be merged with document namespaces
+query I
+SELECT map_extract_value(
+    map_concat(
+        xml_common_namespaces(),
+        xml_namespaces('<root xmlns:custom="http://my.custom.ns"><custom:item/></root>')
+    ),
+    'custom'
+);
+----
+http://my.custom.ns
+
+# Test xml_common_namespaces has reasonable size (20+ well-known namespaces)
+query I
+SELECT cardinality(xml_common_namespaces()) >= 20;
+----
+true
+
+# ============================================================================
+# xml_detect_prefixes() function tests
+# ============================================================================
+
+# Test xml_detect_prefixes with single prefix
+query I
+SELECT xml_detect_prefixes('//gml:posList');
+----
+[gml]
+
+# Test xml_detect_prefixes with multiple prefixes
+query I
+SELECT xml_detect_prefixes('//gml:data | //svg:path');
+----
+[gml, svg]
+
+# Test xml_detect_prefixes with no prefixes
+query I
+SELECT xml_detect_prefixes('//item/text()');
+----
+[]
+
+# Test xml_detect_prefixes with attribute prefix
+query I
+SELECT xml_detect_prefixes('//@xlink:href');
+----
+[xlink]
+
+# Test xml_detect_prefixes with mixed element and attribute prefixes
+query I
+SELECT xml_detect_prefixes('//svg:a[@xlink:href]');
+----
+[svg, xlink]
+
+# Test xml_detect_prefixes with predicate prefixes
+query I
+SELECT xml_detect_prefixes('//item[ns:value > 10]');
+----
+[ns]
+
+# Test xml_detect_prefixes excludes XPath axis specifiers
+query I
+SELECT xml_detect_prefixes('//ancestor::div');
+----
+[]
+
+# Test xml_detect_prefixes with complex XPath
+query I
+SELECT xml_detect_prefixes('//atom:entry/atom:link[@rel="alternate"]/@href | //rss:item/rss:link');
+----
+[atom, rss]
+
+# ============================================================================
+# xml_mock_namespaces() function tests
+# ============================================================================
+
+# Test xml_mock_namespaces with single prefix
+query I
+SELECT xml_mock_namespaces(['gml']);
+----
+{gml='urn:mock:gml'}
+
+# Test xml_mock_namespaces with multiple prefixes
+query I
+SELECT map_extract_value(xml_mock_namespaces(['gml', 'svg']), 'gml');
+----
+urn:mock:gml
+
+# Test xml_mock_namespaces with empty list
+query I
+SELECT xml_mock_namespaces([]);
+----
+{}
+
+# Test xml_mock_namespaces combined with xml_detect_prefixes
+query I
+SELECT map_extract_value(
+    xml_mock_namespaces(xml_detect_prefixes('//custom:element')),
+    'custom'
+);
+----
+urn:mock:custom
+
+# Test combining mock namespaces with common namespaces
+# Common namespace should take precedence when merged
+query I
+SELECT map_extract_value(
+    map_concat(
+        xml_mock_namespaces(['gml', 'custom']),
+        xml_common_namespaces()
+    ),
+    'gml'
+);
+----
+http://www.opengis.net/gml

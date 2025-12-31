@@ -44,7 +44,7 @@ true
 
 # Test namespace handling in deep hierarchy
 query I
-SELECT length(xml_namespaces(xml::VARCHAR)) >= 2
+SELECT cardinality(xml_namespaces(xml::VARCHAR)) >= 2
 FROM read_xml_objects('test/xml/deep_hierarchy.xml');
 ----
 true

@@ -136,7 +136,7 @@ vol-abcdef1234567890a	500	in-use
 
 # Test 5.1: xml_namespaces shows declared namespaces
 query I
-SELECT length(xml_namespaces(xml::VARCHAR)) >= 1
+SELECT cardinality(xml_namespaces(xml::VARCHAR)) >= 1
 FROM read_xml_objects('test/xml/github_issues/aws_ec2_volumes_simple.xml');
 ----
 true
@@ -209,3 +209,132 @@ WHERE volumeId = 'vol-049df61146c4d7901';
 ----
 true
 
+# ============================================================================
+# PART 9: XPath with Declared Namespace Prefixes
+# ============================================================================
+#
+# PROBLEM: libxml2's XPath engine does NOT auto-register namespace prefixes
+# from the document. Even with `xmlns:gml="http://..."` declared, XPath
+# `//gml:posList` fails with "undefined namespace prefix" because the XPath
+# context doesn't know about the `gml` prefix.
+#
+# EXPECTED BEHAVIOR: When a namespace is declared in the XML document (e.g.,
+# xmlns:gml="http://..."), XPath expressions using that prefix should work.
+#
+# CURRENT BEHAVIOR (BUG): XPath with namespace prefixes returns empty list
+# even when the namespace is properly declared in the document.
+#
+# WORKAROUNDS:
+# 1. Use local-name(): //*[local-name()="posList"]
+# 2. Use contains(): //*[contains(local-name(), "posList")]
+#
+# FIX REQUIRED: Auto-register namespace declarations from the document
+# into the XPath context using xmlXPathRegisterNs()
+#
+# References:
+# - https://grantm.github.io/perl-libxml-by-example/namespaces.html
+# - https://www.thecodingforums.com/threads/xpath-and-namespaces-a-newbie-question.169475/
+
+# Test 9.1: XPath with declared namespace prefix SHOULD work (currently fails)
+# EXPECTED: [1 2 3, 4 5 6, 7 8 9]
+# ACTUAL BUG: [] (empty list)
+query I
+SELECT xml_extract_text('<root xmlns:gml="http://www.opengis.net/gml">
+  <gml:posList>1 2 3</gml:posList>
+  <nested>
+    <gml:posList>4 5 6</gml:posList>
+    <moreNested>
+      <gml:posList>7 8 9</gml:posList>
+    </moreNested>
+  </nested>
+</root>', '//gml:posList');
+----
+[1 2 3, 4 5 6, 7 8 9]
+
+# Test 9.2: XPath with declared default namespace and prefix SHOULD work
+# EXPECTED: [Content]
+query I
+SELECT xml_extract_text('<root xmlns:ns="http://example.com/ns">
+  <ns:item>Content</ns:item>
+</root>', '//ns:item');
+----
+[Content]
+
+# Test 9.3: Multiple declared namespaces should all work
+# EXPECTED: [GML Data, SVG Path]
+query I
+SELECT xml_extract_text('<root xmlns:gml="http://www.opengis.net/gml" xmlns:svg="http://www.w3.org/2000/svg">
+  <gml:data>GML Data</gml:data>
+  <svg:path>SVG Path</svg:path>
+</root>', '//gml:data | //svg:path');
+----
+[GML Data, SVG Path]
+
+# Test 9.4: Nested elements with declared namespace
+query I
+SELECT xml_extract_text('<root xmlns:app="http://example.com/app">
+  <app:level1>
+    <app:level2>
+      <app:level3>Deep Value</app:level3>
+    </app:level2>
+  </app:level1>
+</root>', '//app:level3');
+----
+[Deep Value]
+
+# Test 9.5: Attributes with namespace prefix should work
+query I
+SELECT xml_extract_text('<root xmlns:xlink="http://www.w3.org/1999/xlink">
+  <link xlink:href="http://example.com">Link Text</link>
+</root>', '//@xlink:href');
+----
+['http://example.com']
+
+# Test 9.6: WORKAROUND - local-name() still works (for reference)
+query I
+SELECT xml_extract_text('<root xmlns:gml="http://www.opengis.net/gml">
+  <gml:posList>1 2 3</gml:posList>
+  <nested>
+    <gml:posList>4 5 6</gml:posList>
+  </nested>
+</root>', '//*[local-name()="posList"]');
+----
+[1 2 3, 4 5 6]
+
+# ============================================================================
+# PART 10: Undeclared Namespace Prefixes (Edge Case)
+# ============================================================================
+#
+# When XML uses a prefix WITHOUT declaring it (e.g., <gml:posList> without
+# xmlns:gml="..."), this is technically malformed XML. libxml2 parses it in
+# recovery mode, treating "gml:posList" as a literal element name with a colon.
+#
+# EXPECTED BEHAVIOR: For undeclared prefixes, XPath should either:
+# a) Treat the colon as part of the element name (current behavior), OR
+# b) Raise a clear error about undeclared namespace prefix
+#
+# The local-name() workaround with the full prefixed name works in this case.
+
+# Test 10.1: Undeclared namespace - XPath returns empty (expected - no namespace to match)
+query I
+SELECT xml_extract_text('<root>
+  <gml:posList>1 2 3</gml:posList>
+</root>', '//gml:posList') = [];
+----
+true
+
+# Test 10.2: Undeclared namespace - local-name includes the prefix
+query I
+SELECT xml_extract_text('<root>
+  <gml:posList>1 2 3</gml:posList>
+</root>', '//*[local-name()="gml:posList"]');
+----
+[1 2 3]
+
+# Test 10.3: Undeclared namespace - contains workaround
+query I
+SELECT xml_extract_text('<root>
+  <gml:posList>1 2 3</gml:posList>
+</root>', '//*[contains(local-name(), "posList")]');
+----
+[1 2 3]

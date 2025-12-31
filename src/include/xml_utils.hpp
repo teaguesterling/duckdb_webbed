@@ -134,6 +134,28 @@ struct XMLStats {
 	int64_t namespace_count;
 };
 
+// Namespace handling modes for XPath functions
+enum class NamespaceMode {
+	STRICT,  // Default: auto-register declared namespaces, raise error on undefined prefix
+	IGNORE,  // Auto-register declared namespaces, silently fail on undefined prefix (legacy behavior)
+	AUTO     // Auto-register declared namespaces + common namespaces + mock undefined prefixes
+};
+
+// Configuration for namespace handling in XPath functions
+struct NamespaceConfig {
+	NamespaceMode mode = NamespaceMode::STRICT;
+	case_insensitive_map_t<string> custom_namespaces;  // prefix -> uri mappings
+
+	// Check if we have explicit namespace mappings
+	bool HasCustomNamespaces() const {
+		return !custom_namespaces.empty();
+	}
+};
+
+// Parse namespaces parameter from various input types
+// Accepts: 'strict', 'ignore', 'auto' (strings), MAP(VARCHAR, VARCHAR), LIST<STRUCT>, STRUCT
+NamespaceConfig ParseNamespacesParam(const Value &param);
+
 // HTML-specific structures
 struct HTMLLink {
 	std::string text;

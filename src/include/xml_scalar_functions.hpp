@@ -43,6 +43,9 @@ private:
 	// Analysis functions
 	static void XMLStatsFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLDetectPrefixesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLMockNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// HTML-specific extraction functions
 	static void HTMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);

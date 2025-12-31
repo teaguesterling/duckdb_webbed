@@ -36,7 +36,7 @@ true
 
 # Test namespace extraction from large document
 query I
-SELECT length(xml_namespaces(xml::VARCHAR)) >= 2
+SELECT cardinality(xml_namespaces(xml::VARCHAR)) >= 2
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----
 true
@@ -80,7 +80,7 @@ true
 query III
 SELECT 
     (xml_stats(xml::VARCHAR)).element_count > 20,
-    length(xml_namespaces(xml::VARCHAR)) >= 2,
+    cardinality(xml_namespaces(xml::VARCHAR)) >= 2,
     xml_valid(xml::VARCHAR)
 FROM read_xml_objects('test/xml/large_catalog.xml');
 ----

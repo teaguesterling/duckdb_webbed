@@ -5,6 +5,9 @@
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
 #include <libxml/entities.h>
+#include <libxml/xpathInternals.h>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <functional>
 #include <set>
@@ -46,6 +49,40 @@ void XMLSilentXPathErrorHandler(void *ctx, const xmlError *error) {
 	// This is thread-safe because it's set per-context, not globally
 }
 
+// Helper function to register all namespace declarations from the document into the XPath context.
+// This enables XPath expressions like "//gml:posList" to work when xmlns:gml="..." is declared.
+// Without this, libxml2's XPath engine requires manual registration of each namespace prefix.
+// See: https://grantm.github.io/perl-libxml-by-example/namespaces.html
+static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_ctx) {
+	if (!doc || !xpath_ctx) {
+		return;
+	}
+
+	xmlNodePtr root = xmlDocGetRootElement(doc);
+	if (!root) {
+		return;
+	}
+
+	// Get all in-scope namespaces for the root element
+	xmlNsPtr *nsList = xmlGetNsList(doc, root);
+	if (!nsList) {
+		return;
+	}
+
+	// Register each namespace with a prefix
+	for (int i = 0; nsList[i] != NULL; i++) {
+		xmlNsPtr ns = nsList[i];
+		// Only register namespaces that have a prefix (skip default namespace)
+		// Default namespace (prefix=NULL) cannot be used in XPath 1.0 expressions directly
+		if (ns->prefix && ns->href) {
+			xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+		}
+	}
+
+	// Free the array (but not the namespace structures themselves, they belong to the document)
+	xmlFree(nsList);
+}
+
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Reset error state
 	xml_parse_error_occurred = false;
@@ -72,6 +109,8 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 		// Set silent error handler on XPath context (thread-safe, per-context)
 		if (xpath_ctx) {
 			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+			// Register all namespace declarations from the document so XPath with prefixes works
+			RegisterDocumentNamespaces(doc, xpath_ctx);
 		}
 	}
 }
@@ -109,6 +148,8 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// Set silent error handler on XPath context (thread-safe, per-context)
 		if (xpath_ctx) {
 			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+			// Register all namespace declarations from the document so XPath with prefixes works
+			RegisterDocumentNamespaces(doc, xpath_ctx);
 		}
 	}
 }
@@ -2034,6 +2075,98 @@ std::string XMLUtils::HTMLEscape(const std::string &text) {
 
 	std::string result = std::string(reinterpret_cast<const char *>(encoded.get()));
 	return result;
+}
+
+// ============================================================================
+// Namespace Parameter Parsing
+// ============================================================================
+
+NamespaceConfig ParseNamespacesParam(const Value &param) {
+	NamespaceConfig config;
+
+	if (param.IsNull()) {
+		// Default: STRICT mode
+		config.mode = NamespaceMode::STRICT;
+		return config;
+	}
+
+	auto &param_type = param.type();
+
+	// Handle string mode specifiers: 'strict', 'ignore', 'auto'
+	if (param_type.id() == LogicalTypeId::VARCHAR) {
+		std::string mode_str = param.GetValue<string>();
+		// Convert to lowercase for comparison
+		std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
+
+		if (mode_str == "strict") {
+			config.mode = NamespaceMode::STRICT;
+		} else if (mode_str == "ignore") {
+			config.mode = NamespaceMode::IGNORE;
+		} else if (mode_str == "auto") {
+			config.mode = NamespaceMode::AUTO;
+		} else {
+			throw InvalidInputException(
+			    "Invalid namespace mode '%s'. Expected 'strict', 'ignore', 'auto', or a MAP/STRUCT of namespace mappings.",
+			    mode_str);
+		}
+		return config;
+	}
+
+	// Handle MAP(VARCHAR, VARCHAR) - canonical form
+	// MAP is stored as LIST of STRUCT{key, value}
+	if (param_type.id() == LogicalTypeId::MAP) {
+		auto &children = MapValue::GetChildren(param);
+		for (const auto &child : children) {
+			if (!child.IsNull() && child.type().id() == LogicalTypeId::STRUCT) {
+				auto &struct_children = StructValue::GetChildren(child);
+				// MAP struct has 'key' at index 0 and 'value' at index 1
+				if (struct_children.size() >= 2) {
+					if (!struct_children[0].IsNull() && !struct_children[1].IsNull()) {
+						std::string prefix = struct_children[0].ToString();
+						std::string uri = struct_children[1].ToString();
+						config.custom_namespaces[prefix] = uri;
+					}
+				}
+			}
+		}
+		// When explicit mappings are provided, use STRICT mode by default
+		config.mode = NamespaceMode::STRICT;
+		return config;
+	}
+
+	// Handle LIST<STRUCT(prefix VARCHAR, uri VARCHAR)> - legacy form
+	if (param_type.id() == LogicalTypeId::LIST) {
+		auto &children = ListValue::GetChildren(param);
+		for (const auto &child : children) {
+			if (!child.IsNull() && child.type().id() == LogicalTypeId::STRUCT) {
+				auto &struct_children = StructValue::GetChildren(child);
+				// Expect struct with 'prefix' and 'uri' or similar fields
+				if (struct_children.size() >= 2) {
+					std::string prefix = struct_children[0].ToString();
+					std::string uri = struct_children[1].ToString();
+					config.custom_namespaces[prefix] = uri;
+				}
+			}
+		}
+		config.mode = NamespaceMode::STRICT;
+		return config;
+	}
+
+	// Handle single STRUCT(prefix VARCHAR, uri VARCHAR) - convenience form
+	if (param_type.id() == LogicalTypeId::STRUCT) {
+		auto &struct_children = StructValue::GetChildren(param);
+		if (struct_children.size() >= 2) {
+			std::string prefix = struct_children[0].ToString();
+			std::string uri = struct_children[1].ToString();
+			config.custom_namespaces[prefix] = uri;
+		}
+		config.mode = NamespaceMode::STRICT;
+		return config;
+	}
+
+	throw InvalidInputException(
+	    "Invalid namespace parameter type. Expected 'strict', 'ignore', 'auto' (string), "
+	    "MAP(VARCHAR, VARCHAR), LIST<STRUCT>, or STRUCT.");
 }
 
 } // namespace duckdb

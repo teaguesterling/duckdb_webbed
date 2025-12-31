@@ -110,7 +110,7 @@ SELECT
     product_name,
     price,
     (xml_stats(full_xml)).element_count as xml_complexity,
-    length(xml_namespaces(full_xml)) as namespace_count
+    cardinality(xml_namespaces(full_xml)) as namespace_count
 FROM (
     SELECT
         xml_extract_text(product_data, '//@id')[1] as product_id,

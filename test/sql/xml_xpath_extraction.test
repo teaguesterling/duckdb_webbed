@@ -94,11 +94,11 @@ SELECT length(xml_extract_elements_string('<catalog><book><title>Book1</title></
 ----
 true
 
-# Test xml_extract_text with namespace-aware XPath (returns empty list without ns registration)
+# Test xml_extract_text with namespace-aware XPath (namespaces are now auto-registered)
 query I
 SELECT xml_extract_text('<root xmlns:ns="http://example.com"><ns:item>Namespaced Content</ns:item></root>', '//ns:item');
 ----
-[]
+[Namespaced Content]
 
 # Test xml_extract_elements with root element (returns list, use [1] for first)
 query I
