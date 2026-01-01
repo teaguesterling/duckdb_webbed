@@ -27,6 +27,9 @@ static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or 
                                  "or self::p or self::pre or self::blockquote or self::ul or self::ol "
                                  "or self::table or self::hr or self::img or self::figure]";
 
+// XPath query for frontmatter script blocks
+static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
+
 void DocBlockFunctions::HtmlToDocBlocksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
@@ -60,11 +63,37 @@ void DocBlockFunctions::HtmlToDocBlocksFunction(DataChunk &args, ExpressionState
 			continue;
 		}
 
-		// Execute XPath query
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST BLOCK_XPATH, xpath_ctx);
-
 		vector<Value> blocks;
 		int32_t block_order = 0;
+
+		// First, extract frontmatter script blocks
+		xmlXPathObjectPtr frontmatter_obj = xmlXPathEvalExpression(BAD_CAST FRONTMATTER_XPATH, xpath_ctx);
+		if (frontmatter_obj && frontmatter_obj->nodesetval) {
+			for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
+				xmlNodePtr node = frontmatter_obj->nodesetval->nodeTab[j];
+				if (!node) {
+					continue;
+				}
+				// Extract text content - preserve exactly for lossless round-trip
+				std::string content = GetNodeTextContent(node);
+				// Trim leading/trailing newlines that we add in doc_blocks_to_html
+				if (!content.empty() && content.front() == '\n') {
+					content.erase(0, 1);
+				}
+				if (!content.empty() && content.back() == '\n') {
+					content.pop_back();
+				}
+				std::map<std::string, std::string> attrs;
+				blocks.push_back(DocBlockTypes::CreateBlock(DocBlockTypes::TYPE_METADATA, content,
+				                                            DocBlockTypes::ENCODING_YAML, attrs, block_order++));
+			}
+		}
+		if (frontmatter_obj) {
+			xmlXPathFreeObject(frontmatter_obj);
+		}
+
+		// Execute XPath query for block-level elements
+		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST BLOCK_XPATH, xpath_ctx);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
 			for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
@@ -369,8 +398,10 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 				// Pass through raw content
 				html << content;
 			} else if (block_type == DocBlockTypes::TYPE_METADATA) {
-				// Output as HTML comment
-				html << "<!-- " << XMLUtils::HTMLEscape(content) << " -->";
+				// Output as script block with frontmatter MIME type for round-trip preservation
+				html << "<script type=\"" << DocBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
+				html << content; // No escaping - preserve YAML exactly
+				html << "\n</script>";
 			}
 		}
 

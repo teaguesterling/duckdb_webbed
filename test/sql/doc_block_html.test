@@ -185,3 +185,84 @@ query I
 SELECT len(html_to_doc_blocks('<h1>Title</h1>'::VARCHAR));
 ----
 1
+
+# =============================================================================
+# Frontmatter/Metadata Block Tests (Issue #56)
+# =============================================================================
+
+# Test frontmatter script extraction
+query I
+SELECT (html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].block_type;
+----
+metadata
+
+# Test frontmatter encoding is yaml
+query I
+SELECT (html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].encoding;
+----
+yaml
+
+# Test frontmatter content extraction
+query I
+SELECT (html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].content;
+----
+title: Test
+
+# Test frontmatter block_order is 0
+query I
+SELECT (html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[1].block_order;
+----
+0
+
+# Test content block_order follows frontmatter
+query I
+SELECT (html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[2].block_order;
+----
+1
+
+# Test multi-line YAML frontmatter preservation (verify content contains expected lines)
+query I
+SELECT length((html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test
+author: John
+tags:
+  - doc
+  - test</script>'))[1].content) > 30;
+----
+true
+
+# Test frontmatter contains expected YAML keys
+query I
+SELECT contains((html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test
+author: John</script>'))[1].content, 'author: John');
+----
+true
+
+# Test frontmatter round-trip (verify structure is preserved)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), 'application/vnd.frontmatter+yaml');
+----
+true
+
+# Test frontmatter round-trip contains heading
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), '<h1>Title</h1>');
+----
+true
+
+# Test frontmatter round-trip contains YAML content
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), 'title: Test');
+----
+true
+
+# Test only regular scripts are ignored (not frontmatter type)
+query I
+SELECT len(html_to_doc_blocks('<script>console.log("hi")</script><h1>Title</h1>'));
+----
+1
+
+# Test document with only frontmatter
+query I
+SELECT len(html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'));
+----
+1

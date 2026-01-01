@@ -69,6 +69,9 @@ public:
 	static constexpr const char *ENCODING_HTML = "html";
 	static constexpr const char *ENCODING_XML = "xml";
 
+	// MIME type for frontmatter in HTML (RFC 9512 compliant)
+	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
+
 	// Helper to create an attributes MAP from a std::map
 	static Value CreateAttributesMap(const std::map<std::string, std::string> &attrs) {
 		vector<Value> keys;
