@@ -1,6 +1,6 @@
 # name: test/sql/html_basic_functions.test
 # description: Test basic HTML functions that should work with current XML infrastructure
-# group: [xml]
+# group: [sql]
 
 require webbed
 

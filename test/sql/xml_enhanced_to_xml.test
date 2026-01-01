@@ -1,6 +1,6 @@
 # name: test/sql/xml_enhanced_to_xml.test
 # description: Test enhanced to_xml() function with complex type support
-# group: [xml]
+# group: [sql]
 
 require webbed
 

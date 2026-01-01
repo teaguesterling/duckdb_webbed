@@ -1,6 +1,6 @@
 # name: test/sql/xml_large_files.test
 # description: Test XML extension with large files for performance and memory handling
-# group: [xml]
+# group: [sql]
 
 require webbed
 

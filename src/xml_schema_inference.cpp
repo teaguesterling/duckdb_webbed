@@ -23,8 +23,7 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 
 // Helper: Collect all child elements with a specific name from a parent node
 void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::string &child_name,
-                                              const XMLSchemaOptions &options,
-                                              std::vector<xmlNodePtr> &result) {
+                                              const XMLSchemaOptions &options, std::vector<xmlNodePtr> &result) {
 	if (!parent) {
 		return;
 	}
@@ -82,8 +81,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	// Calculate remaining depth for column introspection:
 	// max_depth=0: root is record (depth 0), columns at depth 1, remaining = 0-1 = -1 (no depth to introspect)
 	// max_depth=1: children are records (depth 1), columns at depth 2, remaining = 1-2 = -1 (no depth to introspect)
-	// max_depth=2: children are records (depth 1), columns at depth 2, remaining = 2-2 = 0 (can see columns but nested become XML)
-	// max_depth=3: children are records (depth 1), columns at depth 2, remaining = 3-2 = 1 (can introspect 1 level deep)
+	// max_depth=2: children are records (depth 1), columns at depth 2, remaining = 2-2 = 0 (can see columns but nested
+	// become XML) max_depth=3: children are records (depth 1), columns at depth 2, remaining = 3-2 = 1 (can introspect
+	// 1 level deep)
 	int remaining_depth = effective_depth - 2;
 
 	// If remaining_depth < 0, we don't have depth budget to look inside records
@@ -120,7 +120,7 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 
 // Phase 1: Identify Record Elements
 std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
-                                                                     const XMLSchemaOptions &options) {
+                                                                   const XMLSchemaOptions &options) {
 	std::vector<xmlNodePtr> record_elements;
 
 	// Special case: max_depth=0 means root itself is the only record
@@ -140,16 +140,14 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 
 		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
 		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos &&
-		    xpath_expr.find('[') == std::string::npos &&
+		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
 		    xpath_expr.find('@') == std::string::npos) {
 			// Simple tag name - use local-name() for namespace-agnostic matching
 			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
 		} else if (xpath_expr.substr(0, 2) == "//") {
 			// XPath starting with // - check if it's just a simple tag name after //
 			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos &&
-			    tag_part.find('[') == std::string::npos &&
+			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
 			    tag_part.find('@') == std::string::npos) {
 				// Simple tag name after // - use local-name()
 				xpath_expr = "//*[local-name()='" + tag_part + "']";
@@ -198,8 +196,8 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 }
 
 // Phase 2: Identify Columns
-std::unordered_map<std::string, ColumnAnalysis> XMLSchemaInference::IdentifyColumns(
-    const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options) {
+std::unordered_map<std::string, ColumnAnalysis>
+XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options) {
 
 	std::unordered_map<std::string, ColumnAnalysis> columns;
 
@@ -320,7 +318,7 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-                                                 const XMLSchemaOptions &options) {
+                                                const XMLSchemaOptions &options) {
 
 	// Attributes are always VARCHAR (or type-detected if enabled)
 	if (column.is_attribute) {
@@ -618,25 +616,21 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
 		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos &&
-		    xpath_expr.find('[') == std::string::npos &&
+		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
 		    xpath_expr.find('@') == std::string::npos) {
 			// Simple tag name - use local-name() for namespace-agnostic matching
 			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
 		} else if (xpath_expr.substr(0, 2) == "//") {
 			// XPath starting with // - check if it's just a simple tag name after //
 			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos &&
-			    tag_part.find('[') == std::string::npos &&
+			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
 			    tag_part.find('@') == std::string::npos) {
 				// Simple tag name after // - use local-name()
 				xpath_expr = "//*[local-name()='" + tag_part + "']";
 			}
 		}
 
-
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath_expr.c_str(), xml_doc.xpath_ctx);
-
 
 		if (xpath_obj && xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -652,9 +646,7 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 		// Use XPath to find the specified root element
 		std::string xpath = "//" + options.root_element;
 
-
 		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
-
 
 		if (xpath_obj && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			root = xpath_obj->nodesetval->nodeTab[0];
@@ -715,8 +707,8 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 	// Create a special pattern for record-level attributes if any exist
 	if (!record_attributes.empty()) {
-		std::string record_element_name = record_elements.empty() ? "record" :
-		                                   std::string((const char *)record_elements[0]->name);
+		std::string record_element_name =
+		    record_elements.empty() ? "record" : std::string((const char *)record_elements[0]->name);
 		auto &record_pattern = pattern_map[record_element_name];
 		record_pattern.name = record_element_name;
 		record_pattern.attribute_counts = record_attributes;
@@ -1200,133 +1192,133 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 		for (const auto &column : schema) {
 			Value value;
 
-				if (column.is_attribute) {
-					// Extract attribute value
-					std::string attr_name = column.name;
-					// Remove element prefix if present (e.g., "employee_id" -> "id")
-					size_t underscore_pos = attr_name.find('_');
-					if (underscore_pos != std::string::npos) {
-						attr_name = attr_name.substr(underscore_pos + 1);
-					}
+			if (column.is_attribute) {
+				// Extract attribute value
+				std::string attr_name = column.name;
+				// Remove element prefix if present (e.g., "employee_id" -> "id")
+				size_t underscore_pos = attr_name.find('_');
+				if (underscore_pos != std::string::npos) {
+					attr_name = attr_name.substr(underscore_pos + 1);
+				}
 
-					xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
-					if (attr_value) {
-						std::string str_value = (const char *)attr_value;
-						value = ConvertToValue(str_value, column.type);
-						xmlFree(attr_value);
-					} else {
-						value = Value(); // NULL
-					}
+				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
+				if (attr_value) {
+					std::string str_value = (const char *)attr_value;
+					value = ConvertToValue(str_value, column.type);
+					xmlFree(attr_value);
 				} else {
-					// Extract element text content
-					xmlNodePtr child = current->children;
-					std::string element_text;
+					value = Value(); // NULL
+				}
+			} else {
+				// Extract element text content
+				xmlNodePtr child = current->children;
+				std::string element_text;
 
-					// Special handling for LIST columns - collect ALL matching children
-					if (column.type.id() == LogicalTypeId::LIST) {
-						vector<Value> list_values;
-						auto element_type = ListType::GetChildType(column.type);
+				// Special handling for LIST columns - collect ALL matching children
+				if (column.type.id() == LogicalTypeId::LIST) {
+					vector<Value> list_values;
+					auto element_type = ListType::GetChildType(column.type);
 
-						// Collect all children with matching name
-						for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
-							if (child_iter->type == XML_ELEMENT_NODE &&
-							    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
-								// Extract this list element
-								Value element_value = ExtractValueFromNode(child_iter, element_type);
-								list_values.push_back(element_value);
-							}
+					// Collect all children with matching name
+					for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
+						if (child_iter->type == XML_ELEMENT_NODE &&
+						    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
+							// Extract this list element
+							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							list_values.push_back(element_value);
 						}
-
-						if (!list_values.empty()) {
-							value = Value::LIST(element_type, list_values);
-						} else {
-							value = Value(); // Empty list becomes NULL
-						}
-						// Skip the rest of the loop since we've handled this column
-						row.push_back(value);
-						continue;
 					}
 
-					while (child) {
-						if (child->type == XML_ELEMENT_NODE &&
-						    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
+					if (!list_values.empty()) {
+						value = Value::LIST(element_type, list_values);
+					} else {
+						value = Value(); // Empty list becomes NULL
+					}
+					// Skip the rest of the loop since we've handled this column
+					row.push_back(value);
+					continue;
+				}
 
-							// Check if this element has child elements (container) or just text
-							bool has_element_children = false;
-							for (xmlNodePtr grandchild = child->children; grandchild; grandchild = grandchild->next) {
-								if (grandchild->type == XML_ELEMENT_NODE) {
-									has_element_children = true;
-									break;
-								}
+				while (child) {
+					if (child->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
+
+						// Check if this element has child elements (container) or just text
+						bool has_element_children = false;
+						for (xmlNodePtr grandchild = child->children; grandchild; grandchild = grandchild->next) {
+							if (grandchild->type == XML_ELEMENT_NODE) {
+								has_element_children = true;
+								break;
+							}
+						}
+
+						if (has_element_children) {
+							// Container element - check for structured types first
+							if (column.type.id() == LogicalTypeId::STRUCT) {
+								// Use structured extraction for STRUCT types
+								value = ExtractValueFromNode(child, column.type);
+								element_text = ""; // Clear element_text to avoid double processing
+								break;
 							}
 
-							if (has_element_children) {
-								// Container element - check for structured types first
-								if (column.type.id() == LogicalTypeId::STRUCT) {
-									// Use structured extraction for STRUCT types
-									value = ExtractValueFromNode(child, column.type);
-									element_text = ""; // Clear element_text to avoid double processing
-									break;
-								}
+							// Check for XML[] type
+							if (XMLTypes::IsXMLArrayType(column.type)) {
+								value = ExtractXMLArrayFromNode(child);
+								element_text = ""; // Clear element_text to avoid double processing
+								break;
+							}
 
-								// Check for XML[] type
-								if (XMLTypes::IsXMLArrayType(column.type)) {
-									value = ExtractXMLArrayFromNode(child);
-									element_text = ""; // Clear element_text to avoid double processing
-									break;
-								}
+							// Fall back to XML/XMLFragment format for unstructured types
+							bool use_fragment = (column.type.HasAlias() && column.type.GetAlias() == "xmlfragment");
 
-								// Fall back to XML/XMLFragment format for unstructured types
-								bool use_fragment = (column.type.HasAlias() && column.type.GetAlias() == "xmlfragment");
-
-								if (use_fragment) {
-									// XMLFragment: return unwrapped child elements
-									xmlBufferPtr buffer = xmlBufferCreate();
-									if (buffer) {
-										for (xmlNodePtr grandchild = child->children; grandchild;
-										     grandchild = grandchild->next) {
-											if (grandchild->type == XML_ELEMENT_NODE) {
-												xmlNodeDump(buffer, grandchild->doc, grandchild, 0, 1);
-											}
+							if (use_fragment) {
+								// XMLFragment: return unwrapped child elements
+								xmlBufferPtr buffer = xmlBufferCreate();
+								if (buffer) {
+									for (xmlNodePtr grandchild = child->children; grandchild;
+									     grandchild = grandchild->next) {
+										if (grandchild->type == XML_ELEMENT_NODE) {
+											xmlNodeDump(buffer, grandchild->doc, grandchild, 0, 1);
 										}
-										// RAII: Copy the content before freeing the buffer
-										const xmlChar *content = xmlBufferContent(buffer);
-										if (content) {
-											element_text = std::string((const char *)content);
-										}
-										xmlBufferFree(buffer);
 									}
-								} else {
-									// XML: return wrapped content (current behavior)
-									xmlBufferPtr buffer = xmlBufferCreate();
-									if (buffer) {
-										xmlNodeDump(buffer, child->doc, child, 0, 1);
-										// RAII: Copy the content before freeing the buffer
-										const xmlChar *content = xmlBufferContent(buffer);
-										if (content) {
-											element_text = std::string((const char *)content);
-										}
-										xmlBufferFree(buffer);
+									// RAII: Copy the content before freeing the buffer
+									const xmlChar *content = xmlBufferContent(buffer);
+									if (content) {
+										element_text = std::string((const char *)content);
 									}
+									xmlBufferFree(buffer);
 								}
 							} else {
-								// Leaf element - return text content
-								xmlChar *text_content = xmlNodeGetContent(child);
-								if (text_content) {
-									element_text = CleanTextContent((const char *)text_content);
-									xmlFree(text_content);
+								// XML: return wrapped content (current behavior)
+								xmlBufferPtr buffer = xmlBufferCreate();
+								if (buffer) {
+									xmlNodeDump(buffer, child->doc, child, 0, 1);
+									// RAII: Copy the content before freeing the buffer
+									const xmlChar *content = xmlBufferContent(buffer);
+									if (content) {
+										element_text = std::string((const char *)content);
+									}
+									xmlBufferFree(buffer);
 								}
 							}
-							break;
+						} else {
+							// Leaf element - return text content
+							xmlChar *text_content = xmlNodeGetContent(child);
+							if (text_content) {
+								element_text = CleanTextContent((const char *)text_content);
+								xmlFree(text_content);
+							}
 						}
-						child = child->next;
+						break;
 					}
-
-					// Only convert text value if we haven't already extracted a structured value
-					if (value.IsNull()) {
-						value = ConvertToValue(element_text, column.type);
-					}
+					child = child->next;
 				}
+
+				// Only convert text value if we haven't already extracted a structured value
+				if (value.IsNull()) {
+					value = ConvertToValue(element_text, column.type);
+				}
+			}
 
 			row.push_back(value);
 		}
@@ -1555,7 +1547,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 
 				xmlNodePtr child = node->children;
 				while (child) {
-					if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					if (child->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Extract each matching child element
 						Value element_value = ExtractValueFromNode(child, element_type);
 						list_values.push_back(element_value);
@@ -1571,7 +1564,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				// Field is not a LIST - extract only the first matching child
 				xmlNodePtr child = node->children;
 				while (child) {
-					if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					if (child->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Found matching child element - extract recursively
 						field_value = ExtractValueFromNode(child, field_type);
 						found = true;

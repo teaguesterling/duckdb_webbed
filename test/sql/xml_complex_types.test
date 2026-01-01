@@ -1,6 +1,6 @@
 # name: test/sql/xml_complex_types.test
 # description: Test complex type mappings between DuckDB types and XML content
-# group: [xml]
+# group: [sql]
 
 require webbed
 

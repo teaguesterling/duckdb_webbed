@@ -1,6 +1,6 @@
 # name: test/sql/xml_xpath_extraction.test
 # description: Test XPath-based XML extraction functions
-# group: [xml]
+# group: [sql]
 
 require webbed
 

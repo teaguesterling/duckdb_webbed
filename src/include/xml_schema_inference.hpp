@@ -25,16 +25,16 @@ struct XMLSchemaOptions {
 	int32_t sample_size = 50; // Number of elements to sample for inference
 
 	// Attribute handling (aligned with xml_to_json)
-	std::string attr_mode = "columns";   // 'columns' | 'prefixed' | 'map' | 'discard'
-	std::string attr_prefix = "@";       // Prefix for attributes when attr_mode='prefixed'
+	std::string attr_mode = "columns"; // 'columns' | 'prefixed' | 'map' | 'discard'
+	std::string attr_prefix = "@";     // Prefix for attributes when attr_mode='prefixed'
 
 	// Content handling (aligned with xml_to_json)
-	std::string text_key = "#text";      // Key for mixed text content in structured types
+	std::string text_key = "#text";       // Key for mixed text content in structured types
 	std::string tagname_key = "#tagname"; // Key for element tag names in heterogeneous records
-	std::string namespaces = "strip";    // Namespace handling: 'strip' | 'expand' | 'keep'
-	std::string empty_elements = "null"; // How to handle empty elements: 'null' | 'string' | 'object'
-	bool preserve_mixed_content = false; // Handle elements with both text and children
-	bool unnest_as_columns = true;       // True: flatten nested elements as columns, False: preserve as structs
+	std::string namespaces = "strip";     // Namespace handling: 'strip' | 'expand' | 'keep'
+	std::string empty_elements = "null";  // How to handle empty elements: 'null' | 'string' | 'object'
+	bool preserve_mixed_content = false;  // Handle elements with both text and children
+	bool unnest_as_columns = true;        // True: flatten nested elements as columns, False: preserve as structs
 
 	// Type detection
 	bool temporal_detection = true; // Detect DATE/TIME/TIMESTAMP
@@ -42,10 +42,11 @@ struct XMLSchemaOptions {
 	bool boolean_detection = true;  // Detect boolean values
 
 	// Collection handling
-	double array_threshold = 0.8; // Minimum homogeneity for arrays (80%)
-	int32_t max_array_depth = 3;  // Maximum nested array depth
+	double array_threshold = 0.8;    // Minimum homogeneity for arrays (80%)
+	int32_t max_array_depth = 3;     // Maximum nested array depth
 	std::string record_element = ""; // XPath or tag name for elements that should be rows (e.g., "//item" or "item")
-	std::string force_list = "";     // Comma-separated list of element names that should always be LIST type (like xml_to_json)
+	std::string force_list =
+	    ""; // Comma-separated list of element names that should always be LIST type (like xml_to_json)
 
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
@@ -194,9 +195,9 @@ public:
 private:
 	// 3-phase schema inference helpers
 	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
-	                                                       const XMLSchemaOptions &options);
-	static std::unordered_map<std::string, ColumnAnalysis> IdentifyColumns(
-	    const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
+	                                                      const XMLSchemaOptions &options);
+	static std::unordered_map<std::string, ColumnAnalysis>
+	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
 	                                   const XMLSchemaOptions &options);
 
@@ -211,8 +212,7 @@ private:
 
 	// Collect all child elements with a specific name from a parent node into the result vector.
 	// Handles namespace stripping based on options.
-	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name,
-	                                 const XMLSchemaOptions &options,
+	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name, const XMLSchemaOptions &options,
 	                                 std::vector<xmlNodePtr> &result);
 
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);

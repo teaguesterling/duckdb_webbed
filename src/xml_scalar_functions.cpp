@@ -112,7 +112,7 @@ void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionS
 
 // Returns LIST(VARCHAR) with custom namespace mappings
 void XMLScalarFunctions::XMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                   Vector &result) {
+                                                                  Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto &ns_vector = args.data[2];
@@ -192,7 +192,7 @@ void XMLScalarFunctions::XMLExtractElementsListFunction(DataChunk &args, Express
 
 // Returns LIST(XMLFragment) with custom namespace mappings
 void XMLScalarFunctions::XMLExtractElementsListWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                       Vector &result) {
+                                                                      Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto &ns_vector = args.data[2];
@@ -250,7 +250,7 @@ void XMLScalarFunctions::XMLExtractElementsStringFunction(DataChunk &args, Expre
 
 // Returns elements as string with custom namespace mappings
 void XMLScalarFunctions::XMLExtractElementsStringWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                         Vector &result) {
+                                                                        Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto &ns_vector = args.data[2];
@@ -281,7 +281,8 @@ void XMLScalarFunctions::XMLExtractElementsStringWithNamespacesFunction(DataChun
 		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
 
 		// Extract with custom namespaces
-		std::string fragment_xml = XMLUtils::ExtractXMLFragmentAll(xml_string, xpath_string, ns_config.custom_namespaces);
+		std::string fragment_xml =
+		    XMLUtils::ExtractXMLFragmentAll(xml_string, xpath_string, ns_config.custom_namespaces);
 		result.SetValue(i, Value(fragment_xml));
 	}
 }
@@ -363,7 +364,7 @@ void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, Expressio
 
 // Returns LIST<STRUCT> of attributes with custom namespace mappings
 void XMLScalarFunctions::XMLExtractAttributesWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                     Vector &result) {
+                                                                    Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto &ns_vector = args.data[2];
@@ -652,13 +653,12 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 	// We look for prefix: followed by a valid name character
 	// But we need to exclude axis specifiers like "child::", "descendant::", etc.
 	static const std::regex prefix_pattern(
-	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))",
-	    std::regex::optimize);
+	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))", std::regex::optimize);
 
 	// XPath axes to exclude (these use :: not single :)
 	static const std::set<std::string> xpath_axes = {
-	    "ancestor",     "ancestor-or-self", "attribute", "child",      "descendant", "descendant-or-self",
-	    "following",    "following-sibling", "namespace", "parent",     "preceding",  "preceding-sibling",
+	    "ancestor",  "ancestor-or-self",  "attribute", "child",  "descendant", "descendant-or-self",
+	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
 	    "self"};
 
 	for (idx_t i = 0; i < count; i++) {
@@ -1013,25 +1013,25 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                      LogicalType::LIST(LogicalType::VARCHAR),
 	                                                      XMLExtractTextListFunction));
 	// XML + STRING_LITERAL -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	xml_extract_text_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + VARCHAR -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
 	                                                      LogicalType::LIST(LogicalType::VARCHAR),
 	                                                      XMLExtractTextListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	xml_extract_text_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
 	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                                      LogicalType::LIST(LogicalType::VARCHAR),
 	                                                      XMLExtractTextListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
-	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	xml_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 
 	// 3-argument variants with namespaces MAP
 	auto ns_map_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
@@ -1063,33 +1063,33 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
 	                                                          XMLExtractElementsListFunction));
 	// XML + STRING_LITERAL -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + VARCHAR -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
 	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
 	                                                          XMLExtractElementsListFunction));
 	// HTML + STRING_LITERAL -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
 	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
 	                                                          XMLExtractElementsListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
 	                                                          XMLExtractElementsListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 
 	// 3-argument variants with namespaces MAP
 	// XML + VARCHAR + MAP -> LIST(XMLFragment)
@@ -1110,10 +1110,12 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	xml_extract_elements_string_functions.AddFunction(ScalarFunction(
 	    {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction));
 	// 3-argument variants with namespaces MAP
-	xml_extract_elements_string_functions.AddFunction(ScalarFunction(
-	    {XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR, XMLExtractElementsStringWithNamespacesFunction));
-	xml_extract_elements_string_functions.AddFunction(ScalarFunction(
-	    {LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR, XMLExtractElementsStringWithNamespacesFunction));
+	xml_extract_elements_string_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
+	                   XMLExtractElementsStringWithNamespacesFunction));
+	xml_extract_elements_string_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
+	                   XMLExtractElementsStringWithNamespacesFunction));
 	loader.RegisterFunction(xml_extract_elements_string_functions);
 
 	// Register xml_wrap_fragment function (returns XML)
@@ -1195,14 +1197,14 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Register xml_common_namespaces function (returns MAP<VARCHAR, VARCHAR> of well-known namespace prefixes)
 	// This is a constant function that takes no arguments
 	auto xml_common_namespaces_function =
-	    ScalarFunction("xml_common_namespaces", {},
-	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLCommonNamespacesFunction);
+	    ScalarFunction("xml_common_namespaces", {}, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR),
+	                   XMLCommonNamespacesFunction);
 	loader.RegisterFunction(xml_common_namespaces_function);
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
-	    ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLDetectPrefixesFunction);
+	    ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                   XMLDetectPrefixesFunction);
 	loader.RegisterFunction(xml_detect_prefixes_function);
 
 	// Register xml_mock_namespaces function (returns MAP<VARCHAR, VARCHAR> with mock URIs for prefixes)
@@ -1272,13 +1274,13 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                       LogicalType::LIST(LogicalType::VARCHAR),
 	                                                       HTMLExtractTextListFunction));
 	// HTML + STRING_LITERAL XPath -> LIST(VARCHAR)
-	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                                                       LogicalType::LIST(LogicalType::VARCHAR),
-	                                                       HTMLExtractTextListFunction));
-	// HTML + XPath + namespaces -> LIST(VARCHAR)
 	html_extract_text_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(LogicalType::VARCHAR),
-	                   HTMLExtractTextListWithNamespacesFunction));
+	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction));
+	// HTML + XPath + namespaces -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type},
+	                                                       LogicalType::LIST(LogicalType::VARCHAR),
+	                                                       HTMLExtractTextListWithNamespacesFunction));
 
 	loader.RegisterFunction(html_extract_text_functions);
 
@@ -1386,7 +1388,7 @@ void XMLScalarFunctions::HTMLExtractTextListFunction(DataChunk &args, Expression
 
 // Returns LIST(VARCHAR) of all matching HTML text content with custom namespace mappings
 void XMLScalarFunctions::HTMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                    Vector &result) {
+                                                                   Vector &result) {
 	auto &html_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto &ns_vector = args.data[2];

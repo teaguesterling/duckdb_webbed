@@ -139,15 +139,15 @@ struct XMLStats {
 
 // Namespace handling modes for XPath functions
 enum class NamespaceMode {
-	STRICT,  // Default: auto-register declared namespaces, raise error on undefined prefix
-	IGNORE,  // Auto-register declared namespaces, silently fail on undefined prefix (legacy behavior)
-	AUTO     // Auto-register declared namespaces + common namespaces + mock undefined prefixes
+	STRICT, // Default: auto-register declared namespaces, raise error on undefined prefix
+	IGNORE, // Auto-register declared namespaces, silently fail on undefined prefix (legacy behavior)
+	AUTO    // Auto-register declared namespaces + common namespaces + mock undefined prefixes
 };
 
 // Configuration for namespace handling in XPath functions
 struct NamespaceConfig {
 	NamespaceMode mode = NamespaceMode::STRICT;
-	case_insensitive_map_t<string> custom_namespaces;  // prefix -> uri mappings
+	case_insensitive_map_t<string> custom_namespaces; // prefix -> uri mappings
 
 	// Check if we have explicit namespace mappings
 	bool HasCustomNamespaces() const {

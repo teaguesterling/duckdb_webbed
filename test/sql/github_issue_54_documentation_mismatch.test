@@ -1,6 +1,7 @@
 # name: test/sql/github_issue_54_documentation_mismatch.test
 # description: Test read_xml and read_xml_objects parameters match documentation
 # group: [sql]
+
 #
 # GitHub Issue #54: Documentation mismatch
 # https://github.com/teaguesterling/duckdb_webbed/issues/54

@@ -1,6 +1,6 @@
 # name: test/sql/xml_document_analysis.test
 # description: Test XML document analysis functions (xml_stats, xml_namespaces)
-# group: [xml]
+# group: [sql]
 
 require webbed
 

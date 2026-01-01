@@ -1,6 +1,6 @@
 # name: test/sql/xml_hybrid_schemas.test
 # description: Test hybrid schemas with mixed flattened DuckDB columns and XML columns
-# group: [xml]
+# group: [sql]
 
 require webbed
 

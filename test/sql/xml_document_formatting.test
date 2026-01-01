@@ -1,6 +1,6 @@
 # name: test/sql/xml_document_formatting.test
 # description: Test XML document formatting functions (xml_pretty_print, xml_minify)
-# group: [xml]
+# group: [sql]
 
 require webbed
 

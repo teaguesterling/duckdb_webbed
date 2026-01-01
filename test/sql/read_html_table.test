@@ -1,6 +1,6 @@
 # name: test/sql/read_html_table.test
 # description: Test read_html table function for reading HTML files
-# group: [xml]
+# group: [sql]
 
 require webbed
 
