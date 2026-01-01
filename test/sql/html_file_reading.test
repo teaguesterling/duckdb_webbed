@@ -1,6 +1,6 @@
-# name: test/sql/html_file_reading.test  
+# name: test/sql/html_file_reading.test
 # description: Test reading HTML files and processing them
-# group: [xml]
+# group: [sql]
 
 require webbed
 

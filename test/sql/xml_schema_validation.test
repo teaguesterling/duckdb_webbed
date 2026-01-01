@@ -1,6 +1,6 @@
 # name: test/sql/xml_schema_validation.test
 # description: Test XML schema validation function
-# group: [xml]
+# group: [sql]
 
 require webbed
 

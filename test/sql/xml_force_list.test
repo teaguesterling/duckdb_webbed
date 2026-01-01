@@ -1,6 +1,6 @@
 # name: test/sql/xml_force_list.test
 # description: Test xml_to_json with schema parameters (force_list, attr_prefix, text_key, namespaces, xmlns_key, empty_elements)
-# group: [xml]
+# group: [sql]
 
 require webbed
 

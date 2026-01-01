@@ -1,6 +1,6 @@
 # name: test/sql/xml_schema_errors.test
 # description: Test xml_to_json error handling and edge cases with schema parameters
-# group: [xml]
+# group: [sql]
 
 require webbed
 

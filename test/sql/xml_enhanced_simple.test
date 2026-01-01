@@ -1,6 +1,6 @@
 # name: test/sql/xml_enhanced_simple.test
 # description: Simple tests for enhanced XML functionality
-# group: [xml]
+# group: [sql]
 
 require webbed
 

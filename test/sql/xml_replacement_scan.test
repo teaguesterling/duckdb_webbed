@@ -1,4 +1,4 @@
-# name: test/sql/xml_replacement_scan.test  
+# name: test/sql/xml_replacement_scan.test
 # description: Test XML replacement scan functionality (direct file querying)
 # group: [sql]
 

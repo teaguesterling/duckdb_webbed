@@ -1,6 +1,7 @@
 # name: test/sql/github_issue_55_xml_extract_attributes.test
 # description: Test xml_extract_attributes with various element types and workflows
 # group: [sql]
+
 #
 # GitHub Issue #55: DuckDB crashes with segmentation fault when running xml_extract_attributes
 # https://github.com/teaguesterling/duckdb_webbed/issues/55

@@ -1,6 +1,6 @@
 # name: test/sql/xml_function_fixes.test
 # description: Test that xml() function no longer returns toy output and works properly
-# group: [xml]
+# group: [sql]
 
 require webbed
 

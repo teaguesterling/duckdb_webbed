@@ -75,6 +75,15 @@ This file tracks known issues where tests have been updated to reflect current (
 **Breaking Change**: Return type changed from VARCHAR/XMLFragment to LIST(VARCHAR)/LIST(XMLFragment)
 **Migration**: Use list indexing `[1]` to get single value: `xml_extract_text(xml, '//title')[1]`
 
+### XPath with Namespace Prefixes Now Works (Issue #4 related)
+**Status**: ✅ FIXED
+**Description**: XPath expressions with namespace prefixes (e.g., `//gml:posList`) now work when the namespace is declared in the document (e.g., `xmlns:gml="http://..."`)
+**Root Cause**: libxml2's XPath engine requires namespace prefixes to be explicitly registered using `xmlXPathRegisterNs()`. Previously, even declared namespaces weren't registered with the XPath context.
+**Fix**: Added `RegisterDocumentNamespaces()` helper that auto-registers all namespace declarations from the document into the XPath context using `xmlGetNsList()` and `xmlXPathRegisterNs()`
+**References**:
+- https://grantm.github.io/perl-libxml-by-example/namespaces.html
+- https://gnome.pages.gitlab.gnome.org/libxml2/devhelp/libxml2-xpathInternals.html
+
 ## Summary
 
 **Total Issues**: 6 items requiring fixes

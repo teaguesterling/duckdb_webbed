@@ -2421,9 +2421,9 @@ NamespaceConfig ParseNamespacesParam(const Value &param) {
 		} else if (mode_str == "auto") {
 			config.mode = NamespaceMode::AUTO;
 		} else {
-			throw InvalidInputException(
-			    "Invalid namespace mode '%s'. Expected 'strict', 'ignore', 'auto', or a MAP/STRUCT of namespace mappings.",
-			    mode_str);
+			throw InvalidInputException("Invalid namespace mode '%s'. Expected 'strict', 'ignore', 'auto', or a "
+			                            "MAP/STRUCT of namespace mappings.",
+			                            mode_str);
 		}
 		return config;
 	}
@@ -2480,9 +2480,8 @@ NamespaceConfig ParseNamespacesParam(const Value &param) {
 		return config;
 	}
 
-	throw InvalidInputException(
-	    "Invalid namespace parameter type. Expected 'strict', 'ignore', 'auto' (string), "
-	    "MAP(VARCHAR, VARCHAR), LIST<STRUCT>, or STRUCT.");
+	throw InvalidInputException("Invalid namespace parameter type. Expected 'strict', 'ignore', 'auto' (string), "
+	                            "MAP(VARCHAR, VARCHAR), LIST<STRUCT>, or STRUCT.");
 }
 
 } // namespace duckdb

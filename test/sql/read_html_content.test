@@ -1,6 +1,6 @@
-# name: test/sql/parse_html_content.test
+# name: test/sql/read_html_content.test
 # description: Test parse_html function for parsing HTML content directly
-# group: [xml]
+# group: [sql]
 
 require webbed
 

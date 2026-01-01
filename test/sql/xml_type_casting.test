@@ -1,6 +1,6 @@
 # name: test/sql/xml_type_casting.test
 # description: Test XML type registration and casting functionality
-# group: [xml]
+# group: [sql]
 
 require webbed
 

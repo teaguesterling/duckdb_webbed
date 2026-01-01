@@ -1,6 +1,6 @@
 # name: test/sql/xml_validation.test
 # description: Test basic XML validation functions
-# group: [xml]
+# group: [sql]
 
 require webbed
 

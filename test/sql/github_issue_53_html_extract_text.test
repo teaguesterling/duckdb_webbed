@@ -1,6 +1,7 @@
 # name: test/sql/github_issue_53_html_extract_text.test
 # description: Test html_extract_text UTF-8 support and multiple element matching
 # group: [sql]
+
 #
 # GitHub Issue #53: How to extract html tag content with UTF-8 support?
 # https://github.com/teaguesterling/duckdb_webbed/issues/53

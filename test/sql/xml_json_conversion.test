@@ -1,6 +1,6 @@
 # name: test/sql/xml_json_conversion.test
 # description: Test XML-JSON conversion functions
-# group: [xml]
+# group: [sql]
 
 require webbed
 

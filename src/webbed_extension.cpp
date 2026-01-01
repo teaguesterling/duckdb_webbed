@@ -5,6 +5,7 @@
 #include "xml_scalar_functions.hpp"
 #include "xml_reader_functions.hpp"
 #include "xml_utils.hpp"
+#include "doc_block_functions.hpp"
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/main/config.hpp"
@@ -25,6 +26,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Register table functions
 	XMLReaderFunctions::Register(loader);
+
+	// Register doc_block conversion functions
+	DocBlockFunctions::Register(loader);
 
 	// Register replacement scan for direct file querying (FROM 'file.xml')
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());

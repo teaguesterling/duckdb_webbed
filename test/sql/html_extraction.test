@@ -1,6 +1,6 @@
 # name: test/sql/html_extraction.test
 # description: Test HTML content extraction functions
-# group: [xml]
+# group: [sql]
 
 require webbed
 

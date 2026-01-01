@@ -1,6 +1,7 @@
 # name: test/sql/github_issue_4_namespace_extraction.test
 # description: Comprehensive tests for namespace handling and nested extraction (GitHub Issue #4)
 # group: [sql]
+
 #
 # GitHub Issue #4: Extracting documents from a specific element and trouble with namespaces
 # https://github.com/teaguesterling/duckdb_webbed/issues/4

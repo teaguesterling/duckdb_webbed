@@ -1,6 +1,6 @@
 # name: test/sql/xml_deep_hierarchies.test
 # description: Test XML extension with deep hierarchical structures
-# group: [xml]
+# group: [sql]
 
 require webbed
 

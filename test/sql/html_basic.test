@@ -1,6 +1,6 @@
 # name: test/sql/html_basic.test
 # description: Test basic HTML processing functionality
-# group: [xml]
+# group: [sql]
 
 require webbed
 
