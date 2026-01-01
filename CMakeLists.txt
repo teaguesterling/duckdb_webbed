@@ -14,13 +14,14 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 project(${TARGET_NAME})
 include_directories(src/include)
 
-set(EXTENSION_SOURCES 
+set(EXTENSION_SOURCES
     src/webbed_extension.cpp
     src/xml_types.cpp
     src/xml_utils.cpp
     src/xml_scalar_functions.cpp
     src/xml_reader_functions.cpp
     src/xml_schema_inference.cpp
+    src/doc_block_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
