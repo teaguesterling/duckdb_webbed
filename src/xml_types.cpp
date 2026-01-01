@@ -131,19 +131,21 @@ void XMLTypes::Register(ExtensionLoader &loader) {
 	loader.RegisterType("HTML", html_type);
 
 	// Register cast functions for XML type conversion
+	// XML/HTML -> VARCHAR: implicit with cost 1 (allows string functions, but prefers XML overloads)
+	// VARCHAR -> XML/HTML: explicit only (-1) to avoid overload ambiguity
 	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_type, VarcharToXMLCast);
-	loader.RegisterCastFunction(xml_type, LogicalType::VARCHAR, XMLToVarcharCast);
+	loader.RegisterCastFunction(xml_type, LogicalType::VARCHAR, XMLToVarcharCast, 1);
 
 	// Register cast functions for XMLFragment type conversion
 	loader.RegisterCastFunction(LogicalType::VARCHAR, xml_fragment_type, VarcharToXMLCast);
-	loader.RegisterCastFunction(xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast);
-	loader.RegisterCastFunction(xml_fragment_type, xml_type, VarcharToXMLCast);
+	loader.RegisterCastFunction(xml_fragment_type, LogicalType::VARCHAR, XMLToVarcharCast, 1);
+	loader.RegisterCastFunction(xml_fragment_type, xml_type, VarcharToXMLCast, 1);
 
 	// Register cast functions for HTML type conversion
 	loader.RegisterCastFunction(LogicalType::VARCHAR, html_type, VarcharToHTMLCast);
-	loader.RegisterCastFunction(html_type, LogicalType::VARCHAR, HTMLToVarcharCast);
-	loader.RegisterCastFunction(xml_type, html_type, XMLToHTMLCast);
-	loader.RegisterCastFunction(html_type, xml_type, HTMLToXMLCast);
+	loader.RegisterCastFunction(html_type, LogicalType::VARCHAR, HTMLToVarcharCast, 1);
+	loader.RegisterCastFunction(xml_type, html_type, XMLToHTMLCast, 1);
+	loader.RegisterCastFunction(html_type, xml_type, HTMLToXMLCast, 1);
 
 	// Register JSON to XML cast (JSON extension is loaded during XML extension initialization)
 	try {
