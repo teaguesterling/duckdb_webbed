@@ -19,8 +19,10 @@ static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 static int CountBlockquoteAncestors(xmlNodePtr node);
 static std::string ListItemsToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
+static std::string TableJsonToHtml(const std::string &json);
 static bool ContentContainsTags(const std::string &content);
 static std::string EscapeJsonString(const std::string &str);
+static std::string UnescapeJsonString(const std::string &str);
 
 // XPath query for block-level elements
 static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 "
@@ -376,10 +378,11 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 				}
 				html << "</" << tag << ">";
 			} else if (block_type == DocBlockTypes::TYPE_TABLE) {
-				// For now, output a placeholder or parse JSON table
-				html << "<table>";
-				// TODO: Parse JSON table content and render rows/cells
-				html << "</table>";
+				if (encoding == DocBlockTypes::ENCODING_JSON && !content.empty()) {
+					html << TableJsonToHtml(content);
+				} else {
+					html << "<table></table>";
+				}
 			} else if (block_type == DocBlockTypes::TYPE_HR) {
 				html << "<hr>";
 			} else if (block_type == DocBlockTypes::TYPE_IMAGE) {
@@ -509,6 +512,137 @@ static std::string EscapeJsonString(const std::string &str) {
 		}
 	}
 	return result;
+}
+
+static std::string UnescapeJsonString(const std::string &str) {
+	std::string result;
+	for (size_t i = 0; i < str.size(); i++) {
+		if (str[i] == '\\' && i + 1 < str.size()) {
+			char next = str[i + 1];
+			switch (next) {
+			case 'n':
+				result += '\n';
+				break;
+			case 'r':
+				result += '\r';
+				break;
+			case 't':
+				result += '\t';
+				break;
+			case '"':
+				result += '"';
+				break;
+			case '\\':
+				result += '\\';
+				break;
+			default:
+				result += next;
+				break;
+			}
+			i++;
+		} else {
+			result += str[i];
+		}
+	}
+	return result;
+}
+
+static std::string TableJsonToHtml(const std::string &json) {
+	// Parse JSON format: {"headers":["col1","col2"],"rows":[["cell1","cell2"],...]}
+	std::stringstream html;
+	html << "<table>";
+
+	// Extract headers array
+	std::vector<std::string> headers;
+	size_t headers_start = json.find("\"headers\":");
+	if (headers_start != std::string::npos) {
+		size_t arr_start = json.find('[', headers_start);
+		size_t arr_end = json.find(']', arr_start);
+		if (arr_start != std::string::npos && arr_end != std::string::npos) {
+			std::string headers_arr = json.substr(arr_start + 1, arr_end - arr_start - 1);
+			std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
+			std::sregex_iterator iter(headers_arr.begin(), headers_arr.end(), item_regex);
+			std::sregex_iterator end;
+			while (iter != end) {
+				headers.push_back(UnescapeJsonString((*iter)[1].str()));
+				++iter;
+			}
+		}
+	}
+
+	// Render headers
+	if (!headers.empty()) {
+		html << "<thead><tr>";
+		for (const auto &h : headers) {
+			html << "<th>" << XMLUtils::HTMLEscape(h) << "</th>";
+		}
+		html << "</tr></thead>";
+	}
+
+	// Extract rows array
+	size_t rows_start = json.find("\"rows\":");
+	if (rows_start != std::string::npos) {
+		size_t arr_start = json.find('[', rows_start);
+		if (arr_start != std::string::npos) {
+			html << "<tbody>";
+			// Find each row array [...]
+			size_t pos = arr_start + 1;
+			while (pos < json.size()) {
+				// Skip whitespace
+				while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == ',')) {
+					pos++;
+				}
+				if (pos >= json.size() || json[pos] == ']') {
+					break;
+				}
+				if (json[pos] == '[') {
+					// Found row start
+					size_t row_end = pos + 1;
+					int bracket_depth = 1;
+					while (row_end < json.size() && bracket_depth > 0) {
+						if (json[row_end] == '[') {
+							bracket_depth++;
+						} else if (json[row_end] == ']') {
+							bracket_depth--;
+						} else if (json[row_end] == '"') {
+							// Skip string content
+							row_end++;
+							while (row_end < json.size()) {
+								if (json[row_end] == '\\' && row_end + 1 < json.size()) {
+									row_end += 2;
+								} else if (json[row_end] == '"') {
+									break;
+								} else {
+									row_end++;
+								}
+							}
+						}
+						row_end++;
+					}
+					std::string row_str = json.substr(pos + 1, row_end - pos - 2);
+
+					// Extract cells from this row
+					std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
+					std::sregex_iterator iter(row_str.begin(), row_str.end(), item_regex);
+					std::sregex_iterator end;
+					html << "<tr>";
+					while (iter != end) {
+						std::string cell = UnescapeJsonString((*iter)[1].str());
+						html << "<td>" << XMLUtils::HTMLEscape(cell) << "</td>";
+						++iter;
+					}
+					html << "</tr>";
+					pos = row_end;
+				} else {
+					pos++;
+				}
+			}
+			html << "</tbody>";
+		}
+	}
+
+	html << "</table>";
+	return html.str();
 }
 
 static std::string ListItemsToJson(xmlNodePtr node) {

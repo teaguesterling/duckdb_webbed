@@ -266,3 +266,229 @@ query I
 SELECT len(html_to_doc_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'));
 ----
 1
+
+# =============================================================================
+# Table Round-Trip Tests (Issue #57)
+# =============================================================================
+
+# Test table round-trip produces table tag
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<table>');
+----
+true
+
+# Test table round-trip contains thead
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>')), '<thead>');
+----
+true
+
+# Test table round-trip contains header cell
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<th>Name</th>');
+----
+true
+
+# Test table round-trip contains tbody
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>')), '<tbody>');
+----
+true
+
+# Test table round-trip contains data cell
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<td>Alice</td>');
+----
+true
+
+# Test table round-trip with multiple rows
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Col1</th></tr><tr><td>Row1</td></tr><tr><td>Row2</td></tr></table>')), '<td>Row2</td>');
+----
+true
+
+# Test table HTML escaping in cells (special chars should be escaped)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Test</th></tr><tr><td>&lt;script&gt;</td></tr></table>')), '&lt;');
+----
+true
+
+# Test empty table renders correctly
+query I
+SELECT doc_blocks_to_html(html_to_doc_blocks('<table></table>'));
+----
+<table><tbody></tbody></table>
+
+# Test table with only headers (no data rows)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><thead><tr><th>Header1</th><th>Header2</th></tr></thead></table>')), '<th>Header1</th>');
+----
+true
+
+# Test table with only data rows (no explicit headers)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tbody><tr><td>Data1</td><td>Data2</td></tr></tbody></table>')), '<td>Data1</td>');
+----
+true
+
+# Test table with special characters in cells (ampersand)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Col</th></tr><tr><td>A &amp; B</td></tr></table>')), '&amp;');
+----
+true
+
+# Test table with special characters in cells (quotes)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Col</th></tr><tr><td>Say &quot;Hello&quot;</td></tr></table>')), 'Hello');
+----
+true
+
+# Test table with many columns
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></table>')), '<th>E</th>');
+----
+true
+
+# Test table with many rows
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>X</th></tr><tr><td>R1</td></tr><tr><td>R2</td></tr><tr><td>R3</td></tr><tr><td>R4</td></tr><tr><td>R5</td></tr></table>')), '<td>R5</td>');
+----
+true
+
+# Test table cell content is preserved exactly
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Name</th></tr><tr><td>John Doe</td></tr></table>')), 'John Doe');
+----
+true
+
+# Test table with numeric content
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Price</th></tr><tr><td>$19.99</td></tr></table>')), '$19.99');
+----
+true
+
+# Test table structure is complete (closing tags)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</table>');
+----
+true
+
+# Test table tbody closing tag present
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</tbody>');
+----
+true
+
+# Test table thead closing tag present
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>')), '</thead>');
+----
+true
+
+# Test table with whitespace in cells
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Col</th></tr><tr><td>  spaced  </td></tr></table>')), 'spaced');
+----
+true
+
+# Test table row structure (tr tags)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</tr>');
+----
+true
+
+# Test multiple tables in document
+query I
+SELECT len(html_to_doc_blocks('<table><tr><th>T1</th></tr></table><p>text</p><table><tr><th>T2</th></tr></table>'));
+----
+3
+
+# Test table block_type is correct
+query I
+SELECT (html_to_doc_blocks('<table><tr><th>H</th></tr></table>'))[1].block_type;
+----
+table
+
+# Test table encoding is json
+query I
+SELECT (html_to_doc_blocks('<table><tr><th>H</th></tr></table>'))[1].encoding;
+----
+json
+
+# Test table JSON content contains headers key
+query I
+SELECT contains((html_to_doc_blocks('<table><tr><th>MyHeader</th></tr></table>'))[1].content, 'headers');
+----
+true
+
+# Test table JSON content contains rows key
+query I
+SELECT contains((html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>'))[1].content, 'rows');
+----
+true
+
+# Test table with empty cells
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td></td></tr></table>')), '<td></td>');
+----
+true
+
+# Test table preserves cell order
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>First</th><th>Second</th><th>Third</th></tr></table>')), '<th>First</th><th>Second</th><th>Third</th>');
+----
+true
+
+# Test table with Unicode content
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>名前</th></tr><tr><td>田中</td></tr></table>')), '田中');
+----
+true
+
+# Test table with emoji
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Status</th></tr><tr><td>✓ Done</td></tr></table>')), '✓');
+----
+true
+
+# Test table with greater than/less than
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Expr</th></tr><tr><td>x &gt; 5</td></tr></table>')), '&gt;');
+----
+true
+
+# Test single cell table
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><td>Single</td></tr></table>')), 'Single');
+----
+true
+
+# Test table row order is preserved (first row first)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>First</td></tr><tr><td>Second</td></tr></table>')), '<td>First</td></tr><tr><td>Second</td>');
+----
+true
+
+# Test table with colons (common in data)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Time</th></tr><tr><td>12:30:00</td></tr></table>')), '12:30:00');
+----
+true
+
+# Test table with commas (common in numbers)
+query I
+SELECT contains(doc_blocks_to_html(html_to_doc_blocks('<table><tr><th>Amount</th></tr><tr><td>1,234,567</td></tr></table>')), '1,234,567');
+----
+true
+
+# Test table header text content extraction
+query I
+SELECT (html_to_doc_blocks('<table><tr><th>Simple Header</th></tr></table>'))[1].content;
+----
+{"headers":["Simple Header"],"rows":[]}
+
+# Test table with single row of data
+query I
+SELECT contains((html_to_doc_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>'))[1].content, '"rows":[["D"]]');
+----
+true
