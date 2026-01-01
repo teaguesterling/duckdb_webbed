@@ -160,8 +160,24 @@ Alias for ``to_xml``.
    -- Result: <value>Hello</value>
 
 
+Document Block Functions
+------------------------
+
+These functions convert HTML documents to and from the ``doc_block`` structured format, enabling document analysis, transformation, and format conversion pipelines.
+
+.. note::
+
+   The ``doc_block`` type is compatible with the `duck_block_utils <https://github.com/teaguesterling/duckdb_duck_block_utils>`_ extension, which provides additional functions for working with document blocks including:
+
+   - ``doc_blocks_to_markdown()`` - Convert blocks to Markdown
+   - ``markdown_to_doc_blocks()`` - Parse Markdown into blocks
+   - Document block filtering and transformation utilities
+
+   When both extensions are loaded, you can build powerful document conversion pipelines (e.g., HTML to Markdown, Markdown to HTML).
+
+
 html_to_doc_blocks
-------------------
+~~~~~~~~~~~~~~~~~~
 
 Convert HTML content into a list of structured document blocks. This function parses HTML and extracts block-level elements (headings, paragraphs, code blocks, lists, tables, etc.) into a structured format suitable for document processing and analysis.
 
@@ -261,7 +277,7 @@ Each block is a struct with the following fields:
 
 
 doc_blocks_to_html
-------------------
+~~~~~~~~~~~~~~~~~~
 
 Convert a list of document blocks back to HTML. This is the inverse of ``html_to_doc_blocks``.
 
@@ -298,6 +314,97 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
        list_sort(
            html_to_doc_blocks(html),
            block -> block.block_order DESC
+       )
+   ) FROM documents;
+
+
+Using with duck_block_utils for Markdown Conversion
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When combined with the `duck_block_utils <https://github.com/teaguesterling/duckdb_duck_block_utils>`_ extension, you can convert between HTML and Markdown formats.
+
+**Setup:**
+
+.. code-block:: sql
+
+   -- Load both extensions
+   INSTALL webbed FROM community;
+   LOAD webbed;
+
+   INSTALL duck_block_utils FROM community;
+   LOAD duck_block_utils;
+
+**HTML to Markdown:**
+
+.. code-block:: sql
+
+   -- Convert HTML to Markdown
+   SELECT doc_blocks_to_markdown(html_to_doc_blocks(
+       '<h1>My Document</h1><p>This is a paragraph.</p><ul><li>Item 1</li><li>Item 2</li></ul>'
+   ));
+   -- Result:
+   -- # My Document
+   --
+   -- This is a paragraph.
+   --
+   -- - Item 1
+   -- - Item 2
+
+   -- Convert a batch of HTML documents to Markdown
+   SELECT
+       filename,
+       doc_blocks_to_markdown(html_to_doc_blocks(content)) as markdown
+   FROM read_html_objects('docs/*.html');
+
+**Markdown to HTML:**
+
+.. code-block:: sql
+
+   -- Convert Markdown to HTML
+   SELECT doc_blocks_to_html(markdown_to_doc_blocks(
+       '# Hello World
+
+   This is a paragraph with **bold** text.
+
+   - First item
+   - Second item'
+   ));
+   -- Result: <h1>Hello World</h1><p>This is a paragraph with <strong>bold</strong> text.</p><ul><li>First item</li><li>Second item</li></ul>
+
+**Document Processing Pipeline:**
+
+.. code-block:: sql
+
+   -- Extract and convert only headings and paragraphs from HTML to Markdown
+   SELECT doc_blocks_to_markdown(
+       list_filter(
+           html_to_doc_blocks(html_content),
+           b -> b.block_type IN ('heading', 'paragraph')
+       )
+   ) as simplified_markdown
+   FROM web_pages;
+
+   -- Build a table of contents from HTML documents
+   SELECT
+       url,
+       block.content as heading,
+       block.level
+   FROM web_pages,
+        LATERAL unnest(html_to_doc_blocks(html_content)) as block
+   WHERE block.block_type = 'heading'
+   ORDER BY url, block.block_order;
+
+   -- Convert code blocks from one language syntax highlighting to another format
+   SELECT doc_blocks_to_html(
+       list_transform(
+           html_to_doc_blocks(html),
+           b -> CASE
+               WHEN b.block_type = 'code'
+               THEN {'block_type': 'code', 'content': b.content, 'level': b.level,
+                     'encoding': b.encoding, 'block_order': b.block_order,
+                     'attributes': map_from_entries([('language', 'python')])}
+               ELSE b
+           END
        )
    ) FROM documents;
 
