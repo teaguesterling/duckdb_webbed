@@ -115,6 +115,10 @@ Conversion Functions
      - Convert value to XML with custom node name
    * - ``parse_html(content)``
      - Parse HTML string into HTML type
+   * - ``html_to_doc_blocks(html)``
+     - Convert HTML to list of document blocks
+   * - ``doc_blocks_to_html(blocks)``
+     - Convert document blocks back to HTML
 
 Utility Functions
 ~~~~~~~~~~~~~~~~~

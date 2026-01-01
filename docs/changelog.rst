@@ -4,6 +4,13 @@ Changelog
 v1.3.0 (Current)
 ----------------
 
+**New Features**
+
+- Added ``html_to_doc_blocks`` function to convert HTML into structured document blocks
+- Added ``doc_blocks_to_html`` function to convert document blocks back to HTML
+- Added namespace parameter to XPath scalar functions (``xml_extract_text``, ``xml_extract_elements``, etc.)
+- Added implicit casting from XML/HTML types to VARCHAR, enabling string functions on XML/HTML values
+
 **Bug Fixes**
 
 - Fixed UTF-8 encoding in ``html_extract_text`` - characters like "chère" are now correctly preserved (Issue #53)
@@ -13,7 +20,7 @@ v1.3.0 (Current)
 **Documentation**
 
 - Added comprehensive XPath namespace handling documentation with ``local-name()`` examples
-- Updated test statistics: 55 test suites, 1608 assertions
+- Updated test statistics: 56 test suites, 1691 assertions
 - Added documentation for ``html_escape`` and ``html_unescape`` functions
 - Created Read the Docs documentation structure
 

@@ -160,6 +160,148 @@ Alias for ``to_xml``.
    -- Result: <value>Hello</value>
 
 
+html_to_doc_blocks
+------------------
+
+Convert HTML content into a list of structured document blocks. This function parses HTML and extracts block-level elements (headings, paragraphs, code blocks, lists, tables, etc.) into a structured format suitable for document processing and analysis.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   html_to_doc_blocks(html)
+
+**Parameters:**
+
+- ``html`` (HTML/VARCHAR): The HTML content to parse
+
+**Returns:** ``LIST(doc_block)`` - A list of document blocks
+
+**The doc_block Type:**
+
+Each block is a struct with the following fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Field
+     - Type
+     - Description
+   * - ``block_type``
+     - VARCHAR
+     - Type of block: ``'heading'``, ``'paragraph'``, ``'code'``, ``'list'``, ``'blockquote'``, ``'table'``, ``'hr'``, ``'image'``, ``'figure'``
+   * - ``content``
+     - VARCHAR
+     - Text content of the block (or JSON for complex blocks)
+   * - ``level``
+     - INTEGER
+     - Heading level (1-6) or blockquote nesting depth
+   * - ``encoding``
+     - VARCHAR
+     - Content encoding: ``'text'`` for plain text, ``'json'`` for structured content
+   * - ``attributes``
+     - MAP(VARCHAR, VARCHAR)
+     - Additional attributes (id, class, language, src, alt, etc.)
+   * - ``block_order``
+     - INTEGER
+     - Zero-based position of the block in the document
+
+**Block Type Details:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 85
+
+   * - Block Type
+     - Description
+   * - ``heading``
+     - H1-H6 elements. ``level`` indicates heading level (1-6). ``attributes`` may contain ``id``.
+   * - ``paragraph``
+     - P elements. Content is plain text.
+   * - ``code``
+     - PRE/CODE elements. ``attributes['language']`` contains the programming language if specified.
+   * - ``list``
+     - UL/OL elements. ``encoding`` is ``'json'``. ``attributes['ordered']`` is ``'true'`` or ``'false'``.
+   * - ``blockquote``
+     - BLOCKQUOTE elements. ``level`` indicates nesting depth.
+   * - ``table``
+     - TABLE elements. ``encoding`` is ``'json'`` with rows/cells structure.
+   * - ``hr``
+     - HR elements. Content is empty.
+   * - ``image``
+     - IMG elements. ``attributes`` contains ``src`` and ``alt``.
+   * - ``figure``
+     - FIGURE elements with optional caption.
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Extract blocks from HTML
+   SELECT html_to_doc_blocks('<h1>Title</h1><p>Some text</p>');
+   -- Returns list with 2 blocks: heading and paragraph
+
+   -- Get all headings from a document
+   SELECT block.content, block.level
+   FROM (SELECT unnest(html_to_doc_blocks(html)) as block FROM documents)
+   WHERE block.block_type = 'heading';
+
+   -- Count blocks by type
+   SELECT block.block_type, COUNT(*)
+   FROM (SELECT unnest(html_to_doc_blocks(html)) as block FROM documents)
+   GROUP BY block.block_type;
+
+   -- Extract code blocks with their language
+   SELECT block.content, block.attributes['language'] as language
+   FROM (SELECT unnest(html_to_doc_blocks(
+       '<pre><code class="language-python">print("hello")</code></pre>'
+   )) as block)
+   WHERE block.block_type = 'code';
+
+
+doc_blocks_to_html
+------------------
+
+Convert a list of document blocks back to HTML. This is the inverse of ``html_to_doc_blocks``.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   doc_blocks_to_html(blocks)
+
+**Parameters:**
+
+- ``blocks`` (LIST(doc_block)): A list of document blocks
+
+**Returns:** HTML - The reconstructed HTML content
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Round-trip conversion
+   SELECT doc_blocks_to_html(html_to_doc_blocks('<h1>Title</h1><p>Text</p>'));
+   -- Result: <h1>Title</h1><p>Text</p>
+
+   -- Filter and reconstruct (keep only headings and paragraphs)
+   SELECT doc_blocks_to_html(
+       list_filter(
+           html_to_doc_blocks(html),
+           block -> block.block_type IN ('heading', 'paragraph')
+       )
+   ) FROM documents;
+
+   -- Reorder blocks
+   SELECT doc_blocks_to_html(
+       list_sort(
+           html_to_doc_blocks(html),
+           block -> block.block_order DESC
+       )
+   ) FROM documents;
+
+
 Python xmltodict Compatibility
 ------------------------------
 
