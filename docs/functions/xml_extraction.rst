@@ -48,6 +48,61 @@ Extract text content from the first matching element.
 
       SELECT xml_extract_text(xml, '//*[local-name()="title"]')
 
+**With Namespace Support:**
+
+Use the ``namespaces`` named parameter to handle namespace prefixes in XPath:
+
+.. code-block:: sql
+
+   xml_extract_text(xml, xpath, namespaces:=<mode_or_map>)
+
+**Namespace Modes:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 85
+
+   * - Mode
+     - Description
+   * - ``'auto'``
+     - Auto-register declared namespaces, common namespaces, and mock undefined prefixes. **Recommended for most use cases.**
+   * - ``'strict'``
+     - Auto-register declared namespaces, raise error on undefined prefix.
+   * - ``'ignore'``
+     - Auto-register declared namespaces, silently return empty on undefined prefix.
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Use 'auto' mode for convenience (handles undeclared prefixes)
+   SELECT xml_extract_text(
+       '<root><gml:pos>1 2 3</gml:pos></root>',
+       '//gml:pos',
+       namespaces:='auto'
+   );
+   -- Result: ["1 2 3"]
+
+   -- Use explicit MAP for precise control
+   SELECT xml_extract_text(
+       '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+       '//ns:item',
+       namespaces:=MAP {'ns': 'http://example.com'}
+   );
+   -- Result: ["Value"]
+
+   -- Use helper functions
+   SELECT xml_extract_text(
+       '<root><gml:pos>1 2 3</gml:pos></root>',
+       '//gml:pos',
+       namespaces:=xml_mock_namespaces(['gml'])
+   );
+   -- Result: ["1 2 3"]
+
+   -- Discover namespaces with xml_namespaces()
+   SELECT xml_namespaces('<root xmlns:gml="http://www.opengis.net/gml"/>');
+   -- Result: {gml: "http://www.opengis.net/gml"}
+
 
 xml_extract_all_text
 --------------------

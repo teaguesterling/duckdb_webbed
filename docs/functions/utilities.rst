@@ -136,6 +136,91 @@ List all namespaces declared in an XML document.
    -- Result: [{prefix: "", uri: "http://default.com"}, {prefix: "ns", uri: "http://example.com"}]
 
 
+xml_common_namespaces
+~~~~~~~~~~~~~~~~~~~~~
+
+Returns a MAP of well-known namespace prefixes to their URIs (XML, XHTML, SVG, RSS, Atom, SOAP, etc.).
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_common_namespaces()
+
+**Returns:** MAP(VARCHAR, VARCHAR) - Mapping of common prefixes to URIs.
+
+**Example:**
+
+.. code-block:: sql
+
+   SELECT xml_common_namespaces();
+   -- Result: {xml: "http://www.w3.org/XML/1998/namespace", xhtml: "http://www.w3.org/1999/xhtml", ...}
+
+   -- Use with XPath extraction
+   SELECT xml_extract_text(xml, '//atom:entry/atom:title', xml_common_namespaces());
+
+
+xml_detect_prefixes
+~~~~~~~~~~~~~~~~~~~
+
+Detect namespace prefixes used in an XPath expression.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_detect_prefixes(xpath)
+
+**Returns:** LIST(VARCHAR) - List of unique namespace prefixes found in the XPath.
+
+**Example:**
+
+.. code-block:: sql
+
+   SELECT xml_detect_prefixes('//gml:pos | //ns:item[@xlink:href]');
+   -- Result: ["gml", "ns", "xlink"]
+
+
+xml_mock_namespaces
+~~~~~~~~~~~~~~~~~~~
+
+Create mock namespace URIs for a list of prefixes. Useful when namespace URIs are unknown or don't matter.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_mock_namespaces(prefixes)
+
+**Parameters:**
+
+- ``prefixes`` (LIST(VARCHAR)): List of namespace prefixes
+
+**Returns:** MAP(VARCHAR, VARCHAR) - Mapping of prefixes to mock URIs (``urn:mock:prefix``).
+
+**Example:**
+
+.. code-block:: sql
+
+   SELECT xml_mock_namespaces(['gml', 'ns']);
+   -- Result: {gml: "urn:mock:gml", ns: "urn:mock:ns"}
+
+   -- Use with XPath when you don't know the actual namespace URI
+   SELECT xml_extract_text(
+       '<root><gml:pos>1 2 3</gml:pos></root>',
+       '//gml:pos',
+       xml_mock_namespaces(['gml'])
+   );
+   -- Result: ["1 2 3"]
+
+   -- Auto-detect and mock in one step
+   SELECT xml_extract_text(
+       xml,
+       xpath,
+       xml_mock_namespaces(xml_detect_prefixes(xpath))
+   );
+
+
 Formatting
 ----------
 

@@ -1,0 +1,73 @@
+# name: test/sql/xpath_namespaces.test
+# description: Test namespace handling in XPath extraction functions
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Namespace MAP - explicit prefix-to-URI mappings
+# =============================================================================
+
+# Test with declared namespace and explicit MAP
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item',
+    namespaces:=MAP {'ns': 'http://example.com'}
+);
+----
+[Value]
+
+# Declared namespaces work without any parameter
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item'
+);
+----
+[Value]
+
+# Multiple declared namespaces
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//a:foo'
+);
+----
+[A]
+
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//b:bar'
+);
+----
+[B]
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+# xml_detect_prefixes
+query I
+SELECT xml_detect_prefixes('//gml:pos | //ns:item');
+----
+[gml, ns]
+
+# xml_mock_namespaces
+query I
+SELECT xml_mock_namespaces(['gml']);
+----
+{gml='urn:mock:gml'}
+
+# xml_namespaces
+query I
+SELECT xml_namespaces('<root xmlns:ns="http://example.com"/>');
+----
+{ns='http://example.com'}
+
+# xml_common_namespaces
+query I
+SELECT xml_common_namespaces()['xml'] IS NOT NULL;
+----
+1

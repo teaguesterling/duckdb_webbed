@@ -1,0 +1,396 @@
+# name: test/sql/github_issue_60_namespace_modes.test
+# description: Test namespace mode handling in XPath scalar functions (Issue #60)
+# group: [sql]
+#
+# GitHub Issue #60: namespaces:='auto' mode doesn't mock undeclared prefixes
+# https://github.com/teaguesterling/duckdb_webbed/issues/60
+#
+# This test file documents EXPECTED behavior for namespace handling.
+# Tests in WORKING sections pass with current code.
+# Tests in EXPECTED sections show intended behavior that needs to be fixed.
+
+require webbed
+
+# =============================================================================
+# WORKING: Declared namespaces (these pass)
+# =============================================================================
+
+# Declared namespace without any parameter - auto-registered from document
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item'
+);
+----
+[Value]
+
+# Declared namespace with explicit MAP (matching URI)
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item',
+    namespaces:=MAP {'ns': 'http://example.com'}
+);
+----
+[Value]
+
+# Multiple declared namespaces
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//a:foo'
+);
+----
+[A]
+
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com" xmlns:b="http://b.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//b:bar'
+);
+----
+[B]
+
+# Nested elements with declared namespace
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:outer><ns:inner>Deep</ns:inner></ns:outer></root>',
+    '//ns:inner'
+);
+----
+[Deep]
+
+# Multiple matches with declared namespace
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>A</ns:item><ns:item>B</ns:item><ns:item>C</ns:item></root>',
+    '//ns:item'
+);
+----
+[A, B, C]
+
+# Default namespace with local-name() workaround
+query I
+SELECT xml_extract_text(
+    '<root xmlns="http://default.com"><item>Value</item></root>',
+    '//*[local-name()="item"]'
+);
+----
+[Value]
+
+# No namespace - simple elements
+query I
+SELECT xml_extract_text(
+    '<root><item>Value</item></root>',
+    '//item'
+);
+----
+[Value]
+
+# Built-in xml: namespace prefix (always predefined per XML spec)
+query I
+SELECT xml_extract_text(
+    '<root><item xml:lang="en">English</item></root>',
+    '//item/@xml:lang'
+);
+----
+[en]
+
+# =============================================================================
+# WORKING: Helper functions
+# =============================================================================
+
+# xml_detect_prefixes - detect prefixes in XPath
+query I
+SELECT xml_detect_prefixes('//gml:pos | //ns:item[@xlink:href]');
+----
+[gml, ns, xlink]
+
+# xml_mock_namespaces - create mock URIs
+query I
+SELECT xml_mock_namespaces(['gml', 'ns']);
+----
+{gml='urn:mock:gml', ns='urn:mock:ns'}
+
+# xml_namespaces - extract declared namespaces from document
+query I
+SELECT xml_namespaces('<root xmlns:ns="http://example.com" xmlns:other="http://other.com"/>');
+----
+{ns='http://example.com', other='http://other.com'}
+
+# xml_common_namespaces contains expected prefixes
+query I
+SELECT xml_common_namespaces()['xml'] IS NOT NULL;
+----
+1
+
+# =============================================================================
+# WORKING: Other XML functions with declared namespaces
+# =============================================================================
+
+# xml_extract_elements with declared namespace
+query I
+SELECT len(xml_extract_elements(
+    '<root xmlns:ns="http://example.com"><ns:item>A</ns:item><ns:item>B</ns:item></root>',
+    '//ns:item'
+));
+----
+2
+
+# xml_extract_elements_string with declared namespace
+query I
+SELECT xml_extract_elements_string(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item'
+) LIKE '%<ns:item%';
+----
+1
+
+# xml_extract_attributes with declared namespace
+query I
+SELECT len(xml_extract_attributes(
+    '<root xmlns:ns="http://example.com"><ns:item id="1" name="test"/></root>',
+    '//ns:item'
+));
+----
+2
+
+# =============================================================================
+# WORKING: HTML extraction
+# =============================================================================
+
+# html_extract_text with standard HTML (no namespaces)
+query I
+SELECT html_extract_text('<html><body><p>Text</p></body></html>'::HTML, '//p');
+----
+[Text]
+
+# =============================================================================
+# WORKING: Real-world patterns with declared namespaces
+# =============================================================================
+
+# AWS-style response (default namespace) - use local-name()
+query I
+SELECT xml_extract_text(
+    '<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+       <requestId>abc123</requestId>
+       <volumeSet><item><volumeId>vol-123</volumeId></item></volumeSet>
+     </DescribeVolumesResponse>',
+    '//*[local-name()="volumeId"]'
+);
+----
+[vol-123]
+
+# SOAP-style response with declared envelope namespace
+query I
+SELECT xml_extract_text(
+    '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+       <soap:Body><Response>Data</Response></soap:Body>
+     </soap:Envelope>',
+    '//soap:Body'
+) != '[]';
+----
+1
+
+# =============================================================================
+# EXPECTED: Namespace mode strings ('auto', 'strict', 'ignore')
+# =============================================================================
+# These modes should be accepted as VARCHAR values for the namespaces parameter
+
+# 'auto' mode with declared namespace
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item',
+    namespaces:='auto'
+);
+----
+[Value]
+
+# 'strict' mode with declared namespace
+query I
+SELECT xml_extract_text(
+    '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+    '//ns:item',
+    namespaces:='strict'
+);
+----
+[Value]
+
+# 'ignore' mode with undeclared namespace should return empty
+query I
+SELECT xml_extract_text(
+    '<root><gml:pos>1 2 3</gml:pos></root>',
+    '//gml:pos',
+    namespaces:='ignore'
+);
+----
+[]
+
+# =============================================================================
+# EXPECTED: 'auto' mode with undeclared namespaces
+# =============================================================================
+# 'auto' mode should mock undeclared prefixes to enable matching
+
+# Undeclared namespace with 'auto' mode should mock and find
+query I
+SELECT xml_extract_text(
+    '<root><gml:pos>1 2 3</gml:pos></root>',
+    '//gml:pos',
+    namespaces:='auto'
+);
+----
+[1 2 3]
+
+# Mixed declared/undeclared - query undeclared with 'auto'
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//b:bar',
+    namespaces:='auto'
+);
+----
+[B]
+
+# Query both with union XPath and 'auto'
+query I
+SELECT xml_extract_text(
+    '<root xmlns:a="http://a.com"><a:foo>A</a:foo><b:bar>B</b:bar></root>',
+    '//a:foo | //b:bar',
+    namespaces:='auto'
+);
+----
+[A, B]
+
+# =============================================================================
+# EXPECTED: Common undeclared prefixes with 'auto' mode
+# =============================================================================
+
+# GML (Geographic Markup Language)
+query I
+SELECT xml_extract_text(
+    '<root><gml:Point><gml:pos>1 2</gml:pos></gml:Point></root>',
+    '//gml:pos',
+    namespaces:='auto'
+);
+----
+[1 2]
+
+# SVG
+query I
+SELECT xml_extract_text(
+    '<root><svg:circle r="10"/></root>',
+    '//svg:circle/@r',
+    namespaces:='auto'
+);
+----
+[10]
+
+# XLink
+query I
+SELECT xml_extract_text(
+    '<root><a xlink:href="http://example.com">Link</a></root>',
+    '//@xlink:href',
+    namespaces:='auto'
+);
+----
+[http://example.com]
+
+# Dublin Core (dc)
+query I
+SELECT xml_extract_text(
+    '<root><dc:title>My Title</dc:title></root>',
+    '//dc:title',
+    namespaces:='auto'
+);
+----
+[My Title]
+
+# =============================================================================
+# EXPECTED: Undeclared namespaces with explicit MAP mock URI
+# =============================================================================
+# Providing a mock URI via MAP should enable matching undeclared prefixes
+
+# Undeclared namespace with explicit MAP mock URI
+query I
+SELECT xml_extract_text(
+    '<root><gml:pos>1 2 3</gml:pos></root>',
+    '//gml:pos',
+    namespaces:=MAP {'gml': 'urn:mock:gml'}
+);
+----
+[1 2 3]
+
+# Undeclared namespace with xml_mock_namespaces helper
+query I
+SELECT xml_extract_text(
+    '<root><gml:pos>1 2 3</gml:pos></root>',
+    '//gml:pos',
+    namespaces:=xml_mock_namespaces(['gml'])
+);
+----
+[1 2 3]
+
+# =============================================================================
+# EXPECTED: Other functions with 'auto' mode
+# =============================================================================
+
+# xml_extract_elements with undeclared namespace and 'auto'
+query I
+SELECT len(xml_extract_elements(
+    '<root><ns:item>A</ns:item><ns:item>B</ns:item></root>',
+    '//ns:item',
+    namespaces:='auto'
+));
+----
+2
+
+# xml_extract_elements_string with undeclared namespace and 'auto'
+query I
+SELECT xml_extract_elements_string(
+    '<root><ns:item>Value</ns:item></root>',
+    '//ns:item',
+    namespaces:='auto'
+) LIKE '%<ns:item%';
+----
+1
+
+# xml_extract_attributes with undeclared namespace and 'auto'
+query I
+SELECT len(xml_extract_attributes(
+    '<root><ns:item id="1" name="test"/></root>',
+    '//ns:item',
+    namespaces:='auto'
+));
+----
+2
+
+# =============================================================================
+# EXPECTED: HTML extraction with namespaces
+# =============================================================================
+
+# html_extract_text with namespace prefix and 'auto'
+query I
+SELECT html_extract_text(
+    '<html><body><svg:circle>Test</svg:circle></body></html>'::HTML,
+    '//svg:circle',
+    namespaces:='auto'
+);
+----
+[Test]
+
+# =============================================================================
+# EXPECTED: Real-world GML geometry
+# =============================================================================
+
+# GML geometry (common in geospatial)
+query I
+SELECT xml_extract_text(
+    '<Feature>
+       <gml:Point><gml:pos>51.5 -0.1</gml:pos></gml:Point>
+     </Feature>',
+    '//gml:pos',
+    namespaces:='auto'
+);
+----
+[51.5 -0.1]
