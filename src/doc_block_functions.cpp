@@ -114,7 +114,8 @@ void DocBlockFunctions::HtmlToDocBlocksFunction(DataChunk &args, ExpressionState
 				// Heading: h1-h6
 				if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
 					block_type = DocBlockTypes::TYPE_HEADING;
-					level_value = Value::INTEGER(tag[1] - '0');
+					// Store heading level in attributes, not in the level field
+					attrs[DocBlockTypes::ATTR_HEADING_LEVEL] = std::string(1, tag[1]);
 					content = GetNodeTextContent(node);
 					std::string id = GetNodeAttribute(node, "id");
 					if (!id.empty()) {
@@ -273,7 +274,8 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 			}
 
 			auto &struct_values = StructValue::GetChildren(block);
-			std::string block_type = struct_values[DocBlockTypes::BLOCK_TYPE_IDX].GetValue<string>();
+			// New struct format: kind, element_type, content, level, encoding, attributes, element_order
+			std::string element_type = struct_values[DocBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
 			std::string content = struct_values[DocBlockTypes::CONTENT_IDX].GetValue<string>();
 			Value level_val = struct_values[DocBlockTypes::LEVEL_IDX];
 			std::string encoding = struct_values[DocBlockTypes::ENCODING_IDX].GetValue<string>();
@@ -291,9 +293,13 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 				}
 			}
 
-			// Generate HTML based on block type
-			if (block_type == DocBlockTypes::TYPE_HEADING) {
-				int lvl = level_val.IsNull() ? 1 : level_val.GetValue<int32_t>();
+			// Generate HTML based on element type
+			if (element_type == DocBlockTypes::TYPE_HEADING) {
+				// Read heading level from attributes
+				int lvl = 1;
+				if (attrs.count(DocBlockTypes::ATTR_HEADING_LEVEL)) {
+					lvl = std::stoi(attrs[DocBlockTypes::ATTR_HEADING_LEVEL]);
+				}
 				if (lvl < 1)
 					lvl = 1;
 				if (lvl > 6)
@@ -309,7 +315,7 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 					html << XMLUtils::HTMLEscape(content);
 				}
 				html << "</h" << lvl << ">";
-			} else if (block_type == DocBlockTypes::TYPE_PARAGRAPH) {
+			} else if (element_type == DocBlockTypes::TYPE_PARAGRAPH) {
 				html << "<p>";
 				if (encoding == DocBlockTypes::ENCODING_HTML) {
 					html << content;
@@ -317,13 +323,13 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 					html << XMLUtils::HTMLEscape(content);
 				}
 				html << "</p>";
-			} else if (block_type == DocBlockTypes::TYPE_CODE) {
+			} else if (element_type == DocBlockTypes::TYPE_CODE) {
 				std::string lang_class = "";
 				if (attrs.count("language")) {
 					lang_class = " class=\"language-" + XMLUtils::HTMLEscape(attrs["language"]) + "\"";
 				}
 				html << "<pre><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
-			} else if (block_type == DocBlockTypes::TYPE_BLOCKQUOTE) {
+			} else if (element_type == DocBlockTypes::TYPE_BLOCKQUOTE) {
 				int depth = level_val.IsNull() ? 1 : level_val.GetValue<int32_t>();
 				if (depth < 1)
 					depth = 1;
@@ -338,7 +344,7 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 				for (int d = 0; d < depth; d++) {
 					html << "</blockquote>";
 				}
-			} else if (block_type == DocBlockTypes::TYPE_LIST) {
+			} else if (element_type == DocBlockTypes::TYPE_LIST) {
 				bool ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				std::string tag = ordered ? "ol" : "ul";
 				html << "<" << tag << ">";
@@ -377,15 +383,15 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 					}
 				}
 				html << "</" << tag << ">";
-			} else if (block_type == DocBlockTypes::TYPE_TABLE) {
+			} else if (element_type == DocBlockTypes::TYPE_TABLE) {
 				if (encoding == DocBlockTypes::ENCODING_JSON && !content.empty()) {
 					html << TableJsonToHtml(content);
 				} else {
 					html << "<table></table>";
 				}
-			} else if (block_type == DocBlockTypes::TYPE_HR) {
+			} else if (element_type == DocBlockTypes::TYPE_HR) {
 				html << "<hr>";
-			} else if (block_type == DocBlockTypes::TYPE_IMAGE) {
+			} else if (element_type == DocBlockTypes::TYPE_IMAGE) {
 				std::string src = attrs.count("src") ? attrs["src"] : "";
 				std::string alt = attrs.count("alt") ? attrs["alt"] : "";
 				std::string title = attrs.count("title") ? attrs["title"] : "";
@@ -397,10 +403,10 @@ void DocBlockFunctions::DocBlocksToHtmlFunction(DataChunk &args, ExpressionState
 					html << " title=\"" << XMLUtils::HTMLEscape(title) << "\"";
 				}
 				html << ">";
-			} else if (block_type == DocBlockTypes::TYPE_RAW) {
+			} else if (element_type == DocBlockTypes::TYPE_RAW) {
 				// Pass through raw content
 				html << content;
-			} else if (block_type == DocBlockTypes::TYPE_METADATA) {
+			} else if (element_type == DocBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DocBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
 				html << content; // No escaping - preserve YAML exactly

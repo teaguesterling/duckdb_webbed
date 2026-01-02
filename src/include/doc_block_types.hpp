@@ -6,49 +6,69 @@
 namespace duckdb {
 
 /**
- * DocBlockTypes provides type definitions and utilities for working with doc_block structures.
+ * DocBlockTypes provides type definitions and utilities for working with doc_element structures.
  *
  * This is a header-only interface that mirrors the duck_block_utils extension's type definitions,
- * enabling webbed to produce doc_block output without a compile-time dependency on duck_block_utils.
+ * enabling webbed to produce doc_element output without a compile-time dependency on duck_block_utils.
  *
- * The doc_block type represents a document block with the following structure:
+ * The doc_element type represents a document element with the following structure:
  * STRUCT(
- *     block_type VARCHAR,      -- 'heading', 'paragraph', 'code', etc.
- *     content VARCHAR,         -- The block's text content
- *     level INTEGER,           -- Heading level (1-6), blockquote nesting, etc.
+ *     kind VARCHAR,            -- 'block' or 'inline'
+ *     element_type VARCHAR,    -- 'heading', 'paragraph', 'code', etc.
+ *     content VARCHAR,         -- The element's text content
+ *     level INTEGER,           -- Hierarchy level (NULL if not applicable)
  *     encoding VARCHAR,        -- 'text', 'json', 'yaml', 'html', 'xml'
  *     attributes MAP(VARCHAR, VARCHAR),  -- Key-value metadata
- *     block_order INTEGER      -- Position in document (0-indexed)
+ *     element_order INTEGER    -- Position in document (0-indexed)
  * )
+ *
+ * For headings, the heading level (1-6) is stored in attributes['heading_level'],
+ * not in the 'level' field. The 'level' field is reserved for hierarchy depth.
  */
 class DocBlockTypes {
 public:
-	// Create the doc_block type
+	// Create the doc_element type (unified type for both blocks and inlines)
 	static LogicalType DocBlockType() {
 		child_list_t<LogicalType> struct_children;
-		struct_children.push_back(make_pair("block_type", LogicalType::VARCHAR));
+		struct_children.push_back(make_pair("kind", LogicalType::VARCHAR));
+		struct_children.push_back(make_pair("element_type", LogicalType::VARCHAR));
 		struct_children.push_back(make_pair("content", LogicalType::VARCHAR));
 		struct_children.push_back(make_pair("level", LogicalType::INTEGER));
 		struct_children.push_back(make_pair("encoding", LogicalType::VARCHAR));
 		struct_children.push_back(
 		    make_pair("attributes", LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)));
-		struct_children.push_back(make_pair("block_order", LogicalType::INTEGER));
+		struct_children.push_back(make_pair("element_order", LogicalType::INTEGER));
 
 		return LogicalType::STRUCT(std::move(struct_children));
 	}
 
-	// Create a LIST(doc_block) type
+	// Alias for semantic clarity
+	static LogicalType DocElementType() {
+		return DocBlockType();
+	}
+
+	// Create a LIST(doc_element) type
 	static LogicalType DocBlockListType() {
 		return LogicalType::LIST(DocBlockType());
 	}
 
-	// Field indices for doc_block struct
-	static constexpr idx_t BLOCK_TYPE_IDX = 0;
-	static constexpr idx_t CONTENT_IDX = 1;
-	static constexpr idx_t LEVEL_IDX = 2;
-	static constexpr idx_t ENCODING_IDX = 3;
-	static constexpr idx_t ATTRIBUTES_IDX = 4;
-	static constexpr idx_t BLOCK_ORDER_IDX = 5;
+	// Alias for semantic clarity
+	static LogicalType DocElementListType() {
+		return DocBlockListType();
+	}
+
+	// Field indices for doc_element struct
+	static constexpr idx_t KIND_IDX = 0;
+	static constexpr idx_t ELEMENT_TYPE_IDX = 1;
+	static constexpr idx_t CONTENT_IDX = 2;
+	static constexpr idx_t LEVEL_IDX = 3;
+	static constexpr idx_t ENCODING_IDX = 4;
+	static constexpr idx_t ATTRIBUTES_IDX = 5;
+	static constexpr idx_t ELEMENT_ORDER_IDX = 6;
+
+	// Kind values
+	static constexpr const char *KIND_BLOCK = "block";
+	static constexpr const char *KIND_INLINE = "inline";
 
 	// Core block type names
 	static constexpr const char *TYPE_HEADING = "heading";
@@ -72,6 +92,9 @@ public:
 	// MIME type for frontmatter in HTML (RFC 9512 compliant)
 	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
 
+	// Attribute keys
+	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
+
 	// Helper to create an attributes MAP from a std::map
 	static Value CreateAttributesMap(const std::map<std::string, std::string> &attrs) {
 		vector<Value> keys;
@@ -83,25 +106,42 @@ public:
 		return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
 	}
 
-	// Helper to create a doc_block Value
-	static Value CreateBlock(const std::string &block_type, const std::string &content, const Value &level,
+	// Helper to create a doc_element Value (block kind)
+	static Value CreateBlock(const std::string &element_type, const std::string &content, const Value &level,
 	                         const std::string &encoding, const std::map<std::string, std::string> &attributes,
-	                         int32_t block_order = 0) {
+	                         int32_t element_order = 0) {
 		child_list_t<Value> struct_values;
-		struct_values.push_back(make_pair("block_type", Value(block_type)));
+		struct_values.push_back(make_pair("kind", Value(KIND_BLOCK)));
+		struct_values.push_back(make_pair("element_type", Value(element_type)));
 		struct_values.push_back(make_pair("content", Value(content)));
 		struct_values.push_back(make_pair("level", level));
 		struct_values.push_back(make_pair("encoding", Value(encoding)));
 		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));
-		struct_values.push_back(make_pair("block_order", Value(block_order)));
+		struct_values.push_back(make_pair("element_order", Value(element_order)));
 
 		return Value::STRUCT(std::move(struct_values));
 	}
 
 	// Convenience overload for blocks without level
-	static Value CreateBlock(const std::string &block_type, const std::string &content, const std::string &encoding,
-	                         const std::map<std::string, std::string> &attributes, int32_t block_order = 0) {
-		return CreateBlock(block_type, content, Value(), encoding, attributes, block_order);
+	static Value CreateBlock(const std::string &element_type, const std::string &content, const std::string &encoding,
+	                         const std::map<std::string, std::string> &attributes, int32_t element_order = 0) {
+		return CreateBlock(element_type, content, Value(), encoding, attributes, element_order);
+	}
+
+	// Helper to create an inline doc_element Value
+	static Value CreateInline(const std::string &element_type, const std::string &content, const Value &level,
+	                          const std::string &encoding, const std::map<std::string, std::string> &attributes,
+	                          int32_t element_order = 0) {
+		child_list_t<Value> struct_values;
+		struct_values.push_back(make_pair("kind", Value(KIND_INLINE)));
+		struct_values.push_back(make_pair("element_type", Value(element_type)));
+		struct_values.push_back(make_pair("content", Value(content)));
+		struct_values.push_back(make_pair("level", level));
+		struct_values.push_back(make_pair("encoding", Value(encoding)));
+		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));
+		struct_values.push_back(make_pair("element_order", Value(element_order)));
+
+		return Value::STRUCT(std::move(struct_values));
 	}
 };
 
