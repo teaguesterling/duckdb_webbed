@@ -221,6 +221,42 @@ Create mock namespace URIs for a list of prefixes. Useful when namespace URIs ar
    );
 
 
+xml_add_namespace_declarations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Add namespace declarations to an XML document's root element.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_add_namespace_declarations(xml, namespaces)
+
+**Parameters:**
+
+- ``xml`` (VARCHAR): The XML content
+- ``namespaces`` (MAP(VARCHAR, VARCHAR)): Map of prefix to URI pairs to add
+
+**Returns:** VARCHAR - XML with namespace declarations added to the root element.
+
+**Example:**
+
+.. code-block:: sql
+
+   -- Add a single namespace declaration
+   SELECT xml_add_namespace_declarations(
+       '<root><gml:pos>1 2</gml:pos></root>',
+       MAP {'gml': 'http://www.opengis.net/gml'}
+   );
+   -- Result: <root xmlns:gml="http://www.opengis.net/gml"><gml:pos>1 2</gml:pos></root>
+
+   -- Fix undeclared prefixes using helper functions
+   SELECT xml_add_namespace_declarations(
+       xml,
+       xml_mock_namespaces(xml_detect_prefixes('//gml:pos'))
+   );
+
+
 Formatting
 ----------
 

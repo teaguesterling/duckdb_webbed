@@ -115,7 +115,31 @@ When using XPath extraction functions on namespaced documents, simple paths may 
    -- This may return empty for namespaced XML:
    SELECT xml_extract_text(xml, '//item');
 
-**Solution: Use local-name()**
+**Solution 1: Use namespaces := 'auto' (Recommended)**
+
+The ``namespaces := 'auto'`` parameter automatically handles both declared and undeclared namespace prefixes:
+
+.. code-block:: sql
+
+   -- Works with declared namespaces
+   SELECT xml_extract_text(
+       '<root xmlns:ns="http://example.com"><ns:item>Value</ns:item></root>',
+       '//ns:item',
+       namespaces := 'auto'
+   );
+   -- Result: [Value]
+
+   -- Also works with undeclared prefixes (common in GML, etc.)
+   SELECT xml_extract_text(
+       '<root><gml:pos>1 2 3</gml:pos></root>',
+       '//gml:pos',
+       namespaces := 'auto'
+   );
+   -- Result: [1 2 3]
+
+**Solution 2: Use local-name() (Fallback)**
+
+For maximum compatibility, use ``local-name()`` to match elements regardless of namespace:
 
 .. code-block:: sql
 
@@ -194,7 +218,8 @@ Feeds often mix namespaces:
 Best Practices
 --------------
 
-1. **Use default (strip)** for most cases - simplifies column names
+1. **Use default (strip)** for ``read_xml`` - simplifies column names
 2. **Use keep** when namespace prefixes are semantically important
-3. **Use local-name()** for XPath when working with raw namespaced documents
-4. **Check xml_namespaces()** when debugging namespace issues
+3. **Use namespaces := 'auto'** for XPath functions - handles both declared and undeclared prefixes
+4. **Use local-name()** as a fallback when ``'auto'`` doesn't work
+5. **Check xml_namespaces()** when debugging namespace issues
