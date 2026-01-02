@@ -142,8 +142,8 @@ void XMLScalarFunctions::XMLExtractTextListWithNamespacesFunction(DataChunk &arg
 		Value ns_value = ns_vector.GetValue(i);
 		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
 
-		// Return LIST of all matches with custom namespaces
-		auto texts = XMLUtils::ExtractAllTextByXPath(xml_string, xpath_string, ns_config.custom_namespaces);
+		// Return LIST of all matches using NamespaceConfig (handles AUTO mode transformation)
+		auto texts = XMLUtils::ExtractAllTextByXPath(xml_string, xpath_string, ns_config);
 		vector<Value> text_values;
 		for (const auto &text : texts) {
 			text_values.push_back(Value(text));
@@ -222,8 +222,8 @@ void XMLScalarFunctions::XMLExtractElementsListWithNamespacesFunction(DataChunk 
 		Value ns_value = ns_vector.GetValue(i);
 		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
 
-		// Return LIST of all matching elements with custom namespaces
-		auto fragments = XMLUtils::ExtractXMLFragmentList(xml_string, xpath_string, ns_config.custom_namespaces);
+		// Return LIST of all matching elements with namespace config (handles AUTO mode)
+		auto fragments = XMLUtils::ExtractXMLFragmentList(xml_string, xpath_string, ns_config);
 		vector<Value> fragment_values;
 		for (const auto &fragment : fragments) {
 			fragment_values.push_back(Value(fragment));
@@ -280,9 +280,8 @@ void XMLScalarFunctions::XMLExtractElementsStringWithNamespacesFunction(DataChun
 		Value ns_value = ns_vector.GetValue(i);
 		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
 
-		// Extract with custom namespaces
-		std::string fragment_xml =
-		    XMLUtils::ExtractXMLFragmentAll(xml_string, xpath_string, ns_config.custom_namespaces);
+		// Extract with namespace config (handles AUTO mode)
+		std::string fragment_xml = XMLUtils::ExtractXMLFragmentAll(xml_string, xpath_string, ns_config);
 		result.SetValue(i, Value(fragment_xml));
 	}
 }
@@ -400,8 +399,8 @@ void XMLScalarFunctions::XMLExtractAttributesWithNamespacesFunction(DataChunk &a
 		Value ns_value = ns_vector.GetValue(i);
 		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
 
-		// Extract elements and their attributes using XPath with custom namespaces
-		auto elements = XMLUtils::ExtractByXPath(xml_string, xpath_string, ns_config.custom_namespaces);
+		// Extract elements and their attributes using XPath with namespace config (handles AUTO mode)
+		auto elements = XMLUtils::ExtractByXPath(xml_string, xpath_string, ns_config);
 
 		// Create list of attribute structs
 		vector<Value> attr_values;
@@ -716,6 +715,100 @@ void XMLScalarFunctions::XMLMockNamespacesFunction(DataChunk &args, ExpressionSt
 
 		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
 		result.SetValue(i, map_value);
+	}
+}
+
+void XMLScalarFunctions::XMLFindUndefinedPrefixesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Finds namespace prefixes in the XPath that are not declared in the XML document
+	// Returns LIST<VARCHAR> of undefined prefixes
+
+	auto &xml_vector = args.data[0];
+	auto &xpath_vector = args.data[1];
+	auto count = args.size();
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
+
+		std::string xml_string = xml_str.GetString();
+		std::string xpath = xpath_str.GetString();
+
+		// Get prefixes used in XPath
+		auto xpath_prefixes = DetectXPathPrefixes(xpath);
+
+		// Get namespaces declared in document
+		XMLDocRAII xml_doc(xml_string);
+		auto declared_ns = xml_doc.IsValid() ? xml_doc.GetDeclaredNamespaces() : case_insensitive_map_t<string>();
+
+		// Find undefined prefixes
+		vector<Value> undefined_values;
+		for (const auto &prefix : xpath_prefixes) {
+			// Check if declared in document
+			if (declared_ns.find(prefix) == declared_ns.end()) {
+				// Also exclude built-in xml prefix
+				if (prefix != "xml") {
+					undefined_values.emplace_back(Value(prefix));
+				}
+			}
+		}
+
+		Value list_value = Value::LIST(LogicalType::VARCHAR, undefined_values);
+		result.SetValue(i, list_value);
+	}
+}
+
+void XMLScalarFunctions::XMLAddNamespaceDeclarationsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Injects namespace declarations into an XML document's root element
+	// Takes XML string and MAP<VARCHAR, VARCHAR> of prefix -> uri mappings
+	// Returns modified XML string
+
+	auto &xml_vector = args.data[0];
+	auto &ns_map_vector = args.data[1];
+	auto count = args.size();
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+		auto ns_map_value = ns_map_vector.GetValue(i);
+
+		std::string xml_string = xml_str.GetString();
+
+		// Parse the MAP value into case_insensitive_map
+		case_insensitive_map_t<string> namespaces_to_inject;
+		if (!ns_map_value.IsNull() && ns_map_value.type().id() == LogicalTypeId::MAP) {
+			auto &map_children = MapValue::GetChildren(ns_map_value);
+			for (const auto &entry : map_children) {
+				auto &struct_children = StructValue::GetChildren(entry);
+				if (struct_children.size() == 2 && !struct_children[0].IsNull() && !struct_children[1].IsNull()) {
+					std::string prefix = struct_children[0].ToString();
+					std::string uri = struct_children[1].ToString();
+					namespaces_to_inject[prefix] = uri;
+				}
+			}
+		}
+
+		// Inject the namespaces
+		std::string modified_xml = InjectNamespaceDeclarations(xml_string, namespaces_to_inject);
+		result.SetValue(i, StringVector::AddString(result, modified_xml));
+	}
+}
+
+void XMLScalarFunctions::XMLLookupNamespaceFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Looks up a namespace prefix in the common namespaces table
+	// Returns the URI if found, NULL otherwise
+
+	auto &prefix_vector = args.data[0];
+	auto count = args.size();
+
+	for (idx_t i = 0; i < count; i++) {
+		auto prefix_str = FlatVector::GetData<string_t>(prefix_vector)[i];
+		std::string prefix = prefix_str.GetString();
+
+		std::string uri = GetCommonNamespaceURI(prefix);
+		if (uri.empty()) {
+			FlatVector::SetNull(result, i, true);
+		} else {
+			result.SetValue(i, Value(uri));
+		}
 	}
 }
 
@@ -1044,6 +1137,16 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                      LogicalType::LIST(LogicalType::VARCHAR),
 	                                                      XMLExtractTextListWithNamespacesFunction));
 
+	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
+	// XML + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
+	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListWithNamespacesFunction));
+	// VARCHAR + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
+	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                      LogicalType::LIST(LogicalType::VARCHAR),
+	                                                      XMLExtractTextListWithNamespacesFunction));
+
 	loader.RegisterFunction(xml_extract_text_functions);
 
 	// Register xml_extract_all_text function - both XML and VARCHAR overloads
@@ -1101,6 +1204,14 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
 	                                                          XMLExtractElementsListWithNamespacesFunction));
 
+	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
+	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListWithNamespacesFunction));
+	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                          XMLExtractElementsListWithNamespacesFunction));
+
 	loader.RegisterFunction(xml_extract_elements_functions);
 
 	// Register xml_extract_elements_string function as a function set
@@ -1115,6 +1226,13 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   XMLExtractElementsStringWithNamespacesFunction));
 	xml_extract_elements_string_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
+	                   XMLExtractElementsStringWithNamespacesFunction));
+	// 3-argument variants with namespace mode VARCHAR
+	xml_extract_elements_string_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                   XMLExtractElementsStringWithNamespacesFunction));
+	xml_extract_elements_string_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                   XMLExtractElementsStringWithNamespacesFunction));
 	loader.RegisterFunction(xml_extract_elements_string_functions);
 
@@ -1148,6 +1266,16 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   XMLExtractAttributesWithNamespacesFunction));
 	xml_extract_attributes_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
+	                   XMLExtractAttributesWithNamespacesFunction));
+	// Add 3-argument variants with namespace mode VARCHAR
+	xml_extract_attributes_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                   XMLExtractAttributesWithNamespacesFunction));
+	xml_extract_attributes_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                   XMLExtractAttributesWithNamespacesFunction));
+	xml_extract_attributes_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
 	                   XMLExtractAttributesWithNamespacesFunction));
 	loader.RegisterFunction(xml_extract_attributes_functions);
 
@@ -1213,6 +1341,28 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction);
 	loader.RegisterFunction(xml_mock_namespaces_function);
 
+	// Register xml_find_undefined_prefixes function
+	// Finds namespace prefixes used in an XPath expression that are not declared in the XML document
+	auto xml_find_undefined_prefixes_function =
+	    ScalarFunction("xml_find_undefined_prefixes", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLFindUndefinedPrefixesFunction);
+	loader.RegisterFunction(xml_find_undefined_prefixes_function);
+
+	// Register xml_add_namespace_declarations function
+	// Injects xmlns declarations into an XML document's root element
+	auto xml_add_namespace_declarations_function =
+	    ScalarFunction("xml_add_namespace_declarations",
+	                   {LogicalType::VARCHAR, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)},
+	                   LogicalType::VARCHAR, XMLAddNamespaceDeclarationsFunction);
+	loader.RegisterFunction(xml_add_namespace_declarations_function);
+
+	// Register xml_lookup_namespace function
+	// Looks up a namespace prefix in the common namespaces table
+	auto xml_lookup_namespace_function =
+	    ScalarFunction("xml_lookup_namespace", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLLookupNamespaceFunction);
+	xml_lookup_namespace_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	loader.RegisterFunction(xml_lookup_namespace_function);
+
 	// Register xml_to_json function with optional named parameters
 	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                    XMLToJSONWithSchemaFunction, XMLToJSONWithSchemaBind);
@@ -1277,10 +1427,10 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	html_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction));
-	// HTML + XPath + namespaces -> LIST(VARCHAR)
-	html_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type},
-	                                                       LogicalType::LIST(LogicalType::VARCHAR),
-	                                                       HTMLExtractTextListWithNamespacesFunction));
+	// NOTE: Namespace parameter overloads intentionally omitted for html_extract_text.
+	// HTML5 parsing (htmlReadMemory) doesn't support XML namespace declarations -
+	// prefixed elements like "svg:circle" are treated as literal names with colons.
+	// Users should use name()="prefix:element" XPath predicates for HTML content.
 
 	loader.RegisterFunction(html_extract_text_functions);
 
@@ -1386,47 +1536,10 @@ void XMLScalarFunctions::HTMLExtractTextListFunction(DataChunk &args, Expression
 	}
 }
 
-// Returns LIST(VARCHAR) of all matching HTML text content with custom namespace mappings
-void XMLScalarFunctions::HTMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state,
-                                                                   Vector &result) {
-	auto &html_vector = args.data[0];
-	auto &xpath_vector = args.data[1];
-	auto &ns_vector = args.data[2];
-	auto count = args.size();
-
-	UnifiedVectorFormat html_data;
-	UnifiedVectorFormat xpath_data;
-	html_vector.ToUnifiedFormat(count, html_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
-
-	auto html_strings = UnifiedVectorFormat::GetData<string_t>(html_data);
-	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
-
-	for (idx_t i = 0; i < count; i++) {
-		auto html_idx = html_data.sel->get_index(i);
-		auto xpath_idx = xpath_data.sel->get_index(i);
-
-		if (!html_data.validity.RowIsValid(html_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
-			result.SetValue(i, Value::LIST(LogicalType::VARCHAR, vector<Value>()));
-			continue;
-		}
-
-		std::string html_string = html_strings[html_idx].GetString();
-		std::string xpath_string = xpath_strings[xpath_idx].GetString();
-
-		// Parse namespace parameter
-		Value ns_value = ns_vector.GetValue(i);
-		NamespaceConfig ns_config = ParseNamespacesParam(ns_value);
-
-		// Return LIST of all matches with custom namespaces
-		auto texts = XMLUtils::ExtractHTMLAllTextByXPath(html_string, xpath_string, ns_config.custom_namespaces);
-		vector<Value> text_values;
-		for (const auto &text : texts) {
-			text_values.push_back(Value(text));
-		}
-		result.SetValue(i, Value::LIST(LogicalType::VARCHAR, text_values));
-	}
-}
+// NOTE: HTMLExtractTextListWithNamespacesFunction intentionally omitted.
+// HTML5 parsing doesn't support XML namespace declarations - prefixed elements
+// like "svg:circle" are treated as literal names with colons.
+// Users should use name()="prefix:element" XPath predicates for HTML content.
 
 void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];

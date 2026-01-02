@@ -4,6 +4,7 @@
 #include <libxml/parser.h>
 #include <libxml/xpath.h>
 #include <libxml/xmlschemas.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -61,6 +62,9 @@ struct XMLDocRAII {
 
 	// Register custom namespace prefix-to-URI mappings for XPath evaluation
 	void RegisterCustomNamespaces(const case_insensitive_map_t<string> &namespaces);
+
+	// Get all declared namespace prefixes from the document
+	case_insensitive_map_t<string> GetDeclaredNamespaces() const;
 };
 
 // Custom deleters for libxml2 resources to use with DuckDB's smart pointers
@@ -159,6 +163,27 @@ struct NamespaceConfig {
 // Accepts: 'strict', 'ignore', 'auto' (strings), MAP(VARCHAR, VARCHAR), LIST<STRUCT>, STRUCT
 NamespaceConfig ParseNamespacesParam(const Value &param);
 
+// Detect namespace prefixes used in an XPath expression
+// Returns set of prefix strings (excluding XPath axis names like 'child', 'descendant', etc.)
+std::set<std::string> DetectXPathPrefixes(const std::string &xpath);
+
+// Transform XPath to use local-name() matching for specified prefixes
+// Used when prefixes are undeclared in the document (AUTO mode)
+// Example: //gml:pos -> //*[local-name()='pos' and starts-with(name(),'gml:')]
+std::string TransformXPathForUndeclaredPrefixes(const std::string &xpath,
+                                                 const std::set<std::string> &undeclared_prefixes);
+
+// Inject namespace declarations into an XML document's root element
+// Returns modified XML string with xmlns:prefix="uri" declarations added
+std::string InjectNamespaceDeclarations(const std::string &xml_str,
+                                         const case_insensitive_map_t<string> &namespaces_to_inject);
+
+// Detect namespace prefixes used in an XML document (scans for prefix:name patterns)
+std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);
+
+// Get common namespace URI for a well-known prefix (returns empty if not found)
+std::string GetCommonNamespaceURI(const std::string &prefix);
+
 // HTML-specific structures
 struct HTMLLink {
 	std::string text;
@@ -196,12 +221,16 @@ public:
 	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath);
 	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath,
 	                                              const case_insensitive_map_t<string> &namespaces);
+	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath,
+	                                              const NamespaceConfig &ns_config);
 	static std::string ExtractTextByXPath(const std::string &xml_str, const std::string &xpath);
 	static std::string ExtractTextByXPath(const std::string &xml_str, const std::string &xpath,
 	                                      const case_insensitive_map_t<string> &namespaces);
 	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath);
 	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
 	                                                      const case_insensitive_map_t<string> &namespaces);
+	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
+	                                                      const NamespaceConfig &ns_config);
 	static std::vector<XMLComment> ExtractComments(const std::string &xml_str);
 	static std::vector<XMLComment> ExtractCData(const std::string &xml_str);
 	static std::vector<XMLNamespace> ExtractNamespaces(const std::string &xml_str);
@@ -223,12 +252,18 @@ public:
 	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath);
 	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath,
 	                                      const case_insensitive_map_t<string> &namespaces);
+	static std::string ExtractXMLFragment(const std::string &xml_str, const std::string &xpath,
+	                                      const NamespaceConfig &ns_config);
 	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath);
 	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath,
 	                                         const case_insensitive_map_t<string> &namespaces);
+	static std::string ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath,
+	                                         const NamespaceConfig &ns_config);
 	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath);
 	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath,
 	                                                       const case_insensitive_map_t<string> &namespaces);
+	static std::vector<std::string> ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath,
+	                                                       const NamespaceConfig &ns_config);
 
 	// Complex type conversion functions for to_xml()
 	static void ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name);
@@ -245,8 +280,8 @@ public:
 	static std::string ExtractHTMLText(const std::string &html_str, const std::string &selector = "");
 	static std::string ExtractHTMLTextByXPath(const std::string &html_str, const std::string &xpath);
 	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath);
-	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath,
-	                                                          const case_insensitive_map_t<string> &namespaces);
+	// NOTE: Namespace overloads intentionally omitted - HTML5 parsing doesn't support
+	// XML namespace declarations. Prefixed elements are treated as literal names.
 
 	// HTML entity escaping/unescaping
 	static std::string HTMLUnescape(const std::string &html_str);

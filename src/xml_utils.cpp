@@ -10,8 +10,9 @@
 #include <cctype>
 #include <iostream>
 #include <functional>
-#include <set>
 #include <map>
+#include <regex>
+#include <set>
 #include <unordered_set>
 
 namespace duckdb {
@@ -41,6 +42,13 @@ void XMLSilentSchemaErrorHandler(void *ctx, const char *msg, ...) {
 	// Silently capture schema validation errors without printing to stderr
 	xml_parse_error_occurred = true;
 }
+
+// Forward declarations for namespace handling helpers (defined later in file)
+// These are public functions declared in xml_utils.hpp
+std::string GetCommonNamespaceURI(const std::string &prefix);
+std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);
+std::string InjectNamespaceDeclarations(const std::string &xml_str,
+                                        const case_insensitive_map_t<string> &namespaces_to_inject);
 
 // Silent structured error handler for XPath errors (thread-safe, per-context)
 // This handler is set on individual XPath contexts to suppress errors like "Undefined namespace prefix"
@@ -196,6 +204,35 @@ void XMLDocRAII::RegisterCustomNamespaces(const case_insensitive_map_t<string> &
 	for (const auto &ns_pair : namespaces) {
 		xmlXPathRegisterNs(xpath_ctx, BAD_CAST ns_pair.first.c_str(), BAD_CAST ns_pair.second.c_str());
 	}
+}
+
+case_insensitive_map_t<string> XMLDocRAII::GetDeclaredNamespaces() const {
+	case_insensitive_map_t<string> result;
+	if (!doc) {
+		return result;
+	}
+
+	xmlNodePtr root = xmlDocGetRootElement(doc);
+	if (!root) {
+		return result;
+	}
+
+	// Get all in-scope namespaces for the root element
+	xmlNsPtr *nsList = xmlGetNsList(doc, root);
+	if (!nsList) {
+		return result;
+	}
+
+	// Collect all namespaces with prefixes
+	for (int i = 0; nsList[i] != NULL; i++) {
+		xmlNsPtr ns = nsList[i];
+		if (ns->prefix && ns->href) {
+			result[std::string((const char *)ns->prefix)] = std::string((const char *)ns->href);
+		}
+	}
+
+	xmlFree(nsList);
+	return result;
 }
 
 void XMLUtils::InitializeLibXML() {
@@ -354,6 +391,74 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 	return results;
 }
 
+std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, const std::string &xpath,
+                                                 const NamespaceConfig &ns_config) {
+	std::vector<XMLElement> results;
+
+	// Determine the effective XML to parse
+	std::string effective_xml = xml_str;
+	case_insensitive_map_t<string> namespaces_to_inject;
+
+	// Handle AUTO mode: inject namespace declarations for undeclared prefixes
+	if (ns_config.mode == NamespaceMode::AUTO) {
+		auto doc_prefixes = DetectDocumentPrefixes(xml_str);
+		auto xpath_prefixes = DetectXPathPrefixes(xpath);
+
+		std::set<std::string> all_prefixes;
+		all_prefixes.insert(doc_prefixes.begin(), doc_prefixes.end());
+		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
+
+		for (const auto &prefix : all_prefixes) {
+			std::string decl_pattern = "xmlns:" + prefix + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				std::string uri = GetCommonNamespaceURI(prefix);
+				if (uri.empty()) {
+					uri = "urn:mock:" + prefix;
+				}
+				namespaces_to_inject[prefix] = uri;
+			}
+		}
+	}
+
+	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
+	if (ns_config.HasCustomNamespaces()) {
+		for (const auto &ns : ns_config.custom_namespaces) {
+			std::string decl_pattern = "xmlns:" + ns.first + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				namespaces_to_inject[ns.first] = ns.second;
+			}
+		}
+	}
+
+	if (!namespaces_to_inject.empty()) {
+		effective_xml = InjectNamespaceDeclarations(xml_str, namespaces_to_inject);
+	}
+
+	XMLDocRAII xml_doc(effective_xml);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (xpath_obj && xpath_obj->nodesetval) {
+		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+			if (node) {
+				results.push_back(ProcessXMLNode(node));
+			}
+		}
+	}
+
+	if (xpath_obj) {
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return results;
+}
+
 std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::string &xpath) {
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
@@ -450,6 +555,91 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 
 	xml_doc.RegisterCustomNamespaces(namespaces);
 
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (xpath_obj) {
+		if (xpath_obj->nodesetval) {
+			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+				xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+				if (node) {
+					xmlChar *content = xmlNodeGetContent(node);
+					if (content) {
+						results.push_back(std::string((const char *)content));
+						xmlFree(content);
+					}
+				}
+			}
+		}
+		xmlXPathFreeObject(xpath_obj);
+	}
+
+	return results;
+}
+
+std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
+                                                         const NamespaceConfig &ns_config) {
+	std::vector<std::string> results;
+
+	// Determine the effective XML to parse
+	std::string effective_xml = xml_str;
+	case_insensitive_map_t<string> namespaces_to_inject;
+
+	// Handle AUTO mode: inject namespace declarations for undeclared prefixes
+	if (ns_config.mode == NamespaceMode::AUTO) {
+		// Scan for prefixes used in the document
+		auto doc_prefixes = DetectDocumentPrefixes(xml_str);
+
+		// Also detect prefixes used in XPath
+		auto xpath_prefixes = DetectXPathPrefixes(xpath);
+
+		// Combine both sets
+		std::set<std::string> all_prefixes;
+		all_prefixes.insert(doc_prefixes.begin(), doc_prefixes.end());
+		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
+
+		// Build namespace map for undeclared prefixes
+		for (const auto &prefix : all_prefixes) {
+			// Check if already declared in document (look for xmlns:prefix=)
+			std::string decl_pattern = "xmlns:" + prefix + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				// Not declared - look up in common namespaces or create mock
+				std::string uri = GetCommonNamespaceURI(prefix);
+				if (uri.empty()) {
+					// Create mock namespace
+					uri = "urn:mock:" + prefix;
+				}
+				namespaces_to_inject[prefix] = uri;
+			}
+		}
+	}
+
+	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
+	// This allows users to provide MAP namespaces for prefixes that aren't declared in the document
+	if (ns_config.HasCustomNamespaces()) {
+		for (const auto &ns : ns_config.custom_namespaces) {
+			// Check if this prefix is declared in the document
+			std::string decl_pattern = "xmlns:" + ns.first + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				// Not declared - inject the user-provided namespace
+				namespaces_to_inject[ns.first] = ns.second;
+			}
+		}
+	}
+
+	// Inject namespace declarations into the document if we have any
+	if (!namespaces_to_inject.empty()) {
+		effective_xml = InjectNamespaceDeclarations(xml_str, namespaces_to_inject);
+	}
+
+	XMLDocRAII xml_doc(effective_xml);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	// Register custom namespaces if provided (for declared namespaces in the document)
+	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
+
+	// Evaluate XPath
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
 	if (xpath_obj) {
@@ -1554,6 +1744,111 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 	return fragment_xml;
 }
 
+std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const std::string &xpath,
+                                            const NamespaceConfig &ns_config) {
+	// Determine the effective XML to parse
+	std::string effective_xml = xml_str;
+	case_insensitive_map_t<string> namespaces_to_inject;
+
+	// Handle AUTO mode: inject namespace declarations for undeclared prefixes
+	if (ns_config.mode == NamespaceMode::AUTO) {
+		auto doc_prefixes = DetectDocumentPrefixes(xml_str);
+		auto xpath_prefixes = DetectXPathPrefixes(xpath);
+
+		std::set<std::string> all_prefixes;
+		all_prefixes.insert(doc_prefixes.begin(), doc_prefixes.end());
+		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
+
+		for (const auto &prefix : all_prefixes) {
+			std::string decl_pattern = "xmlns:" + prefix + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				std::string uri = GetCommonNamespaceURI(prefix);
+				if (uri.empty()) {
+					uri = "urn:mock:" + prefix;
+				}
+				namespaces_to_inject[prefix] = uri;
+			}
+		}
+	}
+
+	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
+	if (ns_config.HasCustomNamespaces()) {
+		for (const auto &ns : ns_config.custom_namespaces) {
+			std::string decl_pattern = "xmlns:" + ns.first + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				namespaces_to_inject[ns.first] = ns.second;
+			}
+		}
+	}
+
+	if (!namespaces_to_inject.empty()) {
+		effective_xml = InjectNamespaceDeclarations(xml_str, namespaces_to_inject);
+	}
+
+	XMLDocRAII xml_doc(effective_xml);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return "";
+	}
+
+	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return "";
+	}
+
+	std::string fragment_xml;
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				xmlNodePtr copied_node = xmlCopyNode(node, 1);
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						if (!fragment_xml.empty()) {
+							fragment_xml += "\n";
+						}
+						fragment_xml += node_xml;
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+
+	if (!fragment_xml.empty()) {
+		fragment_xml += "\n";
+	}
+
+	return fragment_xml;
+}
+
 std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath) {
 	std::vector<std::string> results;
 
@@ -1625,6 +1920,103 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 	}
 
 	xml_doc.RegisterCustomNamespaces(namespaces);
+
+	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
+
+	if (!xpath_obj || !xpath_obj->nodesetval) {
+		if (xpath_obj)
+			xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
+
+	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
+		if (node) {
+			XMLDocPtr temp_doc(xmlNewDoc(BAD_CAST "1.0"));
+			if (temp_doc) {
+				xmlNodePtr copied_node = xmlCopyNode(node, 1);
+				if (copied_node) {
+					xmlDocSetRootElement(temp_doc.get(), copied_node);
+
+					xmlChar *node_str = nullptr;
+					int size = 0;
+					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+
+					if (node_str) {
+						XMLCharPtr node_ptr(node_str);
+						std::string node_xml = std::string(reinterpret_cast<const char *>(node_ptr.get()));
+
+						size_t xml_decl_end = node_xml.find("?>");
+						if (xml_decl_end != std::string::npos) {
+							node_xml = node_xml.substr(xml_decl_end + 2);
+							node_xml.erase(0, node_xml.find_first_not_of(" \t\n\r"));
+						}
+
+						size_t end = node_xml.find_last_not_of(" \t\n\r");
+						if (end != std::string::npos) {
+							node_xml = node_xml.substr(0, end + 1);
+						}
+
+						results.push_back(node_xml);
+					}
+				}
+			}
+		}
+	}
+
+	xmlXPathFreeObject(xpath_obj);
+	return results;
+}
+
+std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml_str, const std::string &xpath,
+                                                          const NamespaceConfig &ns_config) {
+	std::vector<std::string> results;
+
+	// Determine the effective XML to parse
+	std::string effective_xml = xml_str;
+	case_insensitive_map_t<string> namespaces_to_inject;
+
+	// Handle AUTO mode: inject namespace declarations for undeclared prefixes
+	if (ns_config.mode == NamespaceMode::AUTO) {
+		auto doc_prefixes = DetectDocumentPrefixes(xml_str);
+		auto xpath_prefixes = DetectXPathPrefixes(xpath);
+
+		std::set<std::string> all_prefixes;
+		all_prefixes.insert(doc_prefixes.begin(), doc_prefixes.end());
+		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
+
+		for (const auto &prefix : all_prefixes) {
+			std::string decl_pattern = "xmlns:" + prefix + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				std::string uri = GetCommonNamespaceURI(prefix);
+				if (uri.empty()) {
+					uri = "urn:mock:" + prefix;
+				}
+				namespaces_to_inject[prefix] = uri;
+			}
+		}
+	}
+
+	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
+	if (ns_config.HasCustomNamespaces()) {
+		for (const auto &ns : ns_config.custom_namespaces) {
+			std::string decl_pattern = "xmlns:" + ns.first + "=";
+			if (xml_str.find(decl_pattern) == std::string::npos) {
+				namespaces_to_inject[ns.first] = ns.second;
+			}
+		}
+	}
+
+	if (!namespaces_to_inject.empty()) {
+		effective_xml = InjectNamespaceDeclarations(xml_str, namespaces_to_inject);
+	}
+
+	XMLDocRAII xml_doc(effective_xml);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
 
 	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), xml_doc.xpath_ctx);
 
@@ -2290,39 +2682,10 @@ std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &
 	return results;
 }
 
-std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath,
-                                                             const case_insensitive_map_t<string> &namespaces) {
-	std::vector<std::string> results;
-
-	XMLDocRAII html_doc(html_str, true); // Use HTML parser
-	if (!html_doc.IsValid() || !html_doc.xpath_ctx) {
-		return results;
-	}
-
-	// Register custom namespaces
-	html_doc.RegisterCustomNamespaces(namespaces);
-
-	xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST xpath.c_str(), html_doc.xpath_ctx);
-
-	if (!xpath_obj || !xpath_obj->nodesetval) {
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
-		return results;
-	}
-
-	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
-		if (node) {
-			XMLCharPtr content(xmlNodeGetContent(node));
-			if (content) {
-				results.push_back(std::string(reinterpret_cast<const char *>(content.get())));
-			}
-		}
-	}
-
-	xmlXPathFreeObject(xpath_obj);
-	return results;
-}
+// NOTE: Namespace overloads intentionally omitted for ExtractHTMLAllTextByXPath.
+// HTML5 parsing (htmlReadMemory) doesn't support XML namespace declarations -
+// prefixed elements like "svg:circle" are treated as literal names with colons.
+// Users should use name()="prefix:element" XPath predicates for HTML content.
 
 std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	if (html_str.empty()) {
@@ -2391,6 +2754,207 @@ std::string XMLUtils::HTMLEscape(const std::string &text) {
 
 	std::string result = std::string(reinterpret_cast<const char *>(encoded.get()));
 	return result;
+}
+
+// ============================================================================
+// XPath Prefix Detection and Transformation
+// ============================================================================
+
+std::set<std::string> DetectXPathPrefixes(const std::string &xpath) {
+	std::set<std::string> prefixes;
+
+	// Regex pattern to match namespace prefixes in XPath
+	// Matches: prefix:name where prefix is NCName (valid XML name without colon)
+	// NCName pattern: [A-Za-z_][A-Za-z0-9._-]*
+	// We look for prefix: followed by a valid name character (not ::)
+	static const std::regex prefix_pattern(
+	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))", std::regex::optimize);
+
+	// XPath axes to exclude (these use :: not single :)
+	static const std::set<std::string> xpath_axes = {
+	    "ancestor",  "ancestor-or-self",  "attribute", "child",  "descendant", "descendant-or-self",
+	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
+	    "self"};
+
+	std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
+	std::sregex_iterator end;
+
+	while (iter != end) {
+		std::string prefix = (*iter)[1].str();
+		// Don't include XPath axis specifiers
+		if (xpath_axes.find(prefix) == xpath_axes.end()) {
+			prefixes.insert(prefix);
+		}
+		++iter;
+	}
+
+	return prefixes;
+}
+
+// Inject namespace declarations into XML document for undeclared prefixes
+// This modifies the root element to add xmlns:prefix="uri" declarations
+// Example: <root><gml:pos>...</gml:pos></root> becomes
+//          <root xmlns:gml="http://www.opengis.net/gml"><gml:pos>...</gml:pos></root>
+std::string InjectNamespaceDeclarations(const std::string &xml_str,
+                                         const case_insensitive_map_t<string> &namespaces_to_inject) {
+	if (namespaces_to_inject.empty()) {
+		return xml_str;
+	}
+
+	// Find the first element's opening tag
+	// Skip XML declaration if present, then find the first '<' that starts an element
+	size_t pos = 0;
+
+	// Skip whitespace
+	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
+		pos++;
+	}
+
+	// Skip XML declaration if present: <?xml ... ?>
+	if (pos + 1 < xml_str.length() && xml_str[pos] == '<' && xml_str[pos + 1] == '?') {
+		size_t end = xml_str.find("?>", pos);
+		if (end != std::string::npos) {
+			pos = end + 2;
+		}
+	}
+
+	// Skip whitespace again
+	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
+		pos++;
+	}
+
+	// Skip DOCTYPE if present: <!DOCTYPE ... >
+	if (pos + 1 < xml_str.length() && xml_str[pos] == '<' && xml_str[pos + 1] == '!') {
+		// Find matching >
+		int depth = 1;
+		pos += 2;
+		while (pos < xml_str.length() && depth > 0) {
+			if (xml_str[pos] == '<') depth++;
+			else if (xml_str[pos] == '>') depth--;
+			pos++;
+		}
+	}
+
+	// Skip whitespace again
+	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
+		pos++;
+	}
+
+	// Now we should be at the root element
+	if (pos >= xml_str.length() || xml_str[pos] != '<') {
+		return xml_str; // Can't find root element
+	}
+
+	// Find the end of the opening tag (either > or />)
+	size_t tag_start = pos;
+	pos++; // Skip <
+
+	// Skip element name
+	while (pos < xml_str.length() && !std::isspace(xml_str[pos]) &&
+	       xml_str[pos] != '>' && xml_str[pos] != '/') {
+		pos++;
+	}
+
+	// Build the namespace declarations string
+	std::string ns_declarations;
+	for (const auto &ns : namespaces_to_inject) {
+		ns_declarations += " xmlns:" + ns.first + "=\"" + ns.second + "\"";
+	}
+
+	// Find where to insert (before the first > or />)
+	size_t insert_pos = pos;
+
+	// Skip existing attributes to find the end of the tag
+	while (pos < xml_str.length()) {
+		if (xml_str[pos] == '>') {
+			insert_pos = pos;
+			break;
+		} else if (pos + 1 < xml_str.length() && xml_str[pos] == '/' && xml_str[pos + 1] == '>') {
+			insert_pos = pos;
+			break;
+		}
+		pos++;
+	}
+
+	// Insert the namespace declarations
+	std::string result = xml_str.substr(0, insert_pos) + ns_declarations + xml_str.substr(insert_pos);
+	return result;
+}
+
+// Get common namespace URI for a prefix (returns empty if not found)
+std::string GetCommonNamespaceURI(const std::string &prefix) {
+	static const case_insensitive_map_t<string> common_namespaces = {
+	    // XML core namespaces
+	    {"xml", "http://www.w3.org/XML/1998/namespace"},
+	    {"xmlns", "http://www.w3.org/2000/xmlns/"},
+	    // XML Schema
+	    {"xsi", "http://www.w3.org/2001/XMLSchema-instance"},
+	    {"xsd", "http://www.w3.org/2001/XMLSchema"},
+	    {"xs", "http://www.w3.org/2001/XMLSchema"},
+	    // Web standards
+	    {"xhtml", "http://www.w3.org/1999/xhtml"},
+	    {"svg", "http://www.w3.org/2000/svg"},
+	    {"xlink", "http://www.w3.org/1999/xlink"},
+	    {"mathml", "http://www.w3.org/1998/Math/MathML"},
+	    // Syndication
+	    {"atom", "http://www.w3.org/2005/Atom"},
+	    {"rss", "http://purl.org/rss/1.0/"},
+	    // Dublin Core
+	    {"dc", "http://purl.org/dc/elements/1.1/"},
+	    {"dcterms", "http://purl.org/dc/terms/"},
+	    // Semantic Web / RDF
+	    {"rdf", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"},
+	    {"rdfs", "http://www.w3.org/2000/01/rdf-schema#"},
+	    {"owl", "http://www.w3.org/2002/07/owl#"},
+	    {"skos", "http://www.w3.org/2004/02/skos/core#"},
+	    {"foaf", "http://xmlns.com/foaf/0.1/"},
+	    // Geospatial
+	    {"gml", "http://www.opengis.net/gml"},
+	    {"gml32", "http://www.opengis.net/gml/3.2"},
+	    {"kml", "http://www.opengis.net/kml/2.2"},
+	    {"gpx", "http://www.topografix.com/GPX/1/1"},
+	    {"georss", "http://www.georss.org/georss"},
+	    // SOAP / Web Services
+	    {"soap", "http://schemas.xmlsoap.org/soap/envelope/"},
+	    {"soap12", "http://www.w3.org/2003/05/soap-envelope"},
+	    {"wsdl", "http://schemas.xmlsoap.org/wsdl/"},
+	    // Office / Documents
+	    {"office", "urn:oasis:names:tc:opendocument:xmlns:office:1.0"},
+	    {"odt", "urn:oasis:names:tc:opendocument:xmlns:text:1.0"},
+	    {"ods", "urn:oasis:names:tc:opendocument:xmlns:spreadsheet:1.0"},
+	    // Other common namespaces
+	    {"xslt", "http://www.w3.org/1999/XSL/Transform"},
+	    {"exsl", "http://exslt.org/common"}
+	};
+
+	auto it = common_namespaces.find(prefix);
+	if (it != common_namespaces.end()) {
+		return it->second;
+	}
+	return "";
+}
+
+// Scan XML for prefixed names and return prefixes used in the document
+std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str) {
+	std::set<std::string> prefixes;
+
+	// Pattern to match prefixed element or attribute names: prefix:name
+	static const std::regex prefix_pattern(R"(<([A-Za-z_][A-Za-z0-9._-]*):|\s([A-Za-z_][A-Za-z0-9._-]*):)",
+	                                       std::regex::optimize);
+
+	std::sregex_iterator iter(xml_str.begin(), xml_str.end(), prefix_pattern);
+	std::sregex_iterator end;
+
+	while (iter != end) {
+		// Match is in group 1 (element) or group 2 (attribute)
+		std::string prefix = (*iter)[1].matched ? (*iter)[1].str() : (*iter)[2].str();
+		if (!prefix.empty() && prefix != "xmlns") {
+			prefixes.insert(prefix);
+		}
+		++iter;
+	}
+
+	return prefixes;
 }
 
 // ============================================================================

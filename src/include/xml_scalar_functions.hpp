@@ -50,12 +50,16 @@ private:
 	static void XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLDetectPrefixesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLMockNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLFindUndefinedPrefixesFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLAddNamespaceDeclarationsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLLookupNamespaceFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// HTML-specific extraction functions
+	// NOTE: Namespace parameter overloads intentionally omitted - HTML5 parsing
+	// doesn't support XML namespace declarations.
 	static void HTMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTextWithXPathFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result);
-	static void HTMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractLinksFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result);
