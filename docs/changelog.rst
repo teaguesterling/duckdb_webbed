@@ -6,8 +6,8 @@ v1.3.0 (Current)
 
 **New Features**
 
-- Added ``html_to_doc_blocks`` function to convert HTML into structured document blocks
-- Added ``doc_blocks_to_html`` function to convert document blocks back to HTML
+- Added ``html_to_duck_blocks`` function to convert HTML into structured document blocks
+- Added ``duck_blocks_to_html`` function to convert document blocks back to HTML
 - Added namespace parameter to XPath scalar functions (``xml_extract_text``, ``xml_extract_elements``, etc.)
 - Added implicit casting from XML/HTML types to VARCHAR, enabling string functions on XML/HTML values
 

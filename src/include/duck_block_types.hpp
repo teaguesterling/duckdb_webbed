@@ -6,7 +6,7 @@
 namespace duckdb {
 
 /**
- * DocBlockTypes provides type definitions and utilities for working with doc_element structures.
+ * DuckBlockTypes provides type definitions and utilities for working with doc_element structures.
  *
  * This is a header-only interface that mirrors the duck_block_utils extension's type definitions,
  * enabling webbed to produce doc_element output without a compile-time dependency on duck_block_utils.
@@ -25,10 +25,10 @@ namespace duckdb {
  * For headings, the heading level (1-6) is stored in attributes['heading_level'],
  * not in the 'level' field. The 'level' field is reserved for hierarchy depth.
  */
-class DocBlockTypes {
+class DuckBlockTypes {
 public:
 	// Create the doc_element type (unified type for both blocks and inlines)
-	static LogicalType DocBlockType() {
+	static LogicalType DuckBlockType() {
 		child_list_t<LogicalType> struct_children;
 		struct_children.push_back(make_pair("kind", LogicalType::VARCHAR));
 		struct_children.push_back(make_pair("element_type", LogicalType::VARCHAR));
@@ -44,17 +44,17 @@ public:
 
 	// Alias for semantic clarity
 	static LogicalType DocElementType() {
-		return DocBlockType();
+		return DuckBlockType();
 	}
 
 	// Create a LIST(doc_element) type
-	static LogicalType DocBlockListType() {
-		return LogicalType::LIST(DocBlockType());
+	static LogicalType DuckBlockListType() {
+		return LogicalType::LIST(DuckBlockType());
 	}
 
 	// Alias for semantic clarity
 	static LogicalType DocElementListType() {
-		return DocBlockListType();
+		return DuckBlockListType();
 	}
 
 	// Field indices for doc_element struct
@@ -81,6 +81,24 @@ public:
 	static constexpr const char *TYPE_METADATA = "metadata";
 	static constexpr const char *TYPE_IMAGE = "image";
 	static constexpr const char *TYPE_RAW = "raw";
+
+	// Inline element type names
+	static constexpr const char *INLINE_TEXT = "text";
+	static constexpr const char *INLINE_BOLD = "bold";
+	static constexpr const char *INLINE_ITALIC = "italic";
+	static constexpr const char *INLINE_CODE = "code";
+	static constexpr const char *INLINE_LINK = "link";
+	static constexpr const char *INLINE_IMAGE = "image";
+	static constexpr const char *INLINE_SPACE = "space";
+	static constexpr const char *INLINE_SOFTBREAK = "softbreak";
+	static constexpr const char *INLINE_LINEBREAK = "linebreak";
+	static constexpr const char *INLINE_STRIKETHROUGH = "strikethrough";
+	static constexpr const char *INLINE_SUPERSCRIPT = "superscript";
+	static constexpr const char *INLINE_SUBSCRIPT = "subscript";
+	static constexpr const char *INLINE_UNDERLINE = "underline";
+	static constexpr const char *INLINE_SMALLCAPS = "smallcaps";
+	static constexpr const char *INLINE_SPAN = "span";
+	static constexpr const char *INLINE_RAW = "raw";
 
 	// Valid encoding values
 	static constexpr const char *ENCODING_TEXT = "text";

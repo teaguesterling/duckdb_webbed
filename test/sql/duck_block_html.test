@@ -1,0 +1,1328 @@
+# name: test/sql/duck_block_html.test
+# description: Test html_to_duck_blocks and duck_blocks_to_html functions
+# group: [sql]
+
+require webbed
+
+# Test basic heading extraction
+query I
+SELECT len(html_to_duck_blocks('<html><body><h1>Title</h1><p>Text</p></body></html>'));
+----
+2
+
+# Test element kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<h1>Hello</h1>'))[1].kind;
+----
+block
+
+# Test heading element_type
+query I
+SELECT (html_to_duck_blocks('<h1>Hello</h1>'))[1].element_type;
+----
+heading
+
+# Test heading level (now stored in attributes)
+query I
+SELECT (html_to_duck_blocks('<h1>Hello</h1>'))[1].attributes['heading_level'];
+----
+1
+
+# Test h2 level (now stored in attributes)
+query I
+SELECT (html_to_duck_blocks('<h2>Hello</h2>'))[1].attributes['heading_level'];
+----
+2
+
+# Test heading content
+query I
+SELECT (html_to_duck_blocks('<h1>Hello World</h1>'))[1].content;
+----
+Hello World
+
+# Test paragraph extraction
+query I
+SELECT (html_to_duck_blocks('<p>Some text</p>'))[1].element_type;
+----
+paragraph
+
+query I
+SELECT (html_to_duck_blocks('<p>Some text</p>'))[1].content;
+----
+Some text
+
+# Test code block extraction
+query I
+SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>'))[1].element_type;
+----
+code
+
+query I
+SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>'))[1].attributes['language'];
+----
+python
+
+# Test unordered list extraction
+query I
+SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].element_type;
+----
+list
+
+query I
+SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].attributes['ordered'];
+----
+false
+
+query I
+SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].encoding;
+----
+json
+
+# Test ordered list
+query I
+SELECT (html_to_duck_blocks('<ol><li>First</li><li>Second</li></ol>'))[1].attributes['ordered'];
+----
+true
+
+# Test horizontal rule
+query I
+SELECT (html_to_duck_blocks('<hr>'))[1].element_type;
+----
+hr
+
+# Test image extraction
+query I
+SELECT (html_to_duck_blocks('<img src="test.jpg" alt="Test image">'))[1].element_type;
+----
+image
+
+query I
+SELECT (html_to_duck_blocks('<img src="test.jpg" alt="Test image">'))[1].attributes['src'];
+----
+test.jpg
+
+query I
+SELECT (html_to_duck_blocks('<img src="test.jpg" alt="Test image">'))[1].attributes['alt'];
+----
+Test image
+
+# Test element_order sequencing
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Para</p><h2>Subtitle</h2>'))[1].element_order;
+----
+0
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Para</p><h2>Subtitle</h2>'))[2].element_order;
+----
+1
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Para</p><h2>Subtitle</h2>'))[3].element_order;
+----
+2
+
+# Test empty document
+query I
+SELECT len(html_to_duck_blocks('<html><body></body></html>'));
+----
+0
+
+# Test blockquote with depth
+query I
+SELECT (html_to_duck_blocks('<blockquote>Quoted text</blockquote>'))[1].element_type;
+----
+blockquote
+
+query I
+SELECT (html_to_duck_blocks('<blockquote>Quoted text</blockquote>'))[1].level;
+----
+1
+
+# Test table extraction
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>Header</th></tr><tr><td>Data</td></tr></table>'))[1].element_type;
+----
+table
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>Header</th></tr><tr><td>Data</td></tr></table>'))[1].encoding;
+----
+json
+
+# Test heading with id attribute
+query I
+SELECT (html_to_duck_blocks('<h1 id="intro">Introduction</h1>'))[1].attributes['id'];
+----
+intro
+
+# Test duck_blocks_to_html round-trip for headings
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Test Title</h1>'));
+----
+<h1>Test Title</h1>
+
+# Test duck_blocks_to_html with paragraph
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Some text content</p>'));
+----
+<p>Some text content</p>
+
+# Test duck_blocks_to_html with code block
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<pre><code class="language-sql">SELECT 1</code></pre>'));
+----
+<pre><code class="language-sql">SELECT 1</code></pre>
+
+# Test duck_blocks_to_html with hr
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<hr>'));
+----
+<hr>
+
+# Test duck_blocks_to_html with image
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<img src="image.png" alt="An image">'));
+----
+<img src="image.png" alt="An image">
+
+# Test VARCHAR input type
+query I
+SELECT len(html_to_duck_blocks('<h1>Title</h1>'::VARCHAR));
+----
+1
+
+# =============================================================================
+# doc_element API Tests (Unified Block/Inline Type)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# kind field tests - all block-level elements should have kind='block'
+# -----------------------------------------------------------------------------
+
+# Heading kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<h1>Heading</h1>'))[1].kind;
+----
+block
+
+# Paragraph kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<p>Text</p>'))[1].kind;
+----
+block
+
+# Code block kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<pre><code>code</code></pre>'))[1].kind;
+----
+block
+
+# Blockquote kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<blockquote>Quote</blockquote>'))[1].kind;
+----
+block
+
+# List kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].kind;
+----
+block
+
+# Table kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].kind;
+----
+block
+
+# HR kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<hr>'))[1].kind;
+----
+block
+
+# Image kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<img src="test.jpg">'))[1].kind;
+----
+block
+
+# Metadata kind is 'block'
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].kind;
+----
+block
+
+# -----------------------------------------------------------------------------
+# heading_level attribute tests - heading levels stored in attributes
+# -----------------------------------------------------------------------------
+
+# h1 has heading_level='1'
+query I
+SELECT (html_to_duck_blocks('<h1>H1</h1>'))[1].attributes['heading_level'];
+----
+1
+
+# h2 has heading_level='2'
+query I
+SELECT (html_to_duck_blocks('<h2>H2</h2>'))[1].attributes['heading_level'];
+----
+2
+
+# h3 has heading_level='3'
+query I
+SELECT (html_to_duck_blocks('<h3>H3</h3>'))[1].attributes['heading_level'];
+----
+3
+
+# h4 has heading_level='4'
+query I
+SELECT (html_to_duck_blocks('<h4>H4</h4>'))[1].attributes['heading_level'];
+----
+4
+
+# h5 has heading_level='5'
+query I
+SELECT (html_to_duck_blocks('<h5>H5</h5>'))[1].attributes['heading_level'];
+----
+5
+
+# h6 has heading_level='6'
+query I
+SELECT (html_to_duck_blocks('<h6>H6</h6>'))[1].attributes['heading_level'];
+----
+6
+
+# Heading can have both heading_level and id attributes
+query I
+SELECT (html_to_duck_blocks('<h2 id="section">Section</h2>'))[1].attributes['heading_level'];
+----
+2
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="section">Section</h2>'))[1].attributes['id'];
+----
+section
+
+# -----------------------------------------------------------------------------
+# level field tests - NULL for headings, used for nesting depth
+# -----------------------------------------------------------------------------
+
+# Heading level field is NULL (heading level is in attributes)
+query I
+SELECT (html_to_duck_blocks('<h1>Heading</h1>'))[1].level IS NULL;
+----
+true
+
+# Paragraph level field is NULL
+query I
+SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level IS NULL;
+----
+true
+
+# Code block level field is NULL
+query I
+SELECT (html_to_duck_blocks('<pre><code>code</code></pre>'))[1].level IS NULL;
+----
+true
+
+# Blockquote level field contains nesting depth
+query I
+SELECT (html_to_duck_blocks('<blockquote>Quote</blockquote>'))[1].level;
+----
+1
+
+# Nested blockquote has higher level (inner blockquote is second element)
+query I
+SELECT (html_to_duck_blocks('<blockquote><blockquote>Nested</blockquote></blockquote>'))[2].level;
+----
+2
+
+# List level field is NULL
+query I
+SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].level IS NULL;
+----
+true
+
+# Table level field is NULL
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].level IS NULL;
+----
+true
+
+# HR level field is NULL
+query I
+SELECT (html_to_duck_blocks('<hr>'))[1].level IS NULL;
+----
+true
+
+# Image level field is NULL
+query I
+SELECT (html_to_duck_blocks('<img src="test.jpg">'))[1].level IS NULL;
+----
+true
+
+# -----------------------------------------------------------------------------
+# Heading round-trip tests - verify heading levels are preserved
+# -----------------------------------------------------------------------------
+
+# h1 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title</h1>'));
+----
+<h1>Title</h1>
+
+# h2 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>Subtitle</h2>'));
+----
+<h2>Subtitle</h2>
+
+# h3 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h3>Section</h3>'));
+----
+<h3>Section</h3>
+
+# h4 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h4>Subsection</h4>'));
+----
+<h4>Subsection</h4>
+
+# h5 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h5>Minor</h5>'));
+----
+<h5>Minor</h5>
+
+# h6 round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h6>Smallest</h6>'));
+----
+<h6>Smallest</h6>
+
+# Heading with id attribute round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2 id="intro">Introduction</h2>'));
+----
+<h2 id="intro">Introduction</h2>
+
+# Multiple headings with different levels
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title</h1><h2>Section</h2><h3>Subsection</h3>'));
+----
+<h1>Title</h1><h2>Section</h2><h3>Subsection</h3>
+
+# -----------------------------------------------------------------------------
+# element_type field tests
+# -----------------------------------------------------------------------------
+
+# All element types are correctly identified
+query I
+SELECT (html_to_duck_blocks('<h1>H</h1>'))[1].element_type;
+----
+heading
+
+query I
+SELECT (html_to_duck_blocks('<p>P</p>'))[1].element_type;
+----
+paragraph
+
+query I
+SELECT (html_to_duck_blocks('<pre><code>C</code></pre>'))[1].element_type;
+----
+code
+
+query I
+SELECT (html_to_duck_blocks('<blockquote>Q</blockquote>'))[1].element_type;
+----
+blockquote
+
+query I
+SELECT (html_to_duck_blocks('<ul><li>L</li></ul>'))[1].element_type;
+----
+list
+
+query I
+SELECT (html_to_duck_blocks('<ol><li>L</li></ol>'))[1].element_type;
+----
+list
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>T</td></tr></table>'))[1].element_type;
+----
+table
+
+query I
+SELECT (html_to_duck_blocks('<hr>'))[1].element_type;
+----
+hr
+
+query I
+SELECT (html_to_duck_blocks('<img src="i.jpg">'))[1].element_type;
+----
+image
+
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">m</script>'))[1].element_type;
+----
+metadata
+
+# -----------------------------------------------------------------------------
+# encoding field tests
+# -----------------------------------------------------------------------------
+
+# Text encoding for simple content
+query I
+SELECT (html_to_duck_blocks('<h1>Heading</h1>'))[1].encoding;
+----
+text
+
+query I
+SELECT (html_to_duck_blocks('<p>Paragraph</p>'))[1].encoding;
+----
+text
+
+query I
+SELECT (html_to_duck_blocks('<pre><code>Code</code></pre>'))[1].encoding;
+----
+text
+
+query I
+SELECT (html_to_duck_blocks('<blockquote>Quote</blockquote>'))[1].encoding;
+----
+text
+
+query I
+SELECT (html_to_duck_blocks('<hr>'))[1].encoding;
+----
+text
+
+# JSON encoding for complex structures
+query I
+SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].encoding;
+----
+json
+
+query I
+SELECT (html_to_duck_blocks('<ol><li>Item</li></ol>'))[1].encoding;
+----
+json
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].encoding;
+----
+json
+
+# YAML encoding for metadata
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].encoding;
+----
+yaml
+
+# Text encoding for paragraphs with inline content (structured inline elements extracted separately)
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[1].encoding;
+----
+text
+
+# Paragraph with inline content has empty content (inlines are extracted as children)
+query I
+SELECT length((html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[1].content);
+----
+0
+
+# Paragraph with inline content has inline children following it
+query I
+SELECT len(html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'));
+----
+3
+
+# Second element is inline text "Text with "
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[2].kind;
+----
+inline
+
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[2].element_type;
+----
+text
+
+query I
+SELECT trim((html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[2].content);
+----
+Text with
+
+# Third element is bold "bold"
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[3].kind;
+----
+inline
+
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[3].element_type;
+----
+bold
+
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[3].content;
+----
+bold
+
+# Inline children have level=1
+query I
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[2].level;
+----
+1
+
+# =============================================================================
+# Frontmatter/Metadata Block Tests (Issue #56)
+# =============================================================================
+
+# Test frontmatter script extraction
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].element_type;
+----
+metadata
+
+# Test frontmatter encoding is yaml
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].encoding;
+----
+yaml
+
+# Test frontmatter content extraction
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'))[1].content;
+----
+title: Test
+
+# Test frontmatter element_order is 0
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[1].element_order;
+----
+0
+
+# Test content element_order follows frontmatter
+query I
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[2].element_order;
+----
+1
+
+# Test multi-line YAML frontmatter preservation (verify content contains expected lines)
+query I
+SELECT length((html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test
+author: John
+tags:
+  - doc
+  - test</script>'))[1].content) > 30;
+----
+true
+
+# Test frontmatter contains expected YAML keys
+query I
+SELECT contains((html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test
+author: John</script>'))[1].content, 'author: John');
+----
+true
+
+# Test frontmatter round-trip (verify structure is preserved)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), 'application/vnd.frontmatter+yaml');
+----
+true
+
+# Test frontmatter round-trip contains heading
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), '<h1>Title</h1>');
+----
+true
+
+# Test frontmatter round-trip contains YAML content
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), 'title: Test');
+----
+true
+
+# Test only regular scripts are ignored (not frontmatter type)
+query I
+SELECT len(html_to_duck_blocks('<script>console.log("hi")</script><h1>Title</h1>'));
+----
+1
+
+# Test document with only frontmatter
+query I
+SELECT len(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script>'));
+----
+1
+
+# =============================================================================
+# Table Round-Trip Tests (Issue #57)
+# =============================================================================
+
+# Test table round-trip produces table tag
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<table>');
+----
+true
+
+# Test table round-trip contains thead
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>')), '<thead>');
+----
+true
+
+# Test table round-trip contains header cell
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<th>Name</th>');
+----
+true
+
+# Test table round-trip contains tbody
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>')), '<tbody>');
+----
+true
+
+# Test table round-trip contains data cell
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>')), '<td>Alice</td>');
+----
+true
+
+# Test table round-trip with multiple rows
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Col1</th></tr><tr><td>Row1</td></tr><tr><td>Row2</td></tr></table>')), '<td>Row2</td>');
+----
+true
+
+# Test table HTML escaping in cells (special chars should be escaped)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Test</th></tr><tr><td>&lt;script&gt;</td></tr></table>')), '&lt;');
+----
+true
+
+# Test empty table renders correctly
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table></table>'));
+----
+<table><tbody></tbody></table>
+
+# Test table with only headers (no data rows)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>Header1</th><th>Header2</th></tr></thead></table>')), '<th>Header1</th>');
+----
+true
+
+# Test table with only data rows (no explicit headers)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tbody><tr><td>Data1</td><td>Data2</td></tr></tbody></table>')), '<td>Data1</td>');
+----
+true
+
+# Test table with special characters in cells (ampersand)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Col</th></tr><tr><td>A &amp; B</td></tr></table>')), '&amp;');
+----
+true
+
+# Test table with special characters in cells (quotes)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Col</th></tr><tr><td>Say &quot;Hello&quot;</td></tr></table>')), 'Hello');
+----
+true
+
+# Test table with many columns
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></table>')), '<th>E</th>');
+----
+true
+
+# Test table with many rows
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>X</th></tr><tr><td>R1</td></tr><tr><td>R2</td></tr><tr><td>R3</td></tr><tr><td>R4</td></tr><tr><td>R5</td></tr></table>')), '<td>R5</td>');
+----
+true
+
+# Test table cell content is preserved exactly
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Name</th></tr><tr><td>John Doe</td></tr></table>')), 'John Doe');
+----
+true
+
+# Test table with numeric content
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Price</th></tr><tr><td>$19.99</td></tr></table>')), '$19.99');
+----
+true
+
+# Test table structure is complete (closing tags)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</table>');
+----
+true
+
+# Test table tbody closing tag present
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</tbody>');
+----
+true
+
+# Test table thead closing tag present
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>')), '</thead>');
+----
+true
+
+# Test table with whitespace in cells
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Col</th></tr><tr><td>  spaced  </td></tr></table>')), 'spaced');
+----
+true
+
+# Test table row structure (tr tags)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>')), '</tr>');
+----
+true
+
+# Test multiple tables in document
+query I
+SELECT len(html_to_duck_blocks('<table><tr><th>T1</th></tr></table><p>text</p><table><tr><th>T2</th></tr></table>'));
+----
+3
+
+# Test table element_type is correct
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>H</th></tr></table>'))[1].element_type;
+----
+table
+
+# Test table encoding is json
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>H</th></tr></table>'))[1].encoding;
+----
+json
+
+# Test table JSON content contains headers key
+query I
+SELECT contains((html_to_duck_blocks('<table><tr><th>MyHeader</th></tr></table>'))[1].content, 'headers');
+----
+true
+
+# Test table JSON content contains rows key
+query I
+SELECT contains((html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>'))[1].content, 'rows');
+----
+true
+
+# Test table with empty cells
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td></td></tr></table>')), '<td></td>');
+----
+true
+
+# Test table preserves cell order
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>First</th><th>Second</th><th>Third</th></tr></table>')), '<th>First</th><th>Second</th><th>Third</th>');
+----
+true
+
+# Test table with Unicode content
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>名前</th></tr><tr><td>田中</td></tr></table>')), '田中');
+----
+true
+
+# Test table with emoji
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Status</th></tr><tr><td>✓ Done</td></tr></table>')), '✓');
+----
+true
+
+# Test table with greater than/less than
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Expr</th></tr><tr><td>x &gt; 5</td></tr></table>')), '&gt;');
+----
+true
+
+# Test single cell table
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><td>Single</td></tr></table>')), 'Single');
+----
+true
+
+# Test table row order is preserved (first row first)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>First</td></tr><tr><td>Second</td></tr></table>')), '<td>First</td></tr><tr><td>Second</td>');
+----
+true
+
+# Test table with colons (common in data)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Time</th></tr><tr><td>12:30:00</td></tr></table>')), '12:30:00');
+----
+true
+
+# Test table with commas (common in numbers)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Amount</th></tr><tr><td>1,234,567</td></tr></table>')), '1,234,567');
+----
+true
+
+# Test table header text content extraction
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>Simple Header</th></tr></table>'))[1].content;
+----
+{"headers":["Simple Header"],"rows":[]}
+
+# Test table with single row of data
+query I
+SELECT contains((html_to_duck_blocks('<table><tr><th>H</th></tr><tr><td>D</td></tr></table>'))[1].content, '"rows":[["D"]]');
+----
+true
+
+# =============================================================================
+# Inline Element Tests (Issue #59)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Basic inline rendering - standalone inline elements
+# -----------------------------------------------------------------------------
+
+# Test inline text rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'text', content: 'Hello',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+Hello
+
+# Test bold rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'bold', content: 'Bold',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<strong>Bold</strong>
+
+# Test italic rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'italic', content: 'Italic',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<em>Italic</em>
+
+# Test inline code rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'code', content: 'code()',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<code>code()</code>
+
+# Test link rendering with href
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'link', content: 'Click',
+                            level: 1, encoding: 'text',
+                            attributes: MAP{'href': 'https://example.com'}, element_order: 0}]);
+----
+<a href="https://example.com">Click</a>
+
+# Test link rendering with href and title
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'link', content: 'Click',
+                            level: 1, encoding: 'text',
+                            attributes: MAP{'href': 'https://example.com', 'title': 'Example Site'}, element_order: 0}]);
+----
+<a href="https://example.com" title="Example Site">Click</a>
+
+# Test linebreak rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'linebreak', content: '',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<br>
+
+# Test strikethrough rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'strikethrough', content: 'deleted',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<del>deleted</del>
+
+# Test superscript rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'superscript', content: '2',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<sup>2</sup>
+
+# Test subscript rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'subscript', content: '2',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<sub>2</sub>
+
+# Test underline rendering
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'underline', content: 'underlined',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<u>underlined</u>
+
+# Test raw inline rendering (passes through without escaping)
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'raw', content: '<span>raw</span>',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<span>raw</span>
+
+# Test space rendering - returns a single space character (length 1)
+query I
+SELECT length(duck_blocks_to_html([{kind: 'inline', element_type: 'space', content: '',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]));
+----
+1
+
+
+# Test inline text escapes HTML entities
+query I
+SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'text', content: '<script>alert(1)</script>',
+                            level: 1, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+&lt;script&gt;alert(1)&lt;/script&gt;
+
+# -----------------------------------------------------------------------------
+# Paragraph with inline children - consuming look-ahead tests
+# -----------------------------------------------------------------------------
+
+# Test paragraph with inline children
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'Hello ', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'inline', element_type: 'bold', content: 'world', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 2}
+]);
+----
+<p>Hello <strong>world</strong></p>
+
+# Test paragraph with mixed inline types
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'This is ', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'inline', element_type: 'italic', content: 'italic', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 2},
+    {kind: 'inline', element_type: 'text', content: ' and ', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 3},
+    {kind: 'inline', element_type: 'bold', content: 'bold', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 4}
+]);
+----
+<p>This is <em>italic</em> and <strong>bold</strong></p>
+
+# Test paragraph with link inline
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'Visit ', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'inline', element_type: 'link', content: 'example', level: 1,
+     encoding: 'text', attributes: MAP{'href': 'https://example.com'}, element_order: 2}
+]);
+----
+<p>Visit <a href="https://example.com">example</a></p>
+
+# Test multiple paragraphs with inline children - inlines should be associated with correct parent
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'First para', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 2},
+    {kind: 'inline', element_type: 'text', content: 'Second para', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 3}
+]);
+----
+<p>First para</p><p>Second para</p>
+
+# Test paragraph with both content and inline children (backward compat)
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: 'Prefix: ', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'bold', content: 'suffix', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1}
+]);
+----
+<p>Prefix: <strong>suffix</strong></p>
+
+# -----------------------------------------------------------------------------
+# Heading with inline children - consuming look-ahead tests
+# -----------------------------------------------------------------------------
+
+# Test heading with inline children
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'heading', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{'heading_level': '1'}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'Chapter ', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'inline', element_type: 'italic', content: 'One', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 2}
+]);
+----
+<h1>Chapter <em>One</em></h1>
+
+# Test h2 heading with inline children
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'heading', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{'heading_level': '2'}, element_order: 0},
+    {kind: 'inline', element_type: 'code', content: 'Section', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1}
+]);
+----
+<h2><code>Section</code></h2>
+
+# Test heading with id attribute and inline children
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'heading', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{'heading_level': '1', 'id': 'intro'}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'Introduction', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1}
+]);
+----
+<h1 id="intro">Introduction</h1>
+
+# -----------------------------------------------------------------------------
+# Backward compatibility - encoding='html' still works
+# -----------------------------------------------------------------------------
+
+# Test paragraph with HTML encoding content (backward compat)
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: 'Text with <strong>bold</strong>', level: NULL,
+     encoding: 'html', attributes: MAP{}, element_order: 0}
+]);
+----
+<p>Text with <strong>bold</strong></p>
+
+# Test heading with HTML encoding content (backward compat)
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'heading', content: 'Title with <em>emphasis</em>', level: NULL,
+     encoding: 'html', attributes: MAP{'heading_level': '1'}, element_order: 0}
+]);
+----
+<h1>Title with <em>emphasis</em></h1>
+
+# -----------------------------------------------------------------------------
+# Edge cases
+# -----------------------------------------------------------------------------
+
+# Test empty paragraph with no inline children
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0}
+]);
+----
+<p></p>
+
+# Test inline at level 0 (NULL) should not be consumed by preceding block
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: 'Para', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: 'text', content: 'Standalone', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 1}
+]);
+----
+<p>Para</p>Standalone
+
+# Test block between paragraph and its potential inline children stops consuming
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: 'Para1', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'block', element_type: 'hr', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 1},
+    {kind: 'inline', element_type: 'text', content: 'After HR', level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 2}
+]);
+----
+<p>Para1</p><hr>After HR
+
+# =============================================================================
+# Inline Extraction Tests (html_to_duck_blocks with inline content)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Paragraph inline extraction
+# -----------------------------------------------------------------------------
+
+# Extract italic from paragraph
+query I
+SELECT (html_to_duck_blocks('<p>Some <em>italic</em> text</p>'))[2].element_type;
+----
+text
+
+query I
+SELECT (html_to_duck_blocks('<p>Some <em>italic</em> text</p>'))[3].element_type;
+----
+italic
+
+query I
+SELECT (html_to_duck_blocks('<p>Some <em>italic</em> text</p>'))[3].content;
+----
+italic
+
+# Extract code from paragraph
+query I
+SELECT (html_to_duck_blocks('<p>Run <code>npm install</code></p>'))[3].element_type;
+----
+code
+
+query I
+SELECT (html_to_duck_blocks('<p>Run <code>npm install</code></p>'))[3].content;
+----
+npm install
+
+# Extract link from paragraph
+query I
+SELECT (html_to_duck_blocks('<p>Visit <a href="https://example.com">our site</a></p>'))[3].element_type;
+----
+link
+
+query I
+SELECT (html_to_duck_blocks('<p>Visit <a href="https://example.com">our site</a></p>'))[3].content;
+----
+our site
+
+query I
+SELECT (html_to_duck_blocks('<p>Visit <a href="https://example.com">our site</a></p>'))[3].attributes['href'];
+----
+https://example.com
+
+# Extract strikethrough from paragraph
+query I
+SELECT (html_to_duck_blocks('<p>This is <del>deleted</del></p>'))[3].element_type;
+----
+strikethrough
+
+# Extract superscript/subscript
+query I
+SELECT (html_to_duck_blocks('<p>E=mc<sup>2</sup></p>'))[3].element_type;
+----
+superscript
+
+query I
+SELECT (html_to_duck_blocks('<p>H<sub>2</sub>O</p>'))[3].element_type;
+----
+subscript
+
+# Extract linebreak
+query I
+SELECT (html_to_duck_blocks('<p>Line 1<br>Line 2</p>'))[3].element_type;
+----
+linebreak
+
+# Extract underline
+query I
+SELECT (html_to_duck_blocks('<p>This is <u>underlined</u></p>'))[3].element_type;
+----
+underline
+
+# Extract span with class
+query I
+SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>'))[3].element_type;
+----
+span
+
+query I
+SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>'))[3].attributes['class'];
+----
+highlight
+
+# -----------------------------------------------------------------------------
+# Heading inline extraction
+# -----------------------------------------------------------------------------
+
+# Heading with bold
+query I
+SELECT len(html_to_duck_blocks('<h1>Chapter <strong>One</strong></h1>'));
+----
+3
+
+query I
+SELECT (html_to_duck_blocks('<h1>Chapter <strong>One</strong></h1>'))[1].element_type;
+----
+heading
+
+query I
+SELECT (html_to_duck_blocks('<h1>Chapter <strong>One</strong></h1>'))[2].kind;
+----
+inline
+
+query I
+SELECT (html_to_duck_blocks('<h1>Chapter <strong>One</strong></h1>'))[3].element_type;
+----
+bold
+
+# Heading with link
+query I
+SELECT (html_to_duck_blocks('<h2>See <a href="#ref">reference</a></h2>'))[3].element_type;
+----
+link
+
+# Heading level preserved in attributes
+query I
+SELECT (html_to_duck_blocks('<h3>Title with <em>emphasis</em></h3>'))[1].attributes['heading_level'];
+----
+3
+
+# -----------------------------------------------------------------------------
+# Round-trip tests: HTML -> duck_blocks -> HTML
+# -----------------------------------------------------------------------------
+
+# Round-trip paragraph with bold
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Hello <strong>world</strong></p>'));
+----
+<p>Hello <strong>world</strong></p>
+
+# Round-trip paragraph with italic
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Hello <em>world</em></p>'));
+----
+<p>Hello <em>world</em></p>
+
+# Round-trip paragraph with link
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Visit <a href="https://example.com">site</a></p>'));
+----
+<p>Visit <a href="https://example.com">site</a></p>
+
+# Round-trip heading with inline
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title <strong>One</strong></h1>'));
+----
+<h1>Title <strong>One</strong></h1>
+
+# Round-trip mixed inline types
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Text <strong>bold</strong> and <em>italic</em></p>'));
+----
+<p>Text <strong>bold</strong> and <em>italic</em></p>
