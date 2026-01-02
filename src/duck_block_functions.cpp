@@ -495,7 +495,10 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			// Struct format: kind, element_type, content, level, encoding, attributes, element_order
 			std::string kind = struct_values[DuckBlockTypes::KIND_IDX].GetValue<string>();
 			std::string element_type = struct_values[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-			std::string content = struct_values[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+			// Handle NULL content (parent elements with inline children have NULL content)
+			std::string content = struct_values[DuckBlockTypes::CONTENT_IDX].IsNull()
+			                          ? ""
+			                          : struct_values[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
 			Value level_val = struct_values[DuckBlockTypes::LEVEL_IDX];
 			std::string encoding = struct_values[DuckBlockTypes::ENCODING_IDX].GetValue<string>();
 			Value attrs_val = struct_values[DuckBlockTypes::ATTRIBUTES_IDX];
@@ -556,7 +559,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 					// Render this inline child
 					std::string next_type = next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].IsNull()
+					                               ? ""
+					                               : next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
 					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
 					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 
@@ -596,7 +601,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 					// Render this inline child
 					std::string next_type = next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].IsNull()
+					                               ? ""
+					                               : next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
 					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
 					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 
