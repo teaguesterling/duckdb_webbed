@@ -47,9 +47,8 @@ LIMIT 1;
 STRUCT("employee-id" INTEGER, "full-name" VARCHAR)
 
 # Test 8: Verify read_html works with filename parameter
-# TODO(GitHub #48): filename parameter not working with union_by_name
-statement error
+query II
 SELECT count(*), count(DISTINCT filename)
 FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', filename:=true);
 ----
-Binder Error
+4	2

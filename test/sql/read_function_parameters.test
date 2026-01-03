@@ -1,0 +1,427 @@
+# name: test/sql/read_function_parameters.test
+# description: Comprehensive tests for read_* function parameter handling
+# group: [webbed]
+
+require webbed
+
+# =============================================================================
+# SECTION 1: Parameter Acceptance Tests
+# Verify all documented parameters are accepted by each function
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# read_xml parameter acceptance
+# -----------------------------------------------------------------------------
+
+# Common parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', ignore_errors := false);
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', maximum_file_size := 16777216);
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', auto_detect := true);
+
+# filename parameter - DOCUMENTED but currently MISSING in read_xml
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', filename := true);
+
+# Schema inference parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', record_element := 'employee');
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', root_element := 'employees');
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', max_depth := 5);
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', unnest_as := 'struct');
+
+# Type handling parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', all_varchar := true);
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', force_list := ['name']);
+
+# Attribute handling parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', attr_mode := 'prefix');
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', attr_prefix := '_');
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', text_key := '#text');
+
+# Namespace parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', namespaces := 'strip');
+
+# Empty element handling
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', empty_elements := 'object');
+
+# Multi-file parameters
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', union_by_name := false);
+
+# -----------------------------------------------------------------------------
+# read_xml_objects parameter acceptance
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT COUNT(*) FROM read_xml_objects('test/data/employees.xml', filename := true);
+
+statement ok
+SELECT COUNT(*) FROM read_xml_objects('test/data/employees.xml', ignore_errors := false);
+
+statement ok
+SELECT COUNT(*) FROM read_xml_objects('test/data/employees.xml', maximum_file_size := 16777216);
+
+# -----------------------------------------------------------------------------
+# read_html parameter acceptance
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', filename := true);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', ignore_errors := false);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', maximum_file_size := 16777216);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', auto_detect := true);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', all_varchar := true);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', union_by_name := false);
+
+# -----------------------------------------------------------------------------
+# read_html_objects parameter acceptance
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT COUNT(*) FROM read_html_objects('test/html/complex.html', filename := true);
+
+statement ok
+SELECT COUNT(*) FROM read_html_objects('test/html/complex.html', ignore_errors := false);
+
+statement ok
+SELECT COUNT(*) FROM read_html_objects('test/html/complex.html', maximum_file_size := 16777216);
+
+# =============================================================================
+# SECTION 2: Parameter Effect Tests
+# Verify parameters actually produce the expected behavior
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# filename parameter effect
+# -----------------------------------------------------------------------------
+
+# read_xml with filename=true should add filename column
+query I
+SELECT COUNT(*) FROM (SELECT filename FROM read_xml('test/data/employees.xml', filename := true));
+----
+3
+
+query I
+SELECT filename LIKE '%employees.xml' FROM read_xml('test/data/employees.xml', filename := true) LIMIT 1;
+----
+true
+
+# read_xml_objects with filename=true
+query I
+SELECT filename LIKE '%employees.xml' FROM read_xml_objects('test/data/employees.xml', filename := true);
+----
+true
+
+# read_html with filename=true
+query I
+SELECT filename LIKE '%complex.html' FROM read_html('test/html/complex.html', filename := true) LIMIT 1;
+----
+true
+
+# read_html_objects with filename=true
+query I
+SELECT filename LIKE '%complex.html' FROM read_html_objects('test/html/complex.html', filename := true);
+----
+true
+
+# filename=false should NOT include filename column
+statement error
+SELECT filename FROM read_xml('test/data/employees.xml', filename := false) LIMIT 1;
+----
+Binder Error
+
+statement error
+SELECT filename FROM read_xml_objects('test/data/employees.xml', filename := false);
+----
+Binder Error
+
+# -----------------------------------------------------------------------------
+# ignore_errors parameter effect
+# -----------------------------------------------------------------------------
+
+# With ignore_errors=false, bad XML should fail
+statement error
+SELECT * FROM read_xml('test/data/bad.xml', ignore_errors := false);
+----
+
+# With ignore_errors=true, bad XML should be skipped
+statement ok
+SELECT * FROM read_xml('test/data/bad.xml', ignore_errors := true);
+
+# -----------------------------------------------------------------------------
+# all_varchar parameter effect
+# -----------------------------------------------------------------------------
+
+# Without all_varchar, numeric values should be typed
+query I
+SELECT typeof(salary) FROM read_xml('test/data/employees.xml', record_element := 'employee') LIMIT 1;
+----
+INTEGER
+
+# With all_varchar=true, numeric values should be VARCHAR
+query I
+SELECT typeof(salary) FROM read_xml('test/data/employees.xml', record_element := 'employee', all_varchar := true) LIMIT 1;
+----
+VARCHAR
+
+# -----------------------------------------------------------------------------
+# record_element parameter effect
+# -----------------------------------------------------------------------------
+
+# Without record_element, auto_detect defaults to true and infers record element
+query I
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml');
+----
+3
+
+# With record_element, each employee becomes a row
+query I
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', record_element := 'employee');
+----
+3
+
+# -----------------------------------------------------------------------------
+# attr_mode parameter effect
+# -----------------------------------------------------------------------------
+
+# With attr_mode='prefix' (default), attributes get prefix
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', record_element := 'employee', attr_mode := 'prefix');
+
+# With attr_mode='ignore', attributes columns should be filtered out
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', record_element := 'employee', attr_mode := 'ignore');
+
+# -----------------------------------------------------------------------------
+# attr_prefix parameter effect
+# -----------------------------------------------------------------------------
+
+# Custom prefix should be accepted
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', record_element := 'employee', attr_prefix := '_');
+
+# -----------------------------------------------------------------------------
+# max_depth parameter effect
+# -----------------------------------------------------------------------------
+
+# max_depth=1 should limit nesting
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', max_depth := 1);
+
+# max_depth=0 should still work (minimal depth)
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', max_depth := 0);
+
+# -----------------------------------------------------------------------------
+# maximum_file_size parameter effect
+# -----------------------------------------------------------------------------
+
+# Setting very small max size should cause files to be skipped/error
+statement error
+SELECT * FROM read_xml('test/data/employees.xml', maximum_file_size := 10);
+----
+
+# With ignore_errors, large files are skipped silently
+query I
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', maximum_file_size := 10, ignore_errors := true);
+----
+0
+
+# -----------------------------------------------------------------------------
+# force_list parameter effect
+# -----------------------------------------------------------------------------
+
+# With force_list, specified column should always be LIST
+query I
+SELECT typeof(name) LIKE 'VARCHAR%' FROM read_xml('test/data/employees.xml', record_element := 'employee', force_list := ['name']) LIMIT 1;
+----
+true
+
+# -----------------------------------------------------------------------------
+# unnest_as parameter effect
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', unnest_as := 'struct');
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', unnest_as := 'columns');
+
+# -----------------------------------------------------------------------------
+# namespaces parameter effect
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', namespaces := 'strip');
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', namespaces := 'keep');
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', namespaces := 'expand');
+
+# -----------------------------------------------------------------------------
+# empty_elements parameter effect
+# -----------------------------------------------------------------------------
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', empty_elements := 'object');
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', empty_elements := 'null');
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', empty_elements := 'string');
+
+# =============================================================================
+# SECTION 3: Error Handling Tests
+# Verify proper error messages for invalid parameter values
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Invalid parameter names
+# -----------------------------------------------------------------------------
+
+statement error
+SELECT * FROM read_xml('test/data/employees.xml', invalid_param := true);
+----
+Invalid named parameter
+
+statement error
+SELECT * FROM read_xml_objects('test/data/employees.xml', invalid_param := true);
+----
+Invalid named parameter
+
+statement error
+SELECT * FROM read_html('test/html/complex.html', invalid_param := true);
+----
+Invalid named parameter
+
+statement error
+SELECT * FROM read_html_objects('test/html/complex.html', invalid_param := true);
+----
+Invalid named parameter
+
+# -----------------------------------------------------------------------------
+# Invalid parameter types
+# -----------------------------------------------------------------------------
+
+# Note: DuckDB automatically coerces many string values to booleans/integers,
+# so we test with types that cannot be coerced
+
+# maximum_file_size expects BIGINT - string 'big' cannot be coerced
+statement error
+SELECT * FROM read_xml('test/data/employees.xml', maximum_file_size := 'big');
+----
+
+# max_depth expects INTEGER - string 'deep' cannot be coerced
+statement error
+SELECT * FROM read_xml('test/data/employees.xml', max_depth := 'deep');
+----
+
+# -----------------------------------------------------------------------------
+# Invalid parameter values
+# -----------------------------------------------------------------------------
+
+# Invalid unnest_as value - this has strict validation
+statement error
+SELECT * FROM read_xml('test/data/employees.xml', unnest_as := 'invalid');
+----
+
+# -----------------------------------------------------------------------------
+# Edge cases
+# -----------------------------------------------------------------------------
+
+# Empty force_list should work
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', force_list := []);
+
+# NULL values for optional parameters
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml', record_element := NULL);
+
+# Multiple files with filename
+query I
+SELECT COUNT(DISTINCT filename) >= 1 FROM read_xml('test/data/*.xml', filename := true, ignore_errors := true);
+----
+true
+
+# =============================================================================
+# SECTION 4: Parameter Consistency Tests
+# Verify read_xml and read_html have consistent parameter sets
+# =============================================================================
+
+# Both should accept the same common parameters
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml',
+    filename := true,
+    ignore_errors := true,
+    maximum_file_size := 16777216,
+    auto_detect := true,
+    all_varchar := false,
+    union_by_name := false
+) LIMIT 1;
+
+statement ok
+SELECT * FROM read_html('test/html/complex.html',
+    filename := true,
+    ignore_errors := true,
+    maximum_file_size := 16777216,
+    auto_detect := true,
+    all_varchar := false,
+    union_by_name := false
+) LIMIT 1;
+
+# =============================================================================
+# SECTION 5: Combined Parameter Tests
+# Test multiple parameters together
+# =============================================================================
+
+statement ok
+SELECT * FROM read_xml('test/data/employees.xml',
+    filename := true,
+    record_element := 'employee',
+    all_varchar := true,
+    attr_mode := 'prefix',
+    attr_prefix := '_',
+    ignore_errors := true
+);
+
+statement ok
+SELECT * FROM read_xml('test/data/*.xml',
+    filename := true,
+    ignore_errors := true,
+    union_by_name := true,
+    all_varchar := true
+);

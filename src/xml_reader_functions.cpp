@@ -171,6 +171,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "filename") {
+			result->include_filename = kv.second.GetValue<bool>();
 		} else if (kv.first == "union_by_name") {
 			result->union_by_name = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
@@ -419,6 +421,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		}
 	}
 
+	// Add filename column at the beginning if requested
+	// Note: Only add to output schema (names/return_types), NOT to stored schema
+	// (column_names/column_types) which is used for data extraction
+	if (result->include_filename) {
+		names.insert(names.begin(), "filename");
+		return_types.insert(return_types.begin(), LogicalType::VARCHAR);
+	}
+
 	return std::move(result);
 }
 
@@ -580,8 +590,15 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
 
 				// Set values for each column in the row
-				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
-					output.data[col_idx].SetValue(output_idx, row[col_idx]);
+				idx_t output_col_idx = 0;
+				// Output filename as first column if requested
+				if (bind_data.include_filename) {
+					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+				}
+				// Output remaining data columns
+				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+				     row_col_idx++, output_col_idx++) {
+					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
 				}
 
 				output_idx++;
@@ -826,6 +843,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "filename") {
+			result->include_filename = kv.second.GetValue<bool>();
 		} else if (kv.first == "union_by_name") {
 			result->union_by_name = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
@@ -1054,6 +1073,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		}
 	}
 
+	// Add filename column at the beginning if requested
+	// Note: Only add to output schema (names/return_types), NOT to stored schema
+	// (column_names/column_types) which is used for data extraction
+	if (result->include_filename) {
+		names.insert(names.begin(), "filename");
+		return_types.insert(return_types.begin(), LogicalType::VARCHAR);
+	}
+
 	return std::move(result);
 }
 
@@ -1138,8 +1165,15 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
 
 				// Set values for each column in the row
-				for (idx_t col_idx = 0; col_idx < output.ColumnCount() && col_idx < row.size(); col_idx++) {
-					output.data[col_idx].SetValue(output_idx, row[col_idx]);
+				idx_t output_col_idx = 0;
+				// Output filename as first column if requested
+				if (bind_data.include_filename) {
+					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+				}
+				// Output remaining data columns
+				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+				     row_col_idx++, output_col_idx++) {
+					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
 				}
 
 				output_idx++;
@@ -1261,6 +1295,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_xml_single.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["filename"] = LogicalType::BOOLEAN;
 	// Schema inference parameters
 	read_xml_single.named_parameters["root_element"] = LogicalType::VARCHAR;
 	read_xml_single.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
@@ -1287,6 +1322,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_xml_array.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["filename"] = LogicalType::BOOLEAN;
 	// Schema inference parameters
 	read_xml_array.named_parameters["root_element"] = LogicalType::VARCHAR;
 	read_xml_array.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
