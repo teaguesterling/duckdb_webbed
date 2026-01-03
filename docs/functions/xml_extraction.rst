@@ -6,7 +6,7 @@ These functions extract data from XML documents using XPath expressions.
 xml_extract_text
 ----------------
 
-Extract text content from the first matching element.
+Extract text content from all matching elements.
 
 **Syntax:**
 
@@ -19,26 +19,34 @@ Extract text content from the first matching element.
 - ``xml`` (VARCHAR or XML): The XML content to search
 - ``xpath`` (VARCHAR): XPath expression to match
 
-**Returns:** VARCHAR - The text content of the first matching element, or empty string if no match.
+**Returns:** VARCHAR[] - List of text content from all matching elements, or empty list if no match.
 
 **Examples:**
 
 .. code-block:: sql
 
-   -- Basic extraction
+   -- Basic extraction (returns list)
    SELECT xml_extract_text('<book><title>DuckDB Guide</title></book>', '//title');
+   -- Result: ["DuckDB Guide"]
+
+   -- Get first match using array indexing
+   SELECT xml_extract_text('<book><title>DuckDB Guide</title></book>', '//title')[1];
    -- Result: "DuckDB Guide"
+
+   -- Multiple matches
+   SELECT xml_extract_text('<catalog><book><title>Book A</title></book><book><title>Book B</title></book></catalog>', '//title');
+   -- Result: ["Book A", "Book B"]
 
    -- Attribute extraction
    SELECT xml_extract_text('<item id="123"/>', '/item/@id');
-   -- Result: "123"
+   -- Result: ["123"]
 
    -- With predicates
    SELECT xml_extract_text(
        '<catalog><book category="fiction"><title>Novel</title></book></catalog>',
        '//book[@category="fiction"]/title'
    );
-   -- Result: "Novel"
+   -- Result: ["Novel"]
 
 .. note::
 
@@ -132,7 +140,7 @@ Extract all text content from an XML document.
 xml_extract_elements
 --------------------
 
-Extract the first matching element as a structured value.
+Extract all matching elements as XML fragments.
 
 **Syntax:**
 
@@ -140,13 +148,17 @@ Extract the first matching element as a structured value.
 
    xml_extract_elements(xml, xpath)
 
-**Returns:** STRUCT - The element with its attributes and child elements.
+**Returns:** xmlfragment[] - List of matching elements as XML fragments.
 
 **Example:**
 
 .. code-block:: sql
 
-   SELECT xml_extract_elements('<items><item id="1">First</item></items>', '//item');
+   SELECT xml_extract_elements('<items><item id="1">First</item><item id="2">Second</item></items>', '//item');
+   -- Result: [<item id="1">First</item>, <item id="2">Second</item>]
+
+   -- Get first match
+   SELECT xml_extract_elements('<items><item id="1">First</item></items>', '//item')[1];
 
 
 xml_extract_elements_string

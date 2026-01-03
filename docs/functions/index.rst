@@ -54,11 +54,11 @@ XML Extraction Functions
    * - Function
      - Description
    * - ``xml_extract_text(xml, xpath)``
-     - Extract first text match using XPath
+     - Extract all text matches using XPath → VARCHAR[]
    * - ``xml_extract_all_text(xml)``
      - Extract all text content from document
    * - ``xml_extract_elements(xml, xpath)``
-     - Extract first matching element as struct
+     - Extract all matching elements → xmlfragment[]
    * - ``xml_extract_elements_string(xml, xpath)``
      - Extract all matching elements as newline-separated text
    * - ``xml_extract_attributes(xml, xpath)``
@@ -137,6 +137,18 @@ Utility Functions
      - Get document statistics
    * - ``xml_namespaces(xml)``
      - List XML namespaces
+   * - ``xml_common_namespaces()``
+     - Get map of well-known namespace prefixes
+   * - ``xml_lookup_namespace(prefix)``
+     - Look up URI for common namespace prefix
+   * - ``xml_detect_prefixes(xpath)``
+     - Detect namespace prefixes in XPath
+   * - ``xml_find_undefined_prefixes(xml, xpath)``
+     - Find prefixes not declared in XML
+   * - ``xml_mock_namespaces(prefixes)``
+     - Create mock URIs for prefixes
+   * - ``xml_add_namespace_declarations(xml, map)``
+     - Add namespace declarations to XML
    * - ``xml_pretty_print(xml)``
      - Format XML with indentation
    * - ``xml_minify(xml)``

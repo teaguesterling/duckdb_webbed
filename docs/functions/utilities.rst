@@ -257,6 +257,92 @@ Add namespace declarations to an XML document's root element.
    );
 
 
+xml_lookup_namespace
+~~~~~~~~~~~~~~~~~~~~
+
+Look up the URI for a well-known namespace prefix.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_lookup_namespace(prefix)
+
+**Parameters:**
+
+- ``prefix`` (VARCHAR): The namespace prefix to look up (e.g., 'gml', 'svg', 'atom')
+
+**Returns:** VARCHAR - The namespace URI, or NULL if the prefix is not recognized.
+
+**Example:**
+
+.. code-block:: sql
+
+   SELECT xml_lookup_namespace('gml');
+   -- Result: http://www.opengis.net/gml
+
+   SELECT xml_lookup_namespace('svg');
+   -- Result: http://www.w3.org/2000/svg
+
+   SELECT xml_lookup_namespace('atom');
+   -- Result: http://www.w3.org/2005/Atom
+
+   SELECT xml_lookup_namespace('unknown');
+   -- Result: NULL
+
+   -- Use with XPath extraction
+   SELECT xml_extract_text(
+       '<root><gml:pos>1 2 3</gml:pos></root>',
+       '//gml:pos',
+       MAP {'gml': xml_lookup_namespace('gml')}
+   );
+
+
+xml_find_undefined_prefixes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Find namespace prefixes used in an XPath expression that are not declared in the XML document.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   xml_find_undefined_prefixes(xml, xpath)
+
+**Parameters:**
+
+- ``xml`` (VARCHAR): The XML content to check
+- ``xpath`` (VARCHAR): The XPath expression containing namespace prefixes
+
+**Returns:** VARCHAR[] - List of prefixes used in the XPath but not declared in the XML.
+
+**Example:**
+
+.. code-block:: sql
+
+   -- Find undefined prefixes
+   SELECT xml_find_undefined_prefixes(
+       '<root><gml:pos>1 2</gml:pos></root>',
+       '//gml:pos'
+   );
+   -- Result: [gml]
+
+   -- Document with declared namespace returns empty list
+   SELECT xml_find_undefined_prefixes(
+       '<root xmlns:gml="http://www.opengis.net/gml"><gml:pos>1 2</gml:pos></root>',
+       '//gml:pos'
+   );
+   -- Result: []
+
+   -- Combine with xml_mock_namespaces for automatic namespace handling
+   WITH doc AS (SELECT '<root><ns:item>value</ns:item></root>' AS xml)
+   SELECT xml_extract_text(
+       xml,
+       '//ns:item',
+       xml_mock_namespaces(xml_find_undefined_prefixes(xml, '//ns:item'))
+   ) FROM doc;
+
+
 Formatting
 ----------
 

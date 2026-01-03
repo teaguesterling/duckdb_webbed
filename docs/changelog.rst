@@ -1,14 +1,23 @@
 Changelog
 =========
 
-v1.3.0 (Current)
+v1.3.1 (Current)
 ----------------
+
+**Bug Fixes**
+
+- Fixed ``duck_blocks_to_html()`` outputting literal "NULL" for parent elements with NULL content (parent blocks with inline children)
+
+v1.3.0
+------
 
 **New Features**
 
 - Added ``html_to_duck_blocks`` function to convert HTML into structured document blocks
 - Added ``duck_blocks_to_html`` function to convert document blocks back to HTML
 - Added namespace parameter to XPath scalar functions (``xml_extract_text``, ``xml_extract_elements``, etc.)
+- Added ``xml_lookup_namespace(prefix)`` to look up common namespace URIs
+- Added ``xml_find_undefined_prefixes(xml, xpath)`` to detect undeclared namespace prefixes
 - Added implicit casting from XML/HTML types to VARCHAR, enabling string functions on XML/HTML values
 
 **Bug Fixes**
@@ -20,7 +29,7 @@ v1.3.0 (Current)
 **Documentation**
 
 - Added comprehensive XPath namespace handling documentation with ``local-name()`` examples
-- Updated test statistics: 56 test suites, 1691 assertions
+- Updated test statistics: 58 test suites, 1901 assertions
 - Added documentation for ``html_escape`` and ``html_unescape`` functions
 - Created Read the Docs documentation structure
 
