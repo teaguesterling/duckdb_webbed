@@ -1326,3 +1326,28 @@ query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Text <strong>bold</strong> and <em>italic</em></p>'));
 ----
 <p>Text <strong>bold</strong> and <em>italic</em></p>
+
+# -----------------------------------------------------------------------------
+# Pandoc table format support (Issue #62)
+# Tables from Pandoc are stored with encoding='json' and content is the Pandoc 'c' array
+# Format: [caption, alignments, widths, headers, rows]
+#
+# Note: Direct Pandoc table testing requires the duck_block_utils extension.
+# The implementation in TableJsonToHtml() detects Pandoc format (JSON arrays starting with '[')
+# vs internal format (JSON objects starting with '{') and handles both correctly.
+#
+# Verification of Pandoc table support can be done with duck_block_utils:
+#   LOAD 'duck_block_utils';
+#   SELECT duck_blocks_to_html(read_pandoc_ast('table.json'));
+# -----------------------------------------------------------------------------
+
+# Verify HTML table round-trip still works (internal JSON format: {"headers":[],"rows":[]})
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>')), '<th>A</th>');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>')), '<td>1</td>');
+----
+true
