@@ -1351,3 +1351,412 @@ query I
 SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>')), '<td>1</td>');
 ----
 true
+
+# =============================================================================
+# COMPREHENSIVE HTML ↔ DUCK BLOCK TESTS
+# Based on duck_block_utils test patterns
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Sequential Inline Formatting Tests
+# Note: Nested inline formatting (inline inside inline) is not currently supported.
+# The outermost inline element is preserved, inner elements are flattened.
+# Sequential inline formatting (multiple inlines at same level) works correctly.
+# -----------------------------------------------------------------------------
+
+# Sequential elements in paragraph - this works
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Text <strong>bold</strong> and <em>italic</em> and <code>code</code></p>'));
+----
+<p>Text <strong>bold</strong> and <em>italic</em> and <code>code</code></p>
+
+# Bold preserves text content (nested em is flattened)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><strong><em>nested</em></strong></p>')), '<strong>');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><strong><em>nested</em></strong></p>')), 'nested');
+----
+true
+
+# Sequential formatting in heading
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>'));
+----
+<h2>Title with <em>emphasis</em></h2>
+
+# Link preserves href and text
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><a href="https://example.com">click here</a></p>')), '<a href="https://example.com">');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><a href="https://example.com">click here</a></p>')), 'click here');
+----
+true
+
+# Sequential links and formatting
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><a href="http://a.com">A</a> and <strong>B</strong></p>')), '<a href=');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><a href="http://a.com">A</a> and <strong>B</strong></p>')), '<strong>');
+----
+true
+
+# -----------------------------------------------------------------------------
+# List Structure Tests
+# Note: Basic lists work, but inline formatting inside list items is currently
+# flattened to plain text.
+# -----------------------------------------------------------------------------
+
+# Simple unordered list round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item 1</li><li>Item 2</li></ul>'));
+----
+<ul><li>Item 1</li><li>Item 2</li></ul>
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item 1</li><li>Item 2</li></ul>')), '<li>');
+----
+true
+
+# Simple ordered list round-trip
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ol><li>First</li><li>Second</li></ol>'));
+----
+<ol><li>First</li><li>Second</li></ol>
+
+# List items preserve text content (formatting is flattened)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li><strong>Bold item</strong></li></ul>')), 'Bold item');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item with <a href="https://example.com">link</a></li></ul>')), 'link');
+----
+true
+
+# List items with code - text is preserved
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Use <code>SELECT</code> query</li></ul>')), 'SELECT');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Table Edge Cases
+# Note: Table structure is preserved. Formatting inside cells is flattened.
+# -----------------------------------------------------------------------------
+
+# Table with multiple rows
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>H1</th></tr></thead><tbody><tr><td>R1</td></tr><tr><td>R2</td></tr><tr><td>R3</td></tr></tbody></table>'));
+----
+<table><thead><tr><th>H1</th></tr></thead><tbody><tr><td>R1</td></tr><tr><td>R2</td></tr><tr><td>R3</td></tr></tbody></table>
+
+# Table with multiple columns
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th>A</th><th>B</th><th>C</th></tr></thead><tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table>'));
+----
+<table><thead><tr><th>A</th><th>B</th><th>C</th></tr></thead><tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table>
+
+# Table without explicit thead - gets normalized with thead/tbody
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><tr><th>Header</th></tr><tr><td>Data</td></tr></table>')), '<thead>');
+----
+true
+
+# Table cell content is preserved (formatting flattened)
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<table><thead><tr><th><strong>Bold Header</strong></th></tr></thead><tbody><tr><td>Data</td></tr></tbody></table>')), 'Bold Header');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Blockquote Handling Tests
+# Note: Blockquotes currently produce duplicated content (blockquote + paragraph).
+# This is a known limitation.
+# -----------------------------------------------------------------------------
+
+# Blockquote element is present
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>Quoted text</p></blockquote>')), '<blockquote>');
+----
+true
+
+# Blockquote content is preserved
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>Quoted text</p></blockquote>')), 'Quoted text');
+----
+true
+
+# Blockquote with formatted content - blockquote present
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>')), '<blockquote>');
+----
+true
+
+# Content text is preserved
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>')), 'Important quote');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Level Hierarchy Tests
+# Note: Top-level blocks have NULL level. Inline children have level 1.
+# -----------------------------------------------------------------------------
+
+# Paragraph is top-level (NULL level)
+query I
+SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level IS NULL;
+----
+true
+
+# Heading is top-level (NULL level)
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1>'))[1].level IS NULL;
+----
+true
+
+# Inline children of paragraph have level 1
+query I
+SELECT (html_to_duck_blocks('<p><strong>Bold</strong></p>'))[2].level;
+----
+1
+
+# Element order is sequential within a document
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Text</p>'))[1].element_order;
+----
+0
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Text</p>'))[2].element_order;
+----
+1
+
+# Multiple blocks have sequential order
+query I
+SELECT (html_to_duck_blocks('<h1>A</h1><h2>B</h2><p>C</p>'))[3].element_order;
+----
+2
+
+# -----------------------------------------------------------------------------
+# Semantic Element Tests
+# -----------------------------------------------------------------------------
+
+# Strikethrough/del element
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><del>deleted</del></p>')), '<del>');
+----
+true
+
+# Superscript element
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p>x<sup>2</sup></p>')), '<sup>');
+----
+true
+
+# Subscript element
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p>H<sub>2</sub>O</p>')), '<sub>');
+----
+true
+
+# Underline element
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><u>underlined</u></p>')), '<u>');
+----
+true
+
+# Code element (inline)
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Use <code>print()</code> function</p>'));
+----
+<p>Use <code>print()</code> function</p>
+
+# Pre/code block
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<pre><code>def hello():\n    print("hi")</code></pre>')), '<pre>');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Heading Level Tests
+# -----------------------------------------------------------------------------
+
+# H1 through H6 preserved
+query I
+SELECT (html_to_duck_blocks('<h1>H1</h1>'))[1].attributes['heading_level'];
+----
+1
+
+query I
+SELECT (html_to_duck_blocks('<h2>H2</h2>'))[1].attributes['heading_level'];
+----
+2
+
+query I
+SELECT (html_to_duck_blocks('<h3>H3</h3>'))[1].attributes['heading_level'];
+----
+3
+
+query I
+SELECT (html_to_duck_blocks('<h4>H4</h4>'))[1].attributes['heading_level'];
+----
+4
+
+query I
+SELECT (html_to_duck_blocks('<h5>H5</h5>'))[1].attributes['heading_level'];
+----
+5
+
+query I
+SELECT (html_to_duck_blocks('<h6>H6</h6>'))[1].attributes['heading_level'];
+----
+6
+
+# Heading with inline formatting
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>')), '<h2>');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>')), '<em>');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Edge Cases
+# -----------------------------------------------------------------------------
+
+# Empty paragraph
+query I
+SELECT len(html_to_duck_blocks('<p></p>'));
+----
+1
+
+# Paragraph with only whitespace
+query I
+SELECT len(html_to_duck_blocks('<p>   </p>'));
+----
+1
+
+# HTML entities are preserved/escaped
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p>&lt;script&gt;</p>')), '&lt;');
+----
+true
+
+# Special characters in content
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p>Price: $100 &amp; tax</p>')), '&amp;');
+----
+true
+
+# Quotes in attributes
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p><a href="https://example.com?a=1&amp;b=2">link</a></p>')), 'href=');
+----
+true
+
+# Line breaks
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<p>Line 1<br>Line 2</p>')), '<br>');
+----
+true
+
+# Horizontal rule
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<hr>')), '<hr');
+----
+true
+
+# Image with attributes
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<img src="photo.jpg" alt="Photo">')), 'src=');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<img src="photo.jpg" alt="Photo">')), 'alt=');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Content Preservation Tests
+# -----------------------------------------------------------------------------
+
+# Simple text content preserved
+query I
+SELECT (html_to_duck_blocks('<p>Hello World</p>'))[1].content;
+----
+Hello World
+
+# Heading content preserved
+query I
+SELECT (html_to_duck_blocks('<h1>My Title</h1>'))[1].content;
+----
+My Title
+
+# Code block content preserved
+query I
+SELECT contains((html_to_duck_blocks('<pre><code>SELECT * FROM t</code></pre>'))[1].content, 'SELECT');
+----
+true
+
+# -----------------------------------------------------------------------------
+# Multiple Block Types in Document
+# -----------------------------------------------------------------------------
+
+# Document with heading, paragraph, list, and code
+query I
+SELECT len(html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'));
+----
+4
+
+# All element types are correct
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[1].element_type;
+----
+heading
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[2].element_type;
+----
+paragraph
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[3].element_type;
+----
+list
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[4].element_type;
+----
+code
+
+# -----------------------------------------------------------------------------
+# Figure Element Tests
+# Note: Figure elements are not preserved as-is. The img content is extracted.
+# -----------------------------------------------------------------------------
+
+# Figure img content is preserved
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<figure><img src="photo.jpg" alt="Photo"></figure>')), '<img');
+----
+true
+
+# Figure img src attribute is preserved
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<figure><img src="photo.jpg" alt="Photo"></figure>')), 'src="photo.jpg"');
+----
+true
