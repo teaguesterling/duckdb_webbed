@@ -1,0 +1,113 @@
+# name: test/sql/parse_xml.test
+# description: Test parse_xml and parse_html functions for parsing XML/HTML strings
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Test parse_xml_objects - returns raw XML content
+# =============================================================================
+
+# Basic parse_xml_objects
+query I
+SELECT * FROM parse_xml_objects('<root><item>test</item></root>');
+----
+<root><item>test</item></root>
+
+# parse_xml_objects with more complex XML
+query I
+SELECT * FROM parse_xml_objects('<catalog><book><title>DuckDB</title><price>29.99</price></book></catalog>');
+----
+<catalog><book><title>DuckDB</title><price>29.99</price></book></catalog>
+
+# parse_xml_objects with invalid XML and ignore_errors=false (should fail)
+statement error
+SELECT * FROM parse_xml_objects('invalid xml');
+----
+Invalid Input Error: Input contains invalid XML
+
+# parse_xml_objects with invalid XML and ignore_errors=true (should return empty)
+query I
+SELECT COUNT(*) FROM parse_xml_objects('invalid xml', ignore_errors := true);
+----
+0
+
+# =============================================================================
+# Test parse_html_objects - returns raw HTML content
+# =============================================================================
+
+# Basic parse_html_objects (HTML is lenient)
+query I
+SELECT * FROM parse_html_objects('<div><p>Hello World</p></div>');
+----
+<div><p>Hello World</p></div>
+
+# parse_html_objects with malformed HTML (should still work due to lenient parsing)
+query I
+SELECT LENGTH(html) > 0 FROM parse_html_objects('<div><p>Unclosed paragraph</div>');
+----
+true
+
+# =============================================================================
+# Test parse_xml with schema inference
+# =============================================================================
+
+# Basic parse_xml with simple structure - use explicit column selection for stable ordering
+query II
+SELECT title, price FROM parse_xml('<catalog><book><title>DuckDB</title><price>29.99</price></book></catalog>');
+----
+DuckDB	29.99
+
+# parse_xml with multiple records - use explicit column selection
+query II
+SELECT name, value FROM parse_xml('<items><item><name>A</name><value>1</value></item><item><name>B</name><value>2</value></item></items>');
+----
+A	1
+B	2
+
+# parse_xml with explicit columns parameter
+query I
+SELECT * FROM parse_xml('<root><item>42</item></root>', columns := {item: 'INTEGER'});
+----
+42
+
+# parse_xml with record_element - use explicit column selection
+query II
+SELECT id, name FROM parse_xml('<data><record><id>1</id><name>Test</name></record></data>', record_element := 'record');
+----
+1	Test
+
+# =============================================================================
+# Test parse_html with schema inference
+# =============================================================================
+
+# parse_html returns data - just verify no error
+query I
+SELECT COUNT(*) >= 0 FROM parse_html('<html><body><div>Content</div></body></html>');
+----
+true
+
+# =============================================================================
+# Test error handling
+# =============================================================================
+
+# parse_xml with invalid XML content
+statement error
+SELECT * FROM parse_xml('not valid xml');
+----
+Invalid Input Error: Input contains invalid XML
+
+# parse_xml with ignore_errors=true
+query I
+SELECT COUNT(*) FROM parse_xml('invalid', ignore_errors := true);
+----
+0
+
+# =============================================================================
+# Test with all_varchar option
+# =============================================================================
+
+query II
+SELECT num, text FROM parse_xml('<data><item><num>123</num><text>hello</text></item></data>', all_varchar := true);
+----
+123	hello

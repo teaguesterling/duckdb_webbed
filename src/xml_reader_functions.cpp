@@ -1265,6 +1265,368 @@ void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionI
 	return ReadDocumentFunction(context, data_p, output);
 }
 
+// =============================================================================
+// String-based Parse Functions (parse_xml, parse_html, etc.)
+// =============================================================================
+
+unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentObjectsBind(ClientContext &context,
+                                                                       TableFunctionBindInput &input,
+                                                                       vector<LogicalType> &return_types,
+                                                                       vector<string> &names, ParseMode mode) {
+	auto result = make_uniq<XMLParseData>();
+	result->parse_mode = mode;
+
+	const char *function_name = (mode == ParseMode::HTML) ? "parse_html_objects" : "parse_xml_objects";
+
+	// Get XML/HTML content from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("%s requires XML/HTML content as first argument", function_name);
+	}
+
+	result->xml_content = input.inputs[0].ToString();
+
+	// Handle optional parameters
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+		}
+	}
+
+	// Return appropriate type based on mode
+	if (mode == ParseMode::HTML) {
+		return_types.push_back(XMLTypes::HTMLType());
+		names.push_back("html");
+	} else {
+		return_types.push_back(XMLTypes::XMLType());
+		names.push_back("xml");
+	}
+
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentObjectsInit(ClientContext &context,
+                                                                                   TableFunctionInitInput &input) {
+	auto result = make_uniq<XMLParseGlobalState>();
+	auto &bind_data = input.bind_data->Cast<XMLParseData>();
+
+	// For _objects functions, we just return the content as a single row
+	// Validation is done at execution time
+	result->current_row = 0;
+
+	return std::move(result);
+}
+
+void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                       DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<XMLParseData>();
+	auto &gstate = data_p.global_state->Cast<XMLParseGlobalState>();
+
+	// Only return one row
+	if (gstate.current_row > 0) {
+		return;
+	}
+
+	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
+	const string &content = bind_data.xml_content;
+
+	// Validate content based on mode
+	if (is_html) {
+		// HTML mode: be lenient, allow empty content
+		if (content.empty()) {
+			if (bind_data.ignore_errors) {
+				output.SetCardinality(0);
+				return;
+			}
+			// Return minimal valid HTML for empty input
+			output.data[0].SetValue(0, Value("<html></html>"));
+			output.SetCardinality(1);
+			gstate.current_row = 1;
+			return;
+		}
+	} else {
+		// XML mode: strict validation
+		if (!XMLUtils::IsValidXML(content)) {
+			if (bind_data.ignore_errors) {
+				output.SetCardinality(0);
+				return;
+			}
+			throw InvalidInputException("Input contains invalid XML");
+		}
+	}
+
+	// Return the content
+	output.data[0].SetValue(0, Value(content));
+	output.SetCardinality(1);
+	gstate.current_row = 1;
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                vector<LogicalType> &return_types, vector<string> &names,
+                                                                ParseMode mode) {
+	auto result = make_uniq<XMLParseData>();
+	result->parse_mode = mode;
+
+	const char *function_name = (mode == ParseMode::HTML) ? "parse_html" : "parse_xml";
+
+	// Get XML/HTML content from first argument
+	if (input.inputs.empty()) {
+		throw InvalidInputException("%s requires XML/HTML content as first argument", function_name);
+	}
+
+	result->xml_content = input.inputs[0].ToString();
+
+	// Handle optional parameters with schema inference defaults
+	XMLSchemaOptions schema_options;
+	schema_options.opaque_type_name = (mode == ParseMode::HTML) ? "HTML" : "XML";
+	bool has_explicit_columns = false;
+
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+			schema_options.ignore_errors = result->ignore_errors;
+		} else if (kv.first == "root_element") {
+			schema_options.root_element = kv.second.ToString();
+		} else if (kv.first == "record_element") {
+			std::string record_value = kv.second.ToString();
+			if (record_value.find('/') == std::string::npos) {
+				record_value = "//" + record_value;
+			}
+			schema_options.record_element = record_value;
+		} else if (kv.first == "force_list") {
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				std::string force_value = kv.second.ToString();
+				if (force_value.find('/') == std::string::npos) {
+					force_value = "//" + force_value;
+				}
+				schema_options.force_list = force_value;
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				auto &list_children = ListValue::GetChildren(kv.second);
+				std::vector<std::string> xpaths;
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						std::string tag = child.ToString();
+						if (tag.find('/') == std::string::npos) {
+							tag = "//" + tag;
+						}
+						xpaths.push_back(tag);
+					}
+				}
+				if (!xpaths.empty()) {
+					schema_options.force_list = xpaths[0];
+					for (size_t i = 1; i < xpaths.size(); i++) {
+						schema_options.force_list += " | " + xpaths[i];
+					}
+				}
+			}
+		} else if (kv.first == "attr_mode") {
+			schema_options.attr_mode = kv.second.ToString();
+		} else if (kv.first == "attr_prefix") {
+			schema_options.attr_prefix = kv.second.ToString();
+		} else if (kv.first == "text_key") {
+			schema_options.text_key = kv.second.ToString();
+		} else if (kv.first == "namespaces") {
+			schema_options.namespaces = kv.second.ToString();
+		} else if (kv.first == "empty_elements") {
+			schema_options.empty_elements = kv.second.ToString();
+		} else if (kv.first == "auto_detect") {
+			schema_options.auto_detect = kv.second.GetValue<bool>();
+		} else if (kv.first == "max_depth") {
+			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "unnest_as") {
+			auto unnest_mode = kv.second.ToString();
+			if (unnest_mode == "columns") {
+				schema_options.unnest_as_columns = true;
+			} else if (unnest_mode == "struct") {
+				schema_options.unnest_as_columns = false;
+			} else {
+				throw BinderException("%s \"unnest_as\" parameter must be 'columns' or 'struct', got: '%s'",
+				                      function_name, unnest_mode);
+			}
+		} else if (kv.first == "all_varchar") {
+			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "columns") {
+			auto &child_type = kv.second.type();
+			if (child_type.id() != LogicalTypeId::STRUCT) {
+				throw BinderException("%s \"columns\" parameter requires a struct as input.", function_name);
+			}
+			auto &struct_children = StructValue::GetChildren(kv.second);
+			D_ASSERT(StructType::GetChildCount(child_type) == struct_children.size());
+
+			for (idx_t i = 0; i < struct_children.size(); i++) {
+				auto &name = StructType::GetChildName(child_type, i);
+				auto &val = struct_children[i];
+				if (val.IsNull()) {
+					throw BinderException("%s \"columns\" parameter type specification cannot be NULL.", function_name);
+				}
+				if (val.type().id() != LogicalTypeId::VARCHAR) {
+					throw BinderException("%s \"columns\" parameter type specification must be VARCHAR.", function_name);
+				}
+
+				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
+				return_types.push_back(logical_type);
+				names.push_back(name);
+			}
+
+			if (return_types.empty()) {
+				throw BinderException("%s \"columns\" parameter needs at least one column.", function_name);
+			}
+
+			result->has_explicit_schema = true;
+			result->column_names = names;
+			result->column_types = return_types;
+			has_explicit_columns = true;
+		}
+	}
+
+	// Check for conflicting parameters
+	if (has_explicit_columns && schema_options.all_varchar) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option.", function_name);
+	}
+
+	result->schema_options = schema_options;
+
+	// Perform schema inference only if no explicit columns were provided
+	if (!has_explicit_columns) {
+		try {
+			const string &content = result->xml_content;
+
+			// Validate content based on mode
+			if (mode == ParseMode::XML) {
+				if (!XMLUtils::IsValidXML(content)) {
+					if (!result->ignore_errors) {
+						throw InvalidInputException("Input contains invalid XML");
+					}
+					// Fallback to simple schema
+					return_types.push_back(XMLTypes::XMLType());
+					names.push_back("xml");
+					return std::move(result);
+				}
+			}
+			// HTML mode: skip validation, let libxml2's HTML parser handle it
+
+			// Perform schema inference
+			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+
+			if (!inferred_columns.empty()) {
+				for (const auto &col_info : inferred_columns) {
+					names.push_back(col_info.name);
+					return_types.push_back(col_info.type);
+				}
+
+				result->has_explicit_schema = true;
+				result->column_names = names;
+				result->column_types = return_types;
+			} else {
+				// Fallback to simple schema
+				if (mode == ParseMode::HTML) {
+					return_types.push_back(XMLTypes::HTMLType());
+					names.push_back("html");
+				} else {
+					return_types.push_back(XMLTypes::XMLType());
+					names.push_back("xml");
+				}
+			}
+
+		} catch (const Exception &e) {
+			if (!result->ignore_errors) {
+				throw;
+			}
+			// Fallback to simple schema
+			if (mode == ParseMode::HTML) {
+				return_types.push_back(XMLTypes::HTMLType());
+				names.push_back("html");
+			} else {
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+			}
+		}
+
+		// Ensure we have at least one column
+		if (return_types.empty()) {
+			if (mode == ParseMode::HTML) {
+				return_types.push_back(XMLTypes::HTMLType());
+				names.push_back("html");
+			} else {
+				return_types.push_back(XMLTypes::XMLType());
+				names.push_back("xml");
+			}
+		}
+	}
+
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentInit(ClientContext &context,
+                                                                            TableFunctionInitInput &input) {
+	auto result = make_uniq<XMLParseGlobalState>();
+	auto &bind_data = input.bind_data->Cast<XMLParseData>();
+
+	// Extract data at init time
+	const string &content = bind_data.xml_content;
+	const auto &schema_options = bind_data.schema_options;
+
+	try {
+		if (bind_data.has_explicit_schema) {
+			result->extracted_rows = XMLSchemaInference::ExtractDataWithSchema(
+			    content, bind_data.column_names, bind_data.column_types, schema_options);
+		} else {
+			result->extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
+		}
+	} catch (const Exception &e) {
+		if (!bind_data.ignore_errors) {
+			throw;
+		}
+		// Return empty result set on error
+		result->extracted_rows.clear();
+	}
+
+	result->current_row = 0;
+	return std::move(result);
+}
+
+void XMLReaderFunctions::ParseDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &gstate = data_p.global_state->Cast<XMLParseGlobalState>();
+
+	idx_t output_idx = 0;
+
+	while (output_idx < STANDARD_VECTOR_SIZE && gstate.current_row < gstate.extracted_rows.size()) {
+		const auto &row = gstate.extracted_rows[gstate.current_row];
+
+		for (idx_t col_idx = 0; col_idx < row.size() && col_idx < output.ColumnCount(); col_idx++) {
+			output.data[col_idx].SetValue(output_idx, row[col_idx]);
+		}
+
+		output_idx++;
+		gstate.current_row++;
+	}
+
+	output.SetCardinality(output_idx);
+}
+
+// Public parse_xml functions (delegate to internal functions)
+unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                  vector<LogicalType> &return_types,
+                                                                  vector<string> &names) {
+	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::XML);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLBind(ClientContext &context, TableFunctionBindInput &input,
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
+	return ParseDocumentBind(context, input, return_types, names, ParseMode::XML);
+}
+
+// Public parse_html functions (delegate to internal functions)
+unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                   vector<LogicalType> &return_types,
+                                                                   vector<string> &names) {
+	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
+}
+
+unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLBind(ClientContext &context, TableFunctionBindInput &input,
+                                                            vector<LogicalType> &return_types, vector<string> &names) {
+	return ParseDocumentBind(context, input, return_types, names, ParseMode::HTML);
+}
+
 void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Register read_xml_objects table function (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_xml_objects_set("read_xml_objects");
@@ -1428,6 +1790,66 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunction html_extract_tables_function("html_extract_tables", {LogicalType::VARCHAR}, HTMLExtractTablesFunction,
 	                                           HTMLExtractTablesBind, HTMLExtractTablesInit);
 	loader.RegisterFunction(html_extract_tables_function);
+
+	// =============================================================================
+	// Register parse_xml_objects table function (parses XML string, returns raw content)
+	// =============================================================================
+	TableFunction parse_xml_objects("parse_xml_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
+	                                ParseXMLObjectsBind, ParseDocumentObjectsInit);
+	parse_xml_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	loader.RegisterFunction(parse_xml_objects);
+
+	// =============================================================================
+	// Register parse_html_objects table function (parses HTML string, returns raw content)
+	// =============================================================================
+	TableFunction parse_html_objects("parse_html_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
+	                                 ParseHTMLObjectsBind, ParseDocumentObjectsInit);
+	parse_html_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	loader.RegisterFunction(parse_html_objects);
+
+	// =============================================================================
+	// Register parse_xml table function (parses XML string with schema inference)
+	// =============================================================================
+	TableFunction parse_xml("parse_xml", {LogicalType::VARCHAR}, ParseDocumentFunction, ParseXMLBind,
+	                        ParseDocumentInit);
+	parse_xml.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	// Schema inference parameters (same as read_xml)
+	parse_xml.named_parameters["root_element"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["record_element"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["force_list"] = LogicalType::ANY;
+	parse_xml.named_parameters["attr_mode"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["attr_prefix"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["text_key"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["namespaces"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["empty_elements"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	parse_xml.named_parameters["max_depth"] = LogicalType::INTEGER;
+	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
+	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_xml.named_parameters["columns"] = LogicalType::ANY;
+	loader.RegisterFunction(parse_xml);
+
+	// =============================================================================
+	// Register parse_html table function (parses HTML string with schema inference)
+	// =============================================================================
+	TableFunction parse_html("parse_html", {LogicalType::VARCHAR}, ParseDocumentFunction, ParseHTMLBind,
+	                         ParseDocumentInit);
+	parse_html.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	// Schema inference parameters (same as read_html)
+	parse_html.named_parameters["root_element"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["record_element"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["force_list"] = LogicalType::ANY;
+	parse_html.named_parameters["attr_mode"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["attr_prefix"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["text_key"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["namespaces"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["empty_elements"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
+	parse_html.named_parameters["max_depth"] = LogicalType::INTEGER;
+	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
+	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_html.named_parameters["columns"] = LogicalType::ANY;
+	loader.RegisterFunction(parse_html);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context,
