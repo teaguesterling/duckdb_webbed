@@ -919,9 +919,10 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 		}
 
 		// Get direct text content only (not including children text)
+		// Include both XML_TEXT_NODE and XML_CDATA_SECTION_NODE (GitHub Issue #63)
 		std::string direct_text;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
-			if (child->type == XML_TEXT_NODE && child->content) {
+			if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
 				direct_text += std::string((const char *)child->content);
 			}
 		}
@@ -1079,9 +1080,10 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		}
 
 		// Get direct text content only (not including children text)
+		// Include both XML_TEXT_NODE and XML_CDATA_SECTION_NODE (GitHub Issue #63)
 		std::string direct_text;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
-			if (child->type == XML_TEXT_NODE && child->content) {
+			if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
 				direct_text += std::string((const char *)child->content);
 			}
 		}

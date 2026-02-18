@@ -1,0 +1,141 @@
+# name: test/sql/github_issue_63_cdata_sections.test
+# description: Test CDATA section handling in xml_to_json (GitHub Issue #63)
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Basic CDATA extraction tests
+# =============================================================================
+
+# Test xml_to_json with simple CDATA section
+query I
+SELECT xml_to_json('<message><![CDATA[Test error message]]></message>');
+----
+{"message":{"#text":"Test error message"}}
+
+# Test CDATA nested in element
+query I
+SELECT xml_to_json('<root><item><![CDATA[Raw content]]></item></root>');
+----
+{"root":{"item":{"#text":"Raw content"}}}
+
+# Test CDATA with special XML characters that would normally need escaping
+query I
+SELECT xml_to_json('<code><![CDATA[if (x < 10 && y > 5) { return true; }]]></code>');
+----
+{"code":{"#text":"if (x < 10 && y > 5) { return true; }"}}
+
+# Test CDATA with angle brackets
+query I
+SELECT xml_to_json('<data><![CDATA[<html><body>content</body></html>]]></data>');
+----
+{"data":{"#text":"<html><body>content</body></html>"}}
+
+# Test CDATA with ampersand
+query I
+SELECT xml_to_json('<text><![CDATA[Tom & Jerry]]></text>');
+----
+{"text":{"#text":"Tom & Jerry"}}
+
+# =============================================================================
+# CDATA with attributes
+# =============================================================================
+
+# Test CDATA in element with attributes
+query I
+SELECT xml_to_json('<item id="1"><![CDATA[Description text]]></item>');
+----
+{"item":{"@id":"1","#text":"Description text"}}
+
+# Test CDATA with multiple attributes
+query I
+SELECT xml_to_json('<error code="500" type="internal"><![CDATA[Server error occurred]]></error>');
+----
+{"error":{"@code":"500","@type":"internal","#text":"Server error occurred"}}
+
+# =============================================================================
+# Mixed CDATA and regular text
+# =============================================================================
+
+# Test CDATA combined with regular text content
+query I
+SELECT xml_to_json('<root><![CDATA[cdata1]]>text<![CDATA[cdata2]]></root>');
+----
+{"root":{"#text":"cdata1textcdata2"}}
+
+# Test multiple CDATA sections
+query I
+SELECT xml_to_json('<msg><![CDATA[part1]]><![CDATA[part2]]></msg>');
+----
+{"msg":{"#text":"part1part2"}}
+
+# =============================================================================
+# CDATA in nested structures
+# =============================================================================
+
+# Test CDATA at different nesting levels
+query I
+SELECT xml_to_json('<root><level1><level2><![CDATA[Deep content]]></level2></level1></root>');
+----
+{"root":{"level1":{"level2":{"#text":"Deep content"}}}}
+
+# Test multiple elements with CDATA
+query I
+SELECT xml_to_json('<tests><test><![CDATA[Test 1]]></test><test><![CDATA[Test 2]]></test></tests>');
+----
+{"tests":{"test":[{"#text":"Test 1"},{"#text":"Test 2"}]}}
+
+# =============================================================================
+# Real-world test case formats (Unity/NUnit/JUnit style)
+# =============================================================================
+
+# Test Unity Test Framework style failure message
+query I
+SELECT xml_to_json('<failure><message><![CDATA[Expected: 5 But was: 3]]></message></failure>');
+----
+{"failure":{"message":{"#text":"Expected: 5 But was: 3"}}}
+
+# Test JUnit style error with stacktrace
+query I
+SELECT xml_to_json('<testcase name="test1"><failure message="fail"><![CDATA[at TestClass.Method() line 42]]></failure></testcase>');
+----
+{"testcase":{"@name":"test1","failure":{"@message":"fail","#text":"at TestClass.Method() line 42"}}}
+
+# =============================================================================
+# Empty and whitespace CDATA
+# =============================================================================
+
+# Test empty CDATA section
+query I
+SELECT xml_to_json('<item><![CDATA[]]></item>');
+----
+{"item":{}}
+
+# Test CDATA with only whitespace (should be trimmed)
+query I
+SELECT xml_to_json('<item><![CDATA[   ]]></item>');
+----
+{"item":{}}
+
+# Test CDATA with content and surrounding whitespace
+query I
+SELECT xml_to_json('<item><![CDATA[  content  ]]></item>');
+----
+{"item":{"#text":"content"}}
+
+# =============================================================================
+# CDATA with options (if applicable)
+# =============================================================================
+
+# Test CDATA with custom text_key option
+query I
+SELECT xml_to_json('<item><![CDATA[content]]></item>', text_key := '_text');
+----
+{"item":{"_text":"content"}}
+
+# Test CDATA with force_list option
+query I
+SELECT xml_to_json('<items><item><![CDATA[single]]></item></items>', force_list := ['item']);
+----
+{"items":{"item":[{"#text":"single"}]}}
