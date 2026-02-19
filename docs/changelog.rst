@@ -1,8 +1,45 @@
 Changelog
 =========
 
-v1.3.1 (Current)
+v1.4.0 (Current)
 ----------------
+
+**New Features**
+
+- Added ``parse_xml(content)`` table function to parse XML strings with schema inference
+- Added ``parse_xml_objects(content)`` table function to parse XML strings and return raw XML type
+- Added ``parse_html(content)`` table function to parse HTML strings with schema inference
+- Added ``parse_html_objects(content)`` table function to parse HTML strings and return raw HTML type
+
+**Bug Fixes**
+
+- Fixed CDATA sections being converted to empty objects in ``xml_to_json`` (Issue #63)
+
+v1.3.3
+------
+
+**Bug Fixes**
+
+- Fixed table blocks rendering to HTML (Issue #62)
+
+**Testing**
+
+- Added comprehensive HTML ↔ Duck Block conversion tests
+
+v1.3.2
+------
+
+**New Features**
+
+- Added ``filename`` parameter to ``read_xml`` and ``read_html`` functions
+
+**Documentation**
+
+- Fixed high priority documentation issues
+- Added documentation badge linking to readthedocs
+
+v1.3.1
+------
 
 **Bug Fixes**
 

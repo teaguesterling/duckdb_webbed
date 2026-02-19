@@ -1,7 +1,7 @@
-File Reading Functions
-======================
+File Reading & String Parsing Functions
+=======================================
 
-These functions read XML and HTML files directly into DuckDB tables.
+These functions read XML and HTML from files or parse them from strings directly into DuckDB tables.
 
 read_xml
 --------
@@ -174,3 +174,155 @@ A table with column ``html`` of type ``HTML``. If ``filename=true``, also includ
        filename,
        html_extract_links(html) as links
    FROM read_html_objects('pages/*.html', filename=true);
+
+
+String Parsing Functions
+------------------------
+
+These functions parse XML and HTML content directly from strings, complementing the file-based ``read_*`` functions.
+
+parse_xml
+~~~~~~~~~
+
+Parse XML string with automatic schema inference.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   parse_xml(content [, options...])
+
+**Parameters:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Parameter
+     - Type
+     - Description
+   * - ``content``
+     - VARCHAR
+     - XML content to parse
+   * - ``ignore_errors``
+     - BOOLEAN
+     - Return empty result instead of error on invalid input (default: false)
+   * - ``record_element``
+     - VARCHAR
+     - XPath or tag name for elements that become rows
+   * - ``root_element``
+     - VARCHAR
+     - Specify root element for schema inference
+   * - ``force_list``
+     - VARCHAR[]
+     - Column names that should always be LIST type
+   * - ``auto_detect``
+     - BOOLEAN
+     - Enable automatic schema detection (default: true)
+   * - ``max_depth``
+     - INTEGER
+     - Maximum nesting depth to parse (default: 10)
+   * - ``all_varchar``
+     - BOOLEAN
+     - Force all scalar types to VARCHAR (default: false)
+   * - ``columns``
+     - STRUCT
+     - Explicit column schema (e.g., ``{item: 'INTEGER'}``)
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Parse XML string with schema inference
+   SELECT * FROM parse_xml('<catalog><book><title>DuckDB</title><price>29.99</price></book></catalog>');
+
+   -- Parse multiple records
+   SELECT name, value FROM parse_xml(
+       '<items><item><name>A</name><value>1</value></item><item><name>B</name><value>2</value></item></items>'
+   );
+
+   -- With explicit schema
+   SELECT * FROM parse_xml('<root><item>42</item></root>', columns := {item: 'INTEGER'});
+
+   -- Ignore parse errors
+   SELECT * FROM parse_xml(xml_column, ignore_errors := true) FROM raw_data;
+
+
+parse_xml_objects
+~~~~~~~~~~~~~~~~~
+
+Parse XML string and return as raw XML type.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   parse_xml_objects(content [, ignore_errors=false])
+
+**Returns:**
+
+A table with column ``xml`` of type ``XML``.
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Parse and validate XML string
+   SELECT * FROM parse_xml_objects('<root><item>test</item></root>');
+
+   -- Process with XPath
+   SELECT xml_extract_text(xml, '//item') as items
+   FROM parse_xml_objects('<root><item>A</item><item>B</item></root>');
+
+
+parse_html
+~~~~~~~~~~
+
+Parse HTML string with automatic schema inference.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   parse_html(content [, options...])
+
+**Parameters:**
+
+Same parameters as ``parse_xml``. HTML parsing is more lenient than XML parsing.
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Parse HTML content
+   SELECT * FROM parse_html('<html><body><div>Content</div></body></html>');
+
+   -- Extract from HTML with record element
+   SELECT * FROM parse_html('<ul><li>Item 1</li><li>Item 2</li></ul>', record_element := 'li');
+
+
+parse_html_objects
+~~~~~~~~~~~~~~~~~~
+
+Parse HTML string and return as raw HTML type.
+
+**Syntax:**
+
+.. code-block:: sql
+
+   parse_html_objects(content [, ignore_errors=false])
+
+**Returns:**
+
+A table with column ``html`` of type ``HTML``.
+
+**Examples:**
+
+.. code-block:: sql
+
+   -- Parse HTML string
+   SELECT * FROM parse_html_objects('<div><p>Hello World</p></div>');
+
+   -- Process with extraction functions
+   SELECT html_extract_text(html) as text
+   FROM parse_html_objects('<p>Paragraph <strong>with bold</strong> text.</p>');

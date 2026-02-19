@@ -13,7 +13,7 @@ Function Categories
    * - Category
      - Description
    * - :doc:`file_reading`
-     - Read XML/HTML files into tables (``read_xml``, ``read_html``, etc.)
+     - Read XML/HTML files or parse strings into tables (``read_xml``, ``parse_xml``, etc.)
    * - :doc:`xml_extraction`
      - Extract data from XML using XPath (``xml_extract_text``, ``xml_extract_attributes``, etc.)
    * - :doc:`html_extraction`
@@ -26,8 +26,8 @@ Function Categories
 Quick Reference
 ---------------
 
-File Reading Functions
-~~~~~~~~~~~~~~~~~~~~~~
+File Reading & String Parsing Functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. list-table::
    :header-rows: 1
@@ -43,6 +43,14 @@ File Reading Functions
      - Read HTML files into table with schema inference
    * - ``read_html_objects(pattern)``
      - Read HTML files as document objects
+   * - ``parse_xml(content)``
+     - Parse XML string with schema inference
+   * - ``parse_xml_objects(content)``
+     - Parse XML string as document object
+   * - ``parse_html(content)``
+     - Parse HTML string with schema inference
+   * - ``parse_html_objects(content)``
+     - Parse HTML string as document object
 
 XML Extraction Functions
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -113,8 +121,6 @@ Conversion Functions
      - Convert any value to XML
    * - ``to_xml(value, node_name)``
      - Convert value to XML with custom node name
-   * - ``parse_html(content)``
-     - Parse HTML string into HTML type
    * - ``html_to_duck_blocks(html)``
      - Convert HTML to list of document blocks
    * - ``duck_blocks_to_html(blocks)``
