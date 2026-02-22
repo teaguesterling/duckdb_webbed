@@ -1139,13 +1139,13 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
 	// XML + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListWithNamespacesFunction));
+	xml_extract_text_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction));
 	// VARCHAR + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListWithNamespacesFunction));
+	xml_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction));
 
 	loader.RegisterFunction(xml_extract_text_functions);
 
@@ -1205,12 +1205,12 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                          XMLExtractElementsListWithNamespacesFunction));
 
 	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListWithNamespacesFunction));
-	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListWithNamespacesFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction));
+	xml_extract_elements_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction));
 
 	loader.RegisterFunction(xml_extract_elements_functions);
 
@@ -1269,14 +1269,14 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   XMLExtractAttributesWithNamespacesFunction));
 	// Add 3-argument variants with namespace mode VARCHAR
 	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
 	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
+	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
 	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
 	loader.RegisterFunction(xml_extract_attributes_functions);
 
 	// Register xml_pretty_print function
@@ -1358,8 +1358,8 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register xml_lookup_namespace function
 	// Looks up a namespace prefix in the common namespaces table
-	auto xml_lookup_namespace_function =
-	    ScalarFunction("xml_lookup_namespace", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLLookupNamespaceFunction);
+	auto xml_lookup_namespace_function = ScalarFunction("xml_lookup_namespace", {LogicalType::VARCHAR},
+	                                                    LogicalType::VARCHAR, XMLLookupNamespaceFunction);
 	xml_lookup_namespace_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
 	loader.RegisterFunction(xml_lookup_namespace_function);
 

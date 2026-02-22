@@ -171,12 +171,12 @@ std::set<std::string> DetectXPathPrefixes(const std::string &xpath);
 // Used when prefixes are undeclared in the document (AUTO mode)
 // Example: //gml:pos -> //*[local-name()='pos' and starts-with(name(),'gml:')]
 std::string TransformXPathForUndeclaredPrefixes(const std::string &xpath,
-                                                 const std::set<std::string> &undeclared_prefixes);
+                                                const std::set<std::string> &undeclared_prefixes);
 
 // Inject namespace declarations into an XML document's root element
 // Returns modified XML string with xmlns:prefix="uri" declarations added
 std::string InjectNamespaceDeclarations(const std::string &xml_str,
-                                         const case_insensitive_map_t<string> &namespaces_to_inject);
+                                        const case_insensitive_map_t<string> &namespaces_to_inject);
 
 // Detect namespace prefixes used in an XML document (scans for prefix:name patterns)
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);

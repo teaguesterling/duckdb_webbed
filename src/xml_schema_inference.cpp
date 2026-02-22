@@ -198,7 +198,6 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 // Phase 2: Identify Columns
 std::unordered_map<std::string, ColumnAnalysis>
 XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options) {
-
 	std::unordered_map<std::string, ColumnAnalysis> columns;
 
 	// Iterate through each record element
@@ -319,7 +318,6 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
                                                 const XMLSchemaOptions &options) {
-
 	// Attributes are always VARCHAR (or type-detected if enabled)
 	if (column.is_attribute) {
 		// TODO: Could sample attribute values for type detection
@@ -946,7 +944,6 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
                                                 const std::unordered_map<std::string, ElementPattern> &all_patterns,
                                                 const XMLSchemaOptions &options) {
-
 	// If this element doesn't have children, it's not a nested type
 	if (!pattern.has_children || pattern.child_element_counts.empty()) {
 		return LogicalType::VARCHAR; // Fallback
@@ -1242,7 +1239,6 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
-
 						// Check if this element has child elements (container) or just text
 						bool has_element_children = false;
 						for (xmlNodePtr grandchild = child->children; grandchild; grandchild = grandchild->next) {

@@ -690,7 +690,6 @@ std::string XMLUtils::MinifyXML(const std::string &xml_str) {
 }
 
 bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &xsd_schema) {
-
 	// Parse the XSD schema using DuckDB-style smart pointers
 	XMLSchemaParserPtr parser_ctx(xmlSchemaNewMemParserCtxt(xsd_schema.c_str(), xsd_schema.length()));
 	if (!parser_ctx) {
@@ -2798,7 +2797,7 @@ std::set<std::string> DetectXPathPrefixes(const std::string &xpath) {
 // Example: <root><gml:pos>...</gml:pos></root> becomes
 //          <root xmlns:gml="http://www.opengis.net/gml"><gml:pos>...</gml:pos></root>
 std::string InjectNamespaceDeclarations(const std::string &xml_str,
-                                         const case_insensitive_map_t<string> &namespaces_to_inject) {
+                                        const case_insensitive_map_t<string> &namespaces_to_inject) {
 	if (namespaces_to_inject.empty()) {
 		return xml_str;
 	}
@@ -2831,8 +2830,10 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 		int depth = 1;
 		pos += 2;
 		while (pos < xml_str.length() && depth > 0) {
-			if (xml_str[pos] == '<') depth++;
-			else if (xml_str[pos] == '>') depth--;
+			if (xml_str[pos] == '<')
+				depth++;
+			else if (xml_str[pos] == '>')
+				depth--;
 			pos++;
 		}
 	}
@@ -2852,8 +2853,7 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 	pos++; // Skip <
 
 	// Skip element name
-	while (pos < xml_str.length() && !std::isspace(xml_str[pos]) &&
-	       xml_str[pos] != '>' && xml_str[pos] != '/') {
+	while (pos < xml_str.length() && !std::isspace(xml_str[pos]) && xml_str[pos] != '>' && xml_str[pos] != '/') {
 		pos++;
 	}
 
@@ -2926,8 +2926,7 @@ std::string GetCommonNamespaceURI(const std::string &prefix) {
 	    {"ods", "urn:oasis:names:tc:opendocument:xmlns:spreadsheet:1.0"},
 	    // Other common namespaces
 	    {"xslt", "http://www.w3.org/1999/XSL/Transform"},
-	    {"exsl", "http://exslt.org/common"}
-	};
+	    {"exsl", "http://exslt.org/common"}};
 
 	auto it = common_namespaces.find(prefix);
 	if (it != common_namespaces.end()) {

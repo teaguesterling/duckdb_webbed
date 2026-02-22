@@ -53,7 +53,7 @@ static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_v
 
 // Render inline element to HTML
 static std::string RenderInlineElementToHtml(const std::string &element_type, const std::string &content,
-                                              const std::map<std::string, std::string> &attrs) {
+                                             const std::map<std::string, std::string> &attrs) {
 	if (element_type == DuckBlockTypes::INLINE_TEXT) {
 		return XMLUtils::HTMLEscape(content);
 	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
@@ -214,10 +214,9 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 			} else {
 				// Unknown inline element - treat as text
 				if (!content.empty()) {
-					inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content,
-					                                               Value::INTEGER(base_level),
-					                                               DuckBlockTypes::ENCODING_TEXT, attrs,
-					                                               element_order++));
+					inlines.push_back(
+					    DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content, Value::INTEGER(base_level),
+					                                 DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 				}
 			}
 		}
@@ -280,7 +279,7 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 				}
 				std::map<std::string, std::string> attrs;
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content,
-				                                            DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+				                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 			}
 		}
 		if (frontmatter_obj) {
@@ -317,9 +316,8 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 					std::string inner_html = GetNodeInnerHTML(node, doc);
 					if (ContentContainsTags(inner_html)) {
 						// Extract structured inline elements instead of storing raw HTML
-						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "",
-						                                             DuckBlockTypes::ENCODING_TEXT, attrs,
-						                                             block_order++));
+						blocks.push_back(DuckBlockTypes::CreateBlock(
+						    DuckBlockTypes::TYPE_HEADING, "", DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
 						// Extract inline children at level 1
 						auto inline_elements = ExtractInlineElements(node, 1, block_order);
 						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
@@ -336,9 +334,8 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 					if (ContentContainsTags(inner_html)) {
 						// Extract structured inline elements instead of storing raw HTML
 						// Create paragraph block with empty content
-						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "",
-						                                             DuckBlockTypes::ENCODING_TEXT, attrs,
-						                                             block_order++));
+						blocks.push_back(DuckBlockTypes::CreateBlock(
+						    DuckBlockTypes::TYPE_PARAGRAPH, "", DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
 						// Extract inline children at level 1
 						auto inline_elements = ExtractInlineElements(node, 1, block_order);
 						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
@@ -720,7 +717,7 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML
 	auto duck_blocks_to_html_func = ScalarFunction("duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()},
-	                                              XMLTypes::HTMLType(), DuckBlocksToHtmlFunction);
+	                                               XMLTypes::HTMLType(), DuckBlocksToHtmlFunction);
 	loader.RegisterFunction(duck_blocks_to_html_func);
 }
 

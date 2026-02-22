@@ -133,7 +133,7 @@ struct HTMLTableExtractionData : public TableFunctionData {
 
 // String-based XML/HTML parsing function data (for parse_xml, parse_html, etc.)
 struct XMLParseData : public TableFunctionData {
-	string xml_content;              // Input XML/HTML string
+	string xml_content; // Input XML/HTML string
 	bool ignore_errors = false;
 	ParseMode parse_mode = ParseMode::XML;
 

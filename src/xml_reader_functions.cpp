@@ -1270,9 +1270,9 @@ void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionI
 // =============================================================================
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentObjectsBind(ClientContext &context,
-                                                                       TableFunctionBindInput &input,
-                                                                       vector<LogicalType> &return_types,
-                                                                       vector<string> &names, ParseMode mode) {
+                                                                      TableFunctionBindInput &input,
+                                                                      vector<LogicalType> &return_types,
+                                                                      vector<string> &names, ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
 	result->parse_mode = mode;
 
@@ -1305,7 +1305,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentObjectsBind(ClientCont
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentObjectsInit(ClientContext &context,
-                                                                                   TableFunctionInitInput &input) {
+                                                                                  TableFunctionInitInput &input) {
 	auto result = make_uniq<XMLParseGlobalState>();
 	auto &bind_data = input.bind_data->Cast<XMLParseData>();
 
@@ -1317,7 +1317,7 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentObjectsIni
 }
 
 void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
-                                                       DataChunk &output) {
+                                                      DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLParseData>();
 	auto &gstate = data_p.global_state->Cast<XMLParseGlobalState>();
 
@@ -1361,8 +1361,8 @@ void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, Ta
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                vector<LogicalType> &return_types, vector<string> &names,
-                                                                ParseMode mode) {
+                                                               vector<LogicalType> &return_types, vector<string> &names,
+                                                               ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
 	result->parse_mode = mode;
 
@@ -1459,7 +1459,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 					throw BinderException("%s \"columns\" parameter type specification cannot be NULL.", function_name);
 				}
 				if (val.type().id() != LogicalTypeId::VARCHAR) {
-					throw BinderException("%s \"columns\" parameter type specification must be VARCHAR.", function_name);
+					throw BinderException("%s \"columns\" parameter type specification must be VARCHAR.",
+					                      function_name);
 				}
 
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
@@ -1557,7 +1558,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 }
 
 unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentInit(ClientContext &context,
-                                                                            TableFunctionInitInput &input) {
+                                                                           TableFunctionInitInput &input) {
 	auto result = make_uniq<XMLParseGlobalState>();
 	auto &bind_data = input.bind_data->Cast<XMLParseData>();
 
@@ -1567,8 +1568,8 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentInit(Clien
 
 	try {
 		if (bind_data.has_explicit_schema) {
-			result->extracted_rows = XMLSchemaInference::ExtractDataWithSchema(
-			    content, bind_data.column_names, bind_data.column_types, schema_options);
+			result->extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
+			                                                                   bind_data.column_types, schema_options);
 		} else {
 			result->extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
 		}
@@ -1605,25 +1606,25 @@ void XMLReaderFunctions::ParseDocumentFunction(ClientContext &context, TableFunc
 
 // Public parse_xml functions (delegate to internal functions)
 unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                  vector<LogicalType> &return_types,
-                                                                  vector<string> &names) {
+                                                                 vector<LogicalType> &return_types,
+                                                                 vector<string> &names) {
 	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::XML);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types, vector<string> &names) {
 	return ParseDocumentBind(context, input, return_types, names, ParseMode::XML);
 }
 
 // Public parse_html functions (delegate to internal functions)
 unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                   vector<LogicalType> &return_types,
-                                                                   vector<string> &names) {
+                                                                  vector<LogicalType> &return_types,
+                                                                  vector<string> &names) {
 	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                           vector<LogicalType> &return_types, vector<string> &names) {
 	return ParseDocumentBind(context, input, return_types, names, ParseMode::HTML);
 }
 
