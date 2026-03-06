@@ -1,6 +1,6 @@
 # name: test/sql/read_function_parameters.test
 # description: Comprehensive tests for read_* function parameter handling
-# group: [webbed]
+# group: [sql]
 
 require webbed
 

@@ -1,6 +1,7 @@
 # name: test/sql/github_issue_60_namespace_modes.test
 # description: Test namespace mode handling in XPath scalar functions (Issue #60)
 # group: [sql]
+
 #
 # GitHub Issue #60: namespaces:='auto' mode doesn't mock undeclared prefixes
 # https://github.com/teaguesterling/duckdb_webbed/issues/60
