@@ -80,6 +80,10 @@ Type Handling Parameters
      - BOOLEAN
      - false
      - Force all scalar types to VARCHAR. Preserves nested structure (STRUCT, LIST) but converts leaf values.
+   * - ``datetime_format``
+     - VARCHAR or VARCHAR[]
+     - 'auto'
+     - Controls date/time detection and parsing. Accepts a format string (``'%m/%d/%Y'``), a preset name, a list of formats, or ``'none'`` to disable. See :ref:`datetime-format` below.
    * - ``force_list``
      - VARCHAR[]
      - []
@@ -157,6 +161,89 @@ Multi-File Parameters
      - false
      - Combine columns by name when reading multiple files with different schemas
 
+
+.. _datetime-format:
+
+Datetime Format Parameter
+-------------------------
+
+The ``datetime_format`` parameter controls how date, time, and timestamp values are detected and parsed.
+
+**Preset names:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 35 20
+
+   * - Preset
+     - Format
+     - Target Type
+   * - ``'auto'``
+     - Built-in candidate list (default)
+     - mixed
+   * - ``'none'``
+     - Disables temporal detection
+     - \-
+   * - ``'us'``
+     - ``%m/%d/%Y``
+     - DATE
+   * - ``'eu'``
+     - ``%d/%m/%Y``
+     - DATE
+   * - ``'iso'``
+     - ``%Y-%m-%d``
+     - DATE
+   * - ``'us_timestamp'``
+     - ``%m/%d/%Y %I:%M:%S %p``
+     - TIMESTAMP
+   * - ``'eu_timestamp'``
+     - ``%d/%m/%Y %H:%M:%S``
+     - TIMESTAMP
+   * - ``'iso_timestamp'``
+     - ``%Y-%m-%dT%H:%M:%S``
+     - TIMESTAMP
+   * - ``'iso_timestamptz'``
+     - ``%Y-%m-%dT%H:%M:%S%z``
+     - TIMESTAMPTZ
+   * - ``'12hour'``
+     - ``%I:%M:%S %p``
+     - TIME
+   * - ``'24hour'``
+     - ``%H:%M:%S``
+     - TIME
+
+**How it works:**
+
+When ``datetime_format='auto'`` (the default), the extension tries a built-in list of common formats against sample values. Formats that fail to parse any sample are eliminated. The first surviving format determines the column type.
+
+When an explicit format or preset is specified, only those formats are tried. If no format matches all samples, the column falls back to VARCHAR.
+
+.. note::
+
+   When auto-detecting, ambiguous date formats (e.g., ``03/04/2024``) default to US (month-first) ordering, consistent with DuckDB conventions. Use ``datetime_format='eu'`` to override.
+
+**Interactions with other parameters:**
+
+- ``all_varchar=true`` overrides ``datetime_format`` — no temporal detection occurs.
+- ``datetime_format='none'`` disables all temporal detection.
+- An explicit ``datetime_format`` overrides ``temporal_detection=false`` if both are set.
+
+.. code-block:: sql
+
+   -- Parse US-format dates
+   SELECT * FROM read_xml('data.xml', datetime_format='us');
+
+   -- Parse European dates
+   SELECT * FROM read_xml('data.xml', datetime_format='eu');
+
+   -- Disable date detection
+   SELECT * FROM read_xml('data.xml', datetime_format='none');
+
+   -- Multiple formats (first surviving format wins)
+   SELECT * FROM read_xml('data.xml', datetime_format=['%m/%d/%Y', '%Y-%m-%d %H:%M:%S']);
+
+   -- Custom format string
+   SELECT * FROM read_xml('data.xml', datetime_format='%Y/%m/%d');
 
 Examples
 --------
