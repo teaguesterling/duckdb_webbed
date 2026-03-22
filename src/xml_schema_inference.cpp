@@ -11,6 +11,15 @@
 
 namespace duckdb {
 
+static bool IsNullString(const std::string &text, const XMLSchemaOptions &options) {
+	for (const auto &ns : options.null_strings) {
+		if (text == ns) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Forward declaration for silent error handler from xml_utils.cpp
 void XMLSilentErrorHandler(void *ctx, const char *msg, ...);
 
@@ -464,6 +473,9 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 						// Recursively infer type with decreased depth
+						// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
+						// Custom datetime formats in nested STRUCTs fall back to default parsing.
+						// Proper fix requires a format-per-field map threaded through extraction.
 						std::string nested_winning_fmt;
 						LogicalType child_type =
 						    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
@@ -533,6 +545,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 					// Recursively infer type with decreased depth
+					// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
 					std::string nested_winning_fmt2;
 					LogicalType child_type =
 					    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
@@ -550,10 +563,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	// This handles elements like <phone type="mobile">555-1234</phone> where
 	// some instances have attributes and some don't
 	if (options.attr_mode != "discard") {
-		// Collect all unique attributes across ALL instances
+		// Collect all unique attributes and text samples across ALL instances
 		std::unordered_set<std::string> all_attrs;
 		bool has_any_attrs = false;
-		bool has_text_content = false;
+		std::vector<std::string> cross_record_text_samples;
 
 		for (xmlNodePtr instance : column.instances) {
 			// Check for attributes
@@ -567,23 +580,27 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					has_any_attrs = true;
 				}
 			}
-			// Check for text content
-			xmlChar *content = xmlNodeGetContent(instance);
-			if (content) {
-				std::string text = CleanTextContent((const char *)content);
-				if (!text.empty()) {
-					has_text_content = true;
+			// Collect text content samples for type inference
+			if (cross_record_text_samples.size() < 20) {
+				xmlChar *content = xmlNodeGetContent(instance);
+				if (content) {
+					std::string text = CleanTextContent((const char *)content);
+					if (!text.empty()) {
+						cross_record_text_samples.push_back(text);
+					}
+					xmlFree(content);
 				}
-				xmlFree(content);
 			}
 		}
 
 		// If we have attributes discovered across records, build STRUCT with text + attrs
-		if (has_any_attrs && has_text_content) {
+		if (has_any_attrs && !cross_record_text_samples.empty()) {
 			child_list_t<LogicalType> struct_fields;
 
-			// Add text content field
-			struct_fields.push_back(make_pair(options.text_key, LogicalType::VARCHAR));
+			// Add text content field with inferred type
+			std::string text_winning_fmt;
+			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
+			struct_fields.push_back(make_pair(options.text_key, text_type));
 
 			// Add attribute fields (sorted for determinism)
 			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());
@@ -907,11 +924,8 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	}
 }
 
-static bool TryMatchDatetimeFormat(const std::string &value, const std::string &format_str,
+static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &strp_format,
                                    const LogicalType &expected_type) {
-	StrpTimeFormat strp_format;
-	StrTimeFormat::ParseFormatSpecifier(format_str, strp_format);
-
 	switch (expected_type.id()) {
 	case LogicalTypeId::DATE: {
 		date_t result;
@@ -971,11 +985,13 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	const auto &effective_candidates =
 	    (!candidates.empty()) ? candidates : (options.temporal_detection ? auto_candidates : candidates);
 
-	// Per-column candidate elimination
+	// Per-column candidate elimination: pre-compile all formats once
 	std::vector<bool> alive(effective_candidates.size(), true);
 	std::vector<LogicalType> candidate_types;
-	for (const auto &fmt : effective_candidates) {
-		candidate_types.push_back(ClassifyDatetimeFormat(fmt));
+	std::vector<StrpTimeFormat> compiled_formats(effective_candidates.size());
+	for (size_t i = 0; i < effective_candidates.size(); i++) {
+		candidate_types.push_back(ClassifyDatetimeFormat(effective_candidates[i]));
+		StrTimeFormat::ParseFormatSpecifier(effective_candidates[i], compiled_formats[i]);
 	}
 
 	bool any_alive = !effective_candidates.empty();
@@ -986,7 +1002,7 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		for (size_t i = 0; i < effective_candidates.size(); i++) {
 			if (!alive[i])
 				continue;
-			if (!TryMatchDatetimeFormat(sample, effective_candidates[i], candidate_types[i])) {
+			if (!TryMatchDatetimeFormat(sample, compiled_formats[i], candidate_types[i])) {
 				alive[i] = false;
 			}
 		}
@@ -1127,55 +1143,7 @@ bool XMLSchemaInference::IsDouble(const std::string &value) {
 	}
 }
 
-bool XMLSchemaInference::IsDate(const std::string &value) {
-	// Match common date formats: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, etc.
-	std::regex date_patterns[] = {
-	    std::regex(R"(\d{4}-\d{2}-\d{2})"), // YYYY-MM-DD
-	    std::regex(R"(\d{2}/\d{2}/\d{4})"), // MM/DD/YYYY or DD/MM/YYYY
-	    std::regex(R"(\d{4}/\d{2}/\d{2})"), // YYYY/MM/DD
-	    std::regex(R"(\d{2}-\d{2}-\d{4})"), // MM-DD-YYYY or DD-MM-YYYY
-	};
-
-	for (const auto &pattern : date_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool XMLSchemaInference::IsTime(const std::string &value) {
-	// Match time formats: HH:MM:SS, HH:MM, HH:MM:SS.sss
-	std::regex time_patterns[] = {
-	    std::regex(R"(\d{2}:\d{2}:\d{2})"),      // HH:MM:SS
-	    std::regex(R"(\d{2}:\d{2})"),            // HH:MM
-	    std::regex(R"(\d{2}:\d{2}:\d{2}\.\d+)"), // HH:MM:SS.sss
-	};
-
-	for (const auto &pattern : time_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool XMLSchemaInference::IsTimestamp(const std::string &value) {
-	// Match ISO timestamp formats and common variations
-	std::regex timestamp_patterns[] = {
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"),      // YYYY-MM-DDTHH:MM:SS
-	    std::regex(R"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"),      // YYYY-MM-DD HH:MM:SS
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)"), // YYYY-MM-DDTHH:MM:SS.sss
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"),     // YYYY-MM-DDTHH:MM:SSZ
-	};
-
-	for (const auto &pattern : timestamp_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
-		}
-	}
-	return false;
-}
+// IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
 
 LogicalType XMLSchemaInference::ClassifyDatetimeFormat(const std::string &format) {
 	bool has_date = false;
@@ -1364,7 +1332,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
 				if (attr_value) {
 					std::string str_value = (const char *)attr_value;
-					value = ConvertToValue(str_value, column.type, column.winning_datetime_format);
+					value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
 					xmlFree(attr_value);
 				} else {
 					value = Value(); // NULL
@@ -1384,7 +1352,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 						if (child_iter->type == XML_ELEMENT_NODE &&
 						    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
 							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
 							list_values.push_back(element_value);
 						}
 					}
@@ -1415,7 +1383,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 							// Container element - check for structured types first
 							if (column.type.id() == LogicalTypeId::STRUCT) {
 								// Use structured extraction for STRUCT types
-								value = ExtractValueFromNode(child, column.type);
+								value = ExtractValueFromNode(child, column.type, options);
 								element_text = ""; // Clear element_text to avoid double processing
 								break;
 							}
@@ -1475,7 +1443,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 
 				// Only convert text value if we haven't already extracted a structured value
 				if (value.IsNull()) {
-					value = ConvertToValue(element_text, column.type, column.winning_datetime_format);
+					value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
 				}
 			}
 
@@ -1536,7 +1504,7 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 			xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column_type, col_fmt);
+				value = ConvertToValue(str_value, column_type, options, col_fmt);
 				xmlFree(attr_value);
 			} else {
 				// Special handling for LIST columns - collect ALL matching children
@@ -1549,7 +1517,7 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 						if (child_iter->type == XML_ELEMENT_NODE &&
 						    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
 							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
 							list_values.push_back(element_value);
 						}
 					}
@@ -1575,11 +1543,11 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 							if (text_content) {
 								std::string text = CleanTextContent((const char *)text_content);
 								xmlFree(text_content);
-								value = ConvertToValue(text, column_type, col_fmt);
+								value = ConvertToValue(text, column_type, options, col_fmt);
 							}
 						} else {
 							// No format: use standard recursive extraction
-							value = ExtractValueFromNode(child, column_type);
+							value = ExtractValueFromNode(child, column_type, options);
 						}
 						break;
 					}
@@ -1592,7 +1560,7 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 					std::string record_name = (const char *)current->name;
 					if (record_name == column_name) {
 						// Column refers to the record element itself - serialize it
-						value = ExtractValueFromNode(current, column_type);
+						value = ExtractValueFromNode(current, column_type, options);
 					} else {
 						value = Value(column_type); // NULL for truly missing columns
 					}
@@ -1608,10 +1576,17 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 	return rows;
 }
 
+// TODO(#38): ParseFormatSpecifier is called per-row when datetime_format is non-empty.
+// The XML parsing bottleneck is much larger than format compilation, so this is acceptable
+// for now. If profiling shows this matters, consider a format-string-to-StrpTimeFormat cache.
 Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type,
-                                         const std::string &datetime_format) {
+                                         const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (text.empty()) {
 		return Value(); // NULL value
+	}
+
+	if (IsNullString(text, options)) {
+		return Value(); // NULL value - matches nullstr parameter
 	}
 
 	try {
@@ -1712,30 +1687,36 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 	}
 }
 
-Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type) {
+Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
+                                               const XMLSchemaOptions &options) {
 	if (!node) {
 		return Value(); // NULL value
 	}
 
 	switch (target_type.id()) {
 	case LogicalTypeId::LIST:
-		return ExtractListFromNode(node, target_type);
+		// TODO(#38): LIST columns skip format-aware path. Custom datetime formats in LIST(DATE)
+		// columns fall back to default parsing. Proper fix requires threading formats through
+		// ExtractValueFromNode via a format-per-field map.
+		return ExtractListFromNode(node, target_type, options);
 	case LogicalTypeId::STRUCT:
-		return ExtractStructFromNode(node, target_type);
+		return ExtractStructFromNode(node, target_type, options);
 	default: {
 		// For primitive types, extract text content and convert
+		// TODO(#38): No datetime_format passed here — nested primitives use default parsing.
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
 			std::string text = CleanTextContent((const char *)text_content);
 			xmlFree(text_content);
-			return ConvertToValue(text, target_type);
+			return ConvertToValue(text, target_type, options);
 		}
 		return Value(); // NULL value
 	}
 	}
 }
 
-Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type) {
+Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
+                                                const XMLSchemaOptions &options) {
 	if (!node || struct_type.id() != LogicalTypeId::STRUCT) {
 		return Value(); // NULL value
 	}
@@ -1757,7 +1738,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			if (content) {
 				std::string text = CleanTextContent((const char *)content);
 				if (!text.empty()) {
-					field_value = ConvertToValue(text, field_type);
+					field_value = ConvertToValue(text, field_type, options);
 					found = true;
 				}
 				xmlFree(content);
@@ -1766,7 +1747,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		// Check if this field is an attribute on the node itself
 		else if (xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
-			field_value = ConvertToValue(str_value, field_type);
+			field_value = ConvertToValue(str_value, field_type, options);
 			xmlFree(attr_value);
 			found = true;
 		} else {
@@ -1782,7 +1763,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Extract each matching child element
-						Value element_value = ExtractValueFromNode(child, element_type);
+						Value element_value = ExtractValueFromNode(child, element_type, options);
 						list_values.push_back(element_value);
 						found = true;
 					}
@@ -1799,7 +1780,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Found matching child element - extract recursively
-						field_value = ExtractValueFromNode(child, field_type);
+						field_value = ExtractValueFromNode(child, field_type, options);
 						found = true;
 						break;
 					}
@@ -1819,7 +1800,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 	return Value::STRUCT(struct_values);
 }
 
-Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type) {
+Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
+                                              const XMLSchemaOptions &options) {
 	if (!node || list_type.id() != LogicalTypeId::LIST) {
 		return Value(); // NULL value
 	}
@@ -1833,7 +1815,7 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE) {
 			// Extract each child element according to the list element type
-			Value element_value = ExtractValueFromNode(child, element_type);
+			Value element_value = ExtractValueFromNode(child, element_type, options);
 			list_values.push_back(element_value);
 		}
 		child = child->next;

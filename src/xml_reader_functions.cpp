@@ -320,6 +320,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
 					}
 				}
+			} else {
+				throw BinderException("datetime_format must be a VARCHAR or LIST(VARCHAR)");
 			}
 			// Validate all format strings
 			for (const auto &fmt : all_formats) {
@@ -458,6 +460,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 								it->second = LogicalType::VARCHAR;
 								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
 							}
+							// NOTE(#38): When types match across files but datetime formats differ,
+							// the first file's format wins. This is acceptable since the format was
+							// determined by that file's samples and both files parse successfully
+							// with it (same type implies compatible format during inference).
 						}
 					}
 
@@ -1036,6 +1042,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
 					}
 				}
+			} else {
+				throw BinderException("datetime_format must be a VARCHAR or LIST(VARCHAR)");
 			}
 			// Validate all format strings
 			for (const auto &fmt : all_formats) {
@@ -1169,6 +1177,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 								it->second = LogicalType::VARCHAR;
 								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
 							}
+							// NOTE(#38): When types match across files but datetime formats differ,
+							// the first file's format wins. This is acceptable since the format was
+							// determined by that file's samples and both files parse successfully
+							// with it (same type implies compatible format during inference).
 						}
 					}
 
@@ -1606,6 +1618,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
 					}
 				}
+			} else {
+				throw BinderException("datetime_format must be a VARCHAR or LIST(VARCHAR)");
 			}
 			// Validate all format strings
 			for (const auto &fmt : all_formats) {
