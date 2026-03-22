@@ -13,6 +13,33 @@
 
 namespace duckdb {
 
+// Parse nullstr parameter (VARCHAR or LIST(VARCHAR)) into null_strings vector.
+// Throws BinderException for invalid types.
+static void ParseNullstrParameter(const Value &val, const char *function_name,
+                                  std::vector<std::string> &null_strings) {
+	auto type_id = val.type().id();
+	if (type_id == LogicalTypeId::VARCHAR) {
+		null_strings.push_back(val.ToString());
+	} else if (type_id == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(val);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				continue;
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException(
+				    "%s \"nullstr\" list elements must be VARCHAR, got: %s",
+				    function_name, child.type().ToString());
+			}
+			null_strings.push_back(child.ToString());
+		}
+	} else {
+		throw BinderException(
+		    "%s \"nullstr\" parameter must be VARCHAR or LIST(VARCHAR), got: %s",
+		    function_name, val.type().ToString());
+	}
+}
+
 // =============================================================================
 // Internal Unified Functions (used by both XML and HTML)
 // =============================================================================
@@ -246,6 +273,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -941,6 +970,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1353,6 +1384,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			auto &child_type = kv.second.type();
 			if (child_type.id() != LogicalTypeId::STRUCT) {
@@ -1586,6 +1619,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1613,6 +1647,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -1644,6 +1679,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_html_single.named_parameters["columns"] = LogicalType::ANY;
 	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_html_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1671,6 +1707,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_html_array.named_parameters["columns"] = LogicalType::ANY;
 	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_html_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);
@@ -1736,6 +1773,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_xml.named_parameters["max_depth"] = LogicalType::INTEGER;
 	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_xml.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_xml.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_xml);
 
@@ -1758,6 +1796,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_html.named_parameters["max_depth"] = LogicalType::INTEGER;
 	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_html.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_html.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_html);
 }
