@@ -10,6 +10,39 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
+
+namespace {
+
+// Resolve a datetime_format preset name or format string to a list of format strings
+std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
+	if (input == "auto") {
+		return {
+		    "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
+		    "%Y-%m-%dT%H:%M:%S.%f",   "%Y-%m-%dT%H:%M:%S",
+		    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
+		    "%Y-%m-%d %H:%M:%S.%f",   "%Y-%m-%d %H:%M:%S",
+		    "%Y-%m-%d",                "%m/%d/%Y",
+		    "%d/%m/%Y",                "%Y/%m/%d",
+		    "%H:%M:%S",                "%I:%M:%S %p",
+		    "%H:%M",
+		};
+	}
+	if (input == "none") { return {}; }
+	if (input == "us") { return {"%m/%d/%Y"}; }
+	if (input == "eu") { return {"%d/%m/%Y"}; }
+	if (input == "iso") { return {"%Y-%m-%d"}; }
+	if (input == "us_timestamp") { return {"%m/%d/%Y %I:%M:%S %p"}; }
+	if (input == "eu_timestamp") { return {"%d/%m/%Y %H:%M:%S"}; }
+	if (input == "iso_timestamp") { return {"%Y-%m-%dT%H:%M:%S"}; }
+	if (input == "iso_timestamptz") { return {"%Y-%m-%dT%H:%M:%S%z"}; }
+	if (input == "12hour") { return {"%I:%M:%S %p"}; }
+	if (input == "24hour") { return {"%H:%M:%S"}; }
+	// Not a preset — treat as a format string
+	return {input};
+}
+
+} // anonymous namespace
 
 namespace duckdb {
 
@@ -246,6 +279,40 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "datetime_format") {
+			// Handle both VARCHAR and LIST(VARCHAR)
+			std::vector<std::string> all_formats;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				auto resolved = ResolveDatetimeFormat(kv.second.ToString());
+				all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				auto &list_children = ListValue::GetChildren(kv.second);
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						auto resolved = ResolveDatetimeFormat(child.ToString());
+						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+					}
+				}
+			}
+			// Validate all format strings
+			for (const auto &fmt : all_formats) {
+				XMLSchemaInference::ValidateDatetimeFormatString(fmt);
+			}
+			schema_options.datetime_format_candidates = all_formats;
+			// 'auto' is default — only mark explicit if user specified something else
+			bool is_auto = false;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR && kv.second.ToString() == "auto") {
+				is_auto = true;
+			}
+			schema_options.has_explicit_datetime_format = !is_auto;
+			// If 'none' was specified, disable temporal detection
+			if (all_formats.empty()) {
+				schema_options.temporal_detection = false;
+			}
+			// Explicit datetime_format overrides temporal_detection=false
+			if (!all_formats.empty()) {
+				schema_options.temporal_detection = true;
+			}
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -918,6 +985,40 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "datetime_format") {
+			// Handle both VARCHAR and LIST(VARCHAR)
+			std::vector<std::string> all_formats;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				auto resolved = ResolveDatetimeFormat(kv.second.ToString());
+				all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				auto &list_children = ListValue::GetChildren(kv.second);
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						auto resolved = ResolveDatetimeFormat(child.ToString());
+						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+					}
+				}
+			}
+			// Validate all format strings
+			for (const auto &fmt : all_formats) {
+				XMLSchemaInference::ValidateDatetimeFormatString(fmt);
+			}
+			schema_options.datetime_format_candidates = all_formats;
+			// 'auto' is default — only mark explicit if user specified something else
+			bool is_auto = false;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR && kv.second.ToString() == "auto") {
+				is_auto = true;
+			}
+			schema_options.has_explicit_datetime_format = !is_auto;
+			// If 'none' was specified, disable temporal detection
+			if (all_formats.empty()) {
+				schema_options.temporal_detection = false;
+			}
+			// Explicit datetime_format overrides temporal_detection=false
+			if (!all_formats.empty()) {
+				schema_options.temporal_detection = true;
+			}
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1444,6 +1545,40 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "datetime_format") {
+			// Handle both VARCHAR and LIST(VARCHAR)
+			std::vector<std::string> all_formats;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				auto resolved = ResolveDatetimeFormat(kv.second.ToString());
+				all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
+				auto &list_children = ListValue::GetChildren(kv.second);
+				for (const auto &child : list_children) {
+					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+						auto resolved = ResolveDatetimeFormat(child.ToString());
+						all_formats.insert(all_formats.end(), resolved.begin(), resolved.end());
+					}
+				}
+			}
+			// Validate all format strings
+			for (const auto &fmt : all_formats) {
+				XMLSchemaInference::ValidateDatetimeFormatString(fmt);
+			}
+			schema_options.datetime_format_candidates = all_formats;
+			// 'auto' is default — only mark explicit if user specified something else
+			bool is_auto = false;
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR && kv.second.ToString() == "auto") {
+				is_auto = true;
+			}
+			schema_options.has_explicit_datetime_format = !is_auto;
+			// If 'none' was specified, disable temporal detection
+			if (all_formats.empty()) {
+				schema_options.temporal_detection = false;
+			}
+			// Explicit datetime_format overrides temporal_detection=false
+			if (!all_formats.empty()) {
+				schema_options.temporal_detection = true;
+			}
 		} else if (kv.first == "columns") {
 			auto &child_type = kv.second.type();
 			if (child_type.id() != LogicalTypeId::STRUCT) {
@@ -1677,6 +1812,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1704,6 +1840,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -1735,6 +1872,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_html_single.named_parameters["columns"] = LogicalType::ANY;
 	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_html_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1762,6 +1900,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Explicit schema specification (like JSON extension)
 	read_html_array.named_parameters["columns"] = LogicalType::ANY;
 	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	read_html_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);
@@ -1827,6 +1966,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_xml.named_parameters["max_depth"] = LogicalType::INTEGER;
 	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_xml.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	parse_xml.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_xml);
 
@@ -1849,6 +1989,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_html.named_parameters["max_depth"] = LogicalType::INTEGER;
 	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+	parse_html.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	parse_html.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_html);
 }
