@@ -34,7 +34,7 @@ Read XML files with automatic schema inference.
      - Skip files that fail to parse (default: false)
    * - ``maximum_file_size``
      - BIGINT
-     - Maximum file size in bytes (default: 16MB)
+     - Maximum file size in bytes (default: 128MB)
    * - ``record_element``
      - VARCHAR
      - XPath or tag name for elements that become rows
