@@ -603,6 +603,7 @@ read_xml('pattern',
     max_depth=10,                 -- Maximum parsing depth
     unnest_as='struct',           -- How to unnest nested elements
     all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
+    nullstr='N/A',                -- String value(s) to interpret as NULL
     attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
     attr_prefix='@',              -- Prefix for attribute columns (default: '@')
     text_key='#text',             -- Key for text content in mixed elements (default: '#text')
@@ -625,6 +626,7 @@ read_xml('pattern',
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
+- **`nullstr`**: String value(s) to interpret as NULL. Accepts a single VARCHAR (e.g., `nullstr='N/A'`) or a list of VARCHAR (e.g., `nullstr=['N/A', '-', 'NULL']`). Matching values are excluded from type inference and converted to NULL during extraction. Matching is case-sensitive. When used with `all_varchar=true`, matched values still become NULL (default: none)
 - **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
 - **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
 - **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)

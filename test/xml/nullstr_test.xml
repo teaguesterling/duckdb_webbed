@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<records>
+  <record>
+    <name>Alice</name>
+    <score>95</score>
+    <grade>A</grade>
+  </record>
+  <record>
+    <name>Bob</name>
+    <score>N/A</score>
+    <grade>-</grade>
+  </record>
+  <record>
+    <name>Charlie</name>
+    <score>87</score>
+    <grade>NULL</grade>
+  </record>
+</records>

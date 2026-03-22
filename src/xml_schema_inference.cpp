@@ -9,6 +9,15 @@
 
 namespace duckdb {
 
+static bool IsNullString(const std::string &text, const XMLSchemaOptions &options) {
+	for (const auto &ns : options.null_strings) {
+		if (text == ns) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Forward declaration for silent error handler from xml_utils.cpp
 void XMLSilentErrorHandler(void *ctx, const char *msg, ...);
 
@@ -361,7 +370,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content);
-				if (!text.empty()) {
+				if (!text.empty() && !IsNullString(text, options)) {
 					sample_values.push_back(text);
 				}
 				xmlFree(content);
@@ -1201,7 +1210,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
 				if (attr_value) {
 					std::string str_value = (const char *)attr_value;
-					value = ConvertToValue(str_value, column.type);
+					value = ConvertToValue(str_value, column.type, options);
 					xmlFree(attr_value);
 				} else {
 					value = Value(); // NULL
@@ -1221,7 +1230,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 						if (child_iter->type == XML_ELEMENT_NODE &&
 						    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
 							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
 							list_values.push_back(element_value);
 						}
 					}
@@ -1252,7 +1261,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 							// Container element - check for structured types first
 							if (column.type.id() == LogicalTypeId::STRUCT) {
 								// Use structured extraction for STRUCT types
-								value = ExtractValueFromNode(child, column.type);
+								value = ExtractValueFromNode(child, column.type, options);
 								element_text = ""; // Clear element_text to avoid double processing
 								break;
 							}
@@ -1312,7 +1321,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 
 				// Only convert text value if we haven't already extracted a structured value
 				if (value.IsNull()) {
-					value = ConvertToValue(element_text, column.type);
+					value = ConvertToValue(element_text, column.type, options);
 				}
 			}
 
@@ -1371,7 +1380,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 			xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column_type);
+				value = ConvertToValue(str_value, column_type, options);
 				xmlFree(attr_value);
 			} else {
 				// Special handling for LIST columns - collect ALL matching children
@@ -1384,7 +1393,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 						if (child_iter->type == XML_ELEMENT_NODE &&
 						    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
 							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type);
+							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
 							list_values.push_back(element_value);
 						}
 					}
@@ -1404,7 +1413,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
 						// Found matching child element - extract recursively
-						value = ExtractValueFromNode(child, column_type);
+						value = ExtractValueFromNode(child, column_type, options);
 						break;
 					}
 					child = child->next;
@@ -1416,7 +1425,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 					std::string record_name = (const char *)current->name;
 					if (record_name == column_name) {
 						// Column refers to the record element itself - serialize it
-						value = ExtractValueFromNode(current, column_type);
+						value = ExtractValueFromNode(current, column_type, options);
 					} else {
 						value = Value(column_type); // NULL for truly missing columns
 					}
@@ -1432,9 +1441,14 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 	return rows;
 }
 
-Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type) {
+Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type,
+                                         const XMLSchemaOptions &options) {
 	if (text.empty()) {
 		return Value(); // NULL value
+	}
+
+	if (IsNullString(text, options)) {
+		return Value(); // NULL value - matches nullstr parameter
 	}
 
 	try {
@@ -1476,30 +1490,32 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 	}
 }
 
-Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type) {
+Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
+                                               const XMLSchemaOptions &options) {
 	if (!node) {
 		return Value(); // NULL value
 	}
 
 	switch (target_type.id()) {
 	case LogicalTypeId::LIST:
-		return ExtractListFromNode(node, target_type);
+		return ExtractListFromNode(node, target_type, options);
 	case LogicalTypeId::STRUCT:
-		return ExtractStructFromNode(node, target_type);
+		return ExtractStructFromNode(node, target_type, options);
 	default: {
 		// For primitive types, extract text content and convert
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
 			std::string text = CleanTextContent((const char *)text_content);
 			xmlFree(text_content);
-			return ConvertToValue(text, target_type);
+			return ConvertToValue(text, target_type, options);
 		}
 		return Value(); // NULL value
 	}
 	}
 }
 
-Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type) {
+Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
+                                                const XMLSchemaOptions &options) {
 	if (!node || struct_type.id() != LogicalTypeId::STRUCT) {
 		return Value(); // NULL value
 	}
@@ -1521,7 +1537,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			if (content) {
 				std::string text = CleanTextContent((const char *)content);
 				if (!text.empty()) {
-					field_value = ConvertToValue(text, field_type);
+					field_value = ConvertToValue(text, field_type, options);
 					found = true;
 				}
 				xmlFree(content);
@@ -1530,7 +1546,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		// Check if this field is an attribute on the node itself
 		else if (xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
-			field_value = ConvertToValue(str_value, field_type);
+			field_value = ConvertToValue(str_value, field_type, options);
 			xmlFree(attr_value);
 			found = true;
 		} else {
@@ -1546,7 +1562,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Extract each matching child element
-						Value element_value = ExtractValueFromNode(child, element_type);
+						Value element_value = ExtractValueFromNode(child, element_type, options);
 						list_values.push_back(element_value);
 						found = true;
 					}
@@ -1563,7 +1579,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						// Found matching child element - extract recursively
-						field_value = ExtractValueFromNode(child, field_type);
+						field_value = ExtractValueFromNode(child, field_type, options);
 						found = true;
 						break;
 					}
@@ -1583,7 +1599,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 	return Value::STRUCT(struct_values);
 }
 
-Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type) {
+Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
+                                              const XMLSchemaOptions &options) {
 	if (!node || list_type.id() != LogicalTypeId::LIST) {
 		return Value(); // NULL value
 	}
@@ -1597,7 +1614,7 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE) {
 			// Extract each child element according to the list element type
-			Value element_value = ExtractValueFromNode(child, element_type);
+			Value element_value = ExtractValueFromNode(child, element_type, options);
 			list_values.push_back(element_value);
 		}
 		child = child->next;

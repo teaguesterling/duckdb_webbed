@@ -84,6 +84,10 @@ Type Handling Parameters
      - VARCHAR[]
      - []
      - Column names that should always be LIST type, even if they appear only once
+   * - ``nullstr``
+     - VARCHAR or VARCHAR[]
+     - (none)
+     - String value(s) to interpret as NULL. Excluded from type inference and converted to NULL during extraction. Case-sensitive.
 
 Attribute Handling Parameters
 -----------------------------

@@ -53,7 +53,8 @@ struct XMLSchemaOptions {
 	idx_t maximum_file_size = 16777216; // 16MB default
 
 	// Type forcing
-	bool all_varchar = false; // Force all scalar types to VARCHAR (nested structure preserved)
+	bool all_varchar = false;                  // Force all scalar types to VARCHAR (nested structure preserved)
+	std::vector<std::string> null_strings;     // Values to treat as NULL (empty = default behavior)
 
 	// Source type tracking
 	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
@@ -219,12 +220,16 @@ private:
 
 	static std::string CleanTextContent(const std::string &text);
 
-	static Value ConvertToValue(const std::string &text, const LogicalType &target_type);
+	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,
+	                            const XMLSchemaOptions &options);
 
 	// Recursive extraction helpers for complex types
-	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type);
-	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type);
-	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type);
+	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
+	                                  const XMLSchemaOptions &options);
+	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
+	                                   const XMLSchemaOptions &options);
+	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
+	                                 const XMLSchemaOptions &options);
 	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
 };
 
