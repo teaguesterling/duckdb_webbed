@@ -1111,15 +1111,38 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 }
 
 std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
-	// Remove leading/trailing whitespace and normalize
-	std::string cleaned = text;
-	StringUtil::Trim(cleaned);
+	// UTF-8-safe trim: only strip ASCII whitespace.
+	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
+	// that treats UTF-8 continuation bytes (negative as signed char) as
+	// characters to erase, destroying entire non-ASCII strings (issue #64).
+	auto is_ascii_space = [](unsigned char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+	};
 
-	// Remove excessive whitespace
-	std::regex multiple_spaces(R"(\s+)");
-	cleaned = std::regex_replace(cleaned, multiple_spaces, " ");
+	auto lstart = std::find_if_not(text.begin(), text.end(),
+	                                [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
+	auto rend = std::find_if_not(text.rbegin(), text.rend(),
+	                              [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); }).base();
+	if (lstart >= rend) {
+		return "";
+	}
 
-	return cleaned;
+	// Collapse runs of ASCII whitespace to a single space
+	std::string result;
+	result.reserve(static_cast<size_t>(rend - lstart));
+	bool in_space = false;
+	for (auto it = lstart; it != rend; ++it) {
+		if (is_ascii_space(static_cast<unsigned char>(*it))) {
+			if (!in_space) {
+				result += ' ';
+				in_space = true;
+			}
+		} else {
+			result += *it;
+			in_space = false;
+		}
+	}
+	return result;
 }
 
 std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::string &xml_content,
