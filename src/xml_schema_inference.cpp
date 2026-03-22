@@ -106,10 +106,13 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	for (auto &pair : column_map) {
 		const auto &col_analysis = pair.second;
 
-		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options);
+		std::string winning_fmt;
+		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options, winning_fmt);
 
 		double confidence = static_cast<double>(col_analysis.occurrence_count) / record_elements.size();
-		columns.emplace_back(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
+		XMLColumnInfo col_info(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
+		col_info.winning_datetime_format = winning_fmt;
+		columns.push_back(std::move(col_info));
 	}
 
 	// Ensure we have at least some columns
@@ -319,7 +322,9 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-                                                const XMLSchemaOptions &options) {
+                                                const XMLSchemaOptions &options,
+                                                std::string &winning_datetime_format) {
+	winning_datetime_format.clear();
 	// Attributes are always VARCHAR (or type-detected if enabled)
 	if (column.is_attribute) {
 		// TODO: Could sample attribute values for type detection
@@ -373,8 +378,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
-		std::string winning_fmt;
-		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_fmt);
+		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_datetime_format);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
@@ -461,7 +465,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 						// Recursively infer type with decreased depth
-						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+						std::string nested_winning_fmt;
+						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
 						struct_fields.push_back(make_pair(child_name, child_type));
 					}
 				}
@@ -528,7 +533,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 					// Recursively infer type with decreased depth
-					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+					std::string nested_winning_fmt2;
+					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
 					struct_fields.push_back(make_pair(child_name, child_type));
 				}
 			}
@@ -1446,7 +1452,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content,
                                                                           const std::vector<std::string> &column_names,
                                                                           const std::vector<LogicalType> &column_types,
-                                                                          const XMLSchemaOptions &options) {
+                                                                          const XMLSchemaOptions &options,
+                                                                          const std::vector<std::string> &column_datetime_formats) {
 	std::vector<std::vector<Value>> rows;
 
 	if (column_names.size() != column_types.size()) {
@@ -1481,6 +1488,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 		for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 			const auto &column_name = column_names[col_idx];
 			const auto &column_type = column_types[col_idx];
+			const std::string &col_fmt =
+			    (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
 
 			// Find the specific child element or attribute for this column
 			Value value;
@@ -1489,7 +1498,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 			xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column_type);
+				value = ConvertToValue(str_value, column_type, col_fmt);
 				xmlFree(attr_value);
 			} else {
 				// Special handling for LIST columns - collect ALL matching children
@@ -1516,13 +1525,24 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 					continue;
 				}
 
-				// Look for child element with matching name (non-LIST types)
+				// Look for child element with matching name (non-LIST/STRUCT primitive types)
+				// When we have a datetime format, extract text and convert directly to preserve the format
 				xmlNodePtr child = current->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
-						// Found matching child element - extract recursively
-						value = ExtractValueFromNode(child, column_type);
+						if (!col_fmt.empty()) {
+							// Has a datetime format: extract raw text and convert with format
+							xmlChar *text_content = xmlNodeGetContent(child);
+							if (text_content) {
+								std::string text = CleanTextContent((const char *)text_content);
+								xmlFree(text_content);
+								value = ConvertToValue(text, column_type, col_fmt);
+							}
+						} else {
+							// No format: use standard recursive extraction
+							value = ExtractValueFromNode(child, column_type);
+						}
 						break;
 					}
 					child = child->next;

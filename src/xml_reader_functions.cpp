@@ -378,6 +378,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
+			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
 			std::vector<std::string> column_order; // Track order of first appearance
 
 			// Scan each file for schema
@@ -419,6 +420,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						if (it == union_schema.end()) {
 							// New column - add it
 							union_schema[col_info.name] = col_info.type;
+							union_formats[col_info.name] = col_info.winning_datetime_format;
 							column_order.push_back(col_info.name);
 						} else {
 							// Column exists - check if type needs to be generalized
@@ -427,6 +429,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 								// For now, use VARCHAR for conflicting types
 								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
 								it->second = LogicalType::VARCHAR;
+								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
 							}
 						}
 					}
@@ -451,6 +454,12 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				result->has_explicit_schema = true;
 				result->column_names = names;
 				result->column_types = return_types;
+				// Store per-column datetime formats for use during extraction
+				result->column_datetime_formats.resize(names.size());
+				for (size_t i = 0; i < names.size(); i++) {
+					auto fmt_it = union_formats.find(names[i]);
+					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
+				}
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				if (mode == ParseMode::HTML) {
@@ -642,7 +651,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				if (bind_data.has_explicit_schema) {
 					// Use explicit schema for extraction
 					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
-					    content, bind_data.column_names, bind_data.column_types, schema_options);
+					    content, bind_data.column_names, bind_data.column_types, schema_options,
+					    bind_data.column_datetime_formats);
 				} else {
 					// Use schema inference
 					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
@@ -1082,6 +1092,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
+			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
 			std::vector<std::string> column_order; // Track order of first appearance
 
 			// Scan each file for schema
@@ -1120,6 +1131,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						if (it == union_schema.end()) {
 							// New column - add it
 							union_schema[col_info.name] = col_info.type;
+							union_formats[col_info.name] = col_info.winning_datetime_format;
 							column_order.push_back(col_info.name);
 						} else {
 							// Column exists - check if type needs to be generalized
@@ -1128,6 +1140,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 								// For now, use VARCHAR for conflicting types
 								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
 								it->second = LogicalType::VARCHAR;
+								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
 							}
 						}
 					}
@@ -1152,6 +1165,12 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				result->has_explicit_schema = true;
 				result->column_names = names;
 				result->column_types = return_types;
+				// Store per-column datetime formats for use during extraction
+				result->column_datetime_formats.resize(names.size());
+				for (size_t i = 0; i < names.size(); i++) {
+					auto fmt_it = union_formats.find(names[i]);
+					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
+				}
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				return_types.push_back(XMLTypes::XMLType());
@@ -1251,7 +1270,8 @@ void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionIn
 				if (bind_data.has_explicit_schema) {
 					// Use explicit schema for extraction
 					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
-					    content, bind_data.column_names, bind_data.column_types, schema_options);
+					    content, bind_data.column_names, bind_data.column_types, schema_options,
+					    bind_data.column_datetime_formats);
 				} else {
 					// Use schema inference
 					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
@@ -1652,6 +1672,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 				result->has_explicit_schema = true;
 				result->column_names = names;
 				result->column_types = return_types;
+				// Store per-column datetime formats for use during extraction
+				result->column_datetime_formats.resize(inferred_columns.size());
+				for (size_t i = 0; i < inferred_columns.size(); i++) {
+					result->column_datetime_formats[i] = inferred_columns[i].winning_datetime_format;
+				}
 			} else {
 				// Fallback to simple schema
 				if (mode == ParseMode::HTML) {
@@ -1704,7 +1729,8 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentInit(Clien
 	try {
 		if (bind_data.has_explicit_schema) {
 			result->extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
-			                                                                   bind_data.column_types, schema_options);
+			                                                                   bind_data.column_types, schema_options,
+			                                                                   bind_data.column_datetime_formats);
 		} else {
 			result->extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
 		}

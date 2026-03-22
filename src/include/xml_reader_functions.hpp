@@ -105,6 +105,7 @@ struct XMLReadFunctionData : public TableFunctionData {
 	bool has_explicit_schema = false;
 	vector<string> column_names;
 	vector<LogicalType> column_types;
+	vector<string> column_datetime_formats; // Per-column winning format from inference
 
 	// Schema inference options (for read_xml with auto schema detection)
 	XMLSchemaOptions schema_options;
@@ -141,6 +142,7 @@ struct XMLParseData : public TableFunctionData {
 	bool has_explicit_schema = false;
 	vector<string> column_names;
 	vector<LogicalType> column_types;
+	vector<string> column_datetime_formats; // Per-column winning format from inference
 	XMLSchemaOptions schema_options;
 };
 

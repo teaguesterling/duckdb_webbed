@@ -176,7 +176,8 @@ public:
 	static std::vector<std::vector<Value>> ExtractDataWithSchema(const std::string &xml_content,
 	                                                             const std::vector<std::string> &column_names,
 	                                                             const std::vector<LogicalType> &column_types,
-	                                                             const XMLSchemaOptions &options = XMLSchemaOptions {});
+	                                                             const XMLSchemaOptions &options = XMLSchemaOptions {},
+	                                                             const std::vector<std::string> &column_datetime_formats = {});
 
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string &xml_content,
@@ -211,7 +212,8 @@ private:
 	static std::unordered_map<std::string, ColumnAnalysis>
 	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-	                                   const XMLSchemaOptions &options);
+	                                   const XMLSchemaOptions &options,
+	                                   std::string &winning_datetime_format);
 
 	// Internal helper functions
 	static void AnalyzeElement(xmlNodePtr node, std::unordered_map<std::string, ElementPattern> &patterns,
