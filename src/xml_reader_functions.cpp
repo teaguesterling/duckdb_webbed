@@ -13,6 +13,33 @@
 
 namespace duckdb {
 
+// Parse nullstr parameter (VARCHAR or LIST(VARCHAR)) into null_strings vector.
+// Throws BinderException for invalid types.
+static void ParseNullstrParameter(const Value &val, const char *function_name,
+                                  std::vector<std::string> &null_strings) {
+	auto type_id = val.type().id();
+	if (type_id == LogicalTypeId::VARCHAR) {
+		null_strings.push_back(val.ToString());
+	} else if (type_id == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(val);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				continue;
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException(
+				    "%s \"nullstr\" list elements must be VARCHAR, got: %s",
+				    function_name, child.type().ToString());
+			}
+			null_strings.push_back(child.ToString());
+		}
+	} else {
+		throw BinderException(
+		    "%s \"nullstr\" parameter must be VARCHAR or LIST(VARCHAR), got: %s",
+		    function_name, val.type().ToString());
+	}
+}
+
 // =============================================================================
 // Internal Unified Functions (used by both XML and HTML)
 // =============================================================================
@@ -247,16 +274,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "nullstr") {
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				schema_options.null_strings.push_back(kv.second.ToString());
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				auto &list_children = ListValue::GetChildren(kv.second);
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						schema_options.null_strings.push_back(child.ToString());
-					}
-				}
-			}
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -930,16 +948,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "nullstr") {
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				schema_options.null_strings.push_back(kv.second.ToString());
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				auto &list_children = ListValue::GetChildren(kv.second);
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						schema_options.null_strings.push_back(child.ToString());
-					}
-				}
-			}
+			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1467,16 +1476,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
 		} else if (kv.first == "nullstr") {
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				schema_options.null_strings.push_back(kv.second.ToString());
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				auto &list_children = ListValue::GetChildren(kv.second);
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						schema_options.null_strings.push_back(child.ToString());
-					}
-				}
-			}
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			auto &child_type = kv.second.type();
 			if (child_type.id() != LogicalTypeId::STRUCT) {
