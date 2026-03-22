@@ -231,7 +231,8 @@ private:
 
 	static std::string CleanTextContent(const std::string &text);
 
-	static Value ConvertToValue(const std::string &text, const LogicalType &target_type);
+	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,
+	                            const std::string &datetime_format = "");
 
 	// Recursive extraction helpers for complex types
 	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type);

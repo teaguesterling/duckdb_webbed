@@ -1,6 +1,7 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
@@ -1318,7 +1319,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
 				if (attr_value) {
 					std::string str_value = (const char *)attr_value;
-					value = ConvertToValue(str_value, column.type);
+					value = ConvertToValue(str_value, column.type, column.winning_datetime_format);
 					xmlFree(attr_value);
 				} else {
 					value = Value(); // NULL
@@ -1429,7 +1430,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 
 				// Only convert text value if we haven't already extracted a structured value
 				if (value.IsNull()) {
-					value = ConvertToValue(element_text, column.type);
+					value = ConvertToValue(element_text, column.type, column.winning_datetime_format);
 				}
 			}
 
@@ -1549,7 +1550,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 	return rows;
 }
 
-Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type) {
+Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type,
+                                          const std::string &datetime_format) {
 	if (text.empty()) {
 		return Value(); // NULL value
 	}
@@ -1573,20 +1575,78 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 		case LogicalTypeId::DOUBLE:
 			return Value::DOUBLE(std::stod(text));
 		case LogicalTypeId::DATE: {
-			// Try to parse date - simplified for now
-			if (text.length() == 10 && text[4] == '-' && text[7] == '-') {
-				return Value::DATE(Date::FromString(text));
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				date_t result;
+				if (strp_format.TryParseDate(text.c_str(), text.size(), result)) {
+					return Value::DATE(result);
+				}
+				throw ConversionException("Could not parse '%s' as DATE with format '%s'", text, datetime_format);
 			}
-			return Value(text); // Fallback to string
+			return Value::DATE(Date::FromString(text));
 		}
 		case LogicalTypeId::TIMESTAMP: {
-			// Try to parse timestamp
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				timestamp_t result;
+				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
+					return Value::TIMESTAMP(result);
+				}
+				throw ConversionException("Could not parse '%s' as TIMESTAMP with format '%s'", text, datetime_format);
+			}
 			return Value::TIMESTAMP(Timestamp::FromString(text, false));
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				timestamp_t result;
+				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
+					return Value::TIMESTAMPTZ(timestamp_tz_t(result));
+				}
+				throw ConversionException("Could not parse '%s' as TIMESTAMPTZ with format '%s'", text, datetime_format);
+			}
+			return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, false)));
+		}
+		case LogicalTypeId::TIME: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				StrpTimeFormat::ParseResult parse_result;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+					dtime_t time_result;
+					if (parse_result.TryToTime(time_result)) {
+						return Value::TIME(time_result);
+					}
+				}
+				throw ConversionException("Could not parse '%s' as TIME with format '%s'", text, datetime_format);
+			}
+			return Value(text);
+		}
+		case LogicalTypeId::TIME_TZ: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				StrpTimeFormat::ParseResult parse_result;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+					dtime_t time_result;
+					if (parse_result.TryToTime(time_result)) {
+						dtime_tz_t result(time_result, parse_result.data[7]);
+						return Value::TIMETZ(result);
+					}
+				}
+				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
+			}
+			return Value(text);
 		}
 		case LogicalTypeId::VARCHAR:
 		default:
 			return Value(text);
 		}
+	} catch (ConversionException &) {
+		throw; // Re-throw ConversionException as-is
 	} catch (...) {
 		// If conversion fails, return as VARCHAR
 		return Value(text);
