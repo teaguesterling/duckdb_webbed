@@ -372,7 +372,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
-		LogicalType scalar_type = InferTypeFromSamples(sample_values, options);
+		std::string winning_fmt;
+		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_fmt);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
@@ -898,41 +899,108 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	}
 }
 
+static bool TryMatchDatetimeFormat(const std::string &value, const std::string &format_str,
+                                   const LogicalType &expected_type) {
+	StrpTimeFormat strp_format;
+	StrTimeFormat::ParseFormatSpecifier(format_str, strp_format);
+
+	switch (expected_type.id()) {
+	case LogicalTypeId::DATE: {
+		date_t result;
+		return strp_format.TryParseDate(value.c_str(), value.size(), result);
+	}
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		timestamp_t result;
+		return strp_format.TryParseTimestamp(value.c_str(), value.size(), result);
+	}
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ: {
+		StrpTimeFormat::ParseResult parse_result;
+		if (!strp_format.Parse(value.c_str(), value.size(), parse_result)) {
+			return false;
+		}
+		dtime_t time_result;
+		return parse_result.TryToTime(time_result);
+	}
+	default:
+		return false;
+	}
+}
+
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
-                                                     const XMLSchemaOptions &options) {
-	// If all_varchar is enabled, skip type detection and return VARCHAR directly
+                                                     const XMLSchemaOptions &options,
+                                                     std::string &winning_datetime_format) {
+	winning_datetime_format.clear();
+
 	if (options.all_varchar) {
 		return LogicalType::VARCHAR;
 	}
-
 	if (samples.empty()) {
 		return LogicalType::VARCHAR;
 	}
 
-	std::vector<LogicalType> detected_types;
+	// Build effective candidate list
+	const auto &candidates = options.datetime_format_candidates;
+	static const std::vector<std::string> auto_candidates = {
+	    "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
+	    "%Y-%m-%dT%H:%M:%S.%f",   "%Y-%m-%dT%H:%M:%S",
+	    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
+	    "%Y-%m-%d %H:%M:%S.%f",   "%Y-%m-%d %H:%M:%S",
+	    "%Y-%m-%d",                "%m/%d/%Y",
+	    "%d/%m/%Y",                "%Y/%m/%d",
+	    "%H:%M:%S",                "%I:%M:%S %p",
+	    "%H:%M",
+	};
+	// Use explicit candidates if provided, else auto if temporal_detection is on, else empty
+	const auto &effective_candidates =
+	    (!candidates.empty()) ? candidates :
+	    (options.temporal_detection ? auto_candidates : candidates);
 
+	// Per-column candidate elimination
+	std::vector<bool> alive(effective_candidates.size(), true);
+	std::vector<LogicalType> candidate_types;
+	for (const auto &fmt : effective_candidates) {
+		candidate_types.push_back(ClassifyDatetimeFormat(fmt));
+	}
+
+	bool any_alive = !effective_candidates.empty();
 	for (const auto &sample : samples) {
 		if (sample.empty()) {
-			continue; // Skip empty values
+			continue; // Nulls/empty skip elimination
 		}
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			if (!alive[i]) continue;
+			if (!TryMatchDatetimeFormat(sample, effective_candidates[i], candidate_types[i])) {
+				alive[i] = false;
+			}
+		}
+		any_alive = false;
+		for (bool a : alive) {
+			if (a) { any_alive = true; break; }
+		}
+		if (!any_alive) break;
+	}
 
-		// Test types in order of specificity (most specific to least specific)
-		// Temporal types first (very specific format requirements)
-		if (options.temporal_detection && IsDate(sample)) {
-			detected_types.push_back(LogicalType::DATE);
-		} else if (options.temporal_detection && IsTimestamp(sample)) {
-			detected_types.push_back(LogicalType::TIMESTAMP);
-		} else if (options.temporal_detection && IsTime(sample)) {
-			detected_types.push_back(LogicalType::TIME);
+	// First surviving candidate wins (priority = list order)
+	if (any_alive) {
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			if (alive[i]) {
+				winning_datetime_format = effective_candidates[i];
+				return candidate_types[i];
+			}
 		}
-		// Numeric types before boolean to avoid "1"/"0" being detected as boolean
-		else if (options.numeric_detection && IsInteger(sample)) {
+	}
+
+	// Fall through to numeric/boolean/VARCHAR detection (existing logic)
+	std::vector<LogicalType> detected_types;
+	for (const auto &sample : samples) {
+		if (sample.empty()) continue;
+		if (options.numeric_detection && IsInteger(sample)) {
 			detected_types.push_back(LogicalType::INTEGER);
 		} else if (options.numeric_detection && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
-		}
-		// Boolean after numeric types (avoids ambiguity with 0/1)
-		else if (options.boolean_detection && IsBoolean(sample)) {
+		} else if (options.boolean_detection && IsBoolean(sample)) {
 			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
@@ -964,7 +1032,8 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
 			// Recursively determine child type
 			LogicalType child_type;
 			if (child_pattern.is_scalar) {
-				child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+				std::string nested_fmt;
+				child_type = InferTypeFromSamples(child_pattern.sample_values, options, nested_fmt);
 			} else {
 				// Recursive nested type
 				child_type = InferNestedType(child_pattern, all_patterns, options);
@@ -986,7 +1055,8 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
 				// Recursively determine child type
 				LogicalType child_type;
 				if (child_pattern.is_scalar) {
-					child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+					std::string nested_fmt;
+					child_type = InferTypeFromSamples(child_pattern.sample_values, options, nested_fmt);
 				} else {
 					// Recursive nested type
 					child_type = InferNestedType(child_pattern, all_patterns, options);

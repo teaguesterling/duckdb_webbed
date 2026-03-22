@@ -183,7 +183,9 @@ public:
 	                                                            const XMLSchemaOptions &options);
 
 	// Infer type from sample values
-	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples, const XMLSchemaOptions &options);
+	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples,
+	                                        const XMLSchemaOptions &options,
+	                                        std::string &winning_datetime_format);
 
 	// Detect nested structures (LIST and STRUCT types)
 	static LogicalType InferNestedType(const ElementPattern &pattern,
