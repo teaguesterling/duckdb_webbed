@@ -1,0 +1,82 @@
+# name: test/sql/github_issue_49_attr_type_inference.test
+# description: Test type inference for elements with attributes (GitHub Issues #49, #46)
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Test 1: Type inference for text content in elements with attributes
+# =============================================================================
+
+# price should be DOUBLE, not VARCHAR
+query T
+SELECT typeof(price)
+FROM read_xml('test/xml/attr_type_inference.xml')
+LIMIT 1;
+----
+STRUCT("#text" DOUBLE, currency VARCHAR)
+
+# count should be INTEGER
+query T
+SELECT typeof(count)
+FROM read_xml('test/xml/attr_type_inference.xml')
+LIMIT 1;
+----
+STRUCT("#text" INTEGER, unit VARCHAR)
+
+# released should be DATE
+query T
+SELECT typeof(released)
+FROM read_xml('test/xml/attr_type_inference.xml')
+LIMIT 1;
+----
+STRUCT("#text" DATE, date VARCHAR)
+
+# active should be BOOLEAN
+query T
+SELECT typeof(active)
+FROM read_xml('test/xml/attr_type_inference.xml')
+LIMIT 1;
+----
+STRUCT("#text" BOOLEAN, status VARCHAR)
+
+# =============================================================================
+# Test 2: Values are correctly typed and extractable
+# =============================================================================
+
+query TITR
+SELECT price."#text", price.currency, count."#text", released."#text"
+FROM read_xml('test/xml/attr_type_inference.xml')
+ORDER BY price."#text";
+----
+19.99	USD	42	2020-01-15
+29.99	EUR	7	2021-06-01
+
+# =============================================================================
+# Test 3: attr_mode='discard' returns scalar types directly (no STRUCT)
+# =============================================================================
+
+query T
+SELECT typeof(price)
+FROM read_xml('test/xml/attr_type_inference.xml', attr_mode:='discard')
+LIMIT 1;
+----
+DOUBLE
+
+query T
+SELECT typeof(released)
+FROM read_xml('test/xml/attr_type_inference.xml', attr_mode:='discard')
+LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# Test 4: name element (no attributes) stays as scalar VARCHAR
+# =============================================================================
+
+query T
+SELECT typeof(name)
+FROM read_xml('test/xml/attr_type_inference.xml')
+LIMIT 1;
+----
+VARCHAR

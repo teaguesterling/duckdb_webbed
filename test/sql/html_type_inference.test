@@ -4,23 +4,23 @@
 
 require webbed
 
-# Test 1: Multiple span elements with class attributes become an array with class preserved
+# Test 1: Multiple span elements with class attributes become an array with class and text preserved
 # NOTE: The class attribute values don't become field names; spans are just grouped as repeated elements
+# Text content is now preserved as #text field with inferred type (Issues #49, #46)
 query TTTTTT
 DESCRIBE SELECT span FROM read_html('test/html/type_inference_test.html', record_element:='li');
 ----
-span	STRUCT("class" VARCHAR)[]	YES	NULL	NULL	NULL
+span	STRUCT("#text" VARCHAR, "class" VARCHAR)[]	YES	NULL	NULL	NULL
 
-# Test 2: Verify span is an array type
+# Test 2: Verify span is an array type with #text field
 query I
 SELECT typeof(span)
 FROM read_html('test/html/type_inference_test.html', record_element:='li')
 LIMIT 1;
 ----
-STRUCT("class" VARCHAR)[]
+STRUCT("#text" VARCHAR, "class" VARCHAR)[]
 
 # Test 3: With attr_mode:='discard', time element content is inferred as DATE
-# TODO(future): Special handling for semantic HTML elements like <time> to infer types even with attributes
 query T
 SELECT typeof(time)
 FROM read_html('test/html/type_inference_test.html', record_element:='li', attr_mode:='discard')
@@ -45,3 +45,11 @@ FROM read_html('test/html/type_inference_test.html', record_element:='li')
 LIMIT 1;
 ----
 5
+
+# Test 6: Time element with default attr_mode now infers #text as DATE (Issues #49, #46)
+query T
+SELECT typeof(time)
+FROM read_html('test/html/type_inference_test.html', record_element:='li')
+LIMIT 1;
+----
+STRUCT("#text" DATE, datetime VARCHAR)

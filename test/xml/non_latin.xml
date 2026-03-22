@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<records>
+  <record>
+    <name>Таймаут</name>
+    <value>100</value>
+    <description>Описание</description>
+  </record>
+  <record>
+    <name>日本語テスト</name>
+    <value>200</value>
+    <description>中文描述</description>
+  </record>
+  <record>
+    <name>Mixed Текст</name>
+    <value>300</value>
+    <description>Hello мир</description>
+  </record>
+</records>

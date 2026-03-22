@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <product>
+    <name>Widget</name>
+    <price currency="USD">19.99</price>
+    <count unit="items">42</count>
+    <released date="2020-01-15">2020-01-15</released>
+    <active status="verified">true</active>
+  </product>
+  <product>
+    <name>Gadget</name>
+    <price currency="EUR">29.99</price>
+    <count unit="boxes">7</count>
+    <released date="2021-06-01">2021-06-01</released>
+    <active status="pending">false</active>
+  </product>
+</catalog>

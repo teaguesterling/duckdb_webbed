@@ -616,7 +616,7 @@ read_xml('pattern',
 #### **Parameter Details:**
 
 - **`ignore_errors`**: Continue processing when individual files fail to parse
-- **`maximum_file_size`**: Skip files larger than specified bytes (default: 16MB)
+- **`maximum_file_size`**: Skip files larger than specified bytes (default: 128MB)
 - **`filename`**: Add a `filename` column to output with source file path
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference
