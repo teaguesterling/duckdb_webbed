@@ -330,39 +330,49 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Check if all instances are leaf nodes (text only, no children and no attributes)
 	// Elements with attributes should be treated as complex (STRUCT), not leaf
+	// But we still collect text samples from attribute-only elements for #text type inference
 	bool all_leaf = true;
 	std::vector<std::string> sample_values;
+	std::vector<std::string> text_samples; // Text samples collected even from elements with attributes
 
 	for (xmlNodePtr node : column.instances) {
-		bool is_complex = false;
+		bool has_child_elements = false;
+		bool has_attributes = false;
 
 		// Check for child elements
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				is_complex = true;
+				has_child_elements = true;
 				break;
 			}
 		}
 
 		// Check for attributes (unless we're discarding them)
-		if (!is_complex && options.attr_mode != "discard") {
-			if (node->properties != nullptr) {
-				is_complex = true;
-			}
+		if (!has_child_elements && options.attr_mode != "discard") {
+			has_attributes = (node->properties != nullptr);
 		}
 
-		if (is_complex) {
+		if (has_child_elements) {
+			// Genuinely complex (has child elements) — no point sampling text
 			all_leaf = false;
 			break;
 		}
 
-		// Collect text content for scalar type detection
-		if (sample_values.size() < 20) {
+		if (has_attributes) {
+			// Has attributes but no children — still collect text for #text type inference
+			all_leaf = false;
+		}
+
+		// Collect text content for type detection
+		if (text_samples.size() < 20) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content);
 				if (!text.empty()) {
-					sample_values.push_back(text);
+					text_samples.push_back(text);
+					if (!has_attributes) {
+						sample_values.push_back(text);
+					}
 				}
 				xmlFree(content);
 			}
@@ -430,7 +440,32 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		// 2. Add child elements as STRUCT fields (if any)
+		// 2. If no child elements but has text content, add #text field with inferred type
+		if (child_max_counts.empty() && !struct_fields.empty()) {
+			// Collect text samples from all instances for type inference
+			std::vector<std::string> list_text_samples;
+			for (xmlNodePtr instance : column.instances) {
+				if (list_text_samples.size() >= 20) {
+					break;
+				}
+				xmlChar *content = xmlNodeGetContent(instance);
+				if (content) {
+					std::string text = CleanTextContent((const char *)content);
+					if (!text.empty()) {
+						list_text_samples.push_back(text);
+					}
+					xmlFree(content);
+				}
+			}
+			if (!list_text_samples.empty()) {
+				LogicalType text_type = InferTypeFromSamples(list_text_samples, options);
+				// Insert #text as first field (before attribute fields)
+				struct_fields.insert(struct_fields.begin(),
+				                     make_pair(options.text_key, text_type));
+			}
+		}
+
+		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
 			std::unordered_set<std::string> seen_children;
 
@@ -540,10 +575,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	// This handles elements like <phone type="mobile">555-1234</phone> where
 	// some instances have attributes and some don't
 	if (options.attr_mode != "discard") {
-		// Collect all unique attributes across ALL instances
+		// Collect all unique attributes and text samples across ALL instances
 		std::unordered_set<std::string> all_attrs;
 		bool has_any_attrs = false;
-		bool has_text_content = false;
+		std::vector<std::string> cross_record_text_samples;
 
 		for (xmlNodePtr instance : column.instances) {
 			// Check for attributes
@@ -557,23 +592,26 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					has_any_attrs = true;
 				}
 			}
-			// Check for text content
-			xmlChar *content = xmlNodeGetContent(instance);
-			if (content) {
-				std::string text = CleanTextContent((const char *)content);
-				if (!text.empty()) {
-					has_text_content = true;
+			// Collect text content samples for type inference
+			if (cross_record_text_samples.size() < 20) {
+				xmlChar *content = xmlNodeGetContent(instance);
+				if (content) {
+					std::string text = CleanTextContent((const char *)content);
+					if (!text.empty()) {
+						cross_record_text_samples.push_back(text);
+					}
+					xmlFree(content);
 				}
-				xmlFree(content);
 			}
 		}
 
 		// If we have attributes discovered across records, build STRUCT with text + attrs
-		if (has_any_attrs && has_text_content) {
+		if (has_any_attrs && !cross_record_text_samples.empty()) {
 			child_list_t<LogicalType> struct_fields;
 
-			// Add text content field
-			struct_fields.push_back(make_pair(options.text_key, LogicalType::VARCHAR));
+			// Add text content field with inferred type
+			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options);
+			struct_fields.push_back(make_pair(options.text_key, text_type));
 
 			// Add attribute fields (sorted for determinism)
 			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());
