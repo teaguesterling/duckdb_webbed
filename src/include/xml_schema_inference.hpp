@@ -5,6 +5,7 @@
 #include <libxml/parser.h>
 #include <unordered_map>
 #include <vector>
+#include "duckdb/function/scalar/strftime_format.hpp"
 
 namespace duckdb {
 
@@ -41,6 +42,10 @@ struct XMLSchemaOptions {
 	bool numeric_detection = true;  // Detect optimal numeric types
 	bool boolean_detection = true;  // Detect boolean values
 
+	// Datetime format (replaces temporal_detection for explicit format control)
+	std::vector<std::string> datetime_format_candidates; // Resolved format strings (empty = use temporal_detection flag)
+	bool has_explicit_datetime_format = false;            // User specified a format (not 'auto')
+
 	// Collection handling
 	double array_threshold = 0.8;    // Minimum homogeneity for arrays (80%)
 	int32_t max_array_depth = 3;     // Maximum nested array depth
@@ -67,6 +72,7 @@ struct XMLColumnInfo {
 	std::string xpath;                      // XPath to extract this column
 	double confidence;                      // Schema inference confidence (0.0-1.0)
 	std::vector<std::string> sample_values; // Sample values used for type detection
+	std::string winning_datetime_format;    // Format string that won during inference (empty = no format)
 
 	XMLColumnInfo(const std::string &name, LogicalType type, bool is_attribute = false, const std::string &xpath = "",
 	              double confidence = 1.0)
@@ -191,6 +197,10 @@ public:
 	static bool IsDate(const std::string &value);
 	static bool IsTime(const std::string &value);
 	static bool IsTimestamp(const std::string &value);
+
+	// Datetime format helpers
+	static LogicalType ClassifyDatetimeFormat(const std::string &format);
+	static void ValidateDatetimeFormatString(const std::string &format);
 
 private:
 	// 3-phase schema inference helpers

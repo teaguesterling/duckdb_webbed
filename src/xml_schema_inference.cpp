@@ -2,6 +2,7 @@
 #include "xml_types.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <regex>
 #include <unordered_set>
@@ -1084,6 +1085,52 @@ bool XMLSchemaInference::IsTimestamp(const std::string &value) {
 		}
 	}
 	return false;
+}
+
+LogicalType XMLSchemaInference::ClassifyDatetimeFormat(const std::string &format) {
+	bool has_date = false;
+	bool has_time = false;
+	bool has_tz = false;
+
+	for (size_t i = 0; i < format.size(); i++) {
+		if (format[i] == '%' && i + 1 < format.size()) {
+			char spec = format[i + 1];
+			switch (spec) {
+			case 'Y': case 'y': case 'm': case 'd': case 'j':
+			case 'U': case 'W': case 'G': case 'V': case 'u':
+			case 'a': case 'A': case 'b': case 'B': case 'w':
+			case 'x': case 'c':
+				has_date = true;
+				break;
+			case 'H': case 'I': case 'M': case 'S': case 'f':
+			case 'g': case 'p': case 'X': case 'n':
+				has_time = true;
+				break;
+			case 'z': case 'Z':
+				has_tz = true;
+				has_time = true;
+				break;
+			default:
+				break;
+			}
+			i++;
+		}
+	}
+
+	if (has_date && has_time && has_tz) return LogicalType::TIMESTAMP_TZ;
+	if (has_date && has_time) return LogicalType::TIMESTAMP;
+	if (has_date) return LogicalType::DATE;
+	if (has_time && has_tz) return LogicalType::TIME_TZ;
+	if (has_time) return LogicalType::TIME;
+	throw InvalidInputException("datetime_format '%s' does not specify a complete date, time, or timestamp.", format);
+}
+
+void XMLSchemaInference::ValidateDatetimeFormatString(const std::string &format) {
+	StrpTimeFormat strp_format;
+	string error = StrTimeFormat::ParseFormatSpecifier(format, strp_format);
+	if (!error.empty()) {
+		throw InvalidInputException("Invalid datetime_format '%s': %s", format, error);
+	}
 }
 
 std::string XMLSchemaInference::GetElementXPath(const std::string &element_name, bool is_attribute,
