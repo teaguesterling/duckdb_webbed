@@ -43,8 +43,9 @@ struct XMLSchemaOptions {
 	bool boolean_detection = true;  // Detect boolean values
 
 	// Datetime format (replaces temporal_detection for explicit format control)
-	std::vector<std::string> datetime_format_candidates; // Resolved format strings (empty = use temporal_detection flag)
-	bool has_explicit_datetime_format = false;            // User specified a format (not 'auto')
+	std::vector<std::string>
+	    datetime_format_candidates;            // Resolved format strings (empty = use temporal_detection flag)
+	bool has_explicit_datetime_format = false; // User specified a format (not 'auto')
 
 	// Collection handling
 	double array_threshold = 0.8;    // Minimum homogeneity for arrays (80%)
@@ -173,19 +174,18 @@ public:
 	                                                   const XMLSchemaOptions &options = XMLSchemaOptions {});
 
 	// Extract structured data according to explicit schema
-	static std::vector<std::vector<Value>> ExtractDataWithSchema(const std::string &xml_content,
-	                                                             const std::vector<std::string> &column_names,
-	                                                             const std::vector<LogicalType> &column_types,
-	                                                             const XMLSchemaOptions &options = XMLSchemaOptions {},
-	                                                             const std::vector<std::string> &column_datetime_formats = {});
+	static std::vector<std::vector<Value>>
+	ExtractDataWithSchema(const std::string &xml_content, const std::vector<std::string> &column_names,
+	                      const std::vector<LogicalType> &column_types,
+	                      const XMLSchemaOptions &options = XMLSchemaOptions {},
+	                      const std::vector<std::string> &column_datetime_formats = {});
 
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string &xml_content,
 	                                                            const XMLSchemaOptions &options);
 
 	// Infer type from sample values
-	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples,
-	                                        const XMLSchemaOptions &options,
+	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples, const XMLSchemaOptions &options,
 	                                        std::string &winning_datetime_format);
 
 	// Detect nested structures (LIST and STRUCT types)
@@ -212,8 +212,7 @@ private:
 	static std::unordered_map<std::string, ColumnAnalysis>
 	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-	                                   const XMLSchemaOptions &options,
-	                                   std::string &winning_datetime_format);
+	                                   const XMLSchemaOptions &options, std::string &winning_datetime_format);
 
 	// Internal helper functions
 	static void AnalyzeElement(xmlNodePtr node, std::unordered_map<std::string, ElementPattern> &patterns,

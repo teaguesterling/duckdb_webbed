@@ -322,8 +322,7 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-                                                const XMLSchemaOptions &options,
-                                                std::string &winning_datetime_format) {
+                                                const XMLSchemaOptions &options, std::string &winning_datetime_format) {
 	winning_datetime_format.clear();
 	// Attributes are always VARCHAR (or type-detected if enabled)
 	if (column.is_attribute) {
@@ -466,7 +465,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 						// Recursively infer type with decreased depth
 						std::string nested_winning_fmt;
-						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
+						LogicalType child_type =
+						    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
 						struct_fields.push_back(make_pair(child_name, child_type));
 					}
 				}
@@ -534,7 +534,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 					// Recursively infer type with decreased depth
 					std::string nested_winning_fmt2;
-					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
+					LogicalType child_type =
+					    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
 					struct_fields.push_back(make_pair(child_name, child_type));
 				}
 			}
@@ -950,19 +951,25 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	// Build effective candidate list
 	const auto &candidates = options.datetime_format_candidates;
 	static const std::vector<std::string> auto_candidates = {
-	    "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
-	    "%Y-%m-%dT%H:%M:%S.%f",   "%Y-%m-%dT%H:%M:%S",
-	    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
-	    "%Y-%m-%d %H:%M:%S.%f",   "%Y-%m-%d %H:%M:%S",
-	    "%Y-%m-%d",                "%m/%d/%Y",
-	    "%d/%m/%Y",                "%Y/%m/%d",
-	    "%H:%M:%S",                "%I:%M:%S %p",
+	    "%Y-%m-%dT%H:%M:%S.%f%z",
+	    "%Y-%m-%dT%H:%M:%S%z",
+	    "%Y-%m-%dT%H:%M:%S.%f",
+	    "%Y-%m-%dT%H:%M:%S",
+	    "%Y-%m-%d %H:%M:%S.%f%z",
+	    "%Y-%m-%d %H:%M:%S%z",
+	    "%Y-%m-%d %H:%M:%S.%f",
+	    "%Y-%m-%d %H:%M:%S",
+	    "%Y-%m-%d",
+	    "%m/%d/%Y",
+	    "%d/%m/%Y",
+	    "%Y/%m/%d",
+	    "%H:%M:%S",
+	    "%I:%M:%S %p",
 	    "%H:%M",
 	};
 	// Use explicit candidates if provided, else auto if temporal_detection is on, else empty
 	const auto &effective_candidates =
-	    (!candidates.empty()) ? candidates :
-	    (options.temporal_detection ? auto_candidates : candidates);
+	    (!candidates.empty()) ? candidates : (options.temporal_detection ? auto_candidates : candidates);
 
 	// Per-column candidate elimination
 	std::vector<bool> alive(effective_candidates.size(), true);
@@ -977,16 +984,21 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 			continue; // Nulls/empty skip elimination
 		}
 		for (size_t i = 0; i < effective_candidates.size(); i++) {
-			if (!alive[i]) continue;
+			if (!alive[i])
+				continue;
 			if (!TryMatchDatetimeFormat(sample, effective_candidates[i], candidate_types[i])) {
 				alive[i] = false;
 			}
 		}
 		any_alive = false;
 		for (bool a : alive) {
-			if (a) { any_alive = true; break; }
+			if (a) {
+				any_alive = true;
+				break;
+			}
 		}
-		if (!any_alive) break;
+		if (!any_alive)
+			break;
 	}
 
 	// First surviving candidate wins (priority = list order)
@@ -1002,7 +1014,8 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	// Fall through to numeric/boolean/VARCHAR detection (existing logic)
 	std::vector<LogicalType> detected_types;
 	for (const auto &sample : samples) {
-		if (sample.empty()) continue;
+		if (sample.empty())
+			continue;
 		if (options.numeric_detection && IsInteger(sample)) {
 			detected_types.push_back(LogicalType::INTEGER);
 		} else if (options.numeric_detection && IsDouble(sample)) {
@@ -1173,17 +1186,38 @@ LogicalType XMLSchemaInference::ClassifyDatetimeFormat(const std::string &format
 		if (format[i] == '%' && i + 1 < format.size()) {
 			char spec = format[i + 1];
 			switch (spec) {
-			case 'Y': case 'y': case 'm': case 'd': case 'j':
-			case 'U': case 'W': case 'G': case 'V': case 'u':
-			case 'a': case 'A': case 'b': case 'B': case 'w':
-			case 'x': case 'c':
+			case 'Y':
+			case 'y':
+			case 'm':
+			case 'd':
+			case 'j':
+			case 'U':
+			case 'W':
+			case 'G':
+			case 'V':
+			case 'u':
+			case 'a':
+			case 'A':
+			case 'b':
+			case 'B':
+			case 'w':
+			case 'x':
+			case 'c':
 				has_date = true;
 				break;
-			case 'H': case 'I': case 'M': case 'S': case 'f':
-			case 'g': case 'p': case 'X': case 'n':
+			case 'H':
+			case 'I':
+			case 'M':
+			case 'S':
+			case 'f':
+			case 'g':
+			case 'p':
+			case 'X':
+			case 'n':
 				has_time = true;
 				break;
-			case 'z': case 'Z':
+			case 'z':
+			case 'Z':
 				has_tz = true;
 				has_time = true;
 				break;
@@ -1194,11 +1228,16 @@ LogicalType XMLSchemaInference::ClassifyDatetimeFormat(const std::string &format
 		}
 	}
 
-	if (has_date && has_time && has_tz) return LogicalType::TIMESTAMP_TZ;
-	if (has_date && has_time) return LogicalType::TIMESTAMP;
-	if (has_date) return LogicalType::DATE;
-	if (has_time && has_tz) return LogicalType::TIME_TZ;
-	if (has_time) return LogicalType::TIME;
+	if (has_date && has_time && has_tz)
+		return LogicalType::TIMESTAMP_TZ;
+	if (has_date && has_time)
+		return LogicalType::TIMESTAMP;
+	if (has_date)
+		return LogicalType::DATE;
+	if (has_time && has_tz)
+		return LogicalType::TIME_TZ;
+	if (has_time)
+		return LogicalType::TIME;
 	throw InvalidInputException("datetime_format '%s' does not specify a complete date, time, or timestamp.", format);
 }
 
@@ -1449,11 +1488,10 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 	return rows;
 }
 
-std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content,
-                                                                          const std::vector<std::string> &column_names,
-                                                                          const std::vector<LogicalType> &column_types,
-                                                                          const XMLSchemaOptions &options,
-                                                                          const std::vector<std::string> &column_datetime_formats) {
+std::vector<std::vector<Value>>
+XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const std::vector<std::string> &column_names,
+                                          const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
+                                          const std::vector<std::string> &column_datetime_formats) {
 	std::vector<std::vector<Value>> rows;
 
 	if (column_names.size() != column_types.size()) {
@@ -1571,7 +1609,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 }
 
 Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type,
-                                          const std::string &datetime_format) {
+                                         const std::string &datetime_format) {
 	if (text.empty()) {
 		return Value(); // NULL value
 	}
@@ -1626,7 +1664,8 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
 					return Value::TIMESTAMPTZ(timestamp_tz_t(result));
 				}
-				throw ConversionException("Could not parse '%s' as TIMESTAMPTZ with format '%s'", text, datetime_format);
+				throw ConversionException("Could not parse '%s' as TIMESTAMPTZ with format '%s'", text,
+				                          datetime_format);
 			}
 			return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, false)));
 		}

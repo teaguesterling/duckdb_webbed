@@ -18,26 +18,53 @@ namespace {
 std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 	if (input == "auto") {
 		return {
-		    "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z",
-		    "%Y-%m-%dT%H:%M:%S.%f",   "%Y-%m-%dT%H:%M:%S",
-		    "%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
-		    "%Y-%m-%d %H:%M:%S.%f",   "%Y-%m-%d %H:%M:%S",
-		    "%Y-%m-%d",                "%m/%d/%Y",
-		    "%d/%m/%Y",                "%Y/%m/%d",
-		    "%H:%M:%S",                "%I:%M:%S %p",
+		    "%Y-%m-%dT%H:%M:%S.%f%z",
+		    "%Y-%m-%dT%H:%M:%S%z",
+		    "%Y-%m-%dT%H:%M:%S.%f",
+		    "%Y-%m-%dT%H:%M:%S",
+		    "%Y-%m-%d %H:%M:%S.%f%z",
+		    "%Y-%m-%d %H:%M:%S%z",
+		    "%Y-%m-%d %H:%M:%S.%f",
+		    "%Y-%m-%d %H:%M:%S",
+		    "%Y-%m-%d",
+		    "%m/%d/%Y",
+		    "%d/%m/%Y",
+		    "%Y/%m/%d",
+		    "%H:%M:%S",
+		    "%I:%M:%S %p",
 		    "%H:%M",
 		};
 	}
-	if (input == "none") { return {}; }
-	if (input == "us") { return {"%m/%d/%Y"}; }
-	if (input == "eu") { return {"%d/%m/%Y"}; }
-	if (input == "iso") { return {"%Y-%m-%d"}; }
-	if (input == "us_timestamp") { return {"%m/%d/%Y %I:%M:%S %p"}; }
-	if (input == "eu_timestamp") { return {"%d/%m/%Y %H:%M:%S"}; }
-	if (input == "iso_timestamp") { return {"%Y-%m-%dT%H:%M:%S"}; }
-	if (input == "iso_timestamptz") { return {"%Y-%m-%dT%H:%M:%S%z"}; }
-	if (input == "12hour") { return {"%I:%M:%S %p"}; }
-	if (input == "24hour") { return {"%H:%M:%S"}; }
+	if (input == "none") {
+		return {};
+	}
+	if (input == "us") {
+		return {"%m/%d/%Y"};
+	}
+	if (input == "eu") {
+		return {"%d/%m/%Y"};
+	}
+	if (input == "iso") {
+		return {"%Y-%m-%d"};
+	}
+	if (input == "us_timestamp") {
+		return {"%m/%d/%Y %I:%M:%S %p"};
+	}
+	if (input == "eu_timestamp") {
+		return {"%d/%m/%Y %H:%M:%S"};
+	}
+	if (input == "iso_timestamp") {
+		return {"%Y-%m-%dT%H:%M:%S"};
+	}
+	if (input == "iso_timestamptz") {
+		return {"%Y-%m-%dT%H:%M:%S%z"};
+	}
+	if (input == "12hour") {
+		return {"%I:%M:%S %p"};
+	}
+	if (input == "24hour") {
+		return {"%H:%M:%S"};
+	}
 	// Not a preset — treat as a format string
 	return {input};
 }
@@ -379,7 +406,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order; // Track order of first appearance
+			std::vector<std::string> column_order;                      // Track order of first appearance
 
 			// Scan each file for schema
 			for (const auto &file_path : files_to_scan) {
@@ -1093,7 +1120,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order; // Track order of first appearance
+			std::vector<std::string> column_order;                      // Track order of first appearance
 
 			// Scan each file for schema
 			for (const auto &file_path : files_to_scan) {
@@ -1728,9 +1755,9 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ParseDocumentInit(Clien
 
 	try {
 		if (bind_data.has_explicit_schema) {
-			result->extracted_rows = XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names,
-			                                                                   bind_data.column_types, schema_options,
-			                                                                   bind_data.column_datetime_formats);
+			result->extracted_rows =
+			    XMLSchemaInference::ExtractDataWithSchema(content, bind_data.column_names, bind_data.column_types,
+			                                              schema_options, bind_data.column_datetime_formats);
 		} else {
 			result->extracted_rows = XMLSchemaInference::ExtractData(content, schema_options);
 		}
