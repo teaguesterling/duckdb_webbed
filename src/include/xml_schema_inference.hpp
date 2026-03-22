@@ -172,6 +172,20 @@ public:
 	                                                             const std::vector<LogicalType> &column_types,
 	                                                             const XMLSchemaOptions &options = XMLSchemaOptions {});
 
+	// Extract one row from a record node using inferred schema
+	static std::vector<Value> ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
+	                                              int remaining_depth, const XMLSchemaOptions &options);
+
+	// Extract one row using explicit column names/types
+	static std::vector<Value> ExtractSingleRecordWithSchema(xmlNodePtr record,
+	                                                        const std::vector<std::string> &column_names,
+	                                                        const std::vector<LogicalType> &column_types,
+	                                                        const XMLSchemaOptions &options);
+
+	// Identify record elements in a parsed document
+	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
+	                                                      const XMLSchemaOptions &options);
+
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string &xml_content,
 	                                                            const XMLSchemaOptions &options);
@@ -194,8 +208,6 @@ public:
 
 private:
 	// 3-phase schema inference helpers
-	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
-	                                                      const XMLSchemaOptions &options);
 	static std::unordered_map<std::string, ColumnAnalysis>
 	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,

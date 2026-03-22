@@ -44,6 +44,7 @@ struct XMLDocRAII {
 	xmlDocPtr doc = nullptr;
 	xmlXPathContextPtr xpath_ctx = nullptr;
 
+	XMLDocRAII() = default;
 	XMLDocRAII(const std::string &xml_str);
 	XMLDocRAII(const std::string &content, bool is_html);
 	~XMLDocRAII();
