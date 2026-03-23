@@ -6,6 +6,12 @@ v1.5.0 (Current)
 
 **New Features**
 
+- Added ``datetime_format`` parameter to ``read_xml``, ``read_html``, ``parse_xml``, and
+  ``parse_html`` for controlling date/time detection and parsing — supports preset names
+  (``auto``, ``none``, ``us``, ``eu``, ``iso``, etc.), custom strftime format strings, and
+  lists of formats. Replaces regex-based temporal detection with DuckDB's ``StrpTimeFormat``
+  candidate elimination approach (Issue #38)
+- Added ``nullstr`` parameter for custom NULL value representation (Issue #40)
 - Lazy DOM extraction for reduced peak memory — records are now extracted one at a time
   directly from the DOM instead of caching all rows at once (Issue #17, Phase 1)
 - Type inference for elements with attributes — ``#text`` field now infers proper types
