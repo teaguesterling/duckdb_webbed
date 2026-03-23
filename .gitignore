@@ -21,3 +21,9 @@ devenv.local.nix
 
 # Locally cloned vcpkg
 vcpkg/
+
+# blq
+.lq/*
+!.lq/hooks/
+!.lq/config.toml
+!.lq/commands.toml

@@ -1,0 +1,91 @@
+# name: test/sql/nullstr_parameter.test
+# description: Test nullstr parameter for custom NULL value representation (#40)
+# group: [sql]
+
+require webbed
+
+# Test 1: Default behavior - without nullstr, N/A and - are regular strings
+# score column should be VARCHAR because "N/A" is not numeric
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/nullstr_test.xml')) ORDER BY column_name;
+----
+grade	VARCHAR
+name	VARCHAR
+score	VARCHAR
+
+# Test 2: Single nullstr value - N/A becomes NULL, enabling numeric inference for score
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/nullstr_test.xml', nullstr='N/A')) ORDER BY column_name;
+----
+grade	VARCHAR
+name	VARCHAR
+score	INTEGER
+
+# Test 3: Verify data with single nullstr
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml', nullstr='N/A');
+----
+Alice	95	A
+Bob	NULL	-
+Charlie	87	NULL
+
+# Test 4: Nullstr with all_varchar=true - matched values still become NULL
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml', nullstr='N/A', all_varchar=true);
+----
+Alice	95	A
+Bob	NULL	-
+Charlie	87	NULL
+
+# Test 5: Nullstr doesn't affect non-matching values
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml', nullstr='MISSING');
+----
+Alice	95	A
+Bob	N/A	-
+Charlie	87	NULL
+
+# Test 6: Case sensitivity - nullstr should be case-sensitive
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml', nullstr='n/a');
+----
+Alice	95	A
+Bob	N/A	-
+Charlie	87	NULL
+
+# Test 7: Default behavior unchanged when nullstr not specified
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml');
+----
+Alice	95	A
+Bob	N/A	-
+Charlie	87	NULL
+
+# Test 8: Works with parse_xml
+query II
+SELECT name, value FROM parse_xml('<?xml version="1.0"?><records><record><name>Alice</name><value>N/A</value></record><record><name>Bob</name><value>42</value></record></records>', nullstr='N/A');
+----
+Alice	NULL
+Bob	42
+
+# Test 9: List form of nullstr - multiple values treated as NULL
+query III
+SELECT name, score, grade FROM read_xml('test/xml/nullstr_test.xml', nullstr=['N/A', '-']);
+----
+Alice	95	A
+Bob	NULL	NULL
+Charlie	87	NULL
+
+# Test 10: List form affects type inference - both N/A and - excluded
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/nullstr_test.xml', nullstr=['N/A', '-'])) ORDER BY column_name;
+----
+grade	VARCHAR
+name	VARCHAR
+score	INTEGER
+
+# Test 11: Invalid nullstr type throws error
+statement error
+SELECT * FROM read_xml('test/xml/nullstr_test.xml', nullstr=42);
+----
+nullstr

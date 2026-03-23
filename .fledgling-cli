@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+#
+# fledgling-cli — human-friendly CLI for fledgling macros
+#
+# Usage:
+#   fledgling <command> [args...] [--named=value...] [-f format] [-c cols]
+#
+# Examples:
+#   fledgling list-files 'src/**/*.py'
+#   fledgling FindDefinitions 'src/**/*.py' '%parse%'
+#   fledgling recent-changes 20
+#   fledgling GitDiffSummary HEAD~3 HEAD
+#   fledgling code-structure '**/*.rs' -f csv
+#   fledgling recent-changes 10 -c hash,message
+#   fledgling query "SELECT * FROM sessions() LIMIT 5"
+#   fledgling help
+#   fledgling info
+#
+# Flags:
+#   -f FORMAT   Output format: markdown (default), csv, json, table, line
+#   -c COLUMNS  Comma-separated column selection
+#   -g          Force global init (~/.fledgling/init.sql)
+#
+# Commands accept any naming convention:
+#   ReadLines, read-lines, read_lines all resolve to the same macro.
+#
+# Init file resolution (first match wins):
+#   1. $FLEDGLING_INIT (if set)
+#   2. .fledgling-init.sql (project-local)
+#   3. ~/.fledgling/init.sql (global)
+
+set -euo pipefail
+
+FORMAT="markdown"
+COLUMNS=""
+FORCE_GLOBAL=false
+INIT=""
+
+# ── Parse global flags ────────────────────────────────────────────────
+
+rest=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)     FORMAT="$2"; shift 2 ;;
+        -f*)    FORMAT="${1#-f}"; shift ;;
+        -c)     COLUMNS="$2"; shift 2 ;;
+        -c*)    COLUMNS="${1#-c}"; shift ;;
+        -g)     FORCE_GLOBAL=true; shift ;;
+        --completions)
+            shift; _COMP_SHELL="${1:-bash}"; shift ;;
+        *)      rest+=("$1"); shift ;;
+    esac
+done
+set -- "${rest[@]+"${rest[@]}"}"
+
+# ── Handle --completions (before init resolution) ─────────────────────
+
+_completions() {
+    local shell="${1:-bash}"
+    case "$shell" in
+        bash)
+            cat << 'COMP'
+_fledgling() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        local cmds="help info version query sql"
+        local init=""
+        if [[ -n "${FLEDGLING_INIT:-}" ]]; then init="$FLEDGLING_INIT"
+        elif [[ -f .fledgling-init.sql ]]; then init=".fledgling-init.sql"
+        elif [[ -f "$HOME/.fledgling/init.sql" ]]; then init="$HOME/.fledgling/init.sql"
+        fi
+        if [[ -n "$init" ]]; then
+            local macros
+            macros=$(duckdb -cmd ".read $init" \
+                -c ".mode csv" -c ".headers off" \
+                -c "SELECT replace(function_name, '_', '-') FROM duckdb_functions() WHERE function_type = 'table_macro' AND schema_name = 'main' AND function_name NOT LIKE '\_%' ESCAPE '\\'" \
+                2>/dev/null | tr '\n' ' ')
+            cmds="$cmds $macros"
+        fi
+        COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
+    elif [[ "$cur" == -* ]]; then
+        COMPREPLY=($(compgen -W "-f -c -g --help --completions" -- "$cur"))
+    fi
+}
+complete -o default -F _fledgling fledgling
+COMP
+            ;;
+        zsh)
+            cat << 'COMP'
+#compdef fledgling
+_fledgling() {
+    local -a commands flags
+    flags=('-f:output format' '-c:column selection' '-g:force global init')
+    commands=(help info version query sql)
+    local init=""
+    if [[ -n "${FLEDGLING_INIT:-}" ]]; then init="$FLEDGLING_INIT"
+    elif [[ -f .fledgling-init.sql ]]; then init=".fledgling-init.sql"
+    elif [[ -f "$HOME/.fledgling/init.sql" ]]; then init="$HOME/.fledgling/init.sql"
+    fi
+    if [[ -n "$init" ]]; then
+        local macros
+        macros=(${(f)"$(duckdb -cmd ".read $init" \
+            -c ".mode csv" -c ".headers off" \
+            -c "SELECT replace(function_name, '_', '-') FROM duckdb_functions() WHERE function_type = 'table_macro' AND schema_name = 'main' AND function_name NOT LIKE '\_%' ESCAPE '\\'" \
+            2>/dev/null)"})
+        commands+=($macros)
+    fi
+    _arguments '1:command:($commands)' '*:file:_files'
+}
+_fledgling "$@"
+COMP
+            ;;
+        *)
+            echo "Unknown shell: $shell (supported: bash, zsh)" >&2
+            exit 1
+            ;;
+    esac
+}
+
+if [[ -n "${_COMP_SHELL:-}" ]]; then
+    _completions "$_COMP_SHELL"
+    exit 0
+fi
+
+# ── Resolve init file ────────────────────────────────────────────────
+
+if [[ -n "${FLEDGLING_INIT:-}" && "$FORCE_GLOBAL" == false ]]; then
+    INIT="$FLEDGLING_INIT"
+elif [[ "$FORCE_GLOBAL" == false && -f .fledgling-init.sql ]]; then
+    INIT=".fledgling-init.sql"
+elif [[ -f "${HOME}/.fledgling/init.sql" ]]; then
+    INIT="${HOME}/.fledgling/init.sql"
+else
+    echo "Error: no fledgling init file found." >&2
+    echo "  Looked for: .fledgling-init.sql, ~/.fledgling/init.sql" >&2
+    echo "  Install: curl -sL https://teaguesterling.github.io/fledgling/install.sql | duckdb" >&2
+    exit 1
+fi
+
+if [[ $# -eq 0 ]]; then
+    set -- "help"
+fi
+
+cmd="$1"; shift
+
+# ── Name normalization ────────────────────────────────────────────────
+# Accept PascalCase (MCP tool names), kebab-case, or snake_case.
+# ReadLines → read_lines, GitDiffSummary → git_diff_summary
+
+_to_snake() {
+    # Insert _ before uppercase runs, lowercase everything, replace - with _
+    echo "$1" | sed -E 's/([a-z0-9])([A-Z])/\1_\2/g; s/([A-Z]+)([A-Z][a-z])/\1_\2/g' \
+              | tr '[:upper:]-' '[:lower:]_'
+}
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+run_sql() {
+    local sql="$1"
+    if [[ -n "$COLUMNS" ]]; then
+        sql="SELECT ${COLUMNS} FROM (${sql})"
+    fi
+    # Set transport=none so the init file's mcp_server_start() is a no-op.
+    # Without this, stdio transport blocks waiting for MCP client input.
+    exec duckdb \
+        -cmd "SET VARIABLE transport = 'none'" \
+        -cmd ".read ${INIT}" \
+        -c ".mode ${FORMAT}" \
+        -c "${sql}"
+}
+
+# ── Special commands ──────────────────────────────────────────────────
+
+case "$cmd" in
+    help|--help|-h)
+        if [[ $# -eq 0 ]]; then
+            run_sql "SELECT function_name AS command,
+                           replace(function_name, '_', '-') AS cli,
+                           parameters AS args
+                    FROM duckdb_functions()
+                    WHERE function_type = 'table_macro'
+                      AND schema_name = 'main'
+                      AND function_name NOT LIKE '\_%' ESCAPE '\\'
+                      AND function_name NOT IN ('query')
+                    ORDER BY function_name"
+        else
+            run_sql "SELECT * FROM help('$(_to_snake "$1")')"
+        fi
+        ;;
+    info)
+        run_sql "SELECT * FROM dr_fledgling()"
+        ;;
+    query|sql)
+        run_sql "$1"
+        ;;
+    version|--version|-V)
+        run_sql "SELECT getvariable('fledgling_version') AS version"
+        ;;
+    --completions)
+        _completions "${1:-bash}"
+        exit 0
+        ;;
+esac
+
+# ── Build SQL from subcommand + args ──────────────────────────────────
+
+macro="$(_to_snake "$cmd")"
+
+positional=()
+named=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --*=*)
+            key="${1%%=*}"; key="${key#--}"; key="${key//-/_}"
+            val="${1#*=}"
+            if [[ "$val" =~ ^[0-9]+$ ]]; then
+                named+=("${key} := ${val}")
+            else
+                named+=("${key} := '${val}'")
+            fi
+            shift
+            ;;
+        --*)
+            key="${1#--}"; key="${key//-/_}"
+            shift
+            val="${1:-}"
+            if [[ "$val" =~ ^[0-9]+$ ]]; then
+                named+=("${key} := ${val}")
+            else
+                named+=("${key} := '${val}'")
+            fi
+            shift
+            ;;
+        *)
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+                positional+=("$1")
+            else
+                positional+=("'$1'")
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Join args
+all_args=""
+if [[ ${#positional[@]} -gt 0 ]]; then
+    all_args=$(IFS=", "; echo "${positional[*]}")
+fi
+if [[ ${#named[@]} -gt 0 ]]; then
+    named_str=$(IFS=", "; echo "${named[*]}")
+    if [[ -n "$all_args" ]]; then
+        all_args="${all_args}, ${named_str}"
+    else
+        all_args="${named_str}"
+    fi
+fi
+
+run_sql "SELECT * FROM ${macro}(${all_args})"
+

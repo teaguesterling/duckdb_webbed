@@ -1,8 +1,27 @@
 Changelog
 =========
 
-v1.4.0 (Current)
-----------------
+v1.5.0 (Current)
+-----------------
+
+**New Features**
+
+- Lazy DOM extraction for reduced peak memory — records are now extracted one at a time
+  directly from the DOM instead of caching all rows at once (Issue #17, Phase 1)
+- Type inference for elements with attributes — ``#text`` field now infers proper types
+  (DOUBLE, INTEGER, DATE, BOOLEAN) instead of defaulting to VARCHAR (Issues #49, #46)
+
+**Improvements**
+
+- Increased default ``maximum_file_size`` from 16MB to 128MB (Issue #66)
+
+**Bug Fixes**
+
+- Fixed ``read_xml`` returning NULL for non-Latin text content — Cyrillic, CJK, and other
+  multi-byte UTF-8 characters were being stripped by whitespace trimming (Issue #64)
+
+v1.4.0
+------
 
 **New Features**
 

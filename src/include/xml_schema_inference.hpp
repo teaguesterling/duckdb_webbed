@@ -55,8 +55,8 @@ struct XMLSchemaOptions {
 	    ""; // Comma-separated list of element names that should always be LIST type (like xml_to_json)
 
 	// Error handling
-	bool ignore_errors = false;         // Continue on parsing errors
-	idx_t maximum_file_size = 16777216; // 16MB default
+	bool ignore_errors = false;          // Continue on parsing errors
+	idx_t maximum_file_size = 134217728; // 128MB default
 
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
@@ -181,6 +181,21 @@ public:
 	                      const XMLSchemaOptions &options = XMLSchemaOptions {},
 	                      const std::vector<std::string> &column_datetime_formats = {});
 
+	// Extract one row from a record node using inferred schema
+	static std::vector<Value> ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
+	                                              int remaining_depth, const XMLSchemaOptions &options);
+
+	// Extract one row using explicit column names/types
+	static std::vector<Value> ExtractSingleRecordWithSchema(xmlNodePtr record,
+	                                                        const std::vector<std::string> &column_names,
+	                                                        const std::vector<LogicalType> &column_types,
+	                                                        const XMLSchemaOptions &options,
+	                                                        const std::vector<std::string> &column_datetime_formats = {});
+
+	// Identify record elements in a parsed document
+	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
+	                                                      const XMLSchemaOptions &options);
+
 	// Analyze document structure and detect patterns
 	static std::vector<ElementPattern> AnalyzeDocumentStructure(const std::string &xml_content,
 	                                                            const XMLSchemaOptions &options);
@@ -205,8 +220,6 @@ public:
 
 private:
 	// 3-phase schema inference helpers
-	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
-	                                                      const XMLSchemaOptions &options);
 	static std::unordered_map<std::string, ColumnAnalysis>
 	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
@@ -234,8 +247,7 @@ private:
 	                            const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
 	// Recursive extraction helpers for complex types
-	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
-	                                  const XMLSchemaOptions &options = XMLSchemaOptions {});
+	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options);
 	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
 	                                   const XMLSchemaOptions &options);
 	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options);

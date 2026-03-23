@@ -1,0 +1,62 @@
+# name: test/sql/github_issue_64_non_latin.test
+# description: Test that read_xml correctly handles non-Latin characters (GitHub Issue #64)
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Test Cyrillic-only text content is not NULL
+# =============================================================================
+
+# Test that Cyrillic text is preserved (the core bug in issue #64)
+query III
+SELECT name, value, description FROM read_xml('test/xml/non_latin.xml') ORDER BY value;
+----
+Таймаут	100	Описание
+日本語テスト	200	中文描述
+Mixed Текст	300	Hello мир
+
+# =============================================================================
+# Test individual non-Latin values are not NULL
+# =============================================================================
+
+# Cyrillic-only tag
+query I
+SELECT name FROM read_xml('test/xml/non_latin.xml') WHERE value = 100;
+----
+Таймаут
+
+# Chinese/Japanese characters
+query I
+SELECT name FROM read_xml('test/xml/non_latin.xml') WHERE value = 200;
+----
+日本語テスト
+
+# Mixed ASCII + Cyrillic
+query I
+SELECT description FROM read_xml('test/xml/non_latin.xml') WHERE value = 300;
+----
+Hello мир
+
+# =============================================================================
+# Test xml_to_json with non-Latin inline content
+# =============================================================================
+
+query I
+SELECT xml_to_json('<item>Таймаут</item>');
+----
+{"item":{"#text":"Таймаут"}}
+
+query I
+SELECT xml_to_json('<item>日本語</item>');
+----
+{"item":{"#text":"日本語"}}
+
+# =============================================================================
+# Test whitespace-only content still returns empty/NULL as before
+# =============================================================================
+
+query I
+SELECT xml_to_json('<item>   </item>');
+----
+{"item":{}}

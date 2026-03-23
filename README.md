@@ -604,6 +604,7 @@ read_xml('pattern',
     unnest_as='struct',           -- How to unnest nested elements
     all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
     datetime_format='auto',       -- Date/time format: 'auto', 'none', 'us', 'eu', 'iso', or strftime string
+    nullstr='N/A',                -- String value(s) to interpret as NULL
     attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
     attr_prefix='@',              -- Prefix for attribute columns (default: '@')
     text_key='#text',             -- Key for text content in mixed elements (default: '#text')
@@ -616,7 +617,7 @@ read_xml('pattern',
 #### **Parameter Details:**
 
 - **`ignore_errors`**: Continue processing when individual files fail to parse
-- **`maximum_file_size`**: Skip files larger than specified bytes (default: 16MB)
+- **`maximum_file_size`**: Skip files larger than specified bytes (default: 128MB)
 - **`filename`**: Add a `filename` column to output with source file path
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference
@@ -627,6 +628,7 @@ read_xml('pattern',
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
 - **`datetime_format`**: Controls date/time detection and parsing. Accepts `'auto'` (default — tries common formats), `'none'` (disables temporal detection), preset names (`'us'`, `'eu'`, `'iso'`, `'us_timestamp'`, `'eu_timestamp'`, `'iso_timestamp'`, `'iso_timestamptz'`, `'12hour'`, `'24hour'`), custom strftime format strings (`'%m/%d/%Y'`), or a list of formats (`['%m/%d/%Y', '%Y-%m-%d %H:%M:%S']`). Ambiguous dates default to US (month-first) ordering.
+- **`nullstr`**: String value(s) to interpret as NULL. Accepts a single VARCHAR (e.g., `nullstr='N/A'`) or a list of VARCHAR (e.g., `nullstr=['N/A', '-', 'NULL']`). Matching values are excluded from type inference and converted to NULL during extraction. Matching is case-sensitive. When used with `all_varchar=true`, matched values still become NULL (default: none)
 - **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
 - **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
 - **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)

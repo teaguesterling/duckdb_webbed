@@ -95,7 +95,7 @@ private:
 struct XMLReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool ignore_errors = false;
-	idx_t max_file_size = 16777216;        // 16MB default
+	idx_t max_file_size = 134217728;       // 128MB default
 	ParseMode parse_mode = ParseMode::XML; // Parsing mode (XML or HTML)
 
 	// For _objects functions
@@ -110,6 +110,11 @@ struct XMLReadFunctionData : public TableFunctionData {
 	// Schema inference options (for read_xml with auto schema detection)
 	XMLSchemaOptions schema_options;
 
+	// Full inferred schema with is_attribute flags — currently populated but used only
+	// by the ExtractSingleRecord path (Phase 2 SAX mode will need this since the
+	// union-schema code path sets has_explicit_schema=true for DOM extraction)
+	std::vector<XMLColumnInfo> inferred_schema;
+
 	// Union by name - combine files with different schemas
 	bool union_by_name = false;
 };
@@ -118,9 +123,12 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t file_index = 0;
 	vector<string> files;
 
-	// Track position within current file's extracted rows
-	idx_t current_row_in_file = 0;
-	std::vector<std::vector<Value>> current_file_rows; // Cached extracted rows for current file
+	// Lazy DOM iteration state
+	XMLDocRAII current_doc;                  // DOM stays alive across scan calls
+	std::vector<xmlNodePtr> record_elements; // Pointers into DOM; valid only while current_doc is alive
+	idx_t current_record_index = 0;          // Position in record_elements
+	int remaining_depth = 0;                 // For extraction depth calculation
+	bool file_loaded = false;
 
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now

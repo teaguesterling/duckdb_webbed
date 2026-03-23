@@ -73,6 +73,30 @@ std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 
 namespace duckdb {
 
+// Parse nullstr parameter (VARCHAR or LIST(VARCHAR)) into null_strings vector.
+// Throws BinderException for invalid types.
+static void ParseNullstrParameter(const Value &val, const char *function_name, std::vector<std::string> &null_strings) {
+	auto type_id = val.type().id();
+	if (type_id == LogicalTypeId::VARCHAR) {
+		null_strings.push_back(val.ToString());
+	} else if (type_id == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(val);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				continue;
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("%s \"nullstr\" list elements must be VARCHAR, got: %s", function_name,
+				                      child.type().ToString());
+			}
+			null_strings.push_back(child.ToString());
+		}
+	} else {
+		throw BinderException("%s \"nullstr\" parameter must be VARCHAR or LIST(VARCHAR), got: %s", function_name,
+		                      val.type().ToString());
+	}
+}
+
 // =============================================================================
 // Internal Unified Functions (used by both XML and HTML)
 // =============================================================================
@@ -342,6 +366,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			if (!all_formats.empty()) {
 				schema_options.temporal_detection = true;
 			}
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -442,6 +468,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 					// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
 					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+
+					// Store full inferred schema from first file (preserves is_attribute flags)
+					if (result->inferred_schema.empty()) {
+						result->inferred_schema = inferred_columns;
+					}
 
 					// Merge columns into union schema
 					for (const auto &col_info : inferred_columns) {
@@ -622,26 +653,20 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
 
 	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
+		return; // No more files to process
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
-
-	// Get schema inference options from bind_data
 	const auto &schema_options = bind_data.schema_options;
 
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		// DON'T increment file_index yet - we may not finish this file in one chunk
 		const auto &filename = gstate.files[gstate.file_index];
 
 		try {
-			// Check if we need to extract rows for current file
-			if (gstate.current_file_rows.empty()) {
-				// Need to extract rows from current file
-				// Check file size
+			// Load file and parse DOM if not already loaded
+			if (!gstate.file_loaded) {
 				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 				auto file_size = fs.GetFileSize(*file_handle);
 
@@ -650,10 +675,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 						                            bind_data.max_file_size);
 					}
-					// Skip this file - move to next
 					gstate.file_index++;
-					gstate.current_row_in_file = 0;
-					gstate.current_file_rows.clear();
 					continue;
 				}
 
@@ -663,16 +685,10 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				file_handle->Read((void *)content.data(), file_size);
 
 				// Validate content based on mode
-				if (is_html) {
-					// HTML mode: be lenient, skip validation
-					// Let libxml2's HTML parser handle malformed content
-				} else {
-					// XML mode: strict validation
+				if (!is_html) {
 					if (!XMLUtils::IsValidXML(content)) {
 						if (bind_data.ignore_errors) {
-							// Skip this file - move to next
 							gstate.file_index++;
-							gstate.current_row_in_file = 0;
 							continue;
 						} else {
 							throw InvalidInputException("File %s contains invalid XML", filename);
@@ -680,60 +696,92 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					}
 				}
 
-				// Extract structured data using appropriate method
-				if (bind_data.has_explicit_schema) {
-					// Use explicit schema for extraction
-					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
-					    content, bind_data.column_names, bind_data.column_types, schema_options,
-					    bind_data.column_datetime_formats);
-				} else {
-					// Use schema inference
-					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
+				// Parse DOM — DOM makes its own copy, so content string can be freed
+				// (it goes out of scope at the end of this if-block)
+				gstate.current_doc = XMLDocRAII(content, is_html);
+
+				if (!gstate.current_doc.IsValid()) {
+					if (bind_data.ignore_errors) {
+						gstate.current_doc = XMLDocRAII();
+						gstate.file_index++;
+						continue;
+					}
+					throw InvalidInputException("Failed to parse file %s", filename);
 				}
 
-				// Reset row offset for this file
-				gstate.current_row_in_file = 0;
+				xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
+				if (!root) {
+					if (bind_data.ignore_errors) {
+						gstate.current_doc = XMLDocRAII();
+						gstate.file_index++;
+						continue;
+					}
+					throw InvalidInputException("File %s has no root element", filename);
+				}
+
+				// Find record elements in the DOM
+				gstate.record_elements =
+				    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
+
+				// Calculate remaining depth for inferred schema extraction
+				int effective_depth = schema_options.max_depth;
+				if (effective_depth > 20 || effective_depth < 0) {
+					effective_depth = 20;
+				}
+				gstate.remaining_depth = effective_depth - 2;
+
+				gstate.current_record_index = 0;
+				gstate.file_loaded = true;
 			}
 
-			// Fill output vectors with extracted data, starting from current_row_in_file
-			while (gstate.current_row_in_file < gstate.current_file_rows.size() && output_idx < STANDARD_VECTOR_SIZE) {
-				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
+			// Extract records from DOM one at a time into output vectors
+			while (gstate.current_record_index < gstate.record_elements.size() && output_idx < STANDARD_VECTOR_SIZE) {
+				xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
 
-				// Set values for each column in the row
+				std::vector<Value> row;
+				if (bind_data.has_explicit_schema) {
+					row = XMLSchemaInference::ExtractSingleRecordWithSchema(
+					    record, bind_data.column_names, bind_data.column_types, schema_options,
+					    bind_data.column_datetime_formats);
+				} else {
+					row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
+					                                              gstate.remaining_depth, schema_options);
+				}
+
+				// Write row values to output vectors
 				idx_t output_col_idx = 0;
-				// Output filename as first column if requested
 				if (bind_data.include_filename) {
 					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
 				}
-				// Output remaining data columns
 				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
 				     row_col_idx++, output_col_idx++) {
 					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
 				}
 
 				output_idx++;
-				gstate.current_row_in_file++;
+				gstate.current_record_index++;
 			}
 
-			// Check if we've finished all rows from this file
-			if (gstate.current_row_in_file >= gstate.current_file_rows.size()) {
-				// Finished this file - move to next file
+			// Check if we've finished all records from this file
+			if (gstate.current_record_index >= gstate.record_elements.size()) {
+				// Free DOM and advance to next file
+				gstate.current_doc = XMLDocRAII();
+				gstate.record_elements.clear();
+				gstate.file_loaded = false;
 				gstate.file_index++;
-				gstate.current_row_in_file = 0;
-				gstate.current_file_rows.clear(); // Free memory
 			}
 
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
 			}
-			// Skip this file and continue - move to next file
+			// Skip this file and continue
+			gstate.current_doc = XMLDocRAII();
+			gstate.record_elements.clear();
+			gstate.file_loaded = false;
 			gstate.file_index++;
-			gstate.current_row_in_file = 0;
-			gstate.current_file_rows.clear();
 		}
 
-		// If we filled up the output, break
 		if (output_idx >= STANDARD_VECTOR_SIZE) {
 			break;
 		}
@@ -1064,6 +1112,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			if (!all_formats.empty()) {
 				schema_options.temporal_detection = true;
 			}
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1249,122 +1299,7 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadXMLInit(ClientConte
 }
 
 void XMLReaderFunctions::ReadXMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
-	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
-
-	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
-	}
-
-	auto &fs = FileSystem::GetFileSystem(context);
-	idx_t output_idx = 0;
-
-	// Get schema inference options from bind_data
-	const auto &schema_options = bind_data.schema_options;
-
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		// DON'T increment file_index yet - we may not finish this file in one chunk
-		const auto &filename = gstate.files[gstate.file_index];
-
-		try {
-			// Check if we need to extract rows for current file
-			if (gstate.current_file_rows.empty()) {
-				// Need to extract rows from current file
-				// Check file size
-				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-				auto file_size = fs.GetFileSize(*file_handle);
-
-				if (file_size > bind_data.max_file_size) {
-					if (!bind_data.ignore_errors) {
-						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-						                            bind_data.max_file_size);
-					}
-					// Skip this file - move to next
-					gstate.file_index++;
-					gstate.current_row_in_file = 0;
-					gstate.current_file_rows.clear();
-					continue;
-				}
-
-				// Read file content
-				string content;
-				content.resize(file_size);
-				file_handle->Read((void *)content.data(), file_size);
-
-				// Validate XML
-				if (!XMLUtils::IsValidXML(content)) {
-					if (bind_data.ignore_errors) {
-						// Skip this file - move to next
-						gstate.file_index++;
-						gstate.current_row_in_file = 0;
-						gstate.current_file_rows.clear();
-						continue;
-					} else {
-						throw InvalidInputException("File %s contains invalid XML", filename);
-					}
-				}
-
-				// Extract structured data using appropriate method
-				if (bind_data.has_explicit_schema) {
-					// Use explicit schema for extraction
-					gstate.current_file_rows = XMLSchemaInference::ExtractDataWithSchema(
-					    content, bind_data.column_names, bind_data.column_types, schema_options,
-					    bind_data.column_datetime_formats);
-				} else {
-					// Use schema inference
-					gstate.current_file_rows = XMLSchemaInference::ExtractData(content, schema_options);
-				}
-
-				// Reset row offset for this file
-				gstate.current_row_in_file = 0;
-			}
-
-			// Fill output vectors with extracted data, starting from current_row_in_file
-			while (gstate.current_row_in_file < gstate.current_file_rows.size() && output_idx < STANDARD_VECTOR_SIZE) {
-				const auto &row = gstate.current_file_rows[gstate.current_row_in_file];
-
-				// Set values for each column in the row
-				idx_t output_col_idx = 0;
-				// Output filename as first column if requested
-				if (bind_data.include_filename) {
-					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
-				}
-				// Output remaining data columns
-				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-				     row_col_idx++, output_col_idx++) {
-					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
-				}
-
-				output_idx++;
-				gstate.current_row_in_file++;
-			}
-
-			// Check if we've finished all rows from this file
-			if (gstate.current_row_in_file >= gstate.current_file_rows.size()) {
-				// Finished this file - move to next file
-				gstate.file_index++;
-				gstate.current_row_in_file = 0;
-				gstate.current_file_rows.clear(); // Free memory
-			}
-
-		} catch (const Exception &e) {
-			if (!bind_data.ignore_errors) {
-				throw;
-			}
-			// Skip this file and continue - move to next file
-			gstate.file_index++;
-			gstate.current_row_in_file = 0;
-			gstate.current_file_rows.clear();
-		}
-
-		// If we filled up the output, break
-		if (output_idx >= STANDARD_VECTOR_SIZE) {
-			break;
-		}
-	}
-
-	output.SetCardinality(output_idx);
+	return ReadDocumentFunction(context, data_p, output);
 }
 
 unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &context, ReplacementScanInput &input,
@@ -1640,6 +1575,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			if (!all_formats.empty()) {
 				schema_options.temporal_detection = true;
 			}
+		} else if (kv.first == "nullstr") {
+			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "columns") {
 			auto &child_type = kv.second.type();
 			if (child_type.id() != LogicalTypeId::STRUCT) {
@@ -1880,6 +1817,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1908,6 +1846,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
 	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -1940,6 +1879,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_single.named_parameters["columns"] = LogicalType::ANY;
 	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	read_html_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -1968,6 +1908,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.named_parameters["columns"] = LogicalType::ANY;
 	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	read_html_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);
@@ -2034,6 +1975,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	parse_xml.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	parse_xml.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_xml.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_xml);
 
@@ -2057,6 +1999,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	parse_html.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
+	parse_html.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_html.named_parameters["columns"] = LogicalType::ANY;
 	loader.RegisterFunction(parse_html);
 }

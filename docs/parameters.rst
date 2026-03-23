@@ -26,8 +26,8 @@ These parameters are available for both ``read_xml`` and ``read_html``:
      - Skip files that fail to parse instead of raising an error
    * - ``maximum_file_size``
      - BIGINT
-     - 16777216
-     - Maximum file size in bytes (16MB default)
+     - 134217728
+     - Maximum file size in bytes (128MB default)
    * - ``auto_detect``
      - BOOLEAN
      - true
@@ -88,6 +88,10 @@ Type Handling Parameters
      - VARCHAR[]
      - []
      - Column names that should always be LIST type, even if they appear only once
+   * - ``nullstr``
+     - VARCHAR or VARCHAR[]
+     - (none)
+     - String value(s) to interpret as NULL. Excluded from type inference and converted to NULL during extraction. Case-sensitive.
 
 Attribute Handling Parameters
 -----------------------------

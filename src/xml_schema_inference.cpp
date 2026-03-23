@@ -345,39 +345,49 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Check if all instances are leaf nodes (text only, no children and no attributes)
 	// Elements with attributes should be treated as complex (STRUCT), not leaf
+	// But we still collect text samples from attribute-only elements for #text type inference
 	bool all_leaf = true;
 	std::vector<std::string> sample_values;
+	std::vector<std::string> text_samples; // Text samples collected even from elements with attributes
 
 	for (xmlNodePtr node : column.instances) {
-		bool is_complex = false;
+		bool has_child_elements = false;
+		bool has_attributes = false;
 
 		// Check for child elements
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				is_complex = true;
+				has_child_elements = true;
 				break;
 			}
 		}
 
 		// Check for attributes (unless we're discarding them)
-		if (!is_complex && options.attr_mode != "discard") {
-			if (node->properties != nullptr) {
-				is_complex = true;
-			}
+		if (!has_child_elements && options.attr_mode != "discard") {
+			has_attributes = (node->properties != nullptr);
 		}
 
-		if (is_complex) {
+		if (has_child_elements) {
+			// Genuinely complex (has child elements) — no point sampling text
 			all_leaf = false;
 			break;
 		}
 
-		// Collect text content for scalar type detection
-		if (sample_values.size() < 20) {
+		if (has_attributes) {
+			// Has attributes but no children — still collect text for #text type inference
+			all_leaf = false;
+		}
+
+		// Collect text content for type detection
+		if (text_samples.size() < 20) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content);
-				if (!text.empty()) {
-					sample_values.push_back(text);
+				if (!text.empty() && !IsNullString(text, options)) {
+					text_samples.push_back(text);
+					if (!has_attributes) {
+						sample_values.push_back(text);
+					}
 				}
 				xmlFree(content);
 			}
@@ -445,7 +455,32 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		// 2. Add child elements as STRUCT fields (if any)
+		// 2. If no child elements but has text content, add #text field with inferred type
+		if (child_max_counts.empty() && !struct_fields.empty()) {
+			// Collect text samples from all instances for type inference
+			std::vector<std::string> list_text_samples;
+			for (xmlNodePtr instance : column.instances) {
+				if (list_text_samples.size() >= 20) {
+					break;
+				}
+				xmlChar *content = xmlNodeGetContent(instance);
+				if (content) {
+					std::string text = CleanTextContent((const char *)content);
+					if (!text.empty()) {
+						list_text_samples.push_back(text);
+					}
+					xmlFree(content);
+				}
+			}
+			if (!list_text_samples.empty()) {
+				std::string list_text_winning_fmt;
+				LogicalType text_type = InferTypeFromSamples(list_text_samples, options, list_text_winning_fmt);
+				// Insert #text as first field (before attribute fields)
+				struct_fields.insert(struct_fields.begin(), make_pair(options.text_key, text_type));
+			}
+		}
+
+		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
 			std::unordered_set<std::string> seen_children;
 
@@ -1242,15 +1277,191 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 }
 
 std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
-	// Remove leading/trailing whitespace and normalize
-	std::string cleaned = text;
-	StringUtil::Trim(cleaned);
+	// UTF-8-safe trim: only strip ASCII whitespace.
+	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
+	// that treats UTF-8 continuation bytes (negative as signed char) as
+	// characters to erase, destroying entire non-ASCII strings (issue #64).
+	auto is_ascii_space = [](unsigned char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+	};
 
-	// Remove excessive whitespace
-	std::regex multiple_spaces(R"(\s+)");
-	cleaned = std::regex_replace(cleaned, multiple_spaces, " ");
+	auto lstart = std::find_if_not(text.begin(), text.end(),
+	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
+	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
+		            return is_ascii_space(static_cast<unsigned char>(c));
+	            }).base();
+	if (lstart >= rend) {
+		return "";
+	}
 
-	return cleaned;
+	// Collapse runs of ASCII whitespace to a single space
+	std::string result;
+	result.reserve(static_cast<size_t>(rend - lstart));
+	bool in_space = false;
+	for (auto it = lstart; it != rend; ++it) {
+		if (is_ascii_space(static_cast<unsigned char>(*it))) {
+			if (!in_space) {
+				result += ' ';
+				in_space = true;
+			}
+		} else {
+			result += *it;
+			in_space = false;
+		}
+	}
+	return result;
+}
+
+std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
+                                                           int remaining_depth, const XMLSchemaOptions &options) {
+	std::vector<Value> row;
+
+	// If remaining_depth < 0, serialize the record as XML
+	if (remaining_depth < 0) {
+		xmlBufferPtr buffer = xmlBufferCreate();
+		if (buffer) {
+			xmlNodeDump(buffer, record->doc, record, 0, 1);
+			const xmlChar *content = xmlBufferContent(buffer);
+			if (content) {
+				std::string xml_string((const char *)content);
+				row.push_back(Value(xml_string));
+			} else {
+				row.push_back(Value()); // NULL
+			}
+			xmlBufferFree(buffer);
+		} else {
+			row.push_back(Value()); // NULL
+		}
+		return row;
+	}
+
+	for (const auto &column : schema) {
+		Value value;
+
+		if (column.is_attribute) {
+			// Extract attribute value
+			std::string attr_name = column.name;
+			// Remove element prefix if present (e.g., "employee_id" -> "id")
+			size_t underscore_pos = attr_name.find('_');
+			if (underscore_pos != std::string::npos) {
+				attr_name = attr_name.substr(underscore_pos + 1);
+			}
+
+			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+			if (attr_value) {
+				std::string str_value = (const char *)attr_value;
+				value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
+				xmlFree(attr_value);
+			} else {
+				value = Value(); // NULL
+			}
+		} else {
+			// Extract element text content
+			xmlNodePtr child = record->children;
+			std::string element_text;
+
+			// Special handling for LIST columns - collect ALL matching children
+			if (column.type.id() == LogicalTypeId::LIST) {
+				vector<Value> list_values;
+				auto element_type = ListType::GetChildType(column.type);
+
+				// Collect all children with matching name
+				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
+					if (child_iter->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
+						Value element_value = ExtractValueFromNode(child_iter, element_type, options);
+						list_values.push_back(element_value);
+					}
+				}
+
+				if (!list_values.empty()) {
+					value = Value::LIST(element_type, list_values);
+				} else {
+					value = Value(); // Empty list becomes NULL
+				}
+				row.push_back(value);
+				continue;
+			}
+
+			while (child) {
+				if (child->type == XML_ELEMENT_NODE &&
+				    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
+					// Check if this element has child elements (container) or just text
+					bool has_element_children = false;
+					for (xmlNodePtr grandchild = child->children; grandchild; grandchild = grandchild->next) {
+						if (grandchild->type == XML_ELEMENT_NODE) {
+							has_element_children = true;
+							break;
+						}
+					}
+
+					if (has_element_children) {
+						// Container element - check for structured types first
+						if (column.type.id() == LogicalTypeId::STRUCT) {
+							value = ExtractValueFromNode(child, column.type, options);
+							element_text = "";
+							break;
+						}
+
+						// Check for XML[] type
+						if (XMLTypes::IsXMLArrayType(column.type)) {
+							value = ExtractXMLArrayFromNode(child);
+							element_text = "";
+							break;
+						}
+
+						// Fall back to XML/XMLFragment format for unstructured types
+						bool use_fragment = (column.type.HasAlias() && column.type.GetAlias() == "xmlfragment");
+
+						if (use_fragment) {
+							xmlBufferPtr buffer = xmlBufferCreate();
+							if (buffer) {
+								for (xmlNodePtr grandchild = child->children; grandchild;
+								     grandchild = grandchild->next) {
+									if (grandchild->type == XML_ELEMENT_NODE) {
+										xmlNodeDump(buffer, grandchild->doc, grandchild, 0, 1);
+									}
+								}
+								const xmlChar *content = xmlBufferContent(buffer);
+								if (content) {
+									element_text = std::string((const char *)content);
+								}
+								xmlBufferFree(buffer);
+							}
+						} else {
+							xmlBufferPtr buffer = xmlBufferCreate();
+							if (buffer) {
+								xmlNodeDump(buffer, child->doc, child, 0, 1);
+								const xmlChar *content = xmlBufferContent(buffer);
+								if (content) {
+									element_text = std::string((const char *)content);
+								}
+								xmlBufferFree(buffer);
+							}
+						}
+					} else {
+						// Leaf element - return text content
+						xmlChar *text_content = xmlNodeGetContent(child);
+						if (text_content) {
+							element_text = CleanTextContent((const char *)text_content);
+							xmlFree(text_content);
+						}
+					}
+					break;
+				}
+				child = child->next;
+			}
+
+			// Only convert text value if we haven't already extracted a structured value
+			if (value.IsNull()) {
+				value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
+			}
+		}
+
+		row.push_back(value);
+	}
+
+	return row;
 }
 
 std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::string &xml_content,
@@ -1286,174 +1497,93 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 	}
 	int remaining_depth = effective_depth - 2;
 
-	// If remaining_depth < 0, serialize each record as XML
-	if (remaining_depth < 0) {
-		for (xmlNodePtr record : record_elements) {
-			std::vector<Value> row;
-
-			// Serialize the record element to XML string
-			xmlBufferPtr buffer = xmlBufferCreate();
-			if (buffer) {
-				xmlNodeDump(buffer, record->doc, record, 0, 1);
-				const xmlChar *content = xmlBufferContent(buffer);
-				if (content) {
-					std::string xml_string((const char *)content);
-					row.push_back(Value(xml_string));
-				} else {
-					row.push_back(Value()); // NULL
-				}
-				xmlBufferFree(buffer);
-			} else {
-				row.push_back(Value()); // NULL
-			}
-
-			rows.push_back(row);
-		}
-		return rows;
-	}
-
-	// Extract data from each record element
-	for (xmlNodePtr current : record_elements) {
-		// Extract data for this record
-		std::vector<Value> row;
-
-		for (const auto &column : schema) {
-			Value value;
-
-			if (column.is_attribute) {
-				// Extract attribute value
-				std::string attr_name = column.name;
-				// Remove element prefix if present (e.g., "employee_id" -> "id")
-				size_t underscore_pos = attr_name.find('_');
-				if (underscore_pos != std::string::npos) {
-					attr_name = attr_name.substr(underscore_pos + 1);
-				}
-
-				xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)attr_name.c_str());
-				if (attr_value) {
-					std::string str_value = (const char *)attr_value;
-					value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
-					xmlFree(attr_value);
-				} else {
-					value = Value(); // NULL
-				}
-			} else {
-				// Extract element text content
-				xmlNodePtr child = current->children;
-				std::string element_text;
-
-				// Special handling for LIST columns - collect ALL matching children
-				if (column.type.id() == LogicalTypeId::LIST) {
-					vector<Value> list_values;
-					auto element_type = ListType::GetChildType(column.type);
-
-					// Collect all children with matching name
-					for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
-						if (child_iter->type == XML_ELEMENT_NODE &&
-						    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
-							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
-							list_values.push_back(element_value);
-						}
-					}
-
-					if (!list_values.empty()) {
-						value = Value::LIST(element_type, list_values);
-					} else {
-						value = Value(); // Empty list becomes NULL
-					}
-					// Skip the rest of the loop since we've handled this column
-					row.push_back(value);
-					continue;
-				}
-
-				while (child) {
-					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)column.name.c_str()) == 0) {
-						// Check if this element has child elements (container) or just text
-						bool has_element_children = false;
-						for (xmlNodePtr grandchild = child->children; grandchild; grandchild = grandchild->next) {
-							if (grandchild->type == XML_ELEMENT_NODE) {
-								has_element_children = true;
-								break;
-							}
-						}
-
-						if (has_element_children) {
-							// Container element - check for structured types first
-							if (column.type.id() == LogicalTypeId::STRUCT) {
-								// Use structured extraction for STRUCT types
-								value = ExtractValueFromNode(child, column.type, options);
-								element_text = ""; // Clear element_text to avoid double processing
-								break;
-							}
-
-							// Check for XML[] type
-							if (XMLTypes::IsXMLArrayType(column.type)) {
-								value = ExtractXMLArrayFromNode(child);
-								element_text = ""; // Clear element_text to avoid double processing
-								break;
-							}
-
-							// Fall back to XML/XMLFragment format for unstructured types
-							bool use_fragment = (column.type.HasAlias() && column.type.GetAlias() == "xmlfragment");
-
-							if (use_fragment) {
-								// XMLFragment: return unwrapped child elements
-								xmlBufferPtr buffer = xmlBufferCreate();
-								if (buffer) {
-									for (xmlNodePtr grandchild = child->children; grandchild;
-									     grandchild = grandchild->next) {
-										if (grandchild->type == XML_ELEMENT_NODE) {
-											xmlNodeDump(buffer, grandchild->doc, grandchild, 0, 1);
-										}
-									}
-									// RAII: Copy the content before freeing the buffer
-									const xmlChar *content = xmlBufferContent(buffer);
-									if (content) {
-										element_text = std::string((const char *)content);
-									}
-									xmlBufferFree(buffer);
-								}
-							} else {
-								// XML: return wrapped content (current behavior)
-								xmlBufferPtr buffer = xmlBufferCreate();
-								if (buffer) {
-									xmlNodeDump(buffer, child->doc, child, 0, 1);
-									// RAII: Copy the content before freeing the buffer
-									const xmlChar *content = xmlBufferContent(buffer);
-									if (content) {
-										element_text = std::string((const char *)content);
-									}
-									xmlBufferFree(buffer);
-								}
-							}
-						} else {
-							// Leaf element - return text content
-							xmlChar *text_content = xmlNodeGetContent(child);
-							if (text_content) {
-								element_text = CleanTextContent((const char *)text_content);
-								xmlFree(text_content);
-							}
-						}
-						break;
-					}
-					child = child->next;
-				}
-
-				// Only convert text value if we haven't already extracted a structured value
-				if (value.IsNull()) {
-					value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
-				}
-			}
-
-			row.push_back(value);
-		}
-
-		rows.push_back(row);
+	// Extract data from each record element using single-record function
+	for (xmlNodePtr record : record_elements) {
+		rows.push_back(ExtractSingleRecord(record, schema, remaining_depth, options));
 	}
 
 	return rows;
+}
+
+std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
+    xmlNodePtr record, const std::vector<std::string> &column_names, const std::vector<LogicalType> &column_types,
+    const XMLSchemaOptions &options, const std::vector<std::string> &column_datetime_formats) {
+	std::vector<Value> row;
+
+	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
+		const auto &column_name = column_names[col_idx];
+		const auto &column_type = column_types[col_idx];
+		const std::string &col_fmt =
+		    (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
+
+		Value value;
+
+		// First check if it's an attribute
+		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)column_name.c_str());
+		if (attr_value) {
+			std::string str_value = (const char *)attr_value;
+			value = ConvertToValue(str_value, column_type, options, col_fmt);
+			xmlFree(attr_value);
+		} else {
+			// Special handling for LIST columns - collect ALL matching children
+			if (column_type.id() == LogicalTypeId::LIST) {
+				vector<Value> list_values;
+				auto element_type = ListType::GetChildType(column_type);
+
+				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
+					if (child_iter->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
+						Value element_value = ExtractValueFromNode(child_iter, element_type, options);
+						list_values.push_back(element_value);
+					}
+				}
+
+				if (!list_values.empty()) {
+					value = Value::LIST(element_type, list_values);
+				} else {
+					value = Value(); // Empty list becomes NULL
+				}
+				row.push_back(value);
+				continue;
+			}
+
+			// Look for child element with matching name (non-LIST types)
+			xmlNodePtr child = record->children;
+			while (child) {
+				if (child->type == XML_ELEMENT_NODE &&
+				    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
+					if (!col_fmt.empty()) {
+						// Has a datetime format: extract raw text and convert with format
+						xmlChar *text_content = xmlNodeGetContent(child);
+						if (text_content) {
+							std::string text = CleanTextContent((const char *)text_content);
+							xmlFree(text_content);
+							value = ConvertToValue(text, column_type, options, col_fmt);
+						}
+					} else {
+						// No format: use standard recursive extraction
+						value = ExtractValueFromNode(child, column_type, options);
+					}
+					break;
+				}
+				child = child->next;
+			}
+
+			// If no matching child found, check if column name matches the record element itself
+			if (child == nullptr) {
+				std::string record_name = (const char *)record->name;
+				if (record_name == column_name) {
+					value = ExtractValueFromNode(record, column_type, options);
+				} else {
+					value = Value(column_type); // NULL for truly missing columns
+				}
+			}
+		}
+
+		row.push_back(value);
+	}
+
+	return row;
 }
 
 std::vector<std::vector<Value>>
@@ -1483,94 +1613,11 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 	}
 
 	// Use same record identification logic as InferSchema/ExtractData
-	// This properly handles record_element XPath for nested records (e.g., //data-item)
 	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
-	// Extract data from each record element
-	for (xmlNodePtr current : record_elements) {
-		// Extract data for this record according to explicit schema
-		std::vector<Value> row;
-
-		for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
-			const auto &column_name = column_names[col_idx];
-			const auto &column_type = column_types[col_idx];
-			const std::string &col_fmt =
-			    (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
-
-			// Find the specific child element or attribute for this column
-			Value value;
-
-			// First check if it's an attribute
-			xmlChar *attr_value = xmlGetProp(current, (const xmlChar *)column_name.c_str());
-			if (attr_value) {
-				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column_type, options, col_fmt);
-				xmlFree(attr_value);
-			} else {
-				// Special handling for LIST columns - collect ALL matching children
-				if (column_type.id() == LogicalTypeId::LIST) {
-					vector<Value> list_values;
-					auto element_type = ListType::GetChildType(column_type);
-
-					// Collect all children with matching name
-					for (xmlNodePtr child_iter = current->children; child_iter; child_iter = child_iter->next) {
-						if (child_iter->type == XML_ELEMENT_NODE &&
-						    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
-							// Extract this list element
-							Value element_value = ExtractValueFromNode(child_iter, element_type, options);
-							list_values.push_back(element_value);
-						}
-					}
-
-					if (!list_values.empty()) {
-						value = Value::LIST(element_type, list_values);
-					} else {
-						value = Value(); // Empty list becomes NULL
-					}
-					row.push_back(value);
-					continue;
-				}
-
-				// Look for child element with matching name (non-LIST/STRUCT primitive types)
-				// When we have a datetime format, extract text and convert directly to preserve the format
-				xmlNodePtr child = current->children;
-				while (child) {
-					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
-						if (!col_fmt.empty()) {
-							// Has a datetime format: extract raw text and convert with format
-							xmlChar *text_content = xmlNodeGetContent(child);
-							if (text_content) {
-								std::string text = CleanTextContent((const char *)text_content);
-								xmlFree(text_content);
-								value = ConvertToValue(text, column_type, options, col_fmt);
-							}
-						} else {
-							// No format: use standard recursive extraction
-							value = ExtractValueFromNode(child, column_type, options);
-						}
-						break;
-					}
-					child = child->next;
-				}
-
-				// If no matching child found, check if column name matches the record element itself
-				// This happens when max_depth is so limited that the record element becomes an opaque type
-				if (child == nullptr) {
-					std::string record_name = (const char *)current->name;
-					if (record_name == column_name) {
-						// Column refers to the record element itself - serialize it
-						value = ExtractValueFromNode(current, column_type, options);
-					} else {
-						value = Value(column_type); // NULL for truly missing columns
-					}
-				}
-			}
-
-			row.push_back(value);
-		}
-
-		rows.push_back(row);
+	// Extract data from each record element using single-record function
+	for (xmlNodePtr record : record_elements) {
+		rows.push_back(ExtractSingleRecordWithSchema(record, column_names, column_types, options, column_datetime_formats));
 	}
 
 	return rows;

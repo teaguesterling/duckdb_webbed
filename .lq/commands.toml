@@ -1,0 +1,15 @@
+[commands.build]
+cmd = "make -j 2"
+description = "Build the extension in release mode (note: do not include a timeout)"
+format = "gcc_text,make_error,cmake_build"
+
+[commands.test]
+cmd = "make test"
+description = "Run tests"
+timeout = 300
+format = "duckdb_tests"
+
+[commands.clean]
+cmd = "make clean"
+description = "Clean build artifacts"
+format = "auto"
