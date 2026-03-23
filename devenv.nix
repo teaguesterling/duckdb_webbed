@@ -3,7 +3,7 @@
 {
   enterShell = ''
     export GEN=ninja
-    export VCPKG_TOOLCHAIN_PATH=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake)
+    export VCPKG_TOOLCHAIN_PATH=$(pwd)/vcpkg/scripts/buildsystems/vcpkg.cmake
   '';
 
   # https://devenv.sh/packages/
