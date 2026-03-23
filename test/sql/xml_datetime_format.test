@@ -1,0 +1,125 @@
+# name: test/sql/xml_datetime_format.test
+# description: Test datetime_format parameter for controlling date/time parsing
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Test 1: Explicit US date format parses MM/DD/YYYY as DATE
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_test.xml', datetime_format='us') LIMIT 1;
+----
+DATE
+
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_test.xml', datetime_format='us') ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# =============================================================================
+# Test 2: EU preset parses DD/MM/YYYY
+# =============================================================================
+
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_eu.xml', datetime_format='eu') ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# =============================================================================
+# Test 3: ISO preset (explicit)
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', datetime_format='iso') LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# Test 4: Auto-detect default - ISO dates should still be detected
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml') LIMIT 1;
+----
+DATE
+
+query I
+SELECT typeof(timestamp) FROM read_xml('test/xml/datetime_format_iso.xml') LIMIT 1;
+----
+TIMESTAMP
+
+# =============================================================================
+# Test 5: datetime_format='none' disables temporal detection
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', datetime_format='none') LIMIT 1;
+----
+VARCHAR
+
+# =============================================================================
+# Test 6: all_varchar overrides datetime_format
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_test.xml', datetime_format='us', all_varchar=true) LIMIT 1;
+----
+VARCHAR
+
+# =============================================================================
+# Test 7: List of format strings
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_test.xml', datetime_format=['%m/%d/%Y', '%Y-%m-%d']) LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# Test 8: Format mismatch falls back to VARCHAR
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', datetime_format='us') LIMIT 1;
+----
+VARCHAR
+
+# =============================================================================
+# Test 9: Mixed formats with auto-detect falls back to VARCHAR
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_mixed.xml') LIMIT 1;
+----
+VARCHAR
+
+# =============================================================================
+# Test 10: Invalid format string produces error
+# =============================================================================
+
+statement error
+SELECT * FROM read_xml('test/xml/datetime_format_test.xml', datetime_format='%Q');
+----
+Invalid datetime_format
+
+# =============================================================================
+# Test 11: read_html works with datetime_format
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM read_html('test/xml/datetime_format_test.html', datetime_format='us', record_element='event') LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# Test 12: parse_xml works with datetime_format
+# =============================================================================
+
+query I
+SELECT typeof(date) FROM parse_xml('<events><event><date>03/15/2024</date></event></events>', datetime_format := 'us');
+----
+DATE

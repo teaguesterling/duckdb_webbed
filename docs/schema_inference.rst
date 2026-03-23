@@ -114,11 +114,17 @@ The extension automatically detects these types:
      - Decimal numbers
      - ``3.14``, ``-0.5``, ``1.0e10``
    * - DATE
-     - ISO 8601 dates
-     - ``2024-01-15``
+     - Date formats (ISO, US, EU)
+     - ``2024-01-15``, ``03/15/2024``
    * - TIMESTAMP
-     - ISO 8601 with time
-     - ``2024-01-15T10:30:00Z``
+     - Date with time
+     - ``2024-01-15T10:30:00``
+   * - TIMESTAMPTZ
+     - Date with time and timezone
+     - ``2024-01-15T10:30:00+05:00``
+   * - TIME
+     - Time of day
+     - ``10:30:00``, ``02:30:00 PM``
    * - VARCHAR
      - Everything else
      - ``hello``, ``mixed123``
@@ -128,6 +134,13 @@ The extension automatically detects these types:
    * - LIST
      - Repeated elements
      - Multiple ``<tag>`` elements
+
+Temporal type detection uses DuckDB's ``StrpTimeFormat`` with a candidate elimination approach.
+A list of format candidates is tested against all sample values; candidates that fail on any
+sample are eliminated. The first surviving candidate determines the column type. By default,
+auto-detection prioritizes ISO formats, then US, then EU for ambiguous dates.
+
+Use the ``datetime_format`` parameter to control this behavior — see :doc:`parameters` for details.
 
 Forcing VARCHAR Types
 ~~~~~~~~~~~~~~~~~~~~~

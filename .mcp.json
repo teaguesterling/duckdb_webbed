@@ -1,0 +1,25 @@
+{
+    "mcpServers": {
+        "jetsam": {
+            "command": "jetsam",
+            "args": [
+                "serve"
+            ],
+            "type": "stdio"
+        },
+        "blq_mcp": {
+            "command": "blq",
+            "args": [
+                "mcp",
+                "serve"
+            ]
+        },
+        "fledgling": {
+            "command": "duckdb",
+            "args": [
+                "-init",
+                ".fledgling-init.sql"
+            ]
+        }
+    }
+}

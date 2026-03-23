@@ -1,0 +1,34 @@
+capture_env = [
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
+    "CONDA_DEFAULT_ENV",
+    "CONDA_PREFIX",
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+    "LD_LIBRARY_PATH",
+    "MAKEFLAGS",
+    "CMAKE_PREFIX_PATH",
+    "NODE_PATH",
+    "NPM_CONFIG_PREFIX",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "GOPATH",
+    "GOROOT",
+    "JAVA_HOME",
+    "CLASSPATH",
+    "CI",
+    "GITHUB_ACTIONS",
+    "GITLAB_CI",
+    "JENKINS_URL",
+]
+
+[project]
+namespace = "github__teaguesterling"
+project = "duckdb_webbed"

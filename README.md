@@ -603,6 +603,7 @@ read_xml('pattern',
     max_depth=10,                 -- Maximum parsing depth
     unnest_as='struct',           -- How to unnest nested elements
     all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
+    datetime_format='auto',       -- Date/time format: 'auto', 'none', 'us', 'eu', 'iso', or strftime string
     nullstr='N/A',                -- String value(s) to interpret as NULL
     attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
     attr_prefix='@',              -- Prefix for attribute columns (default: '@')
@@ -626,6 +627,7 @@ read_xml('pattern',
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
+- **`datetime_format`**: Controls date/time detection and parsing. Accepts `'auto'` (default — tries common formats), `'none'` (disables temporal detection), preset names (`'us'`, `'eu'`, `'iso'`, `'us_timestamp'`, `'eu_timestamp'`, `'iso_timestamp'`, `'iso_timestamptz'`, `'12hour'`, `'24hour'`), custom strftime format strings (`'%m/%d/%Y'`), or a list of formats (`['%m/%d/%Y', '%Y-%m-%d %H:%M:%S']`). Ambiguous dates default to US (month-first) ordering.
 - **`nullstr`**: String value(s) to interpret as NULL. Accepts a single VARCHAR (e.g., `nullstr='N/A'`) or a list of VARCHAR (e.g., `nullstr=['N/A', '-', 'NULL']`). Matching values are excluded from type inference and converted to NULL during extraction. Matching is case-sensitive. When used with `all_varchar=true`, matched values still become NULL (default: none)
 - **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
 - **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
@@ -694,12 +696,16 @@ The extension uses a **3-phase deterministic approach** for intelligent schema i
 
 **Automatic Type Detection:**
 
-- **Dates**: ISO 8601 formats → DATE type
-- **Timestamps**: ISO 8601 with time → TIMESTAMP type
+- **Dates**: Common date formats (ISO, US, EU) → DATE type
+- **Timestamps**: Date with time → TIMESTAMP type
+- **Timestamps with timezone**: Date with time and offset → TIMESTAMPTZ type
+- **Times**: Time of day → TIME type
 - **Numbers**: Integer and decimal → BIGINT/DOUBLE types
 - **Booleans**: true/false, 1/0 → BOOLEAN type
 - **Lists**: Repeated elements → LIST type
 - **Objects**: Nested elements → STRUCT type
+
+Use `datetime_format` to control date/time detection (e.g., `datetime_format='us'` for MM/DD/YYYY).
 
 **RSS Feed Example:**
 

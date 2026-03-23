@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<events>
+  <event>
+    <name>Meeting</name>
+    <date>03/15/2024</date>
+  </event>
+  <event>
+    <name>Conference</name>
+    <date>2024-12-25</date>
+  </event>
+</events>

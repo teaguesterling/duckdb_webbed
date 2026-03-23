@@ -1,7 +1,9 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <regex>
 #include <unordered_set>
@@ -113,10 +115,13 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	for (auto &pair : column_map) {
 		const auto &col_analysis = pair.second;
 
-		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options);
+		std::string winning_fmt;
+		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options, winning_fmt);
 
 		double confidence = static_cast<double>(col_analysis.occurrence_count) / record_elements.size();
-		columns.emplace_back(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
+		XMLColumnInfo col_info(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
+		col_info.winning_datetime_format = winning_fmt;
+		columns.push_back(std::move(col_info));
 	}
 
 	// Ensure we have at least some columns
@@ -326,7 +331,8 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 
 // Phase 3: Infer Column Type
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
-                                                const XMLSchemaOptions &options) {
+                                                const XMLSchemaOptions &options, std::string &winning_datetime_format) {
+	winning_datetime_format.clear();
 	// Attributes are always VARCHAR (or type-detected if enabled)
 	if (column.is_attribute) {
 		// TODO: Could sample attribute values for type detection
@@ -390,7 +396,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
-		LogicalType scalar_type = InferTypeFromSamples(sample_values, options);
+		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_datetime_format);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
@@ -467,10 +473,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				}
 			}
 			if (!list_text_samples.empty()) {
-				LogicalType text_type = InferTypeFromSamples(list_text_samples, options);
+				std::string list_text_winning_fmt;
+				LogicalType text_type = InferTypeFromSamples(list_text_samples, options, list_text_winning_fmt);
 				// Insert #text as first field (before attribute fields)
-				struct_fields.insert(struct_fields.begin(),
-				                     make_pair(options.text_key, text_type));
+				struct_fields.insert(struct_fields.begin(), make_pair(options.text_key, text_type));
 			}
 		}
 
@@ -502,7 +508,12 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 						// Recursively infer type with decreased depth
-						LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+						// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
+						// Custom datetime formats in nested STRUCTs fall back to default parsing.
+						// Proper fix requires a format-per-field map threaded through extraction.
+						std::string nested_winning_fmt;
+						LogicalType child_type =
+						    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
 						struct_fields.push_back(make_pair(child_name, child_type));
 					}
 				}
@@ -569,7 +580,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
 
 					// Recursively infer type with decreased depth
-					LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options);
+					// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
+					std::string nested_winning_fmt2;
+					LogicalType child_type =
+					    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
 					struct_fields.push_back(make_pair(child_name, child_type));
 				}
 			}
@@ -619,7 +633,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			child_list_t<LogicalType> struct_fields;
 
 			// Add text content field with inferred type
-			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options);
+			std::string text_winning_fmt;
+			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
 			struct_fields.push_back(make_pair(options.text_key, text_type));
 
 			// Add attribute fields (sorted for determinism)
@@ -944,41 +959,119 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	}
 }
 
+static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &strp_format,
+                                   const LogicalType &expected_type) {
+	switch (expected_type.id()) {
+	case LogicalTypeId::DATE: {
+		date_t result;
+		return strp_format.TryParseDate(value.c_str(), value.size(), result);
+	}
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		timestamp_t result;
+		return strp_format.TryParseTimestamp(value.c_str(), value.size(), result);
+	}
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ: {
+		StrpTimeFormat::ParseResult parse_result;
+		if (!strp_format.Parse(value.c_str(), value.size(), parse_result)) {
+			return false;
+		}
+		dtime_t time_result;
+		return parse_result.TryToTime(time_result);
+	}
+	default:
+		return false;
+	}
+}
+
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
-                                                     const XMLSchemaOptions &options) {
-	// If all_varchar is enabled, skip type detection and return VARCHAR directly
+                                                     const XMLSchemaOptions &options,
+                                                     std::string &winning_datetime_format) {
+	winning_datetime_format.clear();
+
 	if (options.all_varchar) {
 		return LogicalType::VARCHAR;
 	}
-
 	if (samples.empty()) {
 		return LogicalType::VARCHAR;
 	}
 
-	std::vector<LogicalType> detected_types;
+	// Build effective candidate list
+	const auto &candidates = options.datetime_format_candidates;
+	static const std::vector<std::string> auto_candidates = {
+	    "%Y-%m-%dT%H:%M:%S.%f%z",
+	    "%Y-%m-%dT%H:%M:%S%z",
+	    "%Y-%m-%dT%H:%M:%S.%f",
+	    "%Y-%m-%dT%H:%M:%S",
+	    "%Y-%m-%d %H:%M:%S.%f%z",
+	    "%Y-%m-%d %H:%M:%S%z",
+	    "%Y-%m-%d %H:%M:%S.%f",
+	    "%Y-%m-%d %H:%M:%S",
+	    "%Y-%m-%d",
+	    "%m/%d/%Y",
+	    "%d/%m/%Y",
+	    "%Y/%m/%d",
+	    "%H:%M:%S",
+	    "%I:%M:%S %p",
+	    "%H:%M",
+	};
+	// Use explicit candidates if provided, else auto if temporal_detection is on, else empty
+	const auto &effective_candidates =
+	    (!candidates.empty()) ? candidates : (options.temporal_detection ? auto_candidates : candidates);
 
+	// Per-column candidate elimination: pre-compile all formats once
+	std::vector<bool> alive(effective_candidates.size(), true);
+	std::vector<LogicalType> candidate_types;
+	std::vector<StrpTimeFormat> compiled_formats(effective_candidates.size());
+	for (size_t i = 0; i < effective_candidates.size(); i++) {
+		candidate_types.push_back(ClassifyDatetimeFormat(effective_candidates[i]));
+		StrTimeFormat::ParseFormatSpecifier(effective_candidates[i], compiled_formats[i]);
+	}
+
+	bool any_alive = !effective_candidates.empty();
 	for (const auto &sample : samples) {
 		if (sample.empty()) {
-			continue; // Skip empty values
+			continue; // Nulls/empty skip elimination
 		}
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			if (!alive[i])
+				continue;
+			if (!TryMatchDatetimeFormat(sample, compiled_formats[i], candidate_types[i])) {
+				alive[i] = false;
+			}
+		}
+		any_alive = false;
+		for (bool a : alive) {
+			if (a) {
+				any_alive = true;
+				break;
+			}
+		}
+		if (!any_alive)
+			break;
+	}
 
-		// Test types in order of specificity (most specific to least specific)
-		// Temporal types first (very specific format requirements)
-		if (options.temporal_detection && IsDate(sample)) {
-			detected_types.push_back(LogicalType::DATE);
-		} else if (options.temporal_detection && IsTimestamp(sample)) {
-			detected_types.push_back(LogicalType::TIMESTAMP);
-		} else if (options.temporal_detection && IsTime(sample)) {
-			detected_types.push_back(LogicalType::TIME);
+	// First surviving candidate wins (priority = list order)
+	if (any_alive) {
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			if (alive[i]) {
+				winning_datetime_format = effective_candidates[i];
+				return candidate_types[i];
+			}
 		}
-		// Numeric types before boolean to avoid "1"/"0" being detected as boolean
-		else if (options.numeric_detection && IsInteger(sample)) {
+	}
+
+	// Fall through to numeric/boolean/VARCHAR detection (existing logic)
+	std::vector<LogicalType> detected_types;
+	for (const auto &sample : samples) {
+		if (sample.empty())
+			continue;
+		if (options.numeric_detection && IsInteger(sample)) {
 			detected_types.push_back(LogicalType::INTEGER);
 		} else if (options.numeric_detection && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
-		}
-		// Boolean after numeric types (avoids ambiguity with 0/1)
-		else if (options.boolean_detection && IsBoolean(sample)) {
+		} else if (options.boolean_detection && IsBoolean(sample)) {
 			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
@@ -1010,7 +1103,8 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
 			// Recursively determine child type
 			LogicalType child_type;
 			if (child_pattern.is_scalar) {
-				child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+				std::string nested_fmt;
+				child_type = InferTypeFromSamples(child_pattern.sample_values, options, nested_fmt);
 			} else {
 				// Recursive nested type
 				child_type = InferNestedType(child_pattern, all_patterns, options);
@@ -1032,7 +1126,8 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
 				// Recursively determine child type
 				LogicalType child_type;
 				if (child_pattern.is_scalar) {
-					child_type = InferTypeFromSamples(child_pattern.sample_values, options);
+					std::string nested_fmt;
+					child_type = InferTypeFromSamples(child_pattern.sample_values, options, nested_fmt);
 				} else {
 					// Recursive nested type
 					child_type = InferNestedType(child_pattern, all_patterns, options);
@@ -1083,54 +1178,78 @@ bool XMLSchemaInference::IsDouble(const std::string &value) {
 	}
 }
 
-bool XMLSchemaInference::IsDate(const std::string &value) {
-	// Match common date formats: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY, etc.
-	std::regex date_patterns[] = {
-	    std::regex(R"(\d{4}-\d{2}-\d{2})"), // YYYY-MM-DD
-	    std::regex(R"(\d{2}/\d{2}/\d{4})"), // MM/DD/YYYY or DD/MM/YYYY
-	    std::regex(R"(\d{4}/\d{2}/\d{2})"), // YYYY/MM/DD
-	    std::regex(R"(\d{2}-\d{2}-\d{4})"), // MM-DD-YYYY or DD-MM-YYYY
-	};
+// IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
 
-	for (const auto &pattern : date_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
+LogicalType XMLSchemaInference::ClassifyDatetimeFormat(const std::string &format) {
+	bool has_date = false;
+	bool has_time = false;
+	bool has_tz = false;
+
+	for (size_t i = 0; i < format.size(); i++) {
+		if (format[i] == '%' && i + 1 < format.size()) {
+			char spec = format[i + 1];
+			switch (spec) {
+			case 'Y':
+			case 'y':
+			case 'm':
+			case 'd':
+			case 'j':
+			case 'U':
+			case 'W':
+			case 'G':
+			case 'V':
+			case 'u':
+			case 'a':
+			case 'A':
+			case 'b':
+			case 'B':
+			case 'w':
+			case 'x':
+			case 'c':
+				has_date = true;
+				break;
+			case 'H':
+			case 'I':
+			case 'M':
+			case 'S':
+			case 'f':
+			case 'g':
+			case 'p':
+			case 'X':
+			case 'n':
+				has_time = true;
+				break;
+			case 'z':
+			case 'Z':
+				has_tz = true;
+				has_time = true;
+				break;
+			default:
+				break;
+			}
+			i++;
 		}
 	}
-	return false;
+
+	if (has_date && has_time && has_tz)
+		return LogicalType::TIMESTAMP_TZ;
+	if (has_date && has_time)
+		return LogicalType::TIMESTAMP;
+	if (has_date)
+		return LogicalType::DATE;
+	if (has_time && has_tz)
+		return LogicalType::TIME_TZ;
+	if (has_time)
+		return LogicalType::TIME;
+	throw InvalidInputException("datetime_format '%s' does not specify a complete date, time, or timestamp.", format);
 }
 
-bool XMLSchemaInference::IsTime(const std::string &value) {
-	// Match time formats: HH:MM:SS, HH:MM, HH:MM:SS.sss
-	std::regex time_patterns[] = {
-	    std::regex(R"(\d{2}:\d{2}:\d{2})"),      // HH:MM:SS
-	    std::regex(R"(\d{2}:\d{2})"),            // HH:MM
-	    std::regex(R"(\d{2}:\d{2}:\d{2}\.\d+)"), // HH:MM:SS.sss
-	};
-
-	for (const auto &pattern : time_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
-		}
+void XMLSchemaInference::ValidateDatetimeFormatString(const std::string &format) {
+	StrpTimeFormat strp_format;
+	string error = StrTimeFormat::ParseFormatSpecifier(format, strp_format);
+	if (!error.empty()) {
+		throw InvalidInputException("Invalid datetime_format '%s': %s", format, error);
 	}
-	return false;
-}
-
-bool XMLSchemaInference::IsTimestamp(const std::string &value) {
-	// Match ISO timestamp formats and common variations
-	std::regex timestamp_patterns[] = {
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"),      // YYYY-MM-DDTHH:MM:SS
-	    std::regex(R"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})"),      // YYYY-MM-DD HH:MM:SS
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+)"), // YYYY-MM-DDTHH:MM:SS.sss
-	    std::regex(R"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"),     // YYYY-MM-DDTHH:MM:SSZ
-	};
-
-	for (const auto &pattern : timestamp_patterns) {
-		if (std::regex_match(value, pattern)) {
-			return true;
-		}
-	}
-	return false;
 }
 
 std::string XMLSchemaInference::GetElementXPath(const std::string &element_name, bool is_attribute,
@@ -1167,9 +1286,10 @@ std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
 	};
 
 	auto lstart = std::find_if_not(text.begin(), text.end(),
-	                                [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
-	auto rend = std::find_if_not(text.rbegin(), text.rend(),
-	                              [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); }).base();
+	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
+	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
+		            return is_ascii_space(static_cast<unsigned char>(c));
+	            }).base();
 	if (lstart >= rend) {
 		return "";
 	}
@@ -1192,9 +1312,8 @@ std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
 	return result;
 }
 
-std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record,
-                                                            const std::vector<XMLColumnInfo> &schema,
-                                                            int remaining_depth, const XMLSchemaOptions &options) {
+std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
+                                                           int remaining_depth, const XMLSchemaOptions &options) {
 	std::vector<Value> row;
 
 	// If remaining_depth < 0, serialize the record as XML
@@ -1231,7 +1350,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record,
 			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column.type, options);
+				value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
 				xmlFree(attr_value);
 			} else {
 				value = Value(); // NULL
@@ -1335,7 +1454,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record,
 
 			// Only convert text value if we haven't already extracted a structured value
 			if (value.IsNull()) {
-				value = ConvertToValue(element_text, column.type, options);
+				value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
 			}
 		}
 
@@ -1381,21 +1500,21 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 	// Extract data from each record element using single-record function
 	for (xmlNodePtr record : record_elements) {
 		rows.push_back(ExtractSingleRecord(record, schema, remaining_depth, options));
-
 	}
 
 	return rows;
 }
 
-std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(xmlNodePtr record,
-                                                                     const std::vector<std::string> &column_names,
-                                                                     const std::vector<LogicalType> &column_types,
-                                                                     const XMLSchemaOptions &options) {
+std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
+    xmlNodePtr record, const std::vector<std::string> &column_names, const std::vector<LogicalType> &column_types,
+    const XMLSchemaOptions &options, const std::vector<std::string> &column_datetime_formats) {
 	std::vector<Value> row;
 
 	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
+		const std::string &col_fmt =
+		    (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
 
 		Value value;
 
@@ -1403,7 +1522,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(xmlNodePtr 
 		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)column_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
-			value = ConvertToValue(str_value, column_type, options);
+			value = ConvertToValue(str_value, column_type, options, col_fmt);
 			xmlFree(attr_value);
 		} else {
 			// Special handling for LIST columns - collect ALL matching children
@@ -1433,7 +1552,18 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(xmlNodePtr 
 			while (child) {
 				if (child->type == XML_ELEMENT_NODE &&
 				    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
-					value = ExtractValueFromNode(child, column_type, options);
+					if (!col_fmt.empty()) {
+						// Has a datetime format: extract raw text and convert with format
+						xmlChar *text_content = xmlNodeGetContent(child);
+						if (text_content) {
+							std::string text = CleanTextContent((const char *)text_content);
+							xmlFree(text_content);
+							value = ConvertToValue(text, column_type, options, col_fmt);
+						}
+					} else {
+						// No format: use standard recursive extraction
+						value = ExtractValueFromNode(child, column_type, options);
+					}
 					break;
 				}
 				child = child->next;
@@ -1456,10 +1586,10 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(xmlNodePtr 
 	return row;
 }
 
-std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content,
-                                                                          const std::vector<std::string> &column_names,
-                                                                          const std::vector<LogicalType> &column_types,
-                                                                          const XMLSchemaOptions &options) {
+std::vector<std::vector<Value>>
+XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const std::vector<std::string> &column_names,
+                                          const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
+                                          const std::vector<std::string> &column_datetime_formats) {
 	std::vector<std::vector<Value>> rows;
 
 	if (column_names.size() != column_types.size()) {
@@ -1487,15 +1617,17 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractDataWithSchema(const 
 
 	// Extract data from each record element using single-record function
 	for (xmlNodePtr record : record_elements) {
-		rows.push_back(ExtractSingleRecordWithSchema(record, column_names, column_types, options));
-
+		rows.push_back(ExtractSingleRecordWithSchema(record, column_names, column_types, options, column_datetime_formats));
 	}
 
 	return rows;
 }
 
+// TODO(#38): ParseFormatSpecifier is called per-row when datetime_format is non-empty.
+// The XML parsing bottleneck is much larger than format compilation, so this is acceptable
+// for now. If profiling shows this matters, consider a format-string-to-StrpTimeFormat cache.
 Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalType &target_type,
-                                         const XMLSchemaOptions &options) {
+                                         const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (text.empty()) {
 		return Value(); // NULL value
 	}
@@ -1523,20 +1655,79 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 		case LogicalTypeId::DOUBLE:
 			return Value::DOUBLE(std::stod(text));
 		case LogicalTypeId::DATE: {
-			// Try to parse date - simplified for now
-			if (text.length() == 10 && text[4] == '-' && text[7] == '-') {
-				return Value::DATE(Date::FromString(text));
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				date_t result;
+				if (strp_format.TryParseDate(text.c_str(), text.size(), result)) {
+					return Value::DATE(result);
+				}
+				throw ConversionException("Could not parse '%s' as DATE with format '%s'", text, datetime_format);
 			}
-			return Value(text); // Fallback to string
+			return Value::DATE(Date::FromString(text));
 		}
 		case LogicalTypeId::TIMESTAMP: {
-			// Try to parse timestamp
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				timestamp_t result;
+				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
+					return Value::TIMESTAMP(result);
+				}
+				throw ConversionException("Could not parse '%s' as TIMESTAMP with format '%s'", text, datetime_format);
+			}
 			return Value::TIMESTAMP(Timestamp::FromString(text, false));
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				timestamp_t result;
+				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
+					return Value::TIMESTAMPTZ(timestamp_tz_t(result));
+				}
+				throw ConversionException("Could not parse '%s' as TIMESTAMPTZ with format '%s'", text,
+				                          datetime_format);
+			}
+			return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, false)));
+		}
+		case LogicalTypeId::TIME: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				StrpTimeFormat::ParseResult parse_result;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+					dtime_t time_result;
+					if (parse_result.TryToTime(time_result)) {
+						return Value::TIME(time_result);
+					}
+				}
+				throw ConversionException("Could not parse '%s' as TIME with format '%s'", text, datetime_format);
+			}
+			return Value(text);
+		}
+		case LogicalTypeId::TIME_TZ: {
+			if (!datetime_format.empty()) {
+				StrpTimeFormat strp_format;
+				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
+				StrpTimeFormat::ParseResult parse_result;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+					dtime_t time_result;
+					if (parse_result.TryToTime(time_result)) {
+						dtime_tz_t result(time_result, parse_result.data[7]);
+						return Value::TIMETZ(result);
+					}
+				}
+				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
+			}
+			return Value(text);
 		}
 		case LogicalTypeId::VARCHAR:
 		default:
 			return Value(text);
 		}
+	} catch (ConversionException &) {
+		throw; // Re-throw ConversionException as-is
 	} catch (...) {
 		// If conversion fails, return as VARCHAR
 		return Value(text);
@@ -1551,11 +1742,15 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 
 	switch (target_type.id()) {
 	case LogicalTypeId::LIST:
+		// TODO(#38): LIST columns skip format-aware path. Custom datetime formats in LIST(DATE)
+		// columns fall back to default parsing. Proper fix requires threading formats through
+		// ExtractValueFromNode via a format-per-field map.
 		return ExtractListFromNode(node, target_type, options);
 	case LogicalTypeId::STRUCT:
 		return ExtractStructFromNode(node, target_type, options);
 	default: {
 		// For primitive types, extract text content and convert
+		// TODO(#38): No datetime_format passed here — nested primitives use default parsing.
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
 			std::string text = CleanTextContent((const char *)text_content);
