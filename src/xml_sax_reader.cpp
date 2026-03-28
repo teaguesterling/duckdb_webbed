@@ -191,10 +191,16 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 		int relative_depth = acc->current_depth - acc->record_depth;
 
 		if (relative_depth == 0) {
-			// Closing the record element itself
+			// Closing the record element itself — record is complete
 			acc->state = SAXAccumulatorState::RECORD_COMPLETE;
 			acc->row_ready = true;
 			sax_ctx->rows_completed++;
+
+			// Collect the completed record immediately (before next element starts)
+			if (sax_ctx->completed_records) {
+				sax_ctx->completed_records->push_back(*acc);
+				acc->Reset();
+			}
 
 			if (sax_ctx->max_rows > 0 && sax_ctx->rows_completed >= sax_ctx->max_rows) {
 				sax_ctx->stop_parsing = true;
@@ -308,6 +314,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 	ctx.max_rows = max_rows;
 	ctx.rows_completed = 0;
 	ctx.stop_parsing = false;
+	ctx.completed_records = &results;
 
 	xmlSAXHandler handler = CreateSAXHandler();
 
@@ -340,24 +347,11 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 			xmlFreeParserCtxt(parser_ctx);
 			throw IOException("SAX parsing error in file '%s'", filename);
 		}
-
-		// Collect any completed records
-		if (accumulator.row_ready) {
-			results.push_back(accumulator);
-			accumulator.Reset();
-			// Restore state to SEEKING_RECORD (Reset already does this)
-			// But keep seeking since we're mid-stream
-		}
 	}
 
 	// Finalize parsing
 	xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
 	xmlFreeParserCtxt(parser_ctx);
-
-	// Collect any final completed record
-	if (accumulator.row_ready) {
-		results.push_back(accumulator);
-	}
 
 	return results;
 }

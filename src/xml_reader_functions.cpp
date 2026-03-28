@@ -454,24 +454,46 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						continue; // Skip this file
 					}
 
-					// Read file content for schema inference
-					string content;
-					content.resize(file_size);
-					file_handle->Read((void *)content.data(), file_size);
-
-					// For XML mode, validate; for HTML mode, be more lenient
-					if (mode == ParseMode::XML) {
-						if (!XMLUtils::IsValidXML(content)) {
-							if (!result->ignore_errors) {
-								throw InvalidInputException("File %s contains invalid XML", file_path);
-							}
-							continue; // Skip this file
+					// Determine if SAX inference should be used
+					bool use_sax_inference = schema_options.streaming;
+					if (!use_sax_inference && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
+						bool has_complex_xpath = false;
+						if (!schema_options.record_element.empty()) {
+							const auto &re = schema_options.record_element;
+							has_complex_xpath = (re.find('[') != std::string::npos ||
+							                     re.find("::") != std::string::npos ||
+							                     re.find('(') != std::string::npos);
+						}
+						if (!has_complex_xpath && mode == ParseMode::XML) {
+							use_sax_inference = true;
 						}
 					}
-					// HTML mode: skip validation, let libxml2's HTML parser handle malformed content
+					if (mode == ParseMode::HTML) {
+						use_sax_inference = false;
+					}
 
-					// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
-					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					std::vector<XMLColumnInfo> inferred_columns;
+
+					if (use_sax_inference) {
+						// SAX-based schema inference (no DOM needed)
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
+					} else {
+						// DOM-based schema inference
+						string content;
+						content.resize(file_size);
+						file_handle->Read((void *)content.data(), file_size);
+
+						if (mode == ParseMode::XML) {
+							if (!XMLUtils::IsValidXML(content)) {
+								if (!result->ignore_errors) {
+									throw InvalidInputException("File %s contains invalid XML", file_path);
+								}
+								continue;
+							}
+						}
+
+						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					}
 
 					// Store full inferred schema from first file (preserves is_attribute flags)
 					if (result->inferred_schema.empty()) {
@@ -669,7 +691,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 		const auto &filename = gstate.files[gstate.file_index];
 
 		try {
-			// Load file and parse DOM if not already loaded
+			// Load file if not already loaded
 			if (!gstate.file_loaded) {
 				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 				auto file_size = fs.GetFileSize(*file_handle);
@@ -683,96 +705,153 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					continue;
 				}
 
-				// Read file content
-				string content;
-				content.resize(file_size);
-				file_handle->Read((void *)content.data(), file_size);
+				// Determine whether to use SAX or DOM
+				bool use_sax = schema_options.streaming;
+				if (!use_sax && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
+					// Auto-select SAX for large files, but only for XML with simple record_element
+					bool has_complex_xpath = false;
+					if (!schema_options.record_element.empty()) {
+						const auto &re = schema_options.record_element;
+						has_complex_xpath = (re.find('[') != std::string::npos ||
+						                     re.find("::") != std::string::npos ||
+						                     re.find('(') != std::string::npos);
+					}
+					if (!has_complex_xpath && !is_html) {
+						use_sax = true;
+					}
+				}
+				// SAX mode not supported for HTML
+				if (is_html) {
+					use_sax = false;
+				}
 
-				// Validate content based on mode
-				if (!is_html) {
-					if (!XMLUtils::IsValidXML(content)) {
-						if (bind_data.ignore_errors) {
-							gstate.file_index++;
-							continue;
-						} else {
-							throw InvalidInputException("File %s contains invalid XML", filename);
+				gstate.use_sax = use_sax;
+
+				if (use_sax) {
+					// SAX mode: read all records via SAX push parser
+					gstate.sax_records = SAXStreamReader::ReadRecords(filename, schema_options);
+					gstate.sax_record_index = 0;
+					gstate.file_loaded = true;
+				} else {
+					// DOM mode: read file content and build DOM
+					string content;
+					content.resize(file_size);
+					file_handle->Read((void *)content.data(), file_size);
+
+					// Validate content based on mode
+					if (!is_html) {
+						if (!XMLUtils::IsValidXML(content)) {
+							if (bind_data.ignore_errors) {
+								gstate.file_index++;
+								continue;
+							} else {
+								throw InvalidInputException("File %s contains invalid XML", filename);
+							}
 						}
 					}
-				}
 
-				// Parse DOM — DOM makes its own copy, so content string can be freed
-				// (it goes out of scope at the end of this if-block)
-				gstate.current_doc = XMLDocRAII(content, is_html);
+					// Parse DOM — DOM makes its own copy, so content string can be freed
+					gstate.current_doc = XMLDocRAII(content, is_html);
 
-				if (!gstate.current_doc.IsValid()) {
-					if (bind_data.ignore_errors) {
-						gstate.current_doc = XMLDocRAII();
-						gstate.file_index++;
-						continue;
+					if (!gstate.current_doc.IsValid()) {
+						if (bind_data.ignore_errors) {
+							gstate.current_doc = XMLDocRAII();
+							gstate.file_index++;
+							continue;
+						}
+						throw InvalidInputException("Failed to parse file %s", filename);
 					}
-					throw InvalidInputException("Failed to parse file %s", filename);
-				}
 
-				xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
-				if (!root) {
-					if (bind_data.ignore_errors) {
-						gstate.current_doc = XMLDocRAII();
-						gstate.file_index++;
-						continue;
+					xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
+					if (!root) {
+						if (bind_data.ignore_errors) {
+							gstate.current_doc = XMLDocRAII();
+							gstate.file_index++;
+							continue;
+						}
+						throw InvalidInputException("File %s has no root element", filename);
 					}
-					throw InvalidInputException("File %s has no root element", filename);
+
+					// Find record elements in the DOM
+					gstate.record_elements =
+					    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
+
+					// Calculate remaining depth for inferred schema extraction
+					int effective_depth = schema_options.max_depth;
+					if (effective_depth > 20 || effective_depth < 0) {
+						effective_depth = 20;
+					}
+					gstate.remaining_depth = effective_depth - 2;
+
+					gstate.current_record_index = 0;
+					gstate.file_loaded = true;
 				}
-
-				// Find record elements in the DOM
-				gstate.record_elements =
-				    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
-
-				// Calculate remaining depth for inferred schema extraction
-				int effective_depth = schema_options.max_depth;
-				if (effective_depth > 20 || effective_depth < 0) {
-					effective_depth = 20;
-				}
-				gstate.remaining_depth = effective_depth - 2;
-
-				gstate.current_record_index = 0;
-				gstate.file_loaded = true;
 			}
 
-			// Extract records from DOM one at a time into output vectors
-			while (gstate.current_record_index < gstate.record_elements.size() && output_idx < STANDARD_VECTOR_SIZE) {
-				xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
+			if (gstate.use_sax) {
+				// SAX extraction: convert accumulated records to output rows
+				while (gstate.sax_record_index < gstate.sax_records.size() && output_idx < STANDARD_VECTOR_SIZE) {
+					auto &record = gstate.sax_records[gstate.sax_record_index];
 
-				std::vector<Value> row;
-				if (bind_data.has_explicit_schema) {
-					row = XMLSchemaInference::ExtractSingleRecordWithSchema(
+					auto row = SAXStreamReader::AccumulatorToRow(
 					    record, bind_data.column_names, bind_data.column_types, schema_options,
-					    bind_data.column_datetime_formats);
-				} else {
-					row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
-					                                              gstate.remaining_depth, schema_options);
+					    bind_data.column_datetime_formats, bind_data.inferred_schema);
+
+					idx_t output_col_idx = 0;
+					if (bind_data.include_filename) {
+						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+					}
+					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+					     row_col_idx++, output_col_idx++) {
+						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+					}
+
+					output_idx++;
+					gstate.sax_record_index++;
 				}
 
-				// Write row values to output vectors
-				idx_t output_col_idx = 0;
-				if (bind_data.include_filename) {
-					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+				// Check if we've finished all SAX records from this file
+				if (gstate.sax_record_index >= gstate.sax_records.size()) {
+					gstate.sax_records.clear();
+					gstate.file_loaded = false;
+					gstate.file_index++;
 				}
-				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-				     row_col_idx++, output_col_idx++) {
-					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+			} else {
+				// DOM extraction: extract records one at a time
+				while (gstate.current_record_index < gstate.record_elements.size() &&
+				       output_idx < STANDARD_VECTOR_SIZE) {
+					xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
+
+					std::vector<Value> row;
+					if (bind_data.has_explicit_schema) {
+						row = XMLSchemaInference::ExtractSingleRecordWithSchema(
+						    record, bind_data.column_names, bind_data.column_types, schema_options,
+						    bind_data.column_datetime_formats);
+					} else {
+						row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
+						                                              gstate.remaining_depth, schema_options);
+					}
+
+					idx_t output_col_idx = 0;
+					if (bind_data.include_filename) {
+						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+					}
+					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+					     row_col_idx++, output_col_idx++) {
+						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+					}
+
+					output_idx++;
+					gstate.current_record_index++;
 				}
 
-				output_idx++;
-				gstate.current_record_index++;
-			}
-
-			// Check if we've finished all records from this file
-			if (gstate.current_record_index >= gstate.record_elements.size()) {
-				// Free DOM and advance to next file
-				gstate.current_doc = XMLDocRAII();
-				gstate.record_elements.clear();
-				gstate.file_loaded = false;
-				gstate.file_index++;
+				// Check if we've finished all records from this file
+				if (gstate.current_record_index >= gstate.record_elements.size()) {
+					gstate.current_doc = XMLDocRAII();
+					gstate.record_elements.clear();
+					gstate.file_loaded = false;
+					gstate.file_index++;
+				}
 			}
 
 		} catch (const Exception &e) {
@@ -782,6 +861,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			// Skip this file and continue
 			gstate.current_doc = XMLDocRAII();
 			gstate.record_elements.clear();
+			gstate.sax_records.clear();
 			gstate.file_loaded = false;
 			gstate.file_index++;
 		}
@@ -1202,21 +1282,39 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						continue; // Skip this file
 					}
 
-					// Read file content for schema inference
-					string content;
-					content.resize(file_size);
-					file_handle->Read((void *)content.data(), file_size);
-
-					// Validate XML
-					if (!XMLUtils::IsValidXML(content)) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s contains invalid XML", file_path);
+					// Determine if SAX inference should be used
+					bool use_sax_inference = schema_options.streaming;
+					if (!use_sax_inference && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
+						bool has_complex_xpath = false;
+						if (!schema_options.record_element.empty()) {
+							const auto &re = schema_options.record_element;
+							has_complex_xpath = (re.find('[') != std::string::npos ||
+							                     re.find("::") != std::string::npos ||
+							                     re.find('(') != std::string::npos);
 						}
-						continue; // Skip this file
+						if (!has_complex_xpath) {
+							use_sax_inference = true;
+						}
 					}
 
-					// Perform schema inference
-					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					std::vector<XMLColumnInfo> inferred_columns;
+
+					if (use_sax_inference) {
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
+					} else {
+						string content;
+						content.resize(file_size);
+						file_handle->Read((void *)content.data(), file_size);
+
+						if (!XMLUtils::IsValidXML(content)) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s contains invalid XML", file_path);
+							}
+							continue;
+						}
+
+						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					}
 
 					// Merge columns into union schema
 					for (const auto &col_info : inferred_columns) {
