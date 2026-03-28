@@ -1734,6 +1734,12 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 	}
 }
 
+Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
+                                               const XMLSchemaOptions &options,
+                                               const std::string &datetime_format) {
+	return ConvertToValue(text, target_type, options, datetime_format);
+}
+
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
                                                const XMLSchemaOptions &options) {
 	if (!node) {

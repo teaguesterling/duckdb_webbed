@@ -222,6 +222,10 @@ public:
 	static LogicalType ClassifyDatetimeFormat(const std::string &format);
 	static void ValidateDatetimeFormatString(const std::string &format);
 
+	// Public wrapper for ConvertToValue (used by SAX streaming reader)
+	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
+	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
+
 private:
 	// 3-phase schema inference helpers
 	static std::unordered_map<std::string, ColumnAnalysis>
