@@ -58,6 +58,10 @@ struct XMLSchemaOptions {
 	bool ignore_errors = false;          // Continue on parsing errors
 	idx_t maximum_file_size = 134217728; // 128MB default
 
+	// SAX streaming controls
+	bool streaming = false;         // Force SAX mode (bypass DOM)
+	idx_t sax_threshold = 67108864; // 64MB: auto-switch to SAX above this size
+
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
 	std::vector<std::string> null_strings; // Values to treat as NULL (empty = default behavior)

@@ -368,6 +368,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "nullstr") {
 			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
+		} else if (kv.first == "streaming") {
+			schema_options.streaming = kv.second.GetValue<bool>();
+		} else if (kv.first == "sax_threshold") {
+			schema_options.sax_threshold = kv.second.GetValue<uint64_t>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1114,6 +1118,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "nullstr") {
 			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
+		} else if (kv.first == "streaming") {
+			schema_options.streaming = kv.second.GetValue<bool>();
+		} else if (kv.first == "sax_threshold") {
+			schema_options.sax_threshold = kv.second.GetValue<uint64_t>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1818,6 +1826,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
+	read_xml_single.named_parameters["streaming"] = LogicalType::BOOLEAN;
+	read_xml_single.named_parameters["sax_threshold"] = LogicalType::UBIGINT;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1847,6 +1857,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
+	read_xml_array.named_parameters["streaming"] = LogicalType::BOOLEAN;
+	read_xml_array.named_parameters["sax_threshold"] = LogicalType::UBIGINT;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
