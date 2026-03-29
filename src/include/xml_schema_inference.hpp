@@ -58,6 +58,9 @@ struct XMLSchemaOptions {
 	bool ignore_errors = false;          // Continue on parsing errors
 	idx_t maximum_file_size = 134217728; // 128MB default
 
+	// SAX streaming controls
+	bool streaming = true; // Enable SAX mode for files exceeding maximum_file_size (default: true)
+
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
 	std::vector<std::string> null_strings; // Values to treat as NULL (empty = default behavior)
@@ -217,6 +220,10 @@ public:
 	// Datetime format helpers
 	static LogicalType ClassifyDatetimeFormat(const std::string &format);
 	static void ValidateDatetimeFormatString(const std::string &format);
+
+	// Public wrapper for ConvertToValue (used by SAX streaming reader)
+	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
+	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
 private:
 	// 3-phase schema inference helpers

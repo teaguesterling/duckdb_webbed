@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<data>
+  <record>
+    <name>Tom &amp; Jerry</name>
+    <formula>x &lt; y &amp;&amp; y &gt; z</formula>
+    <value>10</value>
+  </record>
+  <record>
+    <name>A &quot;quoted&quot; name</name>
+    <formula>a &lt; b</formula>
+    <value>20</value>
+  </record>
+</data>

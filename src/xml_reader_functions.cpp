@@ -14,6 +14,23 @@
 
 namespace {
 
+// Check if a record_element value contains XPath syntax that SAX mode can't handle.
+// SAX only supports simple tag names (e.g., "item"), optionally prefixed with "//".
+// Path expressions ("/root/item"), predicates ("item[@type]"), axes ("child::item"),
+// and functions ("local-name()") all require DOM XPath evaluation.
+static bool HasComplexXPath(const std::string &record_element) {
+	if (record_element.empty()) {
+		return false;
+	}
+	// Strip leading "//" (SAX-compatible shorthand)
+	std::string re = record_element;
+	if (re.size() >= 2 && re[0] == '/' && re[1] == '/') {
+		re = re.substr(2);
+	}
+	// Any remaining XPath tokens mean SAX can't handle it
+	return re.find_first_of("/[@]()*:.") != std::string::npos;
+}
+
 // Resolve a datetime_format preset name or format string to a list of format strings
 std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 	if (input == "auto") {
@@ -368,6 +385,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "nullstr") {
 			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
+		} else if (kv.first == "streaming") {
+			schema_options.streaming = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -442,32 +461,45 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
 					auto file_size = fs.GetFileSize(*file_handle);
 
-					if (file_size > result->max_file_size) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
-							                            result->max_file_size);
+					// Determine if SAX inference should be used
+					bool use_sax_inference = false;
+					if (schema_options.streaming && mode == ParseMode::XML &&
+					    static_cast<idx_t>(file_size) > result->max_file_size) {
+						if (!HasComplexXPath(schema_options.record_element)) {
+							use_sax_inference = true;
 						}
-						continue; // Skip this file
 					}
 
-					// Read file content for schema inference
-					string content;
-					content.resize(file_size);
-					file_handle->Read((void *)content.data(), file_size);
+					std::vector<XMLColumnInfo> inferred_columns;
 
-					// For XML mode, validate; for HTML mode, be more lenient
-					if (mode == ParseMode::XML) {
-						if (!XMLUtils::IsValidXML(content)) {
+					if (use_sax_inference) {
+						// SAX-based schema inference (no DOM needed)
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
+					} else {
+						// DOM-based: enforce file size limit
+						if (static_cast<idx_t>(file_size) > result->max_file_size) {
 							if (!result->ignore_errors) {
-								throw InvalidInputException("File %s contains invalid XML", file_path);
+								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+								                            file_path, result->max_file_size);
 							}
-							continue; // Skip this file
+							continue;
 						}
-					}
-					// HTML mode: skip validation, let libxml2's HTML parser handle malformed content
 
-					// Perform schema inference (works for both XML and HTML since both produce xmlDoc)
-					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+						string content;
+						content.resize(file_size);
+						file_handle->Read((void *)content.data(), file_size);
+
+						if (mode == ParseMode::XML) {
+							if (!XMLUtils::IsValidXML(content)) {
+								if (!result->ignore_errors) {
+									throw InvalidInputException("File %s contains invalid XML", file_path);
+								}
+								continue;
+							}
+						}
+
+						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					}
 
 					// Store full inferred schema from first file (preserves is_attribute flags)
 					if (result->inferred_schema.empty()) {
@@ -665,12 +697,23 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 		const auto &filename = gstate.files[gstate.file_index];
 
 		try {
-			// Load file and parse DOM if not already loaded
+			// Load file if not already loaded
 			if (!gstate.file_loaded) {
 				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 				auto file_size = fs.GetFileSize(*file_handle);
 
-				if (file_size > bind_data.max_file_size) {
+				// Determine whether to use SAX or DOM
+				bool use_sax = false;
+				if (schema_options.streaming && !is_html &&
+				    static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+					// File exceeds max size — use SAX if possible
+					if (!HasComplexXPath(schema_options.record_element)) {
+						use_sax = true;
+					}
+				}
+
+				// If not using SAX, enforce file size limit
+				if (!use_sax && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
 					if (!bind_data.ignore_errors) {
 						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 						                            bind_data.max_file_size);
@@ -679,96 +722,213 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					continue;
 				}
 
-				// Read file content
-				string content;
-				content.resize(file_size);
-				file_handle->Read((void *)content.data(), file_size);
+				gstate.use_sax = use_sax;
 
-				// Validate content based on mode
-				if (!is_html) {
-					if (!XMLUtils::IsValidXML(content)) {
-						if (bind_data.ignore_errors) {
-							gstate.file_index++;
-							continue;
-						} else {
-							throw InvalidInputException("File %s contains invalid XML", filename);
+				if (use_sax) {
+					// SAX mode: initialize push parser for incremental streaming
+					gstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
+					gstate.sax_accumulator->namespace_mode = schema_options.namespaces;
+
+					// Configure record tag matching
+					if (!schema_options.record_element.empty()) {
+						std::string tag = schema_options.record_element;
+						if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
+							tag = tag.substr(2);
+						}
+						gstate.sax_accumulator->record_tag = tag;
+					}
+
+					gstate.sax_ctx = make_uniq<SAXCallbackContext>();
+					gstate.sax_ctx->accumulator = gstate.sax_accumulator.get();
+					gstate.sax_ctx->max_rows = 0; // No limit per chunk
+					gstate.sax_ctx->rows_completed = 0;
+					gstate.sax_ctx->stop_parsing = false;
+					gstate.sax_ctx->completed_records = &gstate.sax_pending_records;
+
+					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
+					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(
+					    &gstate.sax_handler, gstate.sax_ctx.get(), nullptr, 0, filename.c_str());
+					if (!gstate.sax_parser_ctx) {
+						throw IOException("Could not create SAX push parser for '%s'", filename);
+					}
+					xmlCtxtUseOptions(gstate.sax_parser_ctx,
+					                  XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+
+					gstate.sax_file_handle = std::move(file_handle);
+					gstate.sax_pending_records.clear();
+					gstate.file_loaded = true;
+				} else {
+					// DOM mode: read file content and build DOM
+					string content;
+					content.resize(file_size);
+					file_handle->Read((void *)content.data(), file_size);
+
+					// Validate content based on mode
+					if (!is_html) {
+						if (!XMLUtils::IsValidXML(content)) {
+							if (bind_data.ignore_errors) {
+								gstate.file_index++;
+								continue;
+							} else {
+								throw InvalidInputException("File %s contains invalid XML", filename);
+							}
 						}
 					}
-				}
 
-				// Parse DOM — DOM makes its own copy, so content string can be freed
-				// (it goes out of scope at the end of this if-block)
-				gstate.current_doc = XMLDocRAII(content, is_html);
+					// Parse DOM — DOM makes its own copy, so content string can be freed
+					gstate.current_doc = XMLDocRAII(content, is_html);
 
-				if (!gstate.current_doc.IsValid()) {
-					if (bind_data.ignore_errors) {
-						gstate.current_doc = XMLDocRAII();
-						gstate.file_index++;
-						continue;
+					if (!gstate.current_doc.IsValid()) {
+						if (bind_data.ignore_errors) {
+							gstate.current_doc = XMLDocRAII();
+							gstate.file_index++;
+							continue;
+						}
+						throw InvalidInputException("Failed to parse file %s", filename);
 					}
-					throw InvalidInputException("Failed to parse file %s", filename);
-				}
 
-				xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
-				if (!root) {
-					if (bind_data.ignore_errors) {
-						gstate.current_doc = XMLDocRAII();
-						gstate.file_index++;
-						continue;
+					xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
+					if (!root) {
+						if (bind_data.ignore_errors) {
+							gstate.current_doc = XMLDocRAII();
+							gstate.file_index++;
+							continue;
+						}
+						throw InvalidInputException("File %s has no root element", filename);
 					}
-					throw InvalidInputException("File %s has no root element", filename);
+
+					// Find record elements in the DOM
+					gstate.record_elements =
+					    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
+
+					// Calculate remaining depth for inferred schema extraction
+					int effective_depth = schema_options.max_depth;
+					if (effective_depth > 20 || effective_depth < 0) {
+						effective_depth = 20;
+					}
+					gstate.remaining_depth = effective_depth - 2;
+
+					gstate.current_record_index = 0;
+					gstate.file_loaded = true;
 				}
-
-				// Find record elements in the DOM
-				gstate.record_elements =
-				    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
-
-				// Calculate remaining depth for inferred schema extraction
-				int effective_depth = schema_options.max_depth;
-				if (effective_depth > 20 || effective_depth < 0) {
-					effective_depth = 20;
-				}
-				gstate.remaining_depth = effective_depth - 2;
-
-				gstate.current_record_index = 0;
-				gstate.file_loaded = true;
 			}
 
-			// Extract records from DOM one at a time into output vectors
-			while (gstate.current_record_index < gstate.record_elements.size() && output_idx < STANDARD_VECTOR_SIZE) {
-				xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
+			if (gstate.use_sax) {
+				// SAX streaming: feed chunks until we have enough records or EOF
+				constexpr idx_t SAX_CHUNK_SIZE = 65536;
+				char sax_buffer[SAX_CHUNK_SIZE];
+				bool file_exhausted = false;
 
-				std::vector<Value> row;
-				if (bind_data.has_explicit_schema) {
-					row = XMLSchemaInference::ExtractSingleRecordWithSchema(
+				while (output_idx < STANDARD_VECTOR_SIZE) {
+					// First, emit any pending completed records
+					while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+						auto &record = gstate.sax_pending_records.front();
+
+						auto row = SAXStreamReader::AccumulatorToRow(
+						    record, bind_data.column_names, bind_data.column_types, schema_options,
+						    bind_data.column_datetime_formats, bind_data.inferred_schema);
+
+						idx_t output_col_idx = 0;
+						if (bind_data.include_filename) {
+							output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+						}
+						for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+						     row_col_idx++, output_col_idx++) {
+							output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+						}
+
+						output_idx++;
+						gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
+					}
+
+					// If we've filled the output, stop
+					if (output_idx >= STANDARD_VECTOR_SIZE) {
+						break;
+					}
+
+					// Feed another chunk to the parser
+					auto bytes_read = gstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
+					if (bytes_read == 0) {
+						// EOF — finalize parser
+						xmlParseChunk(gstate.sax_parser_ctx, nullptr, 0, 1);
+						file_exhausted = true;
+						break;
+					}
+
+					int parse_result =
+					    xmlParseChunk(gstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
+					if (parse_result != 0 && !bind_data.ignore_errors) {
+						throw IOException("SAX parsing error in file '%s'", filename);
+					}
+				}
+
+				// Emit any remaining pending records after EOF
+				while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+					auto &record = gstate.sax_pending_records.front();
+					auto row = SAXStreamReader::AccumulatorToRow(
 					    record, bind_data.column_names, bind_data.column_types, schema_options,
-					    bind_data.column_datetime_formats);
-				} else {
-					row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
-					                                              gstate.remaining_depth, schema_options);
+					    bind_data.column_datetime_formats, bind_data.inferred_schema);
+
+					idx_t output_col_idx = 0;
+					if (bind_data.include_filename) {
+						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+					}
+					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+					     row_col_idx++, output_col_idx++) {
+						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+					}
+					output_idx++;
+					gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
 				}
 
-				// Write row values to output vectors
-				idx_t output_col_idx = 0;
-				if (bind_data.include_filename) {
-					output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+				// Check if file is done and all records emitted
+				if (file_exhausted && gstate.sax_pending_records.empty()) {
+					if (gstate.sax_parser_ctx) {
+						xmlFreeParserCtxt(gstate.sax_parser_ctx);
+						gstate.sax_parser_ctx = nullptr;
+					}
+					gstate.sax_accumulator.reset();
+					gstate.sax_ctx.reset();
+					gstate.sax_file_handle.reset();
+					gstate.file_loaded = false;
+					gstate.file_index++;
 				}
-				for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-				     row_col_idx++, output_col_idx++) {
-					output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+			} else {
+				// DOM extraction: extract records one at a time
+				while (gstate.current_record_index < gstate.record_elements.size() &&
+				       output_idx < STANDARD_VECTOR_SIZE) {
+					xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
+
+					std::vector<Value> row;
+					if (bind_data.has_explicit_schema) {
+						row = XMLSchemaInference::ExtractSingleRecordWithSchema(
+						    record, bind_data.column_names, bind_data.column_types, schema_options,
+						    bind_data.column_datetime_formats);
+					} else {
+						row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
+						                                              gstate.remaining_depth, schema_options);
+					}
+
+					idx_t output_col_idx = 0;
+					if (bind_data.include_filename) {
+						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+					}
+					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+					     row_col_idx++, output_col_idx++) {
+						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+					}
+
+					output_idx++;
+					gstate.current_record_index++;
 				}
 
-				output_idx++;
-				gstate.current_record_index++;
-			}
-
-			// Check if we've finished all records from this file
-			if (gstate.current_record_index >= gstate.record_elements.size()) {
-				// Free DOM and advance to next file
-				gstate.current_doc = XMLDocRAII();
-				gstate.record_elements.clear();
-				gstate.file_loaded = false;
-				gstate.file_index++;
+				// Check if we've finished all records from this file
+				if (gstate.current_record_index >= gstate.record_elements.size()) {
+					gstate.current_doc = XMLDocRAII();
+					gstate.record_elements.clear();
+					gstate.file_loaded = false;
+					gstate.file_index++;
+				}
 			}
 
 		} catch (const Exception &e) {
@@ -778,6 +938,14 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			// Skip this file and continue
 			gstate.current_doc = XMLDocRAII();
 			gstate.record_elements.clear();
+			if (gstate.sax_parser_ctx) {
+				xmlFreeParserCtxt(gstate.sax_parser_ctx);
+				gstate.sax_parser_ctx = nullptr;
+			}
+			gstate.sax_accumulator.reset();
+			gstate.sax_ctx.reset();
+			gstate.sax_file_handle.reset();
+			gstate.sax_pending_records.clear();
 			gstate.file_loaded = false;
 			gstate.file_index++;
 		}
@@ -1114,6 +1282,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "nullstr") {
 			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
+		} else if (kv.first == "streaming") {
+			schema_options.streaming = kv.second.GetValue<bool>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1186,29 +1356,41 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
 					auto file_size = fs.GetFileSize(*file_handle);
 
-					if (file_size > result->max_file_size) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
-							                            result->max_file_size);
+					// Determine if SAX inference should be used
+					bool use_sax_inference = false;
+					if (schema_options.streaming && static_cast<idx_t>(file_size) > result->max_file_size) {
+						if (!HasComplexXPath(schema_options.record_element)) {
+							use_sax_inference = true;
 						}
-						continue; // Skip this file
 					}
 
-					// Read file content for schema inference
-					string content;
-					content.resize(file_size);
-					file_handle->Read((void *)content.data(), file_size);
+					std::vector<XMLColumnInfo> inferred_columns;
 
-					// Validate XML
-					if (!XMLUtils::IsValidXML(content)) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s contains invalid XML", file_path);
+					if (use_sax_inference) {
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
+					} else {
+						// DOM mode: enforce file size limit
+						if (static_cast<idx_t>(file_size) > result->max_file_size) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+								                            file_path, result->max_file_size);
+							}
+							continue;
 						}
-						continue; // Skip this file
-					}
 
-					// Perform schema inference
-					auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+						string content;
+						content.resize(file_size);
+						file_handle->Read((void *)content.data(), file_size);
+
+						if (!XMLUtils::IsValidXML(content)) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s contains invalid XML", file_path);
+							}
+							continue;
+						}
+
+						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+					}
 
 					// Merge columns into union schema
 					for (const auto &col_info : inferred_columns) {
@@ -1818,6 +2000,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
+	read_xml_single.named_parameters["streaming"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1847,6 +2030,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
+	read_xml_array.named_parameters["streaming"] = LogicalType::BOOLEAN;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
