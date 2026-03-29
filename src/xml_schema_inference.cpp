@@ -1513,8 +1513,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
-		const std::string &col_fmt =
-		    (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
+		const std::string &col_fmt = (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
 
 		Value value;
 
@@ -1617,7 +1616,8 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 
 	// Extract data from each record element using single-record function
 	for (xmlNodePtr record : record_elements) {
-		rows.push_back(ExtractSingleRecordWithSchema(record, column_names, column_types, options, column_datetime_formats));
+		rows.push_back(
+		    ExtractSingleRecordWithSchema(record, column_names, column_types, options, column_datetime_formats));
 	}
 
 	return rows;

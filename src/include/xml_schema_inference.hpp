@@ -58,6 +58,10 @@ struct XMLSchemaOptions {
 	bool ignore_errors = false;          // Continue on parsing errors
 	idx_t maximum_file_size = 134217728; // 128MB default
 
+	// SAX streaming controls
+	bool streaming = false;         // Force SAX mode (bypass DOM)
+	idx_t sax_threshold = 67108864; // 64MB: auto-switch to SAX above this size
+
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
 	std::vector<std::string> null_strings; // Values to treat as NULL (empty = default behavior)
@@ -186,11 +190,10 @@ public:
 	                                              int remaining_depth, const XMLSchemaOptions &options);
 
 	// Extract one row using explicit column names/types
-	static std::vector<Value> ExtractSingleRecordWithSchema(xmlNodePtr record,
-	                                                        const std::vector<std::string> &column_names,
-	                                                        const std::vector<LogicalType> &column_types,
-	                                                        const XMLSchemaOptions &options,
-	                                                        const std::vector<std::string> &column_datetime_formats = {});
+	static std::vector<Value>
+	ExtractSingleRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
+	                              const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
+	                              const std::vector<std::string> &column_datetime_formats = {});
 
 	// Identify record elements in a parsed document
 	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,

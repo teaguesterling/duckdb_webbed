@@ -1,0 +1,35 @@
+# name: test/sql/xml_sax_streaming.test
+# description: Test SAX-based streaming parser for large XML files
+# group: [sql]
+
+require webbed
+
+# Baseline: verify simple.xml returns expected rows without new params
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
+----
+2
+
+# Test streaming:=false (explicit DOM mode, should behave identically)
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false);
+----
+2
+
+# Test streaming:=true (force SAX mode, should behave identically for now)
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=true);
+----
+2
+
+# Test sax_threshold with a small value (files larger than 1MB would use SAX)
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', sax_threshold:=1000000);
+----
+2
+
+# Test combining streaming and sax_threshold
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false, sax_threshold:=67108864);
+----
+2
