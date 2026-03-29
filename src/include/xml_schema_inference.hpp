@@ -56,7 +56,7 @@ struct XMLSchemaOptions {
 
 	// Error handling
 	bool ignore_errors = false;          // Continue on parsing errors
-	idx_t maximum_file_size = 134217728; // 128MB default
+	idx_t maximum_file_size = 16777216; // 16MB default (files above this use SAX streaming)
 
 	// SAX streaming controls
 	bool streaming = true; // Enable SAX mode for files exceeding maximum_file_size (default: true)

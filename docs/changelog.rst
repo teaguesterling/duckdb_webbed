@@ -1,7 +1,7 @@
 Changelog
 =========
 
-v1.6.0 (Current)
+v2.0.0 (Current)
 -----------------
 
 **New Features**
@@ -18,6 +18,14 @@ v1.6.0 (Current)
     XPath expressions automatically fall back to DOM parsing.
   - Not available for HTML files (libxml2 HTML parser is DOM-only).
 
+**Changes**
+
+- Reduced default ``maximum_file_size`` from 128MB to 16MB. With SAX streaming
+  enabled by default, this threshold now controls when to switch from DOM to SAX
+  rather than when to reject files. Files above 16MB are streamed automatically.
+  Set ``maximum_file_size`` higher to use DOM for larger files, or set
+  ``streaming:=false`` to error on oversized files (previous behavior).
+
 **Limitations**
 
 - SAX mode currently handles flat records (scalars, attributes, repeated elements).
@@ -30,6 +38,8 @@ v1.6.0 (Current)
 - Comprehensive DOM/SAX equivalence tests covering type inference, datetime_format,
   record_element, cross-record attribute discovery, large row counts (3000 rows
   across chunk boundaries), UTF-8 content, and nullstr interaction
+- Stress tested with 382MB file (1M records): zero data loss, 5x faster than DOM,
+  184x less memory (25MB vs 4.6GB peak)
 
 v1.5.0
 -----------------

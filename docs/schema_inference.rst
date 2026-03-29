@@ -173,7 +173,7 @@ Limit parsing depth with ``max_depth``:
 SAX Streaming and Schema Inference
 -----------------------------------
 
-When files exceed ``maximum_file_size`` (128MB by default), the extension uses SAX-based
+When files exceed ``maximum_file_size`` (16MB by default), the extension uses SAX-based
 streaming instead of building a full DOM tree. This affects schema inference in two ways:
 
 1. **Sample-based inference** — SAX mode reads the first ``sample_size`` records (default: 50)

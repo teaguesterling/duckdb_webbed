@@ -624,7 +624,7 @@ read_xml('pattern',
 #### **Parameter Details:**
 
 - **`ignore_errors`**: Continue processing when individual files fail to parse
-- **`maximum_file_size`**: Skip files larger than specified bytes (default: 128MB)
+- **`maximum_file_size`**: Maximum file size in bytes for DOM parsing (default: 16MB). Files above this threshold use SAX streaming when `streaming=true` (default), or are rejected when `streaming=false`.
 - **`filename`**: Add a `filename` column to output with source file path
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference

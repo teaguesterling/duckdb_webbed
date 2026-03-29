@@ -151,7 +151,7 @@ Use ``nullstr`` to specify values that should be treated as NULL:
 Processing Large Files
 ----------------------
 
-Files exceeding ``maximum_file_size`` (128MB by default) are automatically streamed
+Files exceeding ``maximum_file_size`` (16MB by default) are automatically streamed
 using a SAX-based parser that processes XML in chunks — peak memory stays proportional
 to a single record rather than the entire file:
 
