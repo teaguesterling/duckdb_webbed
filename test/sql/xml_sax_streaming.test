@@ -4,32 +4,169 @@
 
 require webbed
 
+# =============================================================================
+# Parameter acceptance tests
+# =============================================================================
+
 # Baseline: verify simple.xml returns expected rows without new params
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
 ----
 2
 
-# Test streaming:=false (explicit DOM mode, should behave identically)
+# streaming:=false (explicit DOM mode)
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false);
 ----
 2
 
-# Test streaming:=true (force SAX mode, should behave identically for now)
+# streaming:=true (default — uses DOM for small files since they're under max_file_size)
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=true);
 ----
 2
 
-# Test sax_threshold with a small value (files larger than 1MB would use SAX)
+# =============================================================================
+# SAX mode triggered by maximum_file_size
+# =============================================================================
+
+# Force SAX by setting maximum_file_size very low (file is ~8KB, threshold at 1 byte)
 query I
-SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', sax_threshold:=1000000);
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1);
+----
+200
+
+# streaming:=false with small max_file_size should error
+statement error
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false, maximum_file_size:=1);
+----
+exceeds maximum size limit
+
+# =============================================================================
+# Record count equivalence: DOM vs SAX
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false);
+----
+200
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1);
+----
+200
+
+# =============================================================================
+# Data equivalence: DOM vs SAX (first 5 rows)
+# =============================================================================
+
+query IIIII
+SELECT name, value, category, date, typeof(date) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false) ORDER BY value LIMIT 5;
+----
+Item 1	10	B	2024-02-02	DATE
+Item 2	20	C	2024-03-03	DATE
+Item 3	30	A	2024-04-04	DATE
+Item 4	40	B	2024-05-05	DATE
+Item 5	50	C	2024-06-06	DATE
+
+query IIIII
+SELECT name, value, category, date, typeof(date) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1) ORDER BY value LIMIT 5;
+----
+Item 1	10	B	2024-02-02	DATE
+Item 2	20	C	2024-03-03	DATE
+Item 3	30	A	2024-04-04	DATE
+Item 4	40	B	2024-05-05	DATE
+Item 5	50	C	2024-06-06	DATE
+
+# =============================================================================
+# Type inference works in SAX mode
+# =============================================================================
+
+query I
+SELECT typeof(value) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1) LIMIT 1;
+----
+INTEGER
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1) LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# SAX with record_element parameter
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1, record_element:='record');
+----
+200
+
+# =============================================================================
+# Edge case: empty file in SAX mode
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_empty.xml', maximum_file_size:=1);
+----
+0
+
+# =============================================================================
+# Edge case: single record in SAX mode
+# =============================================================================
+
+query II
+SELECT name, value FROM read_xml('test/xml/sax_test_single.xml', maximum_file_size:=1);
+----
+Only	42
+
+# =============================================================================
+# Edge case: UTF-8 content (regression test for #64)
+# =============================================================================
+
+query I
+SELECT msg FROM read_xml('test/xml/sax_test_utf8.xml', maximum_file_size:=1) ORDER BY msg;
+----
+Таймаут
+日本語
+
+# =============================================================================
+# Edge case: nullstr works in SAX mode
+# =============================================================================
+
+query II
+SELECT name, value FROM read_xml('test/xml/sax_test_nullstr.xml', maximum_file_size:=1, nullstr:='N/A') ORDER BY name;
+----
+Alice	NULL
+Bob	42
+
+# =============================================================================
+# Complex XPath with oversized file falls back to DOM error
+# =============================================================================
+
+# Complex XPath with small file works fine (uses DOM)
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
 ----
 2
 
-# Test combining streaming and sax_threshold
-query I
-SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false, sax_threshold:=67108864);
+# Complex XPath with oversized file cannot use SAX, so errors on file size
+statement error
+SELECT * FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1, record_element:='record[@id="1"]');
 ----
-2
+exceeds maximum size limit
+
+# =============================================================================
+# streaming=true is the default
+# =============================================================================
+
+# With default streaming=true, a file over max_file_size uses SAX (no error)
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1);
+----
+200
+
+# Explicitly setting streaming:=true behaves the same
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true, maximum_file_size:=1);
+----
+200

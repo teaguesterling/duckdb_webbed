@@ -21,6 +21,7 @@ set(EXTENSION_SOURCES
     src/xml_scalar_functions.cpp
     src/xml_reader_functions.cpp
     src/xml_schema_inference.cpp
+    src/xml_sax_reader.cpp
     src/duck_block_functions.cpp
 )
 

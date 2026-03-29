@@ -1,7 +1,18 @@
 Changelog
 =========
 
-v1.5.0 (Current)
+v1.6.0 (Current)
+-----------------
+
+**New Features**
+
+- SAX-based streaming parser for very large XML files — files exceeding
+  ``maximum_file_size`` are automatically parsed using SAX mode, reducing peak
+  memory from ~4x file size (DOM) to proportional to a single record. Controlled
+  by ``streaming`` parameter (default: true). Set ``streaming:=false`` for the
+  original behavior of erroring on oversized files (Issue #68)
+
+v1.5.0
 -----------------
 
 **New Features**

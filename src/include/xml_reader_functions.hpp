@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "xml_sax_reader.hpp"
 #include "xml_schema_inference.hpp"
 
 namespace duckdb {
@@ -129,6 +130,22 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 	idx_t current_record_index = 0;          // Position in record_elements
 	int remaining_depth = 0;                 // For extraction depth calculation
 	bool file_loaded = false;
+
+	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
+	bool use_sax = false;
+	std::unique_ptr<SAXRecordAccumulator> sax_accumulator;   // Accumulator state (persists across scan calls)
+	std::unique_ptr<SAXCallbackContext> sax_ctx;             // Callback context (persists across scan calls)
+	xmlParserCtxtPtr sax_parser_ctx = nullptr;               // Push parser context (persists across scan calls)
+	std::unique_ptr<FileHandle> sax_file_handle;             // File handle (persists across scan calls)
+	xmlSAXHandler sax_handler;                               // SAX handler (must outlive parser context)
+	std::vector<SAXRecordAccumulator> sax_pending_records;   // Records completed during current chunk
+
+	~XMLReadGlobalState() {
+		if (sax_parser_ctx) {
+			xmlFreeParserCtxt(sax_parser_ctx);
+			sax_parser_ctx = nullptr;
+		}
+	}
 
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now

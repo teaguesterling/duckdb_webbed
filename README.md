@@ -635,6 +635,7 @@ read_xml('pattern',
 - **`empty_elements`**: How to handle empty elements: `'object'` (default) returns empty struct, `'null'` returns NULL, `'string'` returns empty string
 - **`namespaces`**: Namespace handling mode: `'strip'` (default) removes namespace prefixes, `'expand'` replaces prefixes with full URIs, `'keep'` preserves prefixes as-is
 - **`union_by_name`**: When reading multiple files, combine columns by name (like DuckDB's `union_by_name` for other formats). Useful when XML files have different schemas (default: false)
+- **`streaming`**: Enable SAX-based streaming for files exceeding `maximum_file_size`. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. Set to false to error on oversized files (original behavior). Only supports simple tag names for `record_element`. Not available for HTML (default: true)
 
 ### 🔍 **XPath Support**
 

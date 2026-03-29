@@ -1,0 +1,63 @@
+# name: test/sql/xml_sax_review_fixes.test
+# description: Test fixes for SAX mode issues found in code review
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Fix 1: XML special characters (&, <, >, quotes) in SAX mode
+# =============================================================================
+
+# DOM baseline
+query III
+SELECT name, formula, value FROM read_xml('test/xml/sax_test_special_chars.xml') ORDER BY value;
+----
+Tom & Jerry	x < y && y > z	10
+A "quoted" name	a < b	20
+
+# SAX must produce identical results
+query III
+SELECT name, formula, value FROM read_xml('test/xml/sax_test_special_chars.xml', maximum_file_size:=1) ORDER BY value;
+----
+Tom & Jerry	x < y && y > z	10
+A "quoted" name	a < b	20
+
+# =============================================================================
+# Fix 2: Whitespace trimming in SAX mode (pretty-printed XML)
+# =============================================================================
+
+# DOM baseline: trims whitespace, infers correct types
+query IIII
+SELECT name, value, active, date FROM read_xml('test/xml/sax_test_whitespace.xml') ORDER BY name;
+----
+Alice	42	true	2024-01-15
+Bob	99	false	2024-06-30
+
+# SAX must trim whitespace and infer correct types
+query IIII
+SELECT name, value, active, date FROM read_xml('test/xml/sax_test_whitespace.xml', maximum_file_size:=1) ORDER BY name;
+----
+Alice	42	true	2024-01-15
+Bob	99	false	2024-06-30
+
+# Type inference must match DOM
+query IIII
+SELECT typeof(name), typeof(value), typeof(active), typeof(date) FROM read_xml('test/xml/sax_test_whitespace.xml', maximum_file_size:=1) LIMIT 1;
+----
+VARCHAR	INTEGER	BOOLEAN	DATE
+
+# =============================================================================
+# Fix 3: Path-style record_element falls back to DOM error for oversized files
+# =============================================================================
+
+# Path-style record_element works in DOM mode (small file)
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='/books/book');
+----
+2
+
+# Path-style record_element with oversized file should error (can't use SAX)
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', record_element:='/books/book', maximum_file_size:=1);
+----
+exceeds maximum size limit
