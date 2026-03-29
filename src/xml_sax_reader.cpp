@@ -374,13 +374,16 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(const std::str
 	for (const auto &record : records) {
 		xml << "<record>";
 
-		// Emit attributes as elements with @ prefix for schema inference
-		for (const auto &attr : record.current_attributes) {
-			// Skip child element attributes (contain a dot)
-			if (attr.first.find('.') != std::string::npos) {
-				continue;
+		// Emit record-level attributes as elements for schema inference
+		// (skip when attr_mode='discard' to match DOM behavior)
+		if (options.attr_mode != "discard") {
+			for (const auto &attr : record.current_attributes) {
+				// Skip child element attributes (contain a dot)
+				if (attr.first.find('.') != std::string::npos) {
+					continue;
+				}
+				xml << "<" << attr.first << ">" << attr.second << "</" << attr.first << ">";
 			}
-			xml << "<" << attr.first << ">" << attr.second << "</" << attr.first << ">";
 		}
 
 		// Emit scalar values

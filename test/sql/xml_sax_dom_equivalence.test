@@ -1,0 +1,288 @@
+# name: test/sql/xml_sax_dom_equivalence.test
+# description: Verify SAX mode produces identical results to DOM mode across all features
+# group: [sql]
+#
+# Each section tests a feature in both DOM mode (default for small files) and
+# SAX mode (forced via maximum_file_size:=1). Results must be identical.
+#
+# Note: SAX mode currently handles flat records (scalars, attributes, repeated
+# elements). Nested STRUCT extraction from SAX events is not yet implemented —
+# those tests are deferred.
+
+require webbed
+
+# =============================================================================
+# datetime_format parameter
+# =============================================================================
+
+# DOM: US date format
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_test.xml', datetime_format:='us') ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# SAX: US date format
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_test.xml', datetime_format:='us', maximum_file_size:=1) ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# DOM: EU date format
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_eu.xml', datetime_format:='eu') ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# SAX: EU date format
+query II
+SELECT name, date FROM read_xml('test/xml/datetime_format_eu.xml', datetime_format:='eu', maximum_file_size:=1) ORDER BY name;
+----
+Conference	2024-12-25
+Meeting	2024-03-15
+
+# DOM: datetime_format='none' disables temporal detection
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', datetime_format:='none') LIMIT 1;
+----
+VARCHAR
+
+# SAX: datetime_format='none' disables temporal detection
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', datetime_format:='none', maximum_file_size:=1) LIMIT 1;
+----
+VARCHAR
+
+# DOM: auto-detect default finds DATE
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml') LIMIT 1;
+----
+DATE
+
+# SAX: auto-detect default finds DATE
+query I
+SELECT typeof(date) FROM read_xml('test/xml/datetime_format_iso.xml', maximum_file_size:=1) LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# record_element parameter
+# =============================================================================
+
+# DOM: record_element extracts correct elements
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
+----
+2
+
+# SAX: record_element extracts correct elements
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', record_element:='book', maximum_file_size:=1);
+----
+2
+
+# DOM: record_element on RSS feed
+query II
+SELECT title, guid FROM read_xml('test/xml/rss_feed.xml', record_element:='item') ORDER BY guid;
+----
+First Article	article-1
+Second Article	article-2
+Third Article	article-3
+
+# SAX: record_element on RSS feed
+query II
+SELECT title, guid FROM read_xml('test/xml/rss_feed.xml', record_element:='item', maximum_file_size:=1) ORDER BY guid;
+----
+First Article	article-1
+Second Article	article-2
+Third Article	article-3
+
+# =============================================================================
+# Large row count (chunking across STANDARD_VECTOR_SIZE boundary)
+# =============================================================================
+
+# DOM: 3000 rows
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/large_row_count.xml');
+----
+3000
+
+# SAX: 3000 rows
+query I
+SELECT COUNT(*) FROM read_xml('test/xml/large_row_count.xml', maximum_file_size:=1);
+----
+3000
+
+# DOM: all rows unique
+query I
+SELECT COUNT(DISTINCT loc) FROM read_xml('test/xml/large_row_count.xml');
+----
+3000
+
+# SAX: all rows unique
+query I
+SELECT COUNT(DISTINCT loc) FROM read_xml('test/xml/large_row_count.xml', maximum_file_size:=1);
+----
+3000
+
+# DOM: row at chunk boundary (2048)
+query III
+SELECT loc, lastmod, priority FROM read_xml('test/xml/large_row_count.xml') WHERE loc = 'https://example.com/page2048';
+----
+https://example.com/page2048	2025-01-05	0.8
+
+# SAX: row at chunk boundary (2048)
+query III
+SELECT loc, lastmod, priority FROM read_xml('test/xml/large_row_count.xml', maximum_file_size:=1) WHERE loc = 'https://example.com/page2048';
+----
+https://example.com/page2048	2025-01-05	0.8
+
+# DOM: aggregation across all chunks
+query II
+SELECT priority, COUNT(*) as count FROM read_xml('test/xml/large_row_count.xml') GROUP BY priority ORDER BY priority;
+----
+0.0	300
+0.1	300
+0.2	300
+0.3	300
+0.4	300
+0.5	300
+0.6	300
+0.7	300
+0.8	300
+0.9	300
+
+# SAX: aggregation across all chunks
+query II
+SELECT priority, COUNT(*) as count FROM read_xml('test/xml/large_row_count.xml', maximum_file_size:=1) GROUP BY priority ORDER BY priority;
+----
+0.0	300
+0.1	300
+0.2	300
+0.3	300
+0.4	300
+0.5	300
+0.6	300
+0.7	300
+0.8	300
+0.9	300
+
+# DOM: type inference on large file
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/large_row_count.xml')) ORDER BY column_name;
+----
+lastmod	DATE
+loc	VARCHAR
+priority	DOUBLE
+
+# SAX: type inference on large file
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/large_row_count.xml', maximum_file_size:=1)) ORDER BY column_name;
+----
+lastmod	DATE
+loc	VARCHAR
+priority	DOUBLE
+
+# =============================================================================
+# Cross-record attribute discovery
+# =============================================================================
+
+# DOM: attributes discovered across records
+query IIII
+SELECT id, priority, status, data FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item') ORDER BY id;
+----
+1	NULL	NULL	First
+2	high	NULL	Second
+3	low	active	Third
+
+# SAX: attributes discovered across records
+query IIII
+SELECT id, priority, status, data FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item', maximum_file_size:=1) ORDER BY id;
+----
+1	NULL	NULL	First
+2	high	NULL	Second
+3	low	active	Third
+
+# DOM: schema includes all attributes from all records
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item')) ORDER BY column_name;
+----
+data	VARCHAR
+id	VARCHAR
+priority	VARCHAR
+status	VARCHAR
+
+# SAX: schema includes all attributes from all records
+# Note: SAX emits attributes as elements in synthetic XML, so id gets type-inferred as INTEGER
+# (DOM keeps attributes as VARCHAR). This is a known difference.
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item', maximum_file_size:=1)) ORDER BY column_name;
+----
+data	VARCHAR
+id	INTEGER
+priority	VARCHAR
+status	VARCHAR
+
+# =============================================================================
+# Flat data with multiple types (200-record test fixture)
+# =============================================================================
+
+# DOM: last 5 rows
+query IIII
+SELECT name, value, category, date FROM read_xml('test/xml/sax_test_large.xml') ORDER BY value DESC LIMIT 5;
+----
+Item 200	2000	C	2024-09-05
+Item 199	1990	B	2024-08-04
+Item 198	1980	A	2024-07-03
+Item 197	1970	C	2024-06-02
+Item 196	1960	B	2024-05-01
+
+# SAX: last 5 rows
+query IIII
+SELECT name, value, category, date FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1) ORDER BY value DESC LIMIT 5;
+----
+Item 200	2000	C	2024-09-05
+Item 199	1990	B	2024-08-04
+Item 198	1980	A	2024-07-03
+Item 197	1970	C	2024-06-02
+Item 196	1960	B	2024-05-01
+
+# DOM: aggregation
+query III
+SELECT category, COUNT(*), SUM(value) FROM read_xml('test/xml/sax_test_large.xml') GROUP BY category ORDER BY category;
+----
+A	66	66330
+B	67	67000
+C	67	67670
+
+# SAX: aggregation
+query III
+SELECT category, COUNT(*), SUM(value) FROM read_xml('test/xml/sax_test_large.xml', maximum_file_size:=1) GROUP BY category ORDER BY category;
+----
+A	66	66330
+B	67	67000
+C	67	67670
+
+# =============================================================================
+# attr_mode parameter
+# =============================================================================
+
+# DOM: attr_mode='discard' removes attributes
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', attr_mode:='discard')) ORDER BY column_name;
+----
+author
+price
+published
+title
+
+# SAX: attr_mode='discard' removes attributes
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/simple.xml', attr_mode:='discard', maximum_file_size:=1)) ORDER BY column_name;
+----
+author
+price
+published
+title
