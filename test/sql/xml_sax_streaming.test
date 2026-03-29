@@ -4,32 +4,145 @@
 
 require webbed
 
+# =============================================================================
+# Parameter acceptance tests
+# =============================================================================
+
 # Baseline: verify simple.xml returns expected rows without new params
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book');
 ----
 2
 
-# Test streaming:=false (explicit DOM mode, should behave identically)
+# streaming:=false (explicit DOM mode)
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false);
 ----
 2
 
-# Test streaming:=true (force SAX mode, should behave identically for now)
+# streaming:=true (force SAX mode)
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=true);
 ----
 2
 
-# Test sax_threshold with a small value (files larger than 1MB would use SAX)
+# sax_threshold parameter accepted
 query I
 SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', sax_threshold:=1000000);
 ----
 2
 
-# Test combining streaming and sax_threshold
+# =============================================================================
+# Record count equivalence: DOM vs SAX
+# =============================================================================
+
 query I
-SELECT COUNT(*) FROM read_xml('test/xml/simple.xml', record_element:='book', streaming:=false, sax_threshold:=67108864);
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false);
 ----
-2
+200
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true);
+----
+200
+
+# =============================================================================
+# Data equivalence: DOM vs SAX (first 5 rows)
+# =============================================================================
+
+query IIIII
+SELECT name, value, category, date, typeof(date) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false) ORDER BY value LIMIT 5;
+----
+Item 1	10	B	2024-02-02	DATE
+Item 2	20	C	2024-03-03	DATE
+Item 3	30	A	2024-04-04	DATE
+Item 4	40	B	2024-05-05	DATE
+Item 5	50	C	2024-06-06	DATE
+
+query IIIII
+SELECT name, value, category, date, typeof(date) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true) ORDER BY value LIMIT 5;
+----
+Item 1	10	B	2024-02-02	DATE
+Item 2	20	C	2024-03-03	DATE
+Item 3	30	A	2024-04-04	DATE
+Item 4	40	B	2024-05-05	DATE
+Item 5	50	C	2024-06-06	DATE
+
+# =============================================================================
+# Type inference works in SAX mode
+# =============================================================================
+
+query I
+SELECT typeof(value) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true) LIMIT 1;
+----
+INTEGER
+
+query I
+SELECT typeof(date) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true) LIMIT 1;
+----
+DATE
+
+# =============================================================================
+# streaming with record_element parameter
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=true, record_element:='record');
+----
+200
+
+# =============================================================================
+# sax_threshold=0 forces SAX mode for any file
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', sax_threshold:=0);
+----
+200
+
+# =============================================================================
+# Edge case: empty file
+# =============================================================================
+
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_test_empty.xml', streaming:=true);
+----
+0
+
+# =============================================================================
+# Edge case: single record
+# =============================================================================
+
+query II
+SELECT name, value FROM read_xml('test/xml/sax_test_single.xml', streaming:=true);
+----
+Only	42
+
+# =============================================================================
+# Edge case: UTF-8 content (regression test for #64)
+# =============================================================================
+
+query I
+SELECT msg FROM read_xml('test/xml/sax_test_utf8.xml', streaming:=true) ORDER BY msg;
+----
+Таймаут
+日本語
+
+# =============================================================================
+# Edge case: nullstr works in SAX mode
+# =============================================================================
+
+query II
+SELECT name, value FROM read_xml('test/xml/sax_test_nullstr.xml', streaming:=true, nullstr:='N/A') ORDER BY name;
+----
+Alice	NULL
+Bob	42
+
+# =============================================================================
+# Validation: complex XPath with streaming=true gives error
+# =============================================================================
+
+statement error
+SELECT * FROM read_xml('test/xml/sax_test_large.xml', streaming:=true, record_element:='item[@type="active"]');
+----
+streaming=true is not compatible with complex XPath

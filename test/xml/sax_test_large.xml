@@ -1,0 +1,1203 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<data>
+  <record id="1">
+    <name>Item 1</name>
+    <value>10</value>
+    <category>B</category>
+    <date>2024-02-02</date>
+  </record>
+  <record id="2">
+    <name>Item 2</name>
+    <value>20</value>
+    <category>C</category>
+    <date>2024-03-03</date>
+  </record>
+  <record id="3">
+    <name>Item 3</name>
+    <value>30</value>
+    <category>A</category>
+    <date>2024-04-04</date>
+  </record>
+  <record id="4">
+    <name>Item 4</name>
+    <value>40</value>
+    <category>B</category>
+    <date>2024-05-05</date>
+  </record>
+  <record id="5">
+    <name>Item 5</name>
+    <value>50</value>
+    <category>C</category>
+    <date>2024-06-06</date>
+  </record>
+  <record id="6">
+    <name>Item 6</name>
+    <value>60</value>
+    <category>A</category>
+    <date>2024-07-07</date>
+  </record>
+  <record id="7">
+    <name>Item 7</name>
+    <value>70</value>
+    <category>B</category>
+    <date>2024-08-08</date>
+  </record>
+  <record id="8">
+    <name>Item 8</name>
+    <value>80</value>
+    <category>C</category>
+    <date>2024-09-09</date>
+  </record>
+  <record id="9">
+    <name>Item 9</name>
+    <value>90</value>
+    <category>A</category>
+    <date>2024-10-10</date>
+  </record>
+  <record id="10">
+    <name>Item 10</name>
+    <value>100</value>
+    <category>B</category>
+    <date>2024-11-11</date>
+  </record>
+  <record id="11">
+    <name>Item 11</name>
+    <value>110</value>
+    <category>C</category>
+    <date>2024-12-12</date>
+  </record>
+  <record id="12">
+    <name>Item 12</name>
+    <value>120</value>
+    <category>A</category>
+    <date>2024-01-13</date>
+  </record>
+  <record id="13">
+    <name>Item 13</name>
+    <value>130</value>
+    <category>B</category>
+    <date>2024-02-14</date>
+  </record>
+  <record id="14">
+    <name>Item 14</name>
+    <value>140</value>
+    <category>C</category>
+    <date>2024-03-15</date>
+  </record>
+  <record id="15">
+    <name>Item 15</name>
+    <value>150</value>
+    <category>A</category>
+    <date>2024-04-16</date>
+  </record>
+  <record id="16">
+    <name>Item 16</name>
+    <value>160</value>
+    <category>B</category>
+    <date>2024-05-17</date>
+  </record>
+  <record id="17">
+    <name>Item 17</name>
+    <value>170</value>
+    <category>C</category>
+    <date>2024-06-18</date>
+  </record>
+  <record id="18">
+    <name>Item 18</name>
+    <value>180</value>
+    <category>A</category>
+    <date>2024-07-19</date>
+  </record>
+  <record id="19">
+    <name>Item 19</name>
+    <value>190</value>
+    <category>B</category>
+    <date>2024-08-20</date>
+  </record>
+  <record id="20">
+    <name>Item 20</name>
+    <value>200</value>
+    <category>C</category>
+    <date>2024-09-21</date>
+  </record>
+  <record id="21">
+    <name>Item 21</name>
+    <value>210</value>
+    <category>A</category>
+    <date>2024-10-22</date>
+  </record>
+  <record id="22">
+    <name>Item 22</name>
+    <value>220</value>
+    <category>B</category>
+    <date>2024-11-23</date>
+  </record>
+  <record id="23">
+    <name>Item 23</name>
+    <value>230</value>
+    <category>C</category>
+    <date>2024-12-24</date>
+  </record>
+  <record id="24">
+    <name>Item 24</name>
+    <value>240</value>
+    <category>A</category>
+    <date>2024-01-25</date>
+  </record>
+  <record id="25">
+    <name>Item 25</name>
+    <value>250</value>
+    <category>B</category>
+    <date>2024-02-26</date>
+  </record>
+  <record id="26">
+    <name>Item 26</name>
+    <value>260</value>
+    <category>C</category>
+    <date>2024-03-27</date>
+  </record>
+  <record id="27">
+    <name>Item 27</name>
+    <value>270</value>
+    <category>A</category>
+    <date>2024-04-28</date>
+  </record>
+  <record id="28">
+    <name>Item 28</name>
+    <value>280</value>
+    <category>B</category>
+    <date>2024-05-01</date>
+  </record>
+  <record id="29">
+    <name>Item 29</name>
+    <value>290</value>
+    <category>C</category>
+    <date>2024-06-02</date>
+  </record>
+  <record id="30">
+    <name>Item 30</name>
+    <value>300</value>
+    <category>A</category>
+    <date>2024-07-03</date>
+  </record>
+  <record id="31">
+    <name>Item 31</name>
+    <value>310</value>
+    <category>B</category>
+    <date>2024-08-04</date>
+  </record>
+  <record id="32">
+    <name>Item 32</name>
+    <value>320</value>
+    <category>C</category>
+    <date>2024-09-05</date>
+  </record>
+  <record id="33">
+    <name>Item 33</name>
+    <value>330</value>
+    <category>A</category>
+    <date>2024-10-06</date>
+  </record>
+  <record id="34">
+    <name>Item 34</name>
+    <value>340</value>
+    <category>B</category>
+    <date>2024-11-07</date>
+  </record>
+  <record id="35">
+    <name>Item 35</name>
+    <value>350</value>
+    <category>C</category>
+    <date>2024-12-08</date>
+  </record>
+  <record id="36">
+    <name>Item 36</name>
+    <value>360</value>
+    <category>A</category>
+    <date>2024-01-09</date>
+  </record>
+  <record id="37">
+    <name>Item 37</name>
+    <value>370</value>
+    <category>B</category>
+    <date>2024-02-10</date>
+  </record>
+  <record id="38">
+    <name>Item 38</name>
+    <value>380</value>
+    <category>C</category>
+    <date>2024-03-11</date>
+  </record>
+  <record id="39">
+    <name>Item 39</name>
+    <value>390</value>
+    <category>A</category>
+    <date>2024-04-12</date>
+  </record>
+  <record id="40">
+    <name>Item 40</name>
+    <value>400</value>
+    <category>B</category>
+    <date>2024-05-13</date>
+  </record>
+  <record id="41">
+    <name>Item 41</name>
+    <value>410</value>
+    <category>C</category>
+    <date>2024-06-14</date>
+  </record>
+  <record id="42">
+    <name>Item 42</name>
+    <value>420</value>
+    <category>A</category>
+    <date>2024-07-15</date>
+  </record>
+  <record id="43">
+    <name>Item 43</name>
+    <value>430</value>
+    <category>B</category>
+    <date>2024-08-16</date>
+  </record>
+  <record id="44">
+    <name>Item 44</name>
+    <value>440</value>
+    <category>C</category>
+    <date>2024-09-17</date>
+  </record>
+  <record id="45">
+    <name>Item 45</name>
+    <value>450</value>
+    <category>A</category>
+    <date>2024-10-18</date>
+  </record>
+  <record id="46">
+    <name>Item 46</name>
+    <value>460</value>
+    <category>B</category>
+    <date>2024-11-19</date>
+  </record>
+  <record id="47">
+    <name>Item 47</name>
+    <value>470</value>
+    <category>C</category>
+    <date>2024-12-20</date>
+  </record>
+  <record id="48">
+    <name>Item 48</name>
+    <value>480</value>
+    <category>A</category>
+    <date>2024-01-21</date>
+  </record>
+  <record id="49">
+    <name>Item 49</name>
+    <value>490</value>
+    <category>B</category>
+    <date>2024-02-22</date>
+  </record>
+  <record id="50">
+    <name>Item 50</name>
+    <value>500</value>
+    <category>C</category>
+    <date>2024-03-23</date>
+  </record>
+  <record id="51">
+    <name>Item 51</name>
+    <value>510</value>
+    <category>A</category>
+    <date>2024-04-24</date>
+  </record>
+  <record id="52">
+    <name>Item 52</name>
+    <value>520</value>
+    <category>B</category>
+    <date>2024-05-25</date>
+  </record>
+  <record id="53">
+    <name>Item 53</name>
+    <value>530</value>
+    <category>C</category>
+    <date>2024-06-26</date>
+  </record>
+  <record id="54">
+    <name>Item 54</name>
+    <value>540</value>
+    <category>A</category>
+    <date>2024-07-27</date>
+  </record>
+  <record id="55">
+    <name>Item 55</name>
+    <value>550</value>
+    <category>B</category>
+    <date>2024-08-28</date>
+  </record>
+  <record id="56">
+    <name>Item 56</name>
+    <value>560</value>
+    <category>C</category>
+    <date>2024-09-01</date>
+  </record>
+  <record id="57">
+    <name>Item 57</name>
+    <value>570</value>
+    <category>A</category>
+    <date>2024-10-02</date>
+  </record>
+  <record id="58">
+    <name>Item 58</name>
+    <value>580</value>
+    <category>B</category>
+    <date>2024-11-03</date>
+  </record>
+  <record id="59">
+    <name>Item 59</name>
+    <value>590</value>
+    <category>C</category>
+    <date>2024-12-04</date>
+  </record>
+  <record id="60">
+    <name>Item 60</name>
+    <value>600</value>
+    <category>A</category>
+    <date>2024-01-05</date>
+  </record>
+  <record id="61">
+    <name>Item 61</name>
+    <value>610</value>
+    <category>B</category>
+    <date>2024-02-06</date>
+  </record>
+  <record id="62">
+    <name>Item 62</name>
+    <value>620</value>
+    <category>C</category>
+    <date>2024-03-07</date>
+  </record>
+  <record id="63">
+    <name>Item 63</name>
+    <value>630</value>
+    <category>A</category>
+    <date>2024-04-08</date>
+  </record>
+  <record id="64">
+    <name>Item 64</name>
+    <value>640</value>
+    <category>B</category>
+    <date>2024-05-09</date>
+  </record>
+  <record id="65">
+    <name>Item 65</name>
+    <value>650</value>
+    <category>C</category>
+    <date>2024-06-10</date>
+  </record>
+  <record id="66">
+    <name>Item 66</name>
+    <value>660</value>
+    <category>A</category>
+    <date>2024-07-11</date>
+  </record>
+  <record id="67">
+    <name>Item 67</name>
+    <value>670</value>
+    <category>B</category>
+    <date>2024-08-12</date>
+  </record>
+  <record id="68">
+    <name>Item 68</name>
+    <value>680</value>
+    <category>C</category>
+    <date>2024-09-13</date>
+  </record>
+  <record id="69">
+    <name>Item 69</name>
+    <value>690</value>
+    <category>A</category>
+    <date>2024-10-14</date>
+  </record>
+  <record id="70">
+    <name>Item 70</name>
+    <value>700</value>
+    <category>B</category>
+    <date>2024-11-15</date>
+  </record>
+  <record id="71">
+    <name>Item 71</name>
+    <value>710</value>
+    <category>C</category>
+    <date>2024-12-16</date>
+  </record>
+  <record id="72">
+    <name>Item 72</name>
+    <value>720</value>
+    <category>A</category>
+    <date>2024-01-17</date>
+  </record>
+  <record id="73">
+    <name>Item 73</name>
+    <value>730</value>
+    <category>B</category>
+    <date>2024-02-18</date>
+  </record>
+  <record id="74">
+    <name>Item 74</name>
+    <value>740</value>
+    <category>C</category>
+    <date>2024-03-19</date>
+  </record>
+  <record id="75">
+    <name>Item 75</name>
+    <value>750</value>
+    <category>A</category>
+    <date>2024-04-20</date>
+  </record>
+  <record id="76">
+    <name>Item 76</name>
+    <value>760</value>
+    <category>B</category>
+    <date>2024-05-21</date>
+  </record>
+  <record id="77">
+    <name>Item 77</name>
+    <value>770</value>
+    <category>C</category>
+    <date>2024-06-22</date>
+  </record>
+  <record id="78">
+    <name>Item 78</name>
+    <value>780</value>
+    <category>A</category>
+    <date>2024-07-23</date>
+  </record>
+  <record id="79">
+    <name>Item 79</name>
+    <value>790</value>
+    <category>B</category>
+    <date>2024-08-24</date>
+  </record>
+  <record id="80">
+    <name>Item 80</name>
+    <value>800</value>
+    <category>C</category>
+    <date>2024-09-25</date>
+  </record>
+  <record id="81">
+    <name>Item 81</name>
+    <value>810</value>
+    <category>A</category>
+    <date>2024-10-26</date>
+  </record>
+  <record id="82">
+    <name>Item 82</name>
+    <value>820</value>
+    <category>B</category>
+    <date>2024-11-27</date>
+  </record>
+  <record id="83">
+    <name>Item 83</name>
+    <value>830</value>
+    <category>C</category>
+    <date>2024-12-28</date>
+  </record>
+  <record id="84">
+    <name>Item 84</name>
+    <value>840</value>
+    <category>A</category>
+    <date>2024-01-01</date>
+  </record>
+  <record id="85">
+    <name>Item 85</name>
+    <value>850</value>
+    <category>B</category>
+    <date>2024-02-02</date>
+  </record>
+  <record id="86">
+    <name>Item 86</name>
+    <value>860</value>
+    <category>C</category>
+    <date>2024-03-03</date>
+  </record>
+  <record id="87">
+    <name>Item 87</name>
+    <value>870</value>
+    <category>A</category>
+    <date>2024-04-04</date>
+  </record>
+  <record id="88">
+    <name>Item 88</name>
+    <value>880</value>
+    <category>B</category>
+    <date>2024-05-05</date>
+  </record>
+  <record id="89">
+    <name>Item 89</name>
+    <value>890</value>
+    <category>C</category>
+    <date>2024-06-06</date>
+  </record>
+  <record id="90">
+    <name>Item 90</name>
+    <value>900</value>
+    <category>A</category>
+    <date>2024-07-07</date>
+  </record>
+  <record id="91">
+    <name>Item 91</name>
+    <value>910</value>
+    <category>B</category>
+    <date>2024-08-08</date>
+  </record>
+  <record id="92">
+    <name>Item 92</name>
+    <value>920</value>
+    <category>C</category>
+    <date>2024-09-09</date>
+  </record>
+  <record id="93">
+    <name>Item 93</name>
+    <value>930</value>
+    <category>A</category>
+    <date>2024-10-10</date>
+  </record>
+  <record id="94">
+    <name>Item 94</name>
+    <value>940</value>
+    <category>B</category>
+    <date>2024-11-11</date>
+  </record>
+  <record id="95">
+    <name>Item 95</name>
+    <value>950</value>
+    <category>C</category>
+    <date>2024-12-12</date>
+  </record>
+  <record id="96">
+    <name>Item 96</name>
+    <value>960</value>
+    <category>A</category>
+    <date>2024-01-13</date>
+  </record>
+  <record id="97">
+    <name>Item 97</name>
+    <value>970</value>
+    <category>B</category>
+    <date>2024-02-14</date>
+  </record>
+  <record id="98">
+    <name>Item 98</name>
+    <value>980</value>
+    <category>C</category>
+    <date>2024-03-15</date>
+  </record>
+  <record id="99">
+    <name>Item 99</name>
+    <value>990</value>
+    <category>A</category>
+    <date>2024-04-16</date>
+  </record>
+  <record id="100">
+    <name>Item 100</name>
+    <value>1000</value>
+    <category>B</category>
+    <date>2024-05-17</date>
+  </record>
+  <record id="101">
+    <name>Item 101</name>
+    <value>1010</value>
+    <category>C</category>
+    <date>2024-06-18</date>
+  </record>
+  <record id="102">
+    <name>Item 102</name>
+    <value>1020</value>
+    <category>A</category>
+    <date>2024-07-19</date>
+  </record>
+  <record id="103">
+    <name>Item 103</name>
+    <value>1030</value>
+    <category>B</category>
+    <date>2024-08-20</date>
+  </record>
+  <record id="104">
+    <name>Item 104</name>
+    <value>1040</value>
+    <category>C</category>
+    <date>2024-09-21</date>
+  </record>
+  <record id="105">
+    <name>Item 105</name>
+    <value>1050</value>
+    <category>A</category>
+    <date>2024-10-22</date>
+  </record>
+  <record id="106">
+    <name>Item 106</name>
+    <value>1060</value>
+    <category>B</category>
+    <date>2024-11-23</date>
+  </record>
+  <record id="107">
+    <name>Item 107</name>
+    <value>1070</value>
+    <category>C</category>
+    <date>2024-12-24</date>
+  </record>
+  <record id="108">
+    <name>Item 108</name>
+    <value>1080</value>
+    <category>A</category>
+    <date>2024-01-25</date>
+  </record>
+  <record id="109">
+    <name>Item 109</name>
+    <value>1090</value>
+    <category>B</category>
+    <date>2024-02-26</date>
+  </record>
+  <record id="110">
+    <name>Item 110</name>
+    <value>1100</value>
+    <category>C</category>
+    <date>2024-03-27</date>
+  </record>
+  <record id="111">
+    <name>Item 111</name>
+    <value>1110</value>
+    <category>A</category>
+    <date>2024-04-28</date>
+  </record>
+  <record id="112">
+    <name>Item 112</name>
+    <value>1120</value>
+    <category>B</category>
+    <date>2024-05-01</date>
+  </record>
+  <record id="113">
+    <name>Item 113</name>
+    <value>1130</value>
+    <category>C</category>
+    <date>2024-06-02</date>
+  </record>
+  <record id="114">
+    <name>Item 114</name>
+    <value>1140</value>
+    <category>A</category>
+    <date>2024-07-03</date>
+  </record>
+  <record id="115">
+    <name>Item 115</name>
+    <value>1150</value>
+    <category>B</category>
+    <date>2024-08-04</date>
+  </record>
+  <record id="116">
+    <name>Item 116</name>
+    <value>1160</value>
+    <category>C</category>
+    <date>2024-09-05</date>
+  </record>
+  <record id="117">
+    <name>Item 117</name>
+    <value>1170</value>
+    <category>A</category>
+    <date>2024-10-06</date>
+  </record>
+  <record id="118">
+    <name>Item 118</name>
+    <value>1180</value>
+    <category>B</category>
+    <date>2024-11-07</date>
+  </record>
+  <record id="119">
+    <name>Item 119</name>
+    <value>1190</value>
+    <category>C</category>
+    <date>2024-12-08</date>
+  </record>
+  <record id="120">
+    <name>Item 120</name>
+    <value>1200</value>
+    <category>A</category>
+    <date>2024-01-09</date>
+  </record>
+  <record id="121">
+    <name>Item 121</name>
+    <value>1210</value>
+    <category>B</category>
+    <date>2024-02-10</date>
+  </record>
+  <record id="122">
+    <name>Item 122</name>
+    <value>1220</value>
+    <category>C</category>
+    <date>2024-03-11</date>
+  </record>
+  <record id="123">
+    <name>Item 123</name>
+    <value>1230</value>
+    <category>A</category>
+    <date>2024-04-12</date>
+  </record>
+  <record id="124">
+    <name>Item 124</name>
+    <value>1240</value>
+    <category>B</category>
+    <date>2024-05-13</date>
+  </record>
+  <record id="125">
+    <name>Item 125</name>
+    <value>1250</value>
+    <category>C</category>
+    <date>2024-06-14</date>
+  </record>
+  <record id="126">
+    <name>Item 126</name>
+    <value>1260</value>
+    <category>A</category>
+    <date>2024-07-15</date>
+  </record>
+  <record id="127">
+    <name>Item 127</name>
+    <value>1270</value>
+    <category>B</category>
+    <date>2024-08-16</date>
+  </record>
+  <record id="128">
+    <name>Item 128</name>
+    <value>1280</value>
+    <category>C</category>
+    <date>2024-09-17</date>
+  </record>
+  <record id="129">
+    <name>Item 129</name>
+    <value>1290</value>
+    <category>A</category>
+    <date>2024-10-18</date>
+  </record>
+  <record id="130">
+    <name>Item 130</name>
+    <value>1300</value>
+    <category>B</category>
+    <date>2024-11-19</date>
+  </record>
+  <record id="131">
+    <name>Item 131</name>
+    <value>1310</value>
+    <category>C</category>
+    <date>2024-12-20</date>
+  </record>
+  <record id="132">
+    <name>Item 132</name>
+    <value>1320</value>
+    <category>A</category>
+    <date>2024-01-21</date>
+  </record>
+  <record id="133">
+    <name>Item 133</name>
+    <value>1330</value>
+    <category>B</category>
+    <date>2024-02-22</date>
+  </record>
+  <record id="134">
+    <name>Item 134</name>
+    <value>1340</value>
+    <category>C</category>
+    <date>2024-03-23</date>
+  </record>
+  <record id="135">
+    <name>Item 135</name>
+    <value>1350</value>
+    <category>A</category>
+    <date>2024-04-24</date>
+  </record>
+  <record id="136">
+    <name>Item 136</name>
+    <value>1360</value>
+    <category>B</category>
+    <date>2024-05-25</date>
+  </record>
+  <record id="137">
+    <name>Item 137</name>
+    <value>1370</value>
+    <category>C</category>
+    <date>2024-06-26</date>
+  </record>
+  <record id="138">
+    <name>Item 138</name>
+    <value>1380</value>
+    <category>A</category>
+    <date>2024-07-27</date>
+  </record>
+  <record id="139">
+    <name>Item 139</name>
+    <value>1390</value>
+    <category>B</category>
+    <date>2024-08-28</date>
+  </record>
+  <record id="140">
+    <name>Item 140</name>
+    <value>1400</value>
+    <category>C</category>
+    <date>2024-09-01</date>
+  </record>
+  <record id="141">
+    <name>Item 141</name>
+    <value>1410</value>
+    <category>A</category>
+    <date>2024-10-02</date>
+  </record>
+  <record id="142">
+    <name>Item 142</name>
+    <value>1420</value>
+    <category>B</category>
+    <date>2024-11-03</date>
+  </record>
+  <record id="143">
+    <name>Item 143</name>
+    <value>1430</value>
+    <category>C</category>
+    <date>2024-12-04</date>
+  </record>
+  <record id="144">
+    <name>Item 144</name>
+    <value>1440</value>
+    <category>A</category>
+    <date>2024-01-05</date>
+  </record>
+  <record id="145">
+    <name>Item 145</name>
+    <value>1450</value>
+    <category>B</category>
+    <date>2024-02-06</date>
+  </record>
+  <record id="146">
+    <name>Item 146</name>
+    <value>1460</value>
+    <category>C</category>
+    <date>2024-03-07</date>
+  </record>
+  <record id="147">
+    <name>Item 147</name>
+    <value>1470</value>
+    <category>A</category>
+    <date>2024-04-08</date>
+  </record>
+  <record id="148">
+    <name>Item 148</name>
+    <value>1480</value>
+    <category>B</category>
+    <date>2024-05-09</date>
+  </record>
+  <record id="149">
+    <name>Item 149</name>
+    <value>1490</value>
+    <category>C</category>
+    <date>2024-06-10</date>
+  </record>
+  <record id="150">
+    <name>Item 150</name>
+    <value>1500</value>
+    <category>A</category>
+    <date>2024-07-11</date>
+  </record>
+  <record id="151">
+    <name>Item 151</name>
+    <value>1510</value>
+    <category>B</category>
+    <date>2024-08-12</date>
+  </record>
+  <record id="152">
+    <name>Item 152</name>
+    <value>1520</value>
+    <category>C</category>
+    <date>2024-09-13</date>
+  </record>
+  <record id="153">
+    <name>Item 153</name>
+    <value>1530</value>
+    <category>A</category>
+    <date>2024-10-14</date>
+  </record>
+  <record id="154">
+    <name>Item 154</name>
+    <value>1540</value>
+    <category>B</category>
+    <date>2024-11-15</date>
+  </record>
+  <record id="155">
+    <name>Item 155</name>
+    <value>1550</value>
+    <category>C</category>
+    <date>2024-12-16</date>
+  </record>
+  <record id="156">
+    <name>Item 156</name>
+    <value>1560</value>
+    <category>A</category>
+    <date>2024-01-17</date>
+  </record>
+  <record id="157">
+    <name>Item 157</name>
+    <value>1570</value>
+    <category>B</category>
+    <date>2024-02-18</date>
+  </record>
+  <record id="158">
+    <name>Item 158</name>
+    <value>1580</value>
+    <category>C</category>
+    <date>2024-03-19</date>
+  </record>
+  <record id="159">
+    <name>Item 159</name>
+    <value>1590</value>
+    <category>A</category>
+    <date>2024-04-20</date>
+  </record>
+  <record id="160">
+    <name>Item 160</name>
+    <value>1600</value>
+    <category>B</category>
+    <date>2024-05-21</date>
+  </record>
+  <record id="161">
+    <name>Item 161</name>
+    <value>1610</value>
+    <category>C</category>
+    <date>2024-06-22</date>
+  </record>
+  <record id="162">
+    <name>Item 162</name>
+    <value>1620</value>
+    <category>A</category>
+    <date>2024-07-23</date>
+  </record>
+  <record id="163">
+    <name>Item 163</name>
+    <value>1630</value>
+    <category>B</category>
+    <date>2024-08-24</date>
+  </record>
+  <record id="164">
+    <name>Item 164</name>
+    <value>1640</value>
+    <category>C</category>
+    <date>2024-09-25</date>
+  </record>
+  <record id="165">
+    <name>Item 165</name>
+    <value>1650</value>
+    <category>A</category>
+    <date>2024-10-26</date>
+  </record>
+  <record id="166">
+    <name>Item 166</name>
+    <value>1660</value>
+    <category>B</category>
+    <date>2024-11-27</date>
+  </record>
+  <record id="167">
+    <name>Item 167</name>
+    <value>1670</value>
+    <category>C</category>
+    <date>2024-12-28</date>
+  </record>
+  <record id="168">
+    <name>Item 168</name>
+    <value>1680</value>
+    <category>A</category>
+    <date>2024-01-01</date>
+  </record>
+  <record id="169">
+    <name>Item 169</name>
+    <value>1690</value>
+    <category>B</category>
+    <date>2024-02-02</date>
+  </record>
+  <record id="170">
+    <name>Item 170</name>
+    <value>1700</value>
+    <category>C</category>
+    <date>2024-03-03</date>
+  </record>
+  <record id="171">
+    <name>Item 171</name>
+    <value>1710</value>
+    <category>A</category>
+    <date>2024-04-04</date>
+  </record>
+  <record id="172">
+    <name>Item 172</name>
+    <value>1720</value>
+    <category>B</category>
+    <date>2024-05-05</date>
+  </record>
+  <record id="173">
+    <name>Item 173</name>
+    <value>1730</value>
+    <category>C</category>
+    <date>2024-06-06</date>
+  </record>
+  <record id="174">
+    <name>Item 174</name>
+    <value>1740</value>
+    <category>A</category>
+    <date>2024-07-07</date>
+  </record>
+  <record id="175">
+    <name>Item 175</name>
+    <value>1750</value>
+    <category>B</category>
+    <date>2024-08-08</date>
+  </record>
+  <record id="176">
+    <name>Item 176</name>
+    <value>1760</value>
+    <category>C</category>
+    <date>2024-09-09</date>
+  </record>
+  <record id="177">
+    <name>Item 177</name>
+    <value>1770</value>
+    <category>A</category>
+    <date>2024-10-10</date>
+  </record>
+  <record id="178">
+    <name>Item 178</name>
+    <value>1780</value>
+    <category>B</category>
+    <date>2024-11-11</date>
+  </record>
+  <record id="179">
+    <name>Item 179</name>
+    <value>1790</value>
+    <category>C</category>
+    <date>2024-12-12</date>
+  </record>
+  <record id="180">
+    <name>Item 180</name>
+    <value>1800</value>
+    <category>A</category>
+    <date>2024-01-13</date>
+  </record>
+  <record id="181">
+    <name>Item 181</name>
+    <value>1810</value>
+    <category>B</category>
+    <date>2024-02-14</date>
+  </record>
+  <record id="182">
+    <name>Item 182</name>
+    <value>1820</value>
+    <category>C</category>
+    <date>2024-03-15</date>
+  </record>
+  <record id="183">
+    <name>Item 183</name>
+    <value>1830</value>
+    <category>A</category>
+    <date>2024-04-16</date>
+  </record>
+  <record id="184">
+    <name>Item 184</name>
+    <value>1840</value>
+    <category>B</category>
+    <date>2024-05-17</date>
+  </record>
+  <record id="185">
+    <name>Item 185</name>
+    <value>1850</value>
+    <category>C</category>
+    <date>2024-06-18</date>
+  </record>
+  <record id="186">
+    <name>Item 186</name>
+    <value>1860</value>
+    <category>A</category>
+    <date>2024-07-19</date>
+  </record>
+  <record id="187">
+    <name>Item 187</name>
+    <value>1870</value>
+    <category>B</category>
+    <date>2024-08-20</date>
+  </record>
+  <record id="188">
+    <name>Item 188</name>
+    <value>1880</value>
+    <category>C</category>
+    <date>2024-09-21</date>
+  </record>
+  <record id="189">
+    <name>Item 189</name>
+    <value>1890</value>
+    <category>A</category>
+    <date>2024-10-22</date>
+  </record>
+  <record id="190">
+    <name>Item 190</name>
+    <value>1900</value>
+    <category>B</category>
+    <date>2024-11-23</date>
+  </record>
+  <record id="191">
+    <name>Item 191</name>
+    <value>1910</value>
+    <category>C</category>
+    <date>2024-12-24</date>
+  </record>
+  <record id="192">
+    <name>Item 192</name>
+    <value>1920</value>
+    <category>A</category>
+    <date>2024-01-25</date>
+  </record>
+  <record id="193">
+    <name>Item 193</name>
+    <value>1930</value>
+    <category>B</category>
+    <date>2024-02-26</date>
+  </record>
+  <record id="194">
+    <name>Item 194</name>
+    <value>1940</value>
+    <category>C</category>
+    <date>2024-03-27</date>
+  </record>
+  <record id="195">
+    <name>Item 195</name>
+    <value>1950</value>
+    <category>A</category>
+    <date>2024-04-28</date>
+  </record>
+  <record id="196">
+    <name>Item 196</name>
+    <value>1960</value>
+    <category>B</category>
+    <date>2024-05-01</date>
+  </record>
+  <record id="197">
+    <name>Item 197</name>
+    <value>1970</value>
+    <category>C</category>
+    <date>2024-06-02</date>
+  </record>
+  <record id="198">
+    <name>Item 198</name>
+    <value>1980</value>
+    <category>A</category>
+    <date>2024-07-03</date>
+  </record>
+  <record id="199">
+    <name>Item 199</name>
+    <value>1990</value>
+    <category>B</category>
+    <date>2024-08-04</date>
+  </record>
+  <record id="200">
+    <name>Item 200</name>
+    <value>2000</value>
+    <category>C</category>
+    <date>2024-09-05</date>
+  </record>
+</data>

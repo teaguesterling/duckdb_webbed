@@ -419,6 +419,18 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		                      function_name);
 	}
 
+	// Validate streaming + record_element compatibility
+	if (schema_options.streaming && !schema_options.record_element.empty()) {
+		const auto &re = schema_options.record_element;
+		bool has_complex_xpath = (re.find('[') != std::string::npos || re.find("::") != std::string::npos ||
+		                          re.find('(') != std::string::npos);
+		if (has_complex_xpath) {
+			throw BinderException("streaming=true is not compatible with complex XPath record_element '%s'. "
+			                      "SAX mode only supports simple tag names (e.g., record_element:='item').",
+			                      re);
+		}
+	}
+
 	// Store schema options in bind_data for use during execution
 	result->schema_options = schema_options;
 
@@ -1245,6 +1257,18 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	if (has_explicit_columns && schema_options.all_varchar) {
 		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
+	}
+
+	// Validate streaming + record_element compatibility
+	if (schema_options.streaming && !schema_options.record_element.empty()) {
+		const auto &re = schema_options.record_element;
+		bool has_complex_xpath = (re.find('[') != std::string::npos || re.find("::") != std::string::npos ||
+		                          re.find('(') != std::string::npos);
+		if (has_complex_xpath) {
+			throw BinderException("streaming=true is not compatible with complex XPath record_element '%s'. "
+			                      "SAX mode only supports simple tag names (e.g., record_element:='item').",
+			                      re);
+		}
 	}
 
 	// Store schema options in bind_data for use during execution
