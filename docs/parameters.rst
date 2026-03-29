@@ -92,6 +92,14 @@ Type Handling Parameters
      - VARCHAR or VARCHAR[]
      - (none)
      - String value(s) to interpret as NULL. Excluded from type inference and converted to NULL during extraction. Case-sensitive.
+   * - ``streaming``
+     - BOOLEAN
+     - false
+     - Force SAX-based streaming mode. Processes XML as a stream of events without building a DOM tree, reducing peak memory to proportional to a single record. Only supports simple tag names for ``record_element``. Not available for HTML.
+   * - ``sax_threshold``
+     - UBIGINT
+     - 67108864
+     - File size threshold in bytes (64MB default) for automatically switching to SAX mode. Files larger than this use SAX unless ``streaming:=false`` is set.
 
 Attribute Handling Parameters
 -----------------------------
