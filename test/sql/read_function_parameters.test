@@ -247,14 +247,14 @@ SELECT * FROM read_xml('test/data/employees.xml', max_depth := 0);
 # maximum_file_size parameter effect
 # -----------------------------------------------------------------------------
 
-# Setting very small max size should cause files to be skipped/error
+# Setting very small max size should cause files to be skipped/error (with streaming=false)
 statement error
-SELECT * FROM read_xml('test/data/employees.xml', maximum_file_size := 10);
+SELECT * FROM read_xml('test/data/employees.xml', maximum_file_size := 10, streaming := false);
 ----
 
 # With ignore_errors, large files are skipped silently
 query I
-SELECT COUNT(*) FROM read_xml('test/data/employees.xml', maximum_file_size := 10, ignore_errors := true);
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', maximum_file_size := 10, streaming := false, ignore_errors := true);
 ----
 0
 

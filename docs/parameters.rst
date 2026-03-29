@@ -94,12 +94,8 @@ Type Handling Parameters
      - String value(s) to interpret as NULL. Excluded from type inference and converted to NULL during extraction. Case-sensitive.
    * - ``streaming``
      - BOOLEAN
-     - false
-     - Force SAX-based streaming mode. Processes XML as a stream of events without building a DOM tree, reducing peak memory to proportional to a single record. Only supports simple tag names for ``record_element``. Not available for HTML.
-   * - ``sax_threshold``
-     - UBIGINT
-     - 67108864
-     - File size threshold in bytes (64MB default) for automatically switching to SAX mode. Files larger than this use SAX unless ``streaming:=false`` is set.
+     - true
+     - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
 
 Attribute Handling Parameters
 -----------------------------

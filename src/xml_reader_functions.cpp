@@ -370,8 +370,6 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			ParseNullstrParameter(kv.second, function_name, schema_options.null_strings);
 		} else if (kv.first == "streaming") {
 			schema_options.streaming = kv.second.GetValue<bool>();
-		} else if (kv.first == "sax_threshold") {
-			schema_options.sax_threshold = kv.second.GetValue<uint64_t>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -419,18 +417,6 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		                      function_name);
 	}
 
-	// Validate streaming + record_element compatibility
-	if (schema_options.streaming && !schema_options.record_element.empty()) {
-		const auto &re = schema_options.record_element;
-		bool has_complex_xpath = (re.find('[') != std::string::npos || re.find("::") != std::string::npos ||
-		                          re.find('(') != std::string::npos);
-		if (has_complex_xpath) {
-			throw BinderException("streaming=true is not compatible with complex XPath record_element '%s'. "
-			                      "SAX mode only supports simple tag names (e.g., record_element:='item').",
-			                      re);
-		}
-	}
-
 	// Store schema options in bind_data for use during execution
 	result->schema_options = schema_options;
 
@@ -458,17 +444,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
 					auto file_size = fs.GetFileSize(*file_handle);
 
-					if (file_size > result->max_file_size) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
-							                            result->max_file_size);
-						}
-						continue; // Skip this file
-					}
-
 					// Determine if SAX inference should be used
-					bool use_sax_inference = schema_options.streaming;
-					if (!use_sax_inference && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
+					bool use_sax_inference = false;
+					if (schema_options.streaming && mode == ParseMode::XML &&
+					    static_cast<idx_t>(file_size) > result->max_file_size) {
+						// File exceeds max size — use SAX if possible
 						bool has_complex_xpath = false;
 						if (!schema_options.record_element.empty()) {
 							const auto &re = schema_options.record_element;
@@ -476,12 +456,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 							                     re.find("::") != std::string::npos ||
 							                     re.find('(') != std::string::npos);
 						}
-						if (!has_complex_xpath && mode == ParseMode::XML) {
+						if (!has_complex_xpath) {
 							use_sax_inference = true;
 						}
-					}
-					if (mode == ParseMode::HTML) {
-						use_sax_inference = false;
 					}
 
 					std::vector<XMLColumnInfo> inferred_columns;
@@ -490,7 +467,15 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						// SAX-based schema inference (no DOM needed)
 						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
 					} else {
-						// DOM-based schema inference
+						// DOM-based: enforce file size limit
+						if (static_cast<idx_t>(file_size) > result->max_file_size) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+								                            file_path, result->max_file_size);
+							}
+							continue;
+						}
+
 						string content;
 						content.resize(file_size);
 						file_handle->Read((void *)content.data(), file_size);
@@ -708,19 +693,11 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 				auto file_size = fs.GetFileSize(*file_handle);
 
-				if (file_size > bind_data.max_file_size) {
-					if (!bind_data.ignore_errors) {
-						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-						                            bind_data.max_file_size);
-					}
-					gstate.file_index++;
-					continue;
-				}
-
 				// Determine whether to use SAX or DOM
-				bool use_sax = schema_options.streaming;
-				if (!use_sax && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
-					// Auto-select SAX for large files, but only for XML with simple record_element
+				bool use_sax = false;
+				if (schema_options.streaming && !is_html &&
+				    static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+					// File exceeds max size — use SAX if possible
 					bool has_complex_xpath = false;
 					if (!schema_options.record_element.empty()) {
 						const auto &re = schema_options.record_element;
@@ -728,13 +705,19 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						                     re.find("::") != std::string::npos ||
 						                     re.find('(') != std::string::npos);
 					}
-					if (!has_complex_xpath && !is_html) {
+					if (!has_complex_xpath) {
 						use_sax = true;
 					}
 				}
-				// SAX mode not supported for HTML
-				if (is_html) {
-					use_sax = false;
+
+				// If not using SAX, enforce file size limit
+				if (!use_sax && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
+						                            bind_data.max_file_size);
+					}
+					gstate.file_index++;
+					continue;
 				}
 
 				gstate.use_sax = use_sax;
@@ -1212,8 +1195,6 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			ParseNullstrParameter(kv.second, "read_xml", schema_options.null_strings);
 		} else if (kv.first == "streaming") {
 			schema_options.streaming = kv.second.GetValue<bool>();
-		} else if (kv.first == "sax_threshold") {
-			schema_options.sax_threshold = kv.second.GetValue<uint64_t>();
 		} else if (kv.first == "columns") {
 			// Handle explicit column schema specification (like JSON extension)
 			auto &child_type = kv.second.type();
@@ -1259,18 +1240,6 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
 	}
 
-	// Validate streaming + record_element compatibility
-	if (schema_options.streaming && !schema_options.record_element.empty()) {
-		const auto &re = schema_options.record_element;
-		bool has_complex_xpath = (re.find('[') != std::string::npos || re.find("::") != std::string::npos ||
-		                          re.find('(') != std::string::npos);
-		if (has_complex_xpath) {
-			throw BinderException("streaming=true is not compatible with complex XPath record_element '%s'. "
-			                      "SAX mode only supports simple tag names (e.g., record_element:='item').",
-			                      re);
-		}
-	}
-
 	// Store schema options in bind_data for use during execution
 	result->schema_options = schema_options;
 
@@ -1298,17 +1267,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
 					auto file_size = fs.GetFileSize(*file_handle);
 
-					if (file_size > result->max_file_size) {
-						if (!result->ignore_errors) {
-							throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
-							                            result->max_file_size);
-						}
-						continue; // Skip this file
-					}
-
 					// Determine if SAX inference should be used
-					bool use_sax_inference = schema_options.streaming;
-					if (!use_sax_inference && static_cast<idx_t>(file_size) > schema_options.sax_threshold) {
+					bool use_sax_inference = false;
+					if (schema_options.streaming && static_cast<idx_t>(file_size) > result->max_file_size) {
 						bool has_complex_xpath = false;
 						if (!schema_options.record_element.empty()) {
 							const auto &re = schema_options.record_element;
@@ -1326,6 +1287,15 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					if (use_sax_inference) {
 						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
 					} else {
+						// DOM mode: enforce file size limit
+						if (static_cast<idx_t>(file_size) > result->max_file_size) {
+							if (!result->ignore_errors) {
+								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+								                            file_path, result->max_file_size);
+							}
+							continue;
+						}
+
 						string content;
 						content.resize(file_size);
 						file_handle->Read((void *)content.data(), file_size);
@@ -1949,7 +1919,6 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_single.named_parameters["streaming"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["sax_threshold"] = LogicalType::UBIGINT;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -1980,7 +1949,6 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_array.named_parameters["streaming"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["sax_threshold"] = LogicalType::UBIGINT;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);

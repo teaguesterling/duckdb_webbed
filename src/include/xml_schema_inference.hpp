@@ -59,8 +59,7 @@ struct XMLSchemaOptions {
 	idx_t maximum_file_size = 134217728; // 128MB default
 
 	// SAX streaming controls
-	bool streaming = false;         // Force SAX mode (bypass DOM)
-	idx_t sax_threshold = 67108864; // 64MB: auto-switch to SAX above this size
+	bool streaming = true; // Enable SAX mode for files exceeding maximum_file_size (default: true)
 
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)

@@ -131,7 +131,7 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 	int remaining_depth = 0;                 // For extraction depth calculation
 	bool file_loaded = false;
 
-	// SAX streaming state (used when streaming=true or file exceeds sax_threshold)
+	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
 	bool use_sax = false;
 	std::vector<SAXRecordAccumulator> sax_records; // Accumulated records from SAX pass
 	idx_t sax_record_index = 0;                    // Position in sax_records
