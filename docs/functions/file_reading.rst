@@ -71,6 +71,18 @@ Read XML files with automatic schema inference.
    * - ``namespaces``
      - VARCHAR
      - Namespace handling: 'strip', 'expand', 'keep' (default: 'strip')
+   * - ``columns``
+     - STRUCT
+     - Explicit column schema (e.g., ``{name: 'VARCHAR', price: 'DOUBLE'}``)
+   * - ``datetime_format``
+     - VARCHAR or VARCHAR[]
+     - Controls date/time detection. Accepts ``'auto'`` (default), ``'none'``, preset names (``'us'``, ``'eu'``, ``'iso'``), custom strftime strings, or a list of formats.
+   * - ``nullstr``
+     - VARCHAR or VARCHAR[]
+     - String value(s) to interpret as NULL (e.g., ``'N/A'`` or ``['N/A', '-']``)
+   * - ``streaming``
+     - BOOLEAN
+     - Enable SAX streaming for files exceeding ``maximum_file_size`` (default: true). SAX mode only supports simple tag names for ``record_element``. Not available for HTML.
 
 **Examples:**
 

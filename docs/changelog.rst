@@ -8,9 +8,28 @@ v1.6.0 (Current)
 
 - SAX-based streaming parser for very large XML files — files exceeding
   ``maximum_file_size`` are automatically parsed using SAX mode, reducing peak
-  memory from ~4x file size (DOM) to proportional to a single record. Controlled
-  by ``streaming`` parameter (default: true). Set ``streaming:=false`` for the
-  original behavior of erroring on oversized files (Issue #68)
+  memory from ~4x file size (DOM) to proportional to a single record (Issue #68)
+
+  - New ``streaming`` parameter (default: ``true``). When enabled, oversized XML
+    files are streamed via libxml2's SAX push parser in 64KB chunks instead of
+    building a full DOM tree. Set ``streaming:=false`` to restore the previous
+    behavior of erroring on oversized files.
+  - SAX mode supports simple tag-name ``record_element`` values (e.g., ``'item'``).
+    XPath expressions automatically fall back to DOM parsing.
+  - Not available for HTML files (libxml2 HTML parser is DOM-only).
+
+**Limitations**
+
+- SAX mode currently handles flat records (scalars, attributes, repeated elements).
+  Nested STRUCT extraction from SAX events is not yet implemented — deeply nested
+  records fall back to raw XML string values.
+
+**Testing**
+
+- 68 test suites, 2511 assertions
+- Comprehensive DOM/SAX equivalence tests covering type inference, datetime_format,
+  record_element, cross-record attribute discovery, large row counts (3000 rows
+  across chunk boundaries), UTF-8 content, and nullstr interaction
 
 v1.5.0
 -----------------

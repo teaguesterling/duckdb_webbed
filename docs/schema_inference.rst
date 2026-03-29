@@ -170,6 +170,32 @@ Limit parsing depth with ``max_depth``:
    -- Unlimited (capped at 10 for safety)
    SELECT * FROM read_xml('deep.xml', max_depth := -1);
 
+SAX Streaming and Schema Inference
+-----------------------------------
+
+When files exceed ``maximum_file_size`` (128MB by default), the extension uses SAX-based
+streaming instead of building a full DOM tree. This affects schema inference in two ways:
+
+1. **Sample-based inference** — SAX mode reads the first ``sample_size`` records (default: 50)
+   to infer the schema, then streams the rest for extraction. The schema is not revised after
+   the sample window, so columns or types that only appear in later records may not be detected.
+
+2. **Simple ``record_element`` only** — SAX mode matches record elements by simple tag name
+   (e.g., ``'item'``). XPath expressions like ``'//ns:item[@type="active"]'`` or path-based
+   patterns like ``'/root/data/item'`` require DOM parsing. When the file is too large for DOM
+   and the ``record_element`` contains XPath syntax, the extension raises an error.
+
+.. code-block:: sql
+
+   -- Works in SAX mode (simple tag name)
+   SELECT * FROM read_xml('huge.xml', record_element := 'item');
+
+   -- Falls back to DOM (XPath expression)
+   SELECT * FROM read_xml('data.xml', record_element := '//item[@status="active"]');
+
+Set ``streaming := false`` to force DOM mode for any file (will error if the file exceeds
+``maximum_file_size``).
+
 Common Patterns
 ---------------
 

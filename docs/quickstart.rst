@@ -106,6 +106,66 @@ Extracting Links and Images from HTML
           (unnest(html_extract_images(html))).alt as alt_text
    FROM read_html_objects('page.html');
 
+Parsing XML/HTML Strings
+------------------------
+
+Parse XML or HTML content directly from strings:
+
+.. code-block:: sql
+
+   -- Parse an XML string with schema inference
+   SELECT * FROM parse_xml('<data><item><name>Widget</name><price>9.99</price></item></data>');
+
+   -- Parse HTML content
+   SELECT * FROM parse_html('<div><p>Hello</p><p>World</p></div>', record_element := 'p');
+
+Controlling Date/Time Parsing
+-----------------------------
+
+Use ``datetime_format`` to control how dates and timestamps are detected:
+
+.. code-block:: sql
+
+   -- Parse European dates (DD/MM/YYYY)
+   SELECT * FROM read_xml('data.xml', datetime_format := 'eu');
+
+   -- Parse US dates (MM/DD/YYYY)
+   SELECT * FROM read_xml('data.xml', datetime_format := 'us');
+
+   -- Use a custom format string
+   SELECT * FROM read_xml('data.xml', datetime_format := '%Y/%m/%d');
+
+   -- Disable date detection entirely
+   SELECT * FROM read_xml('data.xml', datetime_format := 'none');
+
+Handling NULL Values
+--------------------
+
+Use ``nullstr`` to specify values that should be treated as NULL:
+
+.. code-block:: sql
+
+   -- Treat "N/A" and "-" as NULL
+   SELECT * FROM read_xml('data.xml', nullstr := ['N/A', '-']);
+
+Processing Large Files
+----------------------
+
+Files exceeding ``maximum_file_size`` (128MB by default) are automatically streamed
+using a SAX-based parser that processes XML in chunks — peak memory stays proportional
+to a single record rather than the entire file:
+
+.. code-block:: sql
+
+   -- Large files are streamed automatically (default behavior)
+   SELECT count(*) FROM read_xml('huge_file.xml');
+
+   -- Force DOM mode (errors if file is too large)
+   SELECT * FROM read_xml('file.xml', streaming := false);
+
+   -- Adjust the file size limit for DOM parsing
+   SELECT * FROM read_xml('file.xml', maximum_file_size := 268435456);  -- 256MB
+
 Extracting HTML Tables
 ----------------------
 

@@ -22,6 +22,10 @@ devenv.local.nix
 # Locally cloned vcpkg
 vcpkg/
 
+# Generated stress test files (use test/xml/generate_stress_test.py to recreate)
+test/xml/sax_stress_test.xml
+test/xml/sax_stress_test.xml.gz
+
 # blq
 .lq/*
 !.lq/hooks/

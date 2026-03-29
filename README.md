@@ -2,7 +2,7 @@
 [![Documentation](https://img.shields.io/badge/docs-readthedocs-blue)](https://duckdb-webbed.readthedocs.io)
 
 
-# DuckDB XML Extension
+# DuckDB Webbed Extension
 
 A comprehensive XML and HTML processing extension for DuckDB that enables SQL-native analysis of structured documents with intelligent schema inference and powerful XPath-based data extraction.
 
@@ -14,16 +14,23 @@ A comprehensive XML and HTML processing extension for DuckDB that enables SQL-na
 - Convert between XML, HTML, and JSON formats
 - Read files directly into DuckDB tables
 
-### 📊 **Smart Schema Inference** 
+### 📊 **Smart Schema Inference**
 - Automatically flatten XML documents into relational tables
 - Intelligent type detection (dates, numbers, booleans)
 - Configurable element and attribute handling
+- Custom datetime format control with presets and format strings
+
+### 🚀 **Streaming for Large Files**
+- SAX-based streaming parser for files exceeding ``maximum_file_size``
+- Peak memory proportional to a single record, not the entire file
+- Automatic fallback: DOM for small files, SAX for large files
+- Controlled by ``streaming`` parameter (default: true)
 
 ### 🛠 **Production Ready**
 - Built on libxml2 for robust parsing
 - Comprehensive error handling
 - Memory-safe RAII implementation
-- 100% test coverage
+- 68 test suites, 2511 assertions
 
 ---
 
