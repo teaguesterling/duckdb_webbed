@@ -133,8 +133,19 @@ struct XMLReadGlobalState : public GlobalTableFunctionState {
 
 	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
 	bool use_sax = false;
-	std::vector<SAXRecordAccumulator> sax_records; // Accumulated records from SAX pass
-	idx_t sax_record_index = 0;                    // Position in sax_records
+	std::unique_ptr<SAXRecordAccumulator> sax_accumulator;   // Accumulator state (persists across scan calls)
+	std::unique_ptr<SAXCallbackContext> sax_ctx;             // Callback context (persists across scan calls)
+	xmlParserCtxtPtr sax_parser_ctx = nullptr;               // Push parser context (persists across scan calls)
+	std::unique_ptr<FileHandle> sax_file_handle;             // File handle (persists across scan calls)
+	xmlSAXHandler sax_handler;                               // SAX handler (must outlive parser context)
+	std::vector<SAXRecordAccumulator> sax_pending_records;   // Records completed during current chunk
+
+	~XMLReadGlobalState() {
+		if (sax_parser_ctx) {
+			xmlFreeParserCtxt(sax_parser_ctx);
+			sax_parser_ctx = nullptr;
+		}
+	}
 
 	idx_t MaxThreads() const override {
 		return 1; // Single-threaded for now

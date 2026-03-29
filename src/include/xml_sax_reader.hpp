@@ -89,17 +89,16 @@ public:
 	// Create a SAX handler struct with our callbacks
 	static xmlSAXHandler CreateSAXHandler();
 
-	// Read records from file using SAX push parsing
-	// Returns accumulated records as vectors of (field_name -> value) maps
-	// Reads file in 64KB chunks
-	static std::vector<SAXRecordAccumulator> ReadRecords(const std::string &filename,
-	                                                      const XMLSchemaOptions &options,
-	                                                      idx_t max_rows = 0);
+	// Read records from file using SAX push parsing via DuckDB FileSystem.
+	// Returns accumulated records as vectors of (field_name -> value) maps.
+	// Reads file in 64KB chunks.
+	static std::vector<SAXRecordAccumulator> ReadRecords(FileSystem &fs, const std::string &filename,
+	                                                     const XMLSchemaOptions &options, idx_t max_rows = 0);
 
 	// SAX-based schema inference: accumulate first N records,
-	// build synthetic XML, feed to existing InferSchema
-	static std::vector<XMLColumnInfo> InferSchemaFromStream(const std::string &filename,
-	                                                         const XMLSchemaOptions &options);
+	// build synthetic XML, feed to existing InferSchema.
+	static std::vector<XMLColumnInfo> InferSchemaFromStream(FileSystem &fs, const std::string &filename,
+	                                                        const XMLSchemaOptions &options);
 
 	// Convert accumulated record data to a row of Values
 	static std::vector<Value> AccumulatorToRow(const SAXRecordAccumulator &accumulator,

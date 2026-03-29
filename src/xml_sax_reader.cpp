@@ -1,7 +1,6 @@
 #include "xml_sax_reader.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
-#include <fstream>
 #include <sstream>
 
 namespace duckdb {
@@ -50,6 +49,72 @@ std::string SAXRecordAccumulator::GetAttribute(const std::string &name) const {
 		return it->second;
 	}
 	return "";
+}
+
+// ─── Helper: escape XML special characters in text content ──────────────────
+
+static std::string XmlEscapeText(const std::string &text) {
+	std::string result;
+	result.reserve(text.size());
+	for (char c : text) {
+		switch (c) {
+		case '&':
+			result += "&amp;";
+			break;
+		case '<':
+			result += "&lt;";
+			break;
+		case '>':
+			result += "&gt;";
+			break;
+		default:
+			result += c;
+			break;
+		}
+	}
+	return result;
+}
+
+static std::string XmlEscapeAttr(const std::string &text) {
+	std::string result;
+	result.reserve(text.size());
+	for (char c : text) {
+		switch (c) {
+		case '&':
+			result += "&amp;";
+			break;
+		case '<':
+			result += "&lt;";
+			break;
+		case '>':
+			result += "&gt;";
+			break;
+		case '"':
+			result += "&quot;";
+			break;
+		default:
+			result += c;
+			break;
+		}
+	}
+	return result;
+}
+
+// ─── Helper: UTF-8-safe whitespace trimming (matches CleanTextContent) ──────
+
+static std::string TrimWhitespace(const std::string &text) {
+	auto is_ascii_space = [](unsigned char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+	};
+	auto lstart =
+	    std::find_if_not(text.begin(), text.end(), [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
+	auto rend = std::find_if_not(text.rbegin(), text.rend(),
+	                             [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); })
+	                .base();
+	if (lstart >= rend) {
+		return "";
+	}
+	return std::string(lstart, rend);
 }
 
 // ─── Helper: resolve element name based on namespace mode ───────────────────
@@ -160,13 +225,13 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			acc->nested_depth = relative_depth;
 			acc->nested_xml += "<" + name;
 
-			// Add attributes to raw XML
+			// Add attributes to raw XML (escape attribute values)
 			for (int i = 0; i < nb_attributes; i++) {
 				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 				const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
 				const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
 				std::string attr_value(value_start, value_end);
-				acc->nested_xml += " " + std::string(attr_localname) + "=\"" + attr_value + "\"";
+				acc->nested_xml += " " + std::string(attr_localname) + "=\"" + XmlEscapeAttr(attr_value) + "\"";
 			}
 			acc->nested_xml += ">";
 		}
@@ -207,11 +272,14 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 			}
 		} else if (relative_depth == 1) {
 			// Closing a direct child of the record
-			std::string value = acc->current_text;
+			std::string value;
 			if (!acc->nested_xml.empty()) {
 				// If we accumulated nested XML, use that instead
 				value = acc->nested_xml;
 				acc->nested_xml.clear();
+			} else {
+				// Trim whitespace to match DOM's CleanTextContent behavior
+				value = TrimWhitespace(acc->current_text);
 			}
 
 			// Check if this field already has a value (repeated element -> list)
@@ -262,8 +330,9 @@ void SAXCharacters(void *ctx, const xmlChar *ch, int len) {
 
 	int relative_depth = acc->current_depth - acc->record_depth;
 	if (relative_depth > 1) {
-		// Inside nested element: accumulate into raw XML
-		acc->nested_xml += text;
+		// Inside nested element: accumulate into raw XML (escape special chars
+		// since SAX delivers decoded text but we're reconstructing XML)
+		acc->nested_xml += XmlEscapeText(text);
 	} else if (relative_depth == 1) {
 		// Direct child text: accumulate
 		acc->current_text += text;
@@ -279,8 +348,7 @@ void SAXCdataBlock(void *ctx, const xmlChar *ch, int len) {
 // ─── SAXStreamReader ────────────────────────────────────────────────────────
 
 xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
-	xmlSAXHandler handler;
-	memset(&handler, 0, sizeof(handler));
+	xmlSAXHandler handler {};
 
 	handler.initialized = XML_SAX2_MAGIC;
 	handler.startElementNs = SAXStartElementNs;
@@ -291,9 +359,8 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 	return handler;
 }
 
-std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string &filename,
-                                                                const XMLSchemaOptions &options,
-                                                                idx_t max_rows) {
+std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, const std::string &filename,
+                                                                const XMLSchemaOptions &options, idx_t max_rows) {
 	std::vector<SAXRecordAccumulator> results;
 
 	SAXRecordAccumulator accumulator;
@@ -305,6 +372,13 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 		// Strip "//" prefix if present
 		if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
 			tag = tag.substr(2);
+		}
+		// Reject XPath tokens that SAX can't evaluate
+		if (tag.find_first_of("/@*[]") != std::string::npos) {
+			throw InvalidInputException(
+			    "SAX reader: record_element '%s' contains XPath syntax not supported in SAX mode. "
+			    "Use a simple element name (e.g., 'item') or set streaming:=false.",
+			    options.record_element);
 		}
 		accumulator.record_tag = tag;
 	}
@@ -318,11 +392,8 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 
 	xmlSAXHandler handler = CreateSAXHandler();
 
-	// Open file and read in chunks
-	std::ifstream file(filename, std::ios::binary);
-	if (!file.is_open()) {
-		throw IOException("Could not open file '%s' for SAX parsing", filename);
-	}
+	// Open file via DuckDB FileSystem (supports S3, HTTP, VFS, etc.)
+	auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 
 	// Create push parser context
 	xmlParserCtxtPtr parser_ctx = xmlCreatePushParserCtxt(&handler, &ctx, nullptr, 0, filename.c_str());
@@ -333,16 +404,15 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 	// Configure parser options (thread-safe, no global state modification)
 	xmlCtxtUseOptions(parser_ctx, XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
-	std::vector<char> buffer(SAX_CHUNK_SIZE);
+	char buffer[SAX_CHUNK_SIZE];
 
-	while (file.good() && !ctx.stop_parsing) {
-		file.read(buffer.data(), static_cast<std::streamsize>(SAX_CHUNK_SIZE));
-		auto bytes_read = file.gcount();
+	while (!ctx.stop_parsing) {
+		auto bytes_read = file_handle->Read(buffer, SAX_CHUNK_SIZE);
 		if (bytes_read == 0) {
 			break;
 		}
 
-		int result = xmlParseChunk(parser_ctx, buffer.data(), static_cast<int>(bytes_read), 0);
+		int result = xmlParseChunk(parser_ctx, buffer, static_cast<int>(bytes_read), 0);
 		if (result != 0 && !options.ignore_errors) {
 			xmlFreeParserCtxt(parser_ctx);
 			throw IOException("SAX parsing error in file '%s'", filename);
@@ -356,11 +426,11 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(const std::string
 	return results;
 }
 
-std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(const std::string &filename,
+std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs, const std::string &filename,
                                                                    const XMLSchemaOptions &options) {
 	// Accumulate sample records using SAX
 	idx_t sample_count = static_cast<idx_t>(options.sample_size > 0 ? options.sample_size : 50);
-	auto records = ReadRecords(filename, options, sample_count);
+	auto records = ReadRecords(fs, filename, options, sample_count);
 
 	if (records.empty()) {
 		return {};
@@ -382,19 +452,19 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(const std::str
 				if (attr.first.find('.') != std::string::npos) {
 					continue;
 				}
-				xml << "<" << attr.first << ">" << attr.second << "</" << attr.first << ">";
+				xml << "<" << attr.first << ">" << XmlEscapeText(attr.second) << "</" << attr.first << ">";
 			}
 		}
 
-		// Emit scalar values
+		// Emit scalar values (escape text to produce valid XML)
 		for (const auto &val : record.current_values) {
-			xml << "<" << val.first << ">" << val.second << "</" << val.first << ">";
+			xml << "<" << val.first << ">" << XmlEscapeText(val.second) << "</" << val.first << ">";
 		}
 
 		// Emit list values as repeated elements
 		for (const auto &list : record.current_lists) {
 			for (const auto &item : list.second) {
-				xml << "<" << list.first << ">" << item << "</" << list.first << ">";
+				xml << "<" << list.first << ">" << XmlEscapeText(item) << "</" << list.first << ">";
 			}
 		}
 

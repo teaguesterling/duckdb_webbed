@@ -14,6 +14,23 @@
 
 namespace {
 
+// Check if a record_element value contains XPath syntax that SAX mode can't handle.
+// SAX only supports simple tag names (e.g., "item"), optionally prefixed with "//".
+// Path expressions ("/root/item"), predicates ("item[@type]"), axes ("child::item"),
+// and functions ("local-name()") all require DOM XPath evaluation.
+static bool HasComplexXPath(const std::string &record_element) {
+	if (record_element.empty()) {
+		return false;
+	}
+	// Strip leading "//" (SAX-compatible shorthand)
+	std::string re = record_element;
+	if (re.size() >= 2 && re[0] == '/' && re[1] == '/') {
+		re = re.substr(2);
+	}
+	// Any remaining XPath tokens mean SAX can't handle it
+	return re.find_first_of("/[@]()*:.") != std::string::npos;
+}
+
 // Resolve a datetime_format preset name or format string to a list of format strings
 std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 	if (input == "auto") {
@@ -448,15 +465,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					bool use_sax_inference = false;
 					if (schema_options.streaming && mode == ParseMode::XML &&
 					    static_cast<idx_t>(file_size) > result->max_file_size) {
-						// File exceeds max size — use SAX if possible
-						bool has_complex_xpath = false;
-						if (!schema_options.record_element.empty()) {
-							const auto &re = schema_options.record_element;
-							has_complex_xpath = (re.find('[') != std::string::npos ||
-							                     re.find("::") != std::string::npos ||
-							                     re.find('(') != std::string::npos);
-						}
-						if (!has_complex_xpath) {
+						if (!HasComplexXPath(schema_options.record_element)) {
 							use_sax_inference = true;
 						}
 					}
@@ -465,7 +474,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 					if (use_sax_inference) {
 						// SAX-based schema inference (no DOM needed)
-						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
 					} else {
 						// DOM-based: enforce file size limit
 						if (static_cast<idx_t>(file_size) > result->max_file_size) {
@@ -698,14 +707,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				if (schema_options.streaming && !is_html &&
 				    static_cast<idx_t>(file_size) > bind_data.max_file_size) {
 					// File exceeds max size — use SAX if possible
-					bool has_complex_xpath = false;
-					if (!schema_options.record_element.empty()) {
-						const auto &re = schema_options.record_element;
-						has_complex_xpath = (re.find('[') != std::string::npos ||
-						                     re.find("::") != std::string::npos ||
-						                     re.find('(') != std::string::npos);
-					}
-					if (!has_complex_xpath) {
+					if (!HasComplexXPath(schema_options.record_element)) {
 						use_sax = true;
 					}
 				}
@@ -723,9 +725,37 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				gstate.use_sax = use_sax;
 
 				if (use_sax) {
-					// SAX mode: read all records via SAX push parser
-					gstate.sax_records = SAXStreamReader::ReadRecords(filename, schema_options);
-					gstate.sax_record_index = 0;
+					// SAX mode: initialize push parser for incremental streaming
+					gstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
+					gstate.sax_accumulator->namespace_mode = schema_options.namespaces;
+
+					// Configure record tag matching
+					if (!schema_options.record_element.empty()) {
+						std::string tag = schema_options.record_element;
+						if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
+							tag = tag.substr(2);
+						}
+						gstate.sax_accumulator->record_tag = tag;
+					}
+
+					gstate.sax_ctx = make_uniq<SAXCallbackContext>();
+					gstate.sax_ctx->accumulator = gstate.sax_accumulator.get();
+					gstate.sax_ctx->max_rows = 0; // No limit per chunk
+					gstate.sax_ctx->rows_completed = 0;
+					gstate.sax_ctx->stop_parsing = false;
+					gstate.sax_ctx->completed_records = &gstate.sax_pending_records;
+
+					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
+					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(
+					    &gstate.sax_handler, gstate.sax_ctx.get(), nullptr, 0, filename.c_str());
+					if (!gstate.sax_parser_ctx) {
+						throw IOException("Could not create SAX push parser for '%s'", filename);
+					}
+					xmlCtxtUseOptions(gstate.sax_parser_ctx,
+					                  XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+
+					gstate.sax_file_handle = std::move(file_handle);
+					gstate.sax_pending_records.clear();
 					gstate.file_loaded = true;
 				} else {
 					// DOM mode: read file content and build DOM
@@ -784,10 +814,57 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			}
 
 			if (gstate.use_sax) {
-				// SAX extraction: convert accumulated records to output rows
-				while (gstate.sax_record_index < gstate.sax_records.size() && output_idx < STANDARD_VECTOR_SIZE) {
-					auto &record = gstate.sax_records[gstate.sax_record_index];
+				// SAX streaming: feed chunks until we have enough records or EOF
+				constexpr idx_t SAX_CHUNK_SIZE = 65536;
+				char sax_buffer[SAX_CHUNK_SIZE];
+				bool file_exhausted = false;
 
+				while (output_idx < STANDARD_VECTOR_SIZE) {
+					// First, emit any pending completed records
+					while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+						auto &record = gstate.sax_pending_records.front();
+
+						auto row = SAXStreamReader::AccumulatorToRow(
+						    record, bind_data.column_names, bind_data.column_types, schema_options,
+						    bind_data.column_datetime_formats, bind_data.inferred_schema);
+
+						idx_t output_col_idx = 0;
+						if (bind_data.include_filename) {
+							output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+						}
+						for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+						     row_col_idx++, output_col_idx++) {
+							output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+						}
+
+						output_idx++;
+						gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
+					}
+
+					// If we've filled the output, stop
+					if (output_idx >= STANDARD_VECTOR_SIZE) {
+						break;
+					}
+
+					// Feed another chunk to the parser
+					auto bytes_read = gstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
+					if (bytes_read == 0) {
+						// EOF — finalize parser
+						xmlParseChunk(gstate.sax_parser_ctx, nullptr, 0, 1);
+						file_exhausted = true;
+						break;
+					}
+
+					int parse_result =
+					    xmlParseChunk(gstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
+					if (parse_result != 0 && !bind_data.ignore_errors) {
+						throw IOException("SAX parsing error in file '%s'", filename);
+					}
+				}
+
+				// Emit any remaining pending records after EOF
+				while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+					auto &record = gstate.sax_pending_records.front();
 					auto row = SAXStreamReader::AccumulatorToRow(
 					    record, bind_data.column_names, bind_data.column_types, schema_options,
 					    bind_data.column_datetime_formats, bind_data.inferred_schema);
@@ -800,14 +877,19 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					     row_col_idx++, output_col_idx++) {
 						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
 					}
-
 					output_idx++;
-					gstate.sax_record_index++;
+					gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
 				}
 
-				// Check if we've finished all SAX records from this file
-				if (gstate.sax_record_index >= gstate.sax_records.size()) {
-					gstate.sax_records.clear();
+				// Check if file is done and all records emitted
+				if (file_exhausted && gstate.sax_pending_records.empty()) {
+					if (gstate.sax_parser_ctx) {
+						xmlFreeParserCtxt(gstate.sax_parser_ctx);
+						gstate.sax_parser_ctx = nullptr;
+					}
+					gstate.sax_accumulator.reset();
+					gstate.sax_ctx.reset();
+					gstate.sax_file_handle.reset();
 					gstate.file_loaded = false;
 					gstate.file_index++;
 				}
@@ -856,7 +938,14 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			// Skip this file and continue
 			gstate.current_doc = XMLDocRAII();
 			gstate.record_elements.clear();
-			gstate.sax_records.clear();
+			if (gstate.sax_parser_ctx) {
+				xmlFreeParserCtxt(gstate.sax_parser_ctx);
+				gstate.sax_parser_ctx = nullptr;
+			}
+			gstate.sax_accumulator.reset();
+			gstate.sax_ctx.reset();
+			gstate.sax_file_handle.reset();
+			gstate.sax_pending_records.clear();
 			gstate.file_loaded = false;
 			gstate.file_index++;
 		}
@@ -1270,14 +1359,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					// Determine if SAX inference should be used
 					bool use_sax_inference = false;
 					if (schema_options.streaming && static_cast<idx_t>(file_size) > result->max_file_size) {
-						bool has_complex_xpath = false;
-						if (!schema_options.record_element.empty()) {
-							const auto &re = schema_options.record_element;
-							has_complex_xpath = (re.find('[') != std::string::npos ||
-							                     re.find("::") != std::string::npos ||
-							                     re.find('(') != std::string::npos);
-						}
-						if (!has_complex_xpath) {
+						if (!HasComplexXPath(schema_options.record_element)) {
 							use_sax_inference = true;
 						}
 					}
@@ -1285,7 +1367,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					std::vector<XMLColumnInfo> inferred_columns;
 
 					if (use_sax_inference) {
-						inferred_columns = SAXStreamReader::InferSchemaFromStream(file_path, schema_options);
+						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
 					} else {
 						// DOM mode: enforce file size limit
 						if (static_cast<idx_t>(file_size) > result->max_file_size) {
