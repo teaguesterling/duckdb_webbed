@@ -1,6 +1,7 @@
 # name: test/sql/xml_sax_dom_equivalence.test
 # description: Verify SAX mode produces identical results to DOM mode across all features
 # group: [sql]
+
 #
 # Each section tests a feature in both DOM mode (default for small files) and
 # SAX mode (forced via maximum_file_size:=1). Results must be identical.

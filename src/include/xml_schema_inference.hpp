@@ -55,7 +55,7 @@ struct XMLSchemaOptions {
 	    ""; // Comma-separated list of element names that should always be LIST type (like xml_to_json)
 
 	// Error handling
-	bool ignore_errors = false;          // Continue on parsing errors
+	bool ignore_errors = false;         // Continue on parsing errors
 	idx_t maximum_file_size = 16777216; // 16MB default (files above this use SAX streaming)
 
 	// SAX streaming controls

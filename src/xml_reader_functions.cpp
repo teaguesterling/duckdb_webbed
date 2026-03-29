@@ -704,8 +704,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 				// Determine whether to use SAX or DOM
 				bool use_sax = false;
-				if (schema_options.streaming && !is_html &&
-				    static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+				if (schema_options.streaming && !is_html && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
 					// File exceeds max size — use SAX if possible
 					if (!HasComplexXPath(schema_options.record_element)) {
 						use_sax = true;
@@ -746,8 +745,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					gstate.sax_ctx->completed_records = &gstate.sax_pending_records;
 
 					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
-					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(
-					    &gstate.sax_handler, gstate.sax_ctx.get(), nullptr, 0, filename.c_str());
+					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(&gstate.sax_handler, gstate.sax_ctx.get(), nullptr,
+					                                                0, filename.c_str());
 					if (!gstate.sax_parser_ctx) {
 						throw IOException("Could not create SAX push parser for '%s'", filename);
 					}
@@ -865,9 +864,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				// Emit any remaining pending records after EOF
 				while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
 					auto &record = gstate.sax_pending_records.front();
-					auto row = SAXStreamReader::AccumulatorToRow(
-					    record, bind_data.column_names, bind_data.column_types, schema_options,
-					    bind_data.column_datetime_formats, bind_data.inferred_schema);
+					auto row = SAXStreamReader::AccumulatorToRow(record, bind_data.column_names, bind_data.column_types,
+					                                             schema_options, bind_data.column_datetime_formats,
+					                                             bind_data.inferred_schema);
 
 					idx_t output_col_idx = 0;
 					if (bind_data.include_filename) {
@@ -901,9 +900,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 					std::vector<Value> row;
 					if (bind_data.has_explicit_schema) {
-						row = XMLSchemaInference::ExtractSingleRecordWithSchema(
-						    record, bind_data.column_names, bind_data.column_types, schema_options,
-						    bind_data.column_datetime_formats);
+						row = XMLSchemaInference::ExtractSingleRecordWithSchema(record, bind_data.column_names,
+						                                                        bind_data.column_types, schema_options,
+						                                                        bind_data.column_datetime_formats);
 					} else {
 						row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
 						                                              gstate.remaining_depth, schema_options);

@@ -12,16 +12,26 @@ The generated file contains varied record content designed to exercise:
 - Attributes on record elements (id, sku)
 - 10 rotating categories including one with & (food & beverage)
 """
+
 import os
 import sys
+
 
 def generate(num_records=1000000, output_path=None):
     if output_path is None:
         output_path = os.path.join(os.path.dirname(__file__), "sax_stress_test.xml")
 
     categories = [
-        "electronics", "clothing", "food & beverage", "toys", "books & media",
-        "health", "automotive", "sports", "home & garden", "office",
+        "electronics",
+        "clothing",
+        "food & beverage",
+        "toys",
+        "books & media",
+        "health",
+        "automotive",
+        "sports",
+        "home & garden",
+        "office",
     ]
 
     special_names = [

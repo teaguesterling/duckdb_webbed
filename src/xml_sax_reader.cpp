@@ -106,11 +106,11 @@ static std::string TrimWhitespace(const std::string &text) {
 	auto is_ascii_space = [](unsigned char c) {
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 	};
-	auto lstart =
-	    std::find_if_not(text.begin(), text.end(), [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
-	auto rend = std::find_if_not(text.rbegin(), text.rend(),
-	                             [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); })
-	                .base();
+	auto lstart = std::find_if_not(text.begin(), text.end(),
+	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
+	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
+		            return is_ascii_space(static_cast<unsigned char>(c));
+	            }).base();
 	if (lstart >= rend) {
 		return "";
 	}
@@ -120,7 +120,7 @@ static std::string TrimWhitespace(const std::string &text) {
 // ─── Helper: resolve element name based on namespace mode ───────────────────
 
 static std::string ResolveElementName(const xmlChar *localname, const xmlChar *prefix,
-                                       const std::string &namespace_mode) {
+                                      const std::string &namespace_mode) {
 	std::string name = reinterpret_cast<const char *>(localname);
 	if (namespace_mode == "keep" && prefix != nullptr) {
 		name = std::string(reinterpret_cast<const char *>(prefix)) + ":" + name;
@@ -144,9 +144,9 @@ static bool MatchesRecordTag(const std::string &element_name, const std::string 
 
 // ─── SAX2 Callbacks ─────────────────────────────────────────────────────────
 
-void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
-                        const xmlChar *URI, int nb_namespaces, const xmlChar **namespaces,
-                        int nb_attributes, int nb_defaulted, const xmlChar **attributes) {
+void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI,
+                       int nb_namespaces, const xmlChar **namespaces, int nb_attributes, int nb_defaulted,
+                       const xmlChar **attributes) {
 	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
 	auto *acc = sax_ctx->accumulator;
 
@@ -360,7 +360,7 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 }
 
 std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, const std::string &filename,
-                                                                const XMLSchemaOptions &options, idx_t max_rows) {
+                                                               const XMLSchemaOptions &options, idx_t max_rows) {
 	std::vector<SAXRecordAccumulator> results;
 
 	SAXRecordAccumulator accumulator;
@@ -427,7 +427,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 }
 
 std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs, const std::string &filename,
-                                                                   const XMLSchemaOptions &options) {
+                                                                  const XMLSchemaOptions &options) {
 	// Accumulate sample records using SAX
 	idx_t sample_count = static_cast<idx_t>(options.sample_size > 0 ? options.sample_size : 50);
 	auto records = ReadRecords(fs, filename, options, sample_count);
@@ -492,11 +492,11 @@ static bool IsNullString(const std::string &text, const XMLSchemaOptions &option
 }
 
 std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator &accumulator,
-                                                      const std::vector<std::string> &column_names,
-                                                      const std::vector<LogicalType> &column_types,
-                                                      const XMLSchemaOptions &options,
-                                                      const std::vector<std::string> &column_datetime_formats,
-                                                      const std::vector<XMLColumnInfo> &inferred_schema) {
+                                                     const std::vector<std::string> &column_names,
+                                                     const std::vector<LogicalType> &column_types,
+                                                     const XMLSchemaOptions &options,
+                                                     const std::vector<std::string> &column_datetime_formats,
+                                                     const std::vector<XMLColumnInfo> &inferred_schema) {
 	std::vector<Value> row;
 	row.reserve(column_names.size());
 
@@ -542,7 +542,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 				} else {
 					// Single value as a one-element list
 					auto child_type = ListType::GetChildType(col_type);
-					auto child_val = XMLSchemaInference::ConvertToValuePublic(scalar, child_type, options, datetime_fmt);
+					auto child_val =
+					    XMLSchemaInference::ConvertToValuePublic(scalar, child_type, options, datetime_fmt);
 					std::vector<Value> list_vals;
 					list_vals.push_back(std::move(child_val));
 					value = Value::LIST(child_type, std::move(list_vals));
