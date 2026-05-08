@@ -69,6 +69,13 @@ SELECT COUNT(*) FROM read_xml('test/data/employees.xml', empty_elements := 'obje
 statement ok
 SELECT COUNT(*) FROM read_xml('test/data/employees.xml', union_by_name := false);
 
+# Whitespace handling
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', preserve_whitespace := true);
+
+statement ok
+SELECT COUNT(*) FROM read_xml('test/data/employees.xml', preserve_whitespace := false);
+
 # -----------------------------------------------------------------------------
 # read_xml_objects parameter acceptance
 # -----------------------------------------------------------------------------
@@ -103,6 +110,13 @@ SELECT COUNT(*) FROM read_html('test/html/complex.html', all_varchar := true);
 
 statement ok
 SELECT COUNT(*) FROM read_html('test/html/complex.html', union_by_name := false);
+
+# Whitespace handling
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', preserve_whitespace := true);
+
+statement ok
+SELECT COUNT(*) FROM read_html('test/html/complex.html', preserve_whitespace := false);
 
 # -----------------------------------------------------------------------------
 # read_html_objects parameter acceptance
