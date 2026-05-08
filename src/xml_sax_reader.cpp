@@ -100,9 +100,9 @@ static std::string XmlEscapeAttr(const std::string &text) {
 	return result;
 }
 
-// ─── Helper: UTF-8-safe whitespace trimming (matches CleanTextContent) ──────
+// ─── Helper: dual-mode text content processing (matches CleanTextContent) ────
 
-static std::string TrimWhitespace(const std::string &text) {
+static std::string ProcessTextContent(const std::string &text, bool preserve_whitespace) {
 	auto is_ascii_space = [](unsigned char c) {
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 	};
@@ -114,7 +114,41 @@ static std::string TrimWhitespace(const std::string &text) {
 	if (lstart >= rend) {
 		return "";
 	}
-	return std::string(lstart, rend);
+
+	if (preserve_whitespace) {
+		// Preserve internal whitespace, normalize CRLF/CR to LF (XML 1.0 §2.11)
+		std::string result;
+		result.reserve(static_cast<size_t>(rend - lstart));
+		for (auto it = lstart; it != rend; ++it) {
+			if (*it == '\r') {
+				result += '\n';
+				auto next = it + 1;
+				if (next != rend && *next == '\n') {
+					++it;
+				}
+			} else {
+				result += *it;
+			}
+		}
+		return result;
+	}
+
+	// Collapse whitespace (matches DOM CleanTextContent with preserve_whitespace=false)
+	std::string result;
+	result.reserve(static_cast<size_t>(rend - lstart));
+	bool in_space = false;
+	for (auto it = lstart; it != rend; ++it) {
+		if (is_ascii_space(static_cast<unsigned char>(*it))) {
+			if (!in_space) {
+				result += ' ';
+				in_space = true;
+			}
+		} else {
+			result += *it;
+			in_space = false;
+		}
+	}
+	return result;
 }
 
 // ─── Helper: resolve element name based on namespace mode ───────────────────
@@ -278,8 +312,8 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				value = acc->nested_xml;
 				acc->nested_xml.clear();
 			} else {
-				// Trim whitespace to match DOM's CleanTextContent behavior
-				value = TrimWhitespace(acc->current_text);
+				// Process whitespace to match DOM's CleanTextContent behavior
+				value = ProcessTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
 
 			// Check if this field already has a value (repeated element -> list)
@@ -389,6 +423,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 	ctx.rows_completed = 0;
 	ctx.stop_parsing = false;
 	ctx.completed_records = &results;
+	ctx.preserve_whitespace = options.preserve_whitespace;
 
 	xmlSAXHandler handler = CreateSAXHandler();
 

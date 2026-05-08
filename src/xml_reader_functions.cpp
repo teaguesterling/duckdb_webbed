@@ -745,6 +745,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					gstate.sax_ctx->rows_completed = 0;
 					gstate.sax_ctx->stop_parsing = false;
 					gstate.sax_ctx->completed_records = &gstate.sax_pending_records;
+					gstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
 
 					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
 					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(&gstate.sax_handler, gstate.sax_ctx.get(), nullptr,
