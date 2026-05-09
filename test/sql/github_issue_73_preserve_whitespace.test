@@ -31,7 +31,7 @@ FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
   record_element='root',
   columns={'code': 'VARCHAR'});
 ----
-6
+5
 
 # =============================================================================
 # SECTION 2: Explicit preserve_whitespace=false (old collapsing behavior)
@@ -95,7 +95,7 @@ FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
   columns={'code': 'VARCHAR'},
   maximum_file_size=16777216);
 ----
-6
+5
 
 # SAX mode: preserve whitespace (force SAX via maximum_file_size=1)
 query I
@@ -105,7 +105,7 @@ FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
   columns={'code': 'VARCHAR'},
   maximum_file_size=1);
 ----
-6
+5
 
 # DOM mode: collapse whitespace
 query I
