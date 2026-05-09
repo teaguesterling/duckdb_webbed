@@ -100,57 +100,6 @@ static std::string XmlEscapeAttr(const std::string &text) {
 	return result;
 }
 
-// ─── Helper: dual-mode text content processing (matches CleanTextContent) ────
-
-static std::string ProcessTextContent(const std::string &text, bool preserve_whitespace) {
-	auto is_ascii_space = [](unsigned char c) {
-		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-	};
-	auto lstart = std::find_if_not(text.begin(), text.end(),
-	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
-	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
-		            return is_ascii_space(static_cast<unsigned char>(c));
-	            }).base();
-	if (lstart >= rend) {
-		return "";
-	}
-
-	if (preserve_whitespace) {
-		// Preserve internal whitespace, normalize CRLF/CR to LF (XML 1.0 §2.11)
-		std::string result;
-		result.reserve(static_cast<size_t>(rend - lstart));
-		for (auto it = lstart; it != rend; ++it) {
-			if (*it == '\r') {
-				result += '\n';
-				auto next = it + 1;
-				if (next != rend && *next == '\n') {
-					++it;
-				}
-			} else {
-				result += *it;
-			}
-		}
-		return result;
-	}
-
-	// Collapse whitespace (matches DOM CleanTextContent with preserve_whitespace=false)
-	std::string result;
-	result.reserve(static_cast<size_t>(rend - lstart));
-	bool in_space = false;
-	for (auto it = lstart; it != rend; ++it) {
-		if (is_ascii_space(static_cast<unsigned char>(*it))) {
-			if (!in_space) {
-				result += ' ';
-				in_space = true;
-			}
-		} else {
-			result += *it;
-			in_space = false;
-		}
-	}
-	return result;
-}
-
 // ─── Helper: resolve element name based on namespace mode ───────────────────
 
 static std::string ResolveElementName(const xmlChar *localname, const xmlChar *prefix,
@@ -313,7 +262,7 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				acc->nested_xml.clear();
 			} else {
 				// Process whitespace to match DOM's CleanTextContent behavior
-				value = ProcessTextContent(acc->current_text, sax_ctx->preserve_whitespace);
+				value = XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
 
 			// Check if this field already has a value (repeated element -> list)

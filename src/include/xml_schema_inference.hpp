@@ -227,6 +227,9 @@ public:
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
 	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
+	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
+	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
+
 private:
 	// 3-phase schema inference helpers
 	static std::unordered_map<std::string, ColumnAnalysis>
@@ -249,8 +252,6 @@ private:
 	                                 std::vector<xmlNodePtr> &result);
 
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
-
-	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
 
 	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,
 	                            const XMLSchemaOptions &options, const std::string &datetime_format = "");
