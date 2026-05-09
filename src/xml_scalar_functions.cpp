@@ -1,9 +1,11 @@
 #include "xml_scalar_functions.hpp"
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 
 #include <regex>
 #include <set>
@@ -81,8 +83,8 @@ void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionS
 	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -120,8 +122,8 @@ void XMLScalarFunctions::XMLExtractTextListWithNamespacesFunction(DataChunk &arg
 
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -161,8 +163,8 @@ void XMLScalarFunctions::XMLExtractElementsListFunction(DataChunk &args, Express
 	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -200,8 +202,8 @@ void XMLScalarFunctions::XMLExtractElementsListWithNamespacesFunction(DataChunk 
 
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -258,8 +260,8 @@ void XMLScalarFunctions::XMLExtractElementsStringWithNamespacesFunction(DataChun
 
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -310,8 +312,8 @@ void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, Expressio
 	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -371,8 +373,8 @@ void XMLScalarFunctions::XMLExtractAttributesWithNamespacesFunction(DataChunk &a
 
 	UnifiedVectorFormat xml_data;
 	UnifiedVectorFormat xpath_data;
-	xml_vector.ToUnifiedFormat(count, xml_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
@@ -822,10 +824,11 @@ void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &sta
 	});
 }
 
-unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientContext &context,
-                                                                     ScalarFunction &bound_function,
-                                                                     vector<unique_ptr<Expression>> &arguments) {
-	if (arguments.empty()) {
+unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(DUCKDB_SCALAR_BIND_PARAMS) {
+	auto &bind_args = DUCKDB_SCALAR_BIND_ARGS;
+	auto &bind_ctx = DUCKDB_SCALAR_BIND_CONTEXT;
+
+	if (bind_args.empty()) {
 		throw BinderException("xml_to_json requires at least one argument (the XML string)");
 	}
 
@@ -835,8 +838,8 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 	// Note: We don't check for alias here because column references have aliases by default
 
 	// Process named parameters (if any)
-	for (idx_t i = 1; i < arguments.size(); i++) {
-		auto &arg = arguments[i];
+	for (idx_t i = 1; i < bind_args.size(); i++) {
+		auto &arg = bind_args[i];
 		std::string param_name = arg->GetAlias();
 
 		if (param_name.empty()) {
@@ -853,7 +856,7 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(ClientConte
 		}
 
 		// Extract the constant value
-		Value param_value = ExpressionExecutor::EvaluateScalar(context, *arg);
+		Value param_value = ExpressionExecutor::EvaluateScalar(bind_ctx, *arg);
 
 		if (param_name == "force_list") {
 			if (param_value.IsNull()) {
@@ -1360,14 +1363,14 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Looks up a namespace prefix in the common namespaces table
 	auto xml_lookup_namespace_function = ScalarFunction("xml_lookup_namespace", {LogicalType::VARCHAR},
 	                                                    LogicalType::VARCHAR, XMLLookupNamespaceFunction);
-	xml_lookup_namespace_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	SetScalarFunctionNullHandling(xml_lookup_namespace_function, FunctionNullHandling::SPECIAL_HANDLING);
 	loader.RegisterFunction(xml_lookup_namespace_function);
 
 	// Register xml_to_json function with optional named parameters
 	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                    XMLToJSONWithSchemaFunction, XMLToJSONWithSchemaBind);
-	xml_to_json_function.varargs = LogicalType::ANY;
-	xml_to_json_function.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	SetScalarFunctionVarArgs(xml_to_json_function, LogicalType::ANY);
+	SetScalarFunctionNullHandling(xml_to_json_function, FunctionNullHandling::SPECIAL_HANDLING);
 	loader.RegisterFunction(xml_to_json_function);
 
 	// Register json_to_xml function
@@ -1507,8 +1510,8 @@ void XMLScalarFunctions::HTMLExtractTextListFunction(DataChunk &args, Expression
 	// Use UnifiedVectorFormat to handle different vector types (FLAT, DICTIONARY, CONSTANT, etc.)
 	UnifiedVectorFormat html_data;
 	UnifiedVectorFormat xpath_data;
-	html_vector.ToUnifiedFormat(count, html_data);
-	xpath_vector.ToUnifiedFormat(count, xpath_data);
+	CompatToUnifiedFormat(html_vector, count, html_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
 	auto html_strings = UnifiedVectorFormat::GetData<string_t>(html_data);
 	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);

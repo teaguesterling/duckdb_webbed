@@ -1574,7 +1574,8 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 						// Has a datetime format: extract raw text and convert with format
 						xmlChar *text_content = xmlNodeGetContent(child);
 						if (text_content) {
-							std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
+							std::string text =
+							    CleanTextContent((const char *)text_content, options.preserve_whitespace);
 							xmlFree(text_content);
 							value = ConvertToValue(text, column_type, options, col_fmt);
 						}

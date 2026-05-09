@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb_compat.hpp"
 
 namespace duckdb {
 
@@ -39,8 +40,7 @@ private:
 	// Conversion functions
 	static void XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLToJSONWithSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result);
-	static unique_ptr<FunctionData> XMLToJSONWithSchemaBind(ClientContext &context, ScalarFunction &bound_function,
-	                                                        vector<unique_ptr<Expression>> &arguments);
+	static unique_ptr<FunctionData> XMLToJSONWithSchemaBind(DUCKDB_SCALAR_BIND_PARAMS);
 	static void JSONToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 

@@ -1,5 +1,6 @@
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
@@ -2108,7 +2109,7 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 
 	for (idx_t i = 0; i < count; i++) {
 		auto list_value = FlatVector::GetData<list_entry_t>(input_vector)[i];
-		auto &child_vector = ListVector::GetEntry(input_vector);
+		auto &child_vector = CompatListGetChild(input_vector);
 		auto child_type = ListType::GetChildType(input_vector.GetType());
 
 		XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
