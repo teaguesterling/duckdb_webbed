@@ -155,7 +155,7 @@ FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
 
 # Non-existent column returns NULL
 query I
-SELECT item IS NULL FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
+SELECT missing IS NULL FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
   record_element='root',
   columns={'missing': 'VARCHAR'});
 ----
