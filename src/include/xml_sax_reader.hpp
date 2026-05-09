@@ -70,6 +70,7 @@ struct SAXCallbackContext {
 	idx_t rows_completed = 0;                                       // Number of completed records so far
 	bool stop_parsing = false;                                      // Signal to stop the push parser
 	std::vector<SAXRecordAccumulator> *completed_records = nullptr; // Where to store completed records
+	bool preserve_whitespace = true;
 };
 
 // SAX2 callback functions (static, matching libxml2 signatures)

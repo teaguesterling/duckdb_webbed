@@ -382,7 +382,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		if (text_samples.size() < 20) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
-				std::string text = CleanTextContent((const char *)content);
+				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
 				if (!text.empty() && !IsNullString(text, options)) {
 					text_samples.push_back(text);
 					if (!has_attributes) {
@@ -465,7 +465,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				}
 				xmlChar *content = xmlNodeGetContent(instance);
 				if (content) {
-					std::string text = CleanTextContent((const char *)content);
+					std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
 					if (!text.empty()) {
 						list_text_samples.push_back(text);
 					}
@@ -619,7 +619,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			if (cross_record_text_samples.size() < 20) {
 				xmlChar *content = xmlNodeGetContent(instance);
 				if (content) {
-					std::string text = CleanTextContent((const char *)content);
+					std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
 					if (!text.empty()) {
 						cross_record_text_samples.push_back(text);
 					}
@@ -856,7 +856,7 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	// Check for text content
 	xmlChar *content = xmlNodeGetContent(node);
 	if (content) {
-		std::string text_content = CleanTextContent((const char *)content);
+		std::string text_content = CleanTextContent((const char *)content, options.preserve_whitespace);
 		if (!text_content.empty()) {
 			pattern.has_text = true;
 			if (pattern.sample_values.size() < 20) { // Limit sample size
@@ -1276,7 +1276,7 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	return result;
 }
 
-std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
+std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
 	// UTF-8-safe trim: only strip ASCII whitespace.
 	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
 	// that treats UTF-8 continuation bytes (negative as signed char) as
@@ -1294,7 +1294,26 @@ std::string XMLSchemaInference::CleanTextContent(const std::string &text) {
 		return "";
 	}
 
-	// Collapse runs of ASCII whitespace to a single space
+	if (preserve_whitespace) {
+		// Preserve internal whitespace, normalize CRLF/CR to LF (XML 1.0 §2.11)
+		std::string result;
+		result.reserve(static_cast<size_t>(rend - lstart));
+		for (auto it = lstart; it != rend; ++it) {
+			if (*it == '\r') {
+				result += '\n';
+				// Skip LF after CR (CRLF pair)
+				auto next = it + 1;
+				if (next != rend && *next == '\n') {
+					++it;
+				}
+			} else {
+				result += *it;
+			}
+		}
+		return result;
+	}
+
+	// Collapse runs of ASCII whitespace to a single space (original behavior)
 	std::string result;
 	result.reserve(static_cast<size_t>(rend - lstart));
 	bool in_space = false;
@@ -1443,7 +1462,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 						// Leaf element - return text content
 						xmlChar *text_content = xmlNodeGetContent(child);
 						if (text_content) {
-							element_text = CleanTextContent((const char *)text_content);
+							element_text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
 							xmlFree(text_content);
 						}
 					}
@@ -1555,7 +1574,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 						// Has a datetime format: extract raw text and convert with format
 						xmlChar *text_content = xmlNodeGetContent(child);
 						if (text_content) {
-							std::string text = CleanTextContent((const char *)text_content);
+							std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
 							xmlFree(text_content);
 							value = ConvertToValue(text, column_type, options, col_fmt);
 						}
@@ -1758,7 +1777,7 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 		// TODO(#38): No datetime_format passed here — nested primitives use default parsing.
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
-			std::string text = CleanTextContent((const char *)text_content);
+			std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
 			xmlFree(text_content);
 			return ConvertToValue(text, target_type, options);
 		}
@@ -1788,7 +1807,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		if (field_name == "#text") {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
-				std::string text = CleanTextContent((const char *)content);
+				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
 				if (!text.empty()) {
 					field_value = ConvertToValue(text, field_type, options);
 					found = true;

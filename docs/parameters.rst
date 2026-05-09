@@ -96,6 +96,10 @@ Type Handling Parameters
      - BOOLEAN
      - true
      - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
+   * - ``preserve_whitespace``
+     - BOOLEAN
+     - true
+     - When true (v2.0.0 default), trims leading/trailing whitespace and normalizes CRLF/CR to LF per XML 1.0 §2.11 but preserves internal whitespace (newlines, tabs, multi-space runs). When false, collapses all internal whitespace runs to a single space (v1.x behavior).
 
 Attribute Handling Parameters
 -----------------------------
