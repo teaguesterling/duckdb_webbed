@@ -129,11 +129,31 @@ FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
 ----
 Let ( [ a = 1 ; b = 2 ] ; a + b )
 
+# SAX mode: CRLF normalization consistency
+query I
+SELECT length(item) - length(replace(item, chr(10), '')) AS lf_count
+FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
+  record_element='root',
+  columns={'item': 'VARCHAR'},
+  maximum_file_size=1);
+----
+3
+
+# SAX mode: no CR bytes remain
+query I
+SELECT length(item) - length(replace(item, chr(13), '')) AS cr_count
+FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
+  record_element='root',
+  columns={'item': 'VARCHAR'},
+  maximum_file_size=1);
+----
+0
+
 # =============================================================================
 # SECTION 5: Edge cases
 # =============================================================================
 
-# Empty element — both modes return NULL
+# Non-existent column returns NULL
 query I
 SELECT item IS NULL FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
   record_element='root',
