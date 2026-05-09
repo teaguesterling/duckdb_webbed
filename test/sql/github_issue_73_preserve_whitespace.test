@@ -65,14 +65,14 @@ Let ( [ a = 1 ; b = 2 ] ; a + b )
 statement ok
 COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?><root><item>' || chr(13) || chr(10) || 'CRLF' || chr(13) || 'CR' || chr(10) || 'LF' || '</item></root>' AS xml) TO '__TEST_DIR__/whitespace_eol.xml' (FORMAT 'csv', HEADER false, QUOTE '');
 
-# Default (preserve): CRLF and CR are normalized to LF
+# Default (preserve): CRLF and CR are normalized to LF (leading LF trimmed)
 query I
 SELECT length(item) - length(replace(item, chr(10), '')) AS lf_count
 FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
   record_element='root',
   columns={'item': 'VARCHAR'});
 ----
-3
+2
 
 # Default (preserve): no CR bytes remain
 query I
@@ -129,7 +129,7 @@ FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
 ----
 Let ( [ a = 1 ; b = 2 ] ; a + b )
 
-# SAX mode: CRLF normalization consistency
+# SAX mode: CRLF normalization consistency (leading LF trimmed)
 query I
 SELECT length(item) - length(replace(item, chr(10), '')) AS lf_count
 FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
@@ -137,7 +137,7 @@ FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
   columns={'item': 'VARCHAR'},
   maximum_file_size=1);
 ----
-3
+2
 
 # SAX mode: no CR bytes remain
 query I
