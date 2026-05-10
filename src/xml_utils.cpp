@@ -2190,14 +2190,14 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 			auto &field_type = child_types[field_idx].second;
 
 			// Get the child vector for this field
-			auto &field_vector = StructVector::GetEntries(input_vector)[field_idx];
+			auto &field_vector = CompatStructGetField(input_vector, field_idx);
 
 			// Create field element
 			xmlNodePtr field_node = xmlNewNode(nullptr, BAD_CAST field_name.c_str());
 			xmlAddChild(root_node, field_node);
 
 			// Get field value and convert recursively using new node-based function
-			Value field_value = field_vector->GetValue(i);
+			Value field_value = field_vector.GetValue(i);
 			if (!field_value.IsNull()) {
 				xmlNodePtr child_node = ConvertValueToXMLNode(field_value, field_type, field_name, doc.get());
 				if (child_node) {

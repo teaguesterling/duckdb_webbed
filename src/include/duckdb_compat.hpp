@@ -32,15 +32,18 @@ inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) 
 	func.SetVarArgs(std::move(varargs));
 }
 
-// --- Vector helpers (GetEntry deprecated → GetChild, ToUnifiedFormat lost count param) ---
+// --- Vector helpers ---
+// ListVector::GetEntry deprecated in favor of GetChild
 inline Vector &CompatListGetChild(Vector &v) {
-	return ListVector::GetChild(v);
+	return ListVector::GetChildMutable(v);
 }
-inline const Vector &CompatListGetChild(const Vector &v) {
-	return ListVector::GetChild(v);
-}
+// ToUnifiedFormat lost the count parameter
 inline void CompatToUnifiedFormat(Vector &v, idx_t /*count*/, UnifiedVectorFormat &data) {
 	v.ToUnifiedFormat(data);
+}
+// StructVector::GetEntries returns vector<Vector>& (not vector<unique_ptr<Vector>>&)
+inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
+	return StructVector::GetEntries(v)[field_idx];
 }
 
 #else // Old API
@@ -60,11 +63,11 @@ inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) 
 inline Vector &CompatListGetChild(Vector &v) {
 	return ListVector::GetEntry(v);
 }
-inline const Vector &CompatListGetChild(const Vector &v) {
-	return ListVector::GetEntry(v);
-}
 inline void CompatToUnifiedFormat(Vector &v, idx_t count, UnifiedVectorFormat &data) {
 	v.ToUnifiedFormat(count, data);
+}
+inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
+	return *StructVector::GetEntries(v)[field_idx];
 }
 
 #endif
