@@ -15,6 +15,10 @@
 #include "duckdb/function/scalar_function.hpp"
 #endif
 
+#if __has_include("duckdb/function/function_set.hpp")
+#include "duckdb/function/function_set.hpp"
+#endif
+
 namespace duckdb {
 
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
@@ -46,6 +50,20 @@ inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
 	return StructVector::GetEntries(v)[field_idx];
 }
 
+// --- Constant folding workaround ---
+// DuckDB main's VectorStructBuffer::SetVectorType throws InternalException when
+// the optimizer constant-folds functions returning STRUCT-containing types
+// (LIST(STRUCT), STRUCT, MAP). Mark them VOLATILE to skip constant folding.
+inline void PreventStructConstantFolding(ScalarFunction &func) {
+	func.SetStability(FunctionStability::VOLATILE);
+}
+template <typename T>
+inline void PreventStructConstantFolding(FunctionSet<T> &func_set) {
+	for (auto &func : func_set.functions) {
+		func.SetStability(FunctionStability::VOLATILE);
+	}
+}
+
 #else // Old API
 
 #define DUCKDB_SCALAR_BIND_PARAMS                                                                                      \
@@ -68,6 +86,13 @@ inline void CompatToUnifiedFormat(Vector &v, idx_t count, UnifiedVectorFormat &d
 }
 inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
 	return *StructVector::GetEntries(v)[field_idx];
+}
+
+// No-op on old API — constant folding works fine for complex types
+inline void PreventStructConstantFolding(ScalarFunction &) {
+}
+template <typename T>
+inline void PreventStructConstantFolding(FunctionSet<T> &) {
 }
 
 #endif

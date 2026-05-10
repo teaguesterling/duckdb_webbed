@@ -1,5 +1,6 @@
 #include "duck_block_functions.hpp"
 #include "duck_block_types.hpp"
+#include "duckdb_compat.hpp"
 #include "xml_types.hpp"
 #include "xml_utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
@@ -713,6 +714,7 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
 	html_to_duck_blocks_set.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
+	PreventStructConstantFolding(html_to_duck_blocks_set);
 	loader.RegisterFunction(html_to_duck_blocks_set);
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML

@@ -1280,6 +1280,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	xml_extract_attributes_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
+	PreventStructConstantFolding(xml_extract_attributes_functions);
 	loader.RegisterFunction(xml_extract_attributes_functions);
 
 	// Register xml_pretty_print function
@@ -1304,11 +1305,13 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto xml_extract_comments_function =
 	    ScalarFunction("xml_extract_comments", {XMLTypes::XMLType()}, LogicalType::LIST(comment_struct_type),
 	                   XMLExtractCommentsFunction);
+	PreventStructConstantFolding(xml_extract_comments_function);
 	loader.RegisterFunction(xml_extract_comments_function);
 
 	// Register xml_extract_cdata function (returns LIST<STRUCT>)
 	auto xml_extract_cdata_function = ScalarFunction("xml_extract_cdata", {XMLTypes::XMLType()},
 	                                                 LogicalType::LIST(comment_struct_type), XMLExtractCDataFunction);
+	PreventStructConstantFolding(xml_extract_cdata_function);
 	loader.RegisterFunction(xml_extract_cdata_function);
 
 	// Register xml_stats function (returns STRUCT)
@@ -1317,12 +1320,14 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("max_depth", LogicalType::BIGINT), make_pair("size_bytes", LogicalType::BIGINT),
 	     make_pair("namespace_count", LogicalType::BIGINT)});
 	auto xml_stats_function = ScalarFunction("xml_stats", {LogicalType::VARCHAR}, stats_struct_type, XMLStatsFunction);
+	PreventStructConstantFolding(xml_stats_function);
 	loader.RegisterFunction(xml_stats_function);
 
 	// Register xml_namespaces function (returns MAP<VARCHAR, VARCHAR> with prefix -> uri mappings)
 	auto xml_namespaces_function =
 	    ScalarFunction("xml_namespaces", {LogicalType::VARCHAR},
 	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLNamespacesFunction);
+	PreventStructConstantFolding(xml_namespaces_function);
 	loader.RegisterFunction(xml_namespaces_function);
 
 	// Register xml_common_namespaces function (returns MAP<VARCHAR, VARCHAR> of well-known namespace prefixes)
@@ -1330,6 +1335,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto xml_common_namespaces_function =
 	    ScalarFunction("xml_common_namespaces", {}, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR),
 	                   XMLCommonNamespacesFunction);
+	PreventStructConstantFolding(xml_common_namespaces_function);
 	loader.RegisterFunction(xml_common_namespaces_function);
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
@@ -1342,6 +1348,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto xml_mock_namespaces_function =
 	    ScalarFunction("xml_mock_namespaces", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction);
+	PreventStructConstantFolding(xml_mock_namespaces_function);
 	loader.RegisterFunction(xml_mock_namespaces_function);
 
 	// Register xml_find_undefined_prefixes function
@@ -1441,24 +1448,28 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto html_extract_links_function =
 	    ScalarFunction("html_extract_links", {XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type),
 	                   HTMLExtractLinksFunction);
+	PreventStructConstantFolding(html_extract_links_function);
 	loader.RegisterFunction(html_extract_links_function);
 
 	// Register html_extract_images function
 	auto html_extract_images_function =
 	    ScalarFunction("html_extract_images", {XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type),
 	                   HTMLExtractImagesFunction);
+	PreventStructConstantFolding(html_extract_images_function);
 	loader.RegisterFunction(html_extract_images_function);
 
 	// Register html_extract_table_rows function
 	auto html_extract_table_rows_function =
 	    ScalarFunction("html_extract_table_rows", {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type),
 	                   HTMLExtractTableRowsFunction);
+	PreventStructConstantFolding(html_extract_table_rows_function);
 	loader.RegisterFunction(html_extract_table_rows_function);
 
 	// Register html_extract_tables_json function
 	auto html_extract_tables_json_function =
 	    ScalarFunction("html_extract_tables_json", {XMLTypes::HTMLType()},
 	                   LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
+	PreventStructConstantFolding(html_extract_tables_json_function);
 	loader.RegisterFunction(html_extract_tables_json_function);
 
 	// Register parse_html scalar function for parsing HTML content directly
