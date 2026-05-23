@@ -227,8 +227,20 @@ public:
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
 	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
+	// Parse an XML fragment (the inner contents of a wrapper element) and extract a value of the
+	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
+	// inner content was captured as raw XML during streaming.
+	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+	                                         const LogicalType &target_type, const XMLSchemaOptions &options);
+
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
+
+	// Merge two column types from union_by_name inference across files.
+	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
+	// when a complex type collides with a non-matching kind, and delegates scalar promotion to
+	// LogicalType::ForceMaxLogicalType.
+	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b);
 
 private:
 	// 3-phase schema inference helpers

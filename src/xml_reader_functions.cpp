@@ -115,6 +115,66 @@ static void ParseNullstrParameter(const Value &val, const char *function_name, s
 	}
 }
 
+// True if a column type contains MAP or ARRAY at any nesting. These DuckDB types have no
+// XML extraction path, so SAX cannot materialize them. STRUCT and LIST<STRUCT> are supported
+// via the inner-XML capture / re-parse path in AccumulatorToRow.
+static bool ContainsUnsupportedSAXType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::MAP:
+	case LogicalTypeId::ARRAY:
+		return true;
+	case LogicalTypeId::LIST:
+		return ContainsUnsupportedSAXType(ListType::GetChildType(type));
+	case LogicalTypeId::STRUCT: {
+		for (auto &child : StructType::GetChildTypes(type)) {
+			if (ContainsUnsupportedSAXType(child.second)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	default:
+		return false;
+	}
+}
+
+static bool SchemaHasUnsupportedSAXType(const std::vector<LogicalType> &column_types) {
+	for (const auto &t : column_types) {
+		if (ContainsUnsupportedSAXType(t)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Merge per-file inferred columns into the running union schema for union_by_name.
+// New columns are appended; existing columns are widened via MergeXMLColumnType.
+// When the merged type differs from the previous one, the column's datetime format
+// hint is reset so that DuckDB's built-in temporal parsing handles the widened type.
+static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
+                                 std::unordered_map<std::string, LogicalType> &union_schema,
+                                 std::unordered_map<std::string, std::string> &union_formats,
+                                 std::vector<std::string> &column_order) {
+	for (const auto &col_info : inferred_columns) {
+		auto it = union_schema.find(col_info.name);
+		if (it == union_schema.end()) {
+			union_schema[col_info.name] = col_info.type;
+			union_formats[col_info.name] = col_info.winning_datetime_format;
+			column_order.push_back(col_info.name);
+			continue;
+		}
+		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type);
+		if (merged != it->second) {
+			it->second = merged;
+			union_formats[col_info.name] = "";
+		}
+		// NOTE(#38): When types match across files but datetime formats differ,
+		// the first file's format wins. This is acceptable since the format was
+		// determined by that file's samples and both files parse successfully
+		// with it (same type implies compatible format during inference).
+	}
+}
+
 // =============================================================================
 // Internal Unified Functions (used by both XML and HTML)
 // =============================================================================
@@ -509,29 +569,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						result->inferred_schema = inferred_columns;
 					}
 
-					// Merge columns into union schema
-					for (const auto &col_info : inferred_columns) {
-						auto it = union_schema.find(col_info.name);
-						if (it == union_schema.end()) {
-							// New column - add it
-							union_schema[col_info.name] = col_info.type;
-							union_formats[col_info.name] = col_info.winning_datetime_format;
-							column_order.push_back(col_info.name);
-						} else {
-							// Column exists - check if type needs to be generalized
-							// If types differ, use VARCHAR as the most general type
-							if (it->second != col_info.type) {
-								// For now, use VARCHAR for conflicting types
-								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
-								it->second = LogicalType::VARCHAR;
-								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
-							}
-							// NOTE(#38): When types match across files but datetime formats differ,
-							// the first file's format wins. This is acceptable since the format was
-							// determined by that file's samples and both files parse successfully
-							// with it (same type implies compatible format during inference).
-						}
-					}
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
 
 				} catch (const Exception &e) {
 					if (!result->ignore_errors) {
@@ -709,7 +747,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				bool use_sax = false;
 				if (schema_options.streaming && !is_html && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
 					// File exceeds max size — use SAX if possible
-					if (!HasComplexXPath(schema_options.record_element)) {
+					if (!HasComplexXPath(schema_options.record_element) &&
+					    !SchemaHasUnsupportedSAXType(bind_data.column_types)) {
 						use_sax = true;
 					}
 				}
@@ -1397,29 +1436,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
 					}
 
-					// Merge columns into union schema
-					for (const auto &col_info : inferred_columns) {
-						auto it = union_schema.find(col_info.name);
-						if (it == union_schema.end()) {
-							// New column - add it
-							union_schema[col_info.name] = col_info.type;
-							union_formats[col_info.name] = col_info.winning_datetime_format;
-							column_order.push_back(col_info.name);
-						} else {
-							// Column exists - check if type needs to be generalized
-							// If types differ, use VARCHAR as the most general type
-							if (it->second != col_info.type) {
-								// For now, use VARCHAR for conflicting types
-								// TODO: Implement proper type widening (e.g., INTEGER -> BIGINT -> DOUBLE -> VARCHAR)
-								it->second = LogicalType::VARCHAR;
-								union_formats[col_info.name] = ""; // No format for VARCHAR fallback
-							}
-							// NOTE(#38): When types match across files but datetime formats differ,
-							// the first file's format wins. This is acceptable since the format was
-							// determined by that file's samples and both files parse successfully
-							// with it (same type implies compatible format during inference).
-						}
-					}
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
 
 				} catch (const Exception &e) {
 					if (!result->ignore_errors) {

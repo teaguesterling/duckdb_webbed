@@ -1276,6 +1276,69 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	return result;
 }
 
+LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b) {
+	if (a == b) {
+		return a;
+	}
+
+	if (a.id() == LogicalTypeId::STRUCT && b.id() == LogicalTypeId::STRUCT) {
+		auto &a_children = StructType::GetChildTypes(a);
+		auto &b_children = StructType::GetChildTypes(b);
+
+		// DuckDB STRUCT requires case-insensitive uniqueness of field names (LogicalType::Verify
+		// asserts this), so we must merge case-insensitively. The first-seen casing wins.
+		// ExtractStructFromNode does case-insensitive matching against XML element names to keep
+		// extraction consistent with this merge semantic.
+		case_insensitive_map_t<idx_t> b_index;
+		for (idx_t i = 0; i < b_children.size(); i++) {
+			b_index[b_children[i].first] = i;
+		}
+
+		child_list_t<LogicalType> merged;
+		for (auto &ac : a_children) {
+			auto it = b_index.find(ac.first);
+			if (it == b_index.end()) {
+				merged.emplace_back(ac.first, ac.second);
+			} else {
+				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second));
+				b_index.erase(it);
+			}
+		}
+		// Append b-only fields in b's original order
+		for (auto &bc : b_children) {
+			auto it = b_index.find(bc.first);
+			if (it != b_index.end()) {
+				merged.emplace_back(bc.first, bc.second);
+				b_index.erase(it);
+			}
+		}
+		return LogicalType::STRUCT(std::move(merged));
+	}
+
+	if (a.id() == LogicalTypeId::LIST && b.id() == LogicalTypeId::LIST) {
+		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b)));
+	}
+
+	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
+	auto is_complex = [](const LogicalType &t) {
+		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST ||
+		       t.id() == LogicalTypeId::MAP || t.id() == LogicalTypeId::ARRAY;
+	};
+	if (is_complex(a) || is_complex(b)) {
+		return LogicalType::VARCHAR;
+	}
+
+	// Scalar/temporal/decimal: use the implicit-cast ladder when one exists.
+	// ForceMaxLogicalType picks the higher-scored type when no cast path exists (e.g., DATE vs INTEGER
+	// → DATE), which then throws ConversionException on the non-temporal file's rows. Falling back to
+	// VARCHAR preserves the textual data instead.
+	LogicalType result;
+	if (LogicalType::TryGetMaxLogicalTypeUnchecked(a, b, result)) {
+		return result;
+	}
+	return LogicalType::VARCHAR;
+}
+
 std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
 	// UTF-8-safe trim: only strip ASCII whitespace.
 	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
@@ -1759,6 +1822,29 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
+Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                      const LogicalType &target_type,
+                                                      const XMLSchemaOptions &options) {
+	if (inner_xml.empty()) {
+		return Value(target_type);
+	}
+	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
+	// receives a node whose ->children are the original siblings.
+	std::string wrapped;
+	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + 5);
+	wrapped.append("<").append(wrapper_name).append(">").append(inner_xml).append("</").append(wrapper_name).append(">");
+
+	XMLDocRAII doc(wrapped);
+	if (!doc.doc) {
+		return Value(target_type);
+	}
+	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
+	if (!root) {
+		return Value(target_type);
+	}
+	return ExtractValueFromNode(root, target_type, options);
+}
+
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
                                                const XMLSchemaOptions &options) {
 	if (!node) {
@@ -1774,8 +1860,40 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 	case LogicalTypeId::STRUCT:
 		return ExtractStructFromNode(node, target_type, options);
 	default: {
-		// For primitive types, extract text content and convert
+		// For primitive types, extract text content and convert.
 		// TODO(#38): No datetime_format passed here — nested primitives use default parsing.
+		// When target is VARCHAR and the node has element children (e.g., the column was widened
+		// from STRUCT to VARCHAR by union_by_name), serialize the XML fragment instead of
+		// concatenating descendant text. Without this, structured payloads collapse to joined text.
+		if (target_type.id() == LogicalTypeId::VARCHAR) {
+			bool has_element_children = false;
+			for (xmlNodePtr child = node->children; child; child = child->next) {
+				if (child->type == XML_ELEMENT_NODE) {
+					has_element_children = true;
+					break;
+				}
+			}
+			if (has_element_children) {
+				xmlBufferPtr buffer = xmlBufferCreate();
+				if (buffer) {
+					for (xmlNodePtr child = node->children; child; child = child->next) {
+						if (child->type == XML_ELEMENT_NODE) {
+							xmlNodeDump(buffer, child->doc, child, 0, 1);
+						}
+					}
+					const xmlChar *content = xmlBufferContent(buffer);
+					Value result;
+					if (content) {
+						std::string fragment = (const char *)content;
+						result = ConvertToValue(fragment, target_type, options);
+					} else {
+						result = Value(); // NULL
+					}
+					xmlBufferFree(buffer);
+					return result;
+				}
+			}
+		}
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
 			std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
@@ -1823,18 +1941,19 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			xmlFree(attr_value);
 			found = true;
 		} else {
-			// Look for child element(s) with matching name
-			// If field_type is LIST, collect all matching children; otherwise just the first
+			// Look for child element(s) with matching name. Match case-insensitively because
+			// DuckDB STRUCTs enforce case-insensitive uniqueness of field names. Cross-file
+			// union_by_name widening (MergeXMLColumnType) keeps the first-seen casing, so an
+			// XML element from another file with a different case must still resolve to it.
 			if (field_type.id() == LogicalTypeId::LIST) {
-				// Field is a LIST - collect ALL matching child elements
+				// Field is a LIST: collect ALL matching child elements
 				auto element_type = ListType::GetChildType(field_type);
 				vector<Value> list_values;
 
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-						// Extract each matching child element
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						Value element_value = ExtractValueFromNode(child, element_type, options);
 						list_values.push_back(element_value);
 						found = true;
@@ -1846,12 +1965,11 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					field_value = Value::LIST(element_type, list_values);
 				}
 			} else {
-				// Field is not a LIST - extract only the first matching child
+				// Field is not a LIST: extract only the first matching child
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-						// Found matching child element - extract recursively
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						field_value = ExtractValueFromNode(child, field_type, options);
 						found = true;
 						break;

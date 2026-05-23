@@ -31,9 +31,13 @@ struct SAXRecordAccumulator {
 	std::vector<std::string> element_stack; // Stack of element names
 	int current_depth = 0;                  // Current nesting depth
 
-	// Accumulated data for current record
+	// Accumulated data for current record. Scalar/text values and nested-XML values are tracked
+	// in parallel maps so the rich-typing path (STRUCT, LIST<STRUCT>) can re-parse the inner XML.
 	std::unordered_map<std::string, std::string> current_values;             // field_name -> scalar value
 	std::unordered_map<std::string, std::vector<std::string>> current_lists; // field_name -> repeated values
+	std::unordered_map<std::string, std::string> current_xml_values;         // field_name -> inner XML fragment
+	std::unordered_map<std::string, std::vector<std::string>>
+	    current_xml_lists;                                                   // field_name -> repeated inner XML
 	std::unordered_map<std::string, std::string> current_attributes;         // attr_name -> value
 
 	// Text accumulation (SAX may split text across multiple characters() callbacks)
@@ -55,6 +59,12 @@ struct SAXRecordAccumulator {
 
 	// Get list values by field name (empty vector if not found)
 	const std::vector<std::string> &GetListValues(const std::string &name) const;
+
+	// Get an inner-XML fragment by field name (empty string if the field carried only text)
+	std::string GetXmlValue(const std::string &name) const;
+
+	// Get inner-XML fragments for a repeated field (empty vector if not present)
+	const std::vector<std::string> &GetXmlListValues(const std::string &name) const;
 
 	// Check if an attribute exists
 	bool HasAttribute(const std::string &name) const;
