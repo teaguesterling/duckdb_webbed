@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <regex>
@@ -1330,11 +1331,16 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 
 	// Scalar/temporal/decimal: use the implicit-cast ladder when one exists.
 	// ForceMaxLogicalType picks the higher-scored type when no cast path exists (e.g., DATE vs INTEGER
-	// → DATE), which then throws ConversionException on the non-temporal file's rows. Falling back to
-	// VARCHAR preserves the textual data instead.
-	LogicalType result;
-	if (LogicalType::TryGetMaxLogicalTypeUnchecked(a, b, result)) {
-		return result;
+	// → DATE), which then throws ConversionException on the non-temporal file's rows. Verify both
+	// sides have an implicit cast path to the candidate; otherwise fall back to VARCHAR to preserve
+	// textual data. This avoids depending on TryGetMaxLogicalTypeUnchecked, which only exists on
+	// newer DuckDB.
+	LogicalType candidate = LogicalType::ForceMaxLogicalType(a, b);
+	auto castable = [&candidate](const LogicalType &t) {
+		return t == candidate || CastRules::ImplicitCast(t, candidate) >= 0;
+	};
+	if (castable(a) && castable(b)) {
+		return candidate;
 	}
 	return LogicalType::VARCHAR;
 }
@@ -1876,10 +1882,15 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 			if (has_element_children) {
 				xmlBufferPtr buffer = xmlBufferCreate();
 				if (buffer) {
+					// Dump element children plus any real text content (mixed content like
+					// "foo <b/> bar"). Skip whitespace-only text nodes that libxml2 inserts
+					// between elements during pretty-print parsing, and use format=0 to avoid
+					// re-adding pretty-print whitespace.
 					for (xmlNodePtr child = node->children; child; child = child->next) {
-						if (child->type == XML_ELEMENT_NODE) {
-							xmlNodeDump(buffer, child->doc, child, 0, 1);
+						if (child->type == XML_TEXT_NODE && xmlIsBlankNode(child)) {
+							continue;
 						}
+						xmlNodeDump(buffer, child->doc, child, 0, 0);
 					}
 					const xmlChar *content = xmlBufferContent(buffer);
 					Value result;

@@ -238,8 +238,10 @@ public:
 
 	// Merge two column types from union_by_name inference across files.
 	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
-	// when a complex type collides with a non-matching kind, and delegates scalar promotion to
-	// LogicalType::ForceMaxLogicalType.
+	// when a complex type collides with a non-matching kind. Scalar promotion uses
+	// LogicalType::ForceMaxLogicalType but only accepts the candidate when both inputs have a
+	// valid implicit cast path to it (via CastRules::ImplicitCast); otherwise falls back to
+	// VARCHAR so textual data is preserved.
 	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b);
 
 private:

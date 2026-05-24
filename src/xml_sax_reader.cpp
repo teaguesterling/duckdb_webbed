@@ -573,9 +573,10 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					list_vals.push_back(Value(child_type));
 				} else if (child_is_complex) {
 					// Text inside a complex-typed list: wrap so ExtractValueFromXmlFragment can
-					// surface it as a #text-bearing struct (NULL for missing fields).
-					list_vals.push_back(
-					    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, item, child_type, options));
+					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
+					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
+					    col_name, XmlEscapeText(item), child_type, options));
 				} else {
 					list_vals.push_back(
 					    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
