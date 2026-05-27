@@ -95,7 +95,7 @@ es	1
 query I
 SELECT loc
 FROM read_xml('test/xml/github_issues/sitemap_example.xml', record_element := 'url')
-WHERE list_contains(list_transform(link, x -> x.hreflang), 'fr')
+WHERE list_contains(list_transform(link, lambda x: x.hreflang), 'fr')
 ORDER BY loc;
 ----
 https://www.example.com/page1

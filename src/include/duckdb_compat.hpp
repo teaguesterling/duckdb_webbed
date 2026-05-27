@@ -50,6 +50,13 @@ inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
 	return StructVector::GetEntries(v)[field_idx];
 }
 
+// --- Output chunk finalization ---
+// DuckDB main requires vector buffers to have their size set after SetValue writes.
+// SetChildCardinality sets both chunk count and FlatVector::SetSize on each column.
+inline void CompatSetOutputCardinality(DataChunk &chunk, idx_t count) {
+	chunk.SetChildCardinality(count);
+}
+
 // --- Constant folding workaround ---
 // DuckDB main's VectorStructBuffer::SetVectorType throws InternalException when
 // the optimizer constant-folds functions returning STRUCT-containing types
@@ -86,6 +93,10 @@ inline void CompatToUnifiedFormat(Vector &v, idx_t count, UnifiedVectorFormat &d
 }
 inline Vector &CompatStructGetField(Vector &v, idx_t field_idx) {
 	return *StructVector::GetEntries(v)[field_idx];
+}
+
+inline void CompatSetOutputCardinality(DataChunk &chunk, idx_t count) {
+	chunk.SetCardinality(count);
 }
 
 // No-op on old API — constant folding works fine for complex types

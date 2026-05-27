@@ -27,7 +27,7 @@ query I
 SELECT count(*) FROM read_xml(
     list_transform(
         [0, 1],
-        n -> case when n = 0 then 'test/xml/simple.xml' else 'test/xml/nonexistent.xml' end
+        lambda n: case when n = 0 then 'test/xml/simple.xml' else 'test/xml/nonexistent.xml' end
     ),
     ignore_errors := true
 );

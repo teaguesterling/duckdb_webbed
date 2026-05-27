@@ -2,6 +2,7 @@
 #include "xml_utils.hpp"
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -679,7 +680,7 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 		}
 	}
 
-	output.SetCardinality(output_idx);
+	CompatSetOutputCardinality(output, output_idx);
 }
 
 void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
@@ -957,7 +958,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 		}
 	}
 
-	output.SetCardinality(output_idx);
+	CompatSetOutputCardinality(output, output_idx);
 }
 
 // =============================================================================
@@ -1110,7 +1111,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 		}
 	}
 
-	output.SetCardinality(output_idx);
+	CompatSetOutputCardinality(output, output_idx);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
@@ -1615,12 +1616,12 @@ void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, Ta
 		// HTML mode: be lenient, allow empty content
 		if (content.empty()) {
 			if (bind_data.ignore_errors) {
-				output.SetCardinality(0);
+				CompatSetOutputCardinality(output, 0);
 				return;
 			}
 			// Return minimal valid HTML for empty input
 			output.data[0].SetValue(0, Value("<html></html>"));
-			output.SetCardinality(1);
+			CompatSetOutputCardinality(output, 1);
 			gstate.current_row = 1;
 			return;
 		}
@@ -1628,7 +1629,7 @@ void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, Ta
 		// XML mode: strict validation
 		if (!XMLUtils::IsValidXML(content)) {
 			if (bind_data.ignore_errors) {
-				output.SetCardinality(0);
+				CompatSetOutputCardinality(output, 0);
 				return;
 			}
 			throw InvalidInputException("Input contains invalid XML");
@@ -1637,7 +1638,7 @@ void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, Ta
 
 	// Return the content
 	output.data[0].SetValue(0, Value(content));
-	output.SetCardinality(1);
+	CompatSetOutputCardinality(output, 1);
 	gstate.current_row = 1;
 }
 
@@ -1926,7 +1927,7 @@ void XMLReaderFunctions::ParseDocumentFunction(ClientContext &context, TableFunc
 		gstate.current_row++;
 	}
 
-	output.SetCardinality(output_idx);
+	CompatSetOutputCardinality(output, output_idx);
 }
 
 // Public parse_xml functions (delegate to internal functions)
@@ -2291,7 +2292,7 @@ void XMLReaderFunctions::HTMLExtractTablesFunction(ClientContext &context, Table
 		}
 	}
 
-	output.SetCardinality(output_idx);
+	CompatSetOutputCardinality(output, output_idx);
 }
 
 } // namespace duckdb
