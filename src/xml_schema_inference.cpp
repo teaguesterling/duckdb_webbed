@@ -52,6 +52,27 @@ void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::stri
 	}
 }
 
+// Helper: Collect the union of distinct child element names across all parent instances,
+// preserving first-seen document order so optional fields absent from the first instance
+// are still represented in the inferred struct.
+void XMLSchemaInference::CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances,
+                                                  const XMLSchemaOptions &options, std::vector<std::string> &result) {
+	std::unordered_set<std::string> seen;
+	for (xmlNodePtr instance : instances) {
+		for (xmlNodePtr child = instance->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				std::string child_name((const char *)child->name);
+				if (options.namespaces == "strip") {
+					child_name = StripNamespacePrefix(child_name);
+				}
+				if (seen.insert(child_name).second) {
+					result.push_back(child_name);
+				}
+			}
+		}
+	}
+}
+
 // NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
                                                            const XMLSchemaOptions &options) {
@@ -483,41 +504,29 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
-			std::unordered_set<std::string> seen_children;
+			// Iterate over children across ALL instances in document order so that optional
+			// fields absent from the first occurrence are still included in the struct.
+			std::vector<std::string> ordered_child_names;
+			CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+			for (const std::string &child_name : ordered_child_names) {
+				// Create a ColumnAnalysis for this nested child
+				ColumnAnalysis nested_col(child_name, false);
 
-			// Iterate over children in document order to preserve field order
-			for (xmlNodePtr child = first->children; child; child = child->next) {
-				if (child->type == XML_ELEMENT_NODE) {
-					std::string child_name((const char *)child->name);
-					if (options.namespaces == "strip") {
-						child_name = StripNamespacePrefix(child_name);
-					}
-
-					// Only process each unique child name once (first occurrence)
-					if (seen_children.find(child_name) == seen_children.end()) {
-						seen_children.insert(child_name);
-
-						// Create a ColumnAnalysis for this nested child
-						ColumnAnalysis nested_col(child_name, false);
-
-						// Collect ALL instances of this child element from ALL parent instances
-						for (xmlNodePtr instance : column.instances) {
-							CollectChildElements(instance, child_name, options, nested_col.instances);
-						}
-
-						nested_col.occurrence_count = child_max_counts[child_name];
-						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
-
-						// Recursively infer type with decreased depth
-						// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
-						// Custom datetime formats in nested STRUCTs fall back to default parsing.
-						// Proper fix requires a format-per-field map threaded through extraction.
-						std::string nested_winning_fmt;
-						LogicalType child_type =
-						    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
-						struct_fields.push_back(make_pair(child_name, child_type));
-					}
+				// Collect ALL instances of this child element from ALL parent instances
+				for (xmlNodePtr instance : column.instances) {
+					CollectChildElements(instance, child_name, options, nested_col.instances);
 				}
+
+				nested_col.occurrence_count = child_max_counts[child_name];
+				nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+
+				// Recursively infer type with decreased depth
+				// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
+				// Custom datetime formats in nested STRUCTs fall back to default parsing.
+				// Proper fix requires a format-per-field map threaded through extraction.
+				std::string nested_winning_fmt;
+				LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
+				struct_fields.push_back(make_pair(child_name, child_type));
 			}
 		}
 
@@ -555,39 +564,28 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	if (!child_max_counts.empty()) {
 		// Build STRUCT type from children IN DOCUMENT ORDER
 		child_list_t<LogicalType> struct_fields;
-		std::unordered_set<std::string> seen_children;
 
-		// Iterate over children in document order to preserve field order
-		for (xmlNodePtr child = first->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				std::string child_name((const char *)child->name);
-				if (options.namespaces == "strip") {
-					child_name = StripNamespacePrefix(child_name);
-				}
+		// Iterate over children across ALL instances in document order so that optional
+		// fields absent from the first occurrence are still included in the struct.
+		std::vector<std::string> ordered_child_names;
+		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+		for (const std::string &child_name : ordered_child_names) {
+			// Create a ColumnAnalysis for this nested child
+			ColumnAnalysis nested_col(child_name, false);
 
-				// Only process each unique child name once (first occurrence)
-				if (seen_children.find(child_name) == seen_children.end()) {
-					seen_children.insert(child_name);
-
-					// Create a ColumnAnalysis for this nested child
-					ColumnAnalysis nested_col(child_name, false);
-
-					// Collect ALL instances of this child element from ALL parent instances
-					for (xmlNodePtr instance : column.instances) {
-						CollectChildElements(instance, child_name, options, nested_col.instances);
-					}
-
-					nested_col.occurrence_count = child_max_counts[child_name];
-					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
-
-					// Recursively infer type with decreased depth
-					// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
-					std::string nested_winning_fmt2;
-					LogicalType child_type =
-					    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
-					struct_fields.push_back(make_pair(child_name, child_type));
-				}
+			// Collect ALL instances of this child element from ALL parent instances
+			for (xmlNodePtr instance : column.instances) {
+				CollectChildElements(instance, child_name, options, nested_col.instances);
 			}
+
+			nested_col.occurrence_count = child_max_counts[child_name];
+			nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+
+			// Recursively infer type with decreased depth
+			// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
+			std::string nested_winning_fmt2;
+			LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
+			struct_fields.push_back(make_pair(child_name, child_type));
 		}
 
 		if (!struct_fields.empty()) {

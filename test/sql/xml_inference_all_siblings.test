@@ -1,0 +1,35 @@
+# name: test/sql/xml_inference_all_siblings.test
+# description: Single-file schema inference for a repeated element (LIST<STRUCT>) must scan
+#             ALL occurrences, not just the first, when building the struct's fields. An
+#             optional grandchild absent from the first occurrence but present in a later
+#             one must appear in the inferred struct (nullable) with its value preserved.
+#             No union_by_name, no multiple files.
+# group: [sql]
+
+require webbed
+
+# ---------------------------------------------------------------------------
+# struct_widen_firstelem.xml has one <doc> with three <perm> occurrences. The
+# optional <extra> grandchild appears ONLY in the last (third) <perm>, so the
+# inferred struct must reflect a scan of every sibling, not just the first.
+# ---------------------------------------------------------------------------
+
+# The inferred LIST<STRUCT> must include the optional <extra> field.
+query T
+SELECT typeof(perm) FROM read_xml('test/xml/struct_widen_firstelem.xml', record_element := 'doc') LIMIT 1;
+----
+STRUCT("name" VARCHAR, extra BOOLEAN)[]
+
+# No data dropped: all three <perm> survive, <extra> populated only on Lead,
+# NULL on the earlier occurrences that omit it.
+query TT
+SELECT p.name, p.extra
+FROM (
+  SELECT unnest(perm) AS p
+  FROM read_xml('test/xml/struct_widen_firstelem.xml', record_element := 'doc')
+)
+ORDER BY p.name;
+----
+Account	NULL
+Contact	NULL
+Lead	true

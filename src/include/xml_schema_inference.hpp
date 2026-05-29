@@ -265,6 +265,11 @@ private:
 	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name, const XMLSchemaOptions &options,
 	                                 std::vector<xmlNodePtr> &result);
 
+	// Collect the union of distinct child element names across all parent instances, preserving
+	// first-seen document order. Ensures optional fields absent from the first instance are included.
+	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
+	                                     std::vector<std::string> &result);
+
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 
 	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,
