@@ -33,12 +33,11 @@ struct SAXRecordAccumulator {
 
 	// Accumulated data for current record. Scalar/text values and nested-XML values are tracked
 	// in parallel maps so the rich-typing path (STRUCT, LIST<STRUCT>) can re-parse the inner XML.
-	std::unordered_map<std::string, std::string> current_values;             // field_name -> scalar value
-	std::unordered_map<std::string, std::vector<std::string>> current_lists; // field_name -> repeated values
-	std::unordered_map<std::string, std::string> current_xml_values;         // field_name -> inner XML fragment
-	std::unordered_map<std::string, std::vector<std::string>>
-	    current_xml_lists;                                                   // field_name -> repeated inner XML
-	std::unordered_map<std::string, std::string> current_attributes;         // attr_name -> value
+	std::unordered_map<std::string, std::string> current_values;                 // field_name -> scalar value
+	std::unordered_map<std::string, std::vector<std::string>> current_lists;     // field_name -> repeated values
+	std::unordered_map<std::string, std::string> current_xml_values;             // field_name -> inner XML fragment
+	std::unordered_map<std::string, std::vector<std::string>> current_xml_lists; // field_name -> repeated inner XML
+	std::unordered_map<std::string, std::string> current_attributes;             // attr_name -> value
 
 	// Text accumulation (SAX may split text across multiple characters() callbacks)
 	std::string current_text;

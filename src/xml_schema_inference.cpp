@@ -1322,8 +1322,8 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 
 	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
 	auto is_complex = [](const LogicalType &t) {
-		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST ||
-		       t.id() == LogicalTypeId::MAP || t.id() == LogicalTypeId::ARRAY;
+		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST || t.id() == LogicalTypeId::MAP ||
+		       t.id() == LogicalTypeId::ARRAY;
 	};
 	if (is_complex(a) || is_complex(b)) {
 		return LogicalType::VARCHAR;
@@ -1829,8 +1829,7 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 }
 
 Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                      const LogicalType &target_type,
-                                                      const XMLSchemaOptions &options) {
+                                                      const LogicalType &target_type, const XMLSchemaOptions &options) {
 	if (inner_xml.empty()) {
 		return Value(target_type);
 	}
@@ -1838,7 +1837,13 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
 	// receives a node whose ->children are the original siblings.
 	std::string wrapped;
 	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + 5);
-	wrapped.append("<").append(wrapper_name).append(">").append(inner_xml).append("</").append(wrapper_name).append(">");
+	wrapped.append("<")
+	    .append(wrapper_name)
+	    .append(">")
+	    .append(inner_xml)
+	    .append("</")
+	    .append(wrapper_name)
+	    .append(">");
 
 	XMLDocRAII doc(wrapped);
 	if (!doc.doc) {

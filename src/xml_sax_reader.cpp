@@ -558,8 +558,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			// text and XML items is not preserved (the accumulator stores them in parallel maps);
 			// items within a single map keep their relative order.
 			auto child_type = ListType::GetChildType(col_type);
-			const bool child_is_complex = (child_type.id() == LogicalTypeId::STRUCT ||
-			                               child_type.id() == LogicalTypeId::LIST);
+			const bool child_is_complex =
+			    (child_type.id() == LogicalTypeId::STRUCT || child_type.id() == LogicalTypeId::LIST);
 
 			const auto &text_items = accumulator.GetListValues(col_name);
 			std::string text_single = accumulator.GetValue(col_name);
@@ -575,8 +575,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					// Text inside a complex-typed list: wrap so ExtractValueFromXmlFragment can
 					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
 					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
-					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
-					    col_name, XmlEscapeText(item), child_type, options));
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(item),
+					                                                                    child_type, options));
 				} else {
 					list_vals.push_back(
 					    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
