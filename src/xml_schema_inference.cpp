@@ -1325,6 +1325,33 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST || t.id() == LogicalTypeId::MAP ||
 		       t.id() == LogicalTypeId::ARRAY;
 	};
+
+	// Cardinality mismatch: an element occurring once infers as a scalar T, the same element
+	// occurring 2+ times in another file infers as LIST<T>. Reconcile by treating the singleton
+	// as a one-element list and widening the element types, so the union is LIST<T'> rather than
+	// collapsing to VARCHAR and dropping rows. This applies when the singleton and the list's
+	// element are compatible: the same complex kind (e.g. STRUCT vs LIST<STRUCT>) or both scalar.
+	// A genuinely different shape such as STRUCT vs LIST<VARCHAR> is a true collision and falls
+	// through to the VARCHAR fallback below.
+	auto reconcilable = [&](const LogicalType &element, const LogicalType &singleton) {
+		if (is_complex(element) || is_complex(singleton)) {
+			return element.id() == singleton.id();
+		}
+		return true;
+	};
+	if (a.id() == LogicalTypeId::LIST && b.id() != LogicalTypeId::LIST) {
+		auto &element = ListType::GetChildType(a);
+		if (reconcilable(element, b)) {
+			return LogicalType::LIST(MergeXMLColumnType(element, b));
+		}
+	}
+	if (b.id() == LogicalTypeId::LIST && a.id() != LogicalTypeId::LIST) {
+		auto &element = ListType::GetChildType(b);
+		if (reconcilable(element, a)) {
+			return LogicalType::LIST(MergeXMLColumnType(a, element));
+		}
+	}
+
 	if (is_complex(a) || is_complex(b)) {
 		return LogicalType::VARCHAR;
 	}

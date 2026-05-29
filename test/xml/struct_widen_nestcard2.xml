@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <doc>
+    <perm>
+      <name>Contact</name>
+      <flag>
+        <k>read</k>
+      </flag>
+      <flag>
+        <k>write</k>
+      </flag>
+    </perm>
+    <perm>
+      <name>Lead</name>
+      <flag>
+        <k>read</k>
+      </flag>
+    </perm>
+  </doc>
+</root>

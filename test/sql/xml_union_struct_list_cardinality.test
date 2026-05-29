@@ -1,0 +1,84 @@
+# name: test/sql/xml_union_struct_list_cardinality.test
+# description: union_by_name must reconcile an element that infers as a scalar STRUCT in one
+#             file (single occurrence) with LIST<STRUCT> in another (2+ occurrences) by
+#             promoting the singleton to a one-element list and widening, NOT collapsing to
+#             VARCHAR and dropping data.
+# group: [sql]
+
+require webbed
+
+# ---------------------------------------------------------------------------
+# Cardinality mismatch: scalar STRUCT (card1, one <perm>) vs LIST<STRUCT>
+# (card2, two <perm>). card1 also carries an optional field (viewAll) absent
+# from card2, exercising field widening at the same time.
+# ---------------------------------------------------------------------------
+
+# File order (card1, card2): union must be a LIST, not VARCHAR.
+query T
+SELECT typeof(perm) FROM read_xml(['test/xml/struct_widen_card1.xml', 'test/xml/struct_widen_card2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT("name" VARCHAR, viewAll BOOLEAN)[]
+
+# Reversed order (card2, card1): same widened LIST type, order-independent.
+query T
+SELECT typeof(perm) FROM read_xml(['test/xml/struct_widen_card2.xml', 'test/xml/struct_widen_card1.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT("name" VARCHAR, viewAll BOOLEAN)[]
+
+# No data dropped: unnesting yields all 3 perms (1 from card1 + 2 from card2),
+# with viewAll populated where present and NULL where absent.
+query TT
+SELECT p.name, p.viewAll
+FROM (
+  SELECT unnest(perm) AS p
+  FROM read_xml(['test/xml/struct_widen_card1.xml', 'test/xml/struct_widen_card2.xml'],
+      record_element := 'doc', union_by_name := true)
+)
+ORDER BY p.name;
+----
+Account	true
+Contact	NULL
+Lead	NULL
+
+# Same data regardless of file order.
+query TT
+SELECT p.name, p.viewAll
+FROM (
+  SELECT unnest(perm) AS p
+  FROM read_xml(['test/xml/struct_widen_card2.xml', 'test/xml/struct_widen_card1.xml'],
+      record_element := 'doc', union_by_name := true)
+)
+ORDER BY p.name;
+----
+Account	true
+Contact	NULL
+Lead	NULL
+
+# ---------------------------------------------------------------------------
+# Nested cardinality mismatch: a struct field (<flag>) is itself singleton in
+# one file and a list in the other, under an outer <perm> that is also
+# singleton-vs-list across the files.
+# ---------------------------------------------------------------------------
+
+query T
+SELECT typeof(perm) FROM read_xml(['test/xml/struct_widen_nestcard1.xml', 'test/xml/struct_widen_nestcard2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT("name" VARCHAR, flag STRUCT(k VARCHAR)[])[]
+
+# All <perm> and <flag> entries survive: nestcard1 has 1 perm (Account, 1 flag),
+# nestcard2 has 2 perms (Contact with 2 flags, Lead with 1 flag).
+query TI
+SELECT p.name, len(p.flag)
+FROM (
+  SELECT unnest(perm) AS p
+  FROM read_xml(['test/xml/struct_widen_nestcard1.xml', 'test/xml/struct_widen_nestcard2.xml'],
+      record_element := 'doc', union_by_name := true)
+)
+ORDER BY p.name;
+----
+Account	1
+Contact	2
+Lead	1

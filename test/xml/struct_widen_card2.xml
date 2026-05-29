@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <doc>
+    <perm>
+      <name>Contact</name>
+    </perm>
+    <perm>
+      <name>Lead</name>
+    </perm>
+  </doc>
+</root>
