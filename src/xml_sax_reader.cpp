@@ -18,8 +18,8 @@ void SAXRecordAccumulator::Reset() {
 	nested_xml.clear();
 	nested_depth = 0;
 	row_ready = false;
-	// Note: element_stack, current_depth, record_depth, record_tag, namespace_mode
-	// are NOT reset — they persist across records
+	// Note: element_stack, current_depth, record_depth, record_tag, namespace_mode,
+	// namespace_declarations are NOT reset — they persist across records
 }
 
 const std::vector<FieldOccurrence> &SAXRecordAccumulator::GetOccurrences(const std::string &name) const {
@@ -91,6 +91,14 @@ static std::string XmlEscapeAttr(const std::string &text) {
 	return result;
 }
 
+std::string SAXRecordAccumulator::BuildNamespaceDeclarations() const {
+	std::string result;
+	for (const auto &ns : namespace_declarations) {
+		result += " xmlns:" + ns.first + "=\"" + XmlEscapeAttr(ns.second) + "\"";
+	}
+	return result;
+}
+
 // ─── Helper: resolve element name based on namespace mode ───────────────────
 
 static std::string ResolveElementName(const xmlChar *localname, const xmlChar *prefix,
@@ -131,6 +139,20 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 	std::string name = ResolveElementName(localname, prefix, acc->namespace_mode);
 	acc->current_depth++;
 	acc->element_stack.push_back(name);
+
+	// In keep mode, record each prefixed namespace declaration so reparsed nested-XML fragments can
+	// resolve their prefixes. Skip the default namespace (null prefix): extraction matches by local
+	// name, so only prefixes need resolving.
+	if (acc->namespace_mode == "keep") {
+		for (int i = 0; i < nb_namespaces; i++) {
+			const xmlChar *ns_prefix = namespaces[i * 2];
+			const xmlChar *ns_uri = namespaces[i * 2 + 1];
+			if (ns_prefix != nullptr && ns_uri != nullptr) {
+				acc->namespace_declarations[reinterpret_cast<const char *>(ns_prefix)] =
+				    reinterpret_cast<const char *>(ns_uri);
+			}
+		}
+	}
 
 	if (acc->state == SAXAccumulatorState::SEEKING_RECORD) {
 		// Determine if this element is a record element
@@ -395,9 +417,12 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	}
 
 	// Build a synthetic XML document from accumulated records
-	// This lets us reuse the existing DOM-based InferSchema
+	// This lets us reuse the existing DOM-based InferSchema. Declare any prefixed namespaces on the
+	// synthetic root so prefixed nested elements parse under strict (non-recovery) inference.
+	// namespace_declarations accumulates monotonically across the parse and is never reset, so the
+	// last record's snapshot is the union of every declaration seen while sampling.
 	std::ostringstream xml;
-	xml << "<root>";
+	xml << "<root" << records.back().BuildNamespaceDeclarations() << ">";
 
 	for (const auto &record : records) {
 		xml << "<record>";
@@ -456,6 +481,10 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 	std::vector<Value> row;
 	row.reserve(column_names.size());
 
+	// Namespace declarations to splice into reparsed fragments so prefixed names resolve (empty
+	// unless namespaces:='keep'). Built once and reused across columns.
+	const std::string ns_decls = accumulator.BuildNamespaceDeclarations();
+
 	for (idx_t i = 0; i < column_names.size(); i++) {
 		const auto &col_name = column_names[i];
 		const auto &col_type = column_types[i];
@@ -491,8 +520,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			if (occs.empty()) {
 				value = Value(col_type); // typed NULL
 			} else if (occs.front().is_xml) {
-				value =
-				    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, occs.front().payload, col_type, options);
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, occs.front().payload, col_type,
+				                                                        options, ns_decls);
 			} else {
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
 				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
@@ -501,7 +530,7 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					value = Value(col_type); // typed NULL
 				} else {
 					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(text), col_type,
-					                                                        options);
+					                                                        options, ns_decls);
 				}
 			}
 		} else if (col_type.id() == LogicalTypeId::LIST) {
@@ -522,7 +551,7 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
 					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
 					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(item),
-					                                                                    child_type, options));
+					                                                                    child_type, options, ns_decls));
 				} else {
 					list_vals.push_back(
 					    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
@@ -531,7 +560,7 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			auto append_xml = [&](const std::string &frag) {
 				if (child_is_complex) {
 					list_vals.push_back(
-					    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, frag, child_type, options));
+					    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, frag, child_type, options, ns_decls));
 				} else if (child_type.id() == LogicalTypeId::VARCHAR) {
 					// Scalar-typed list with an XML item: surface the serialized fragment.
 					list_vals.push_back(Value(frag));

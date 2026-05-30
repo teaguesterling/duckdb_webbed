@@ -4,6 +4,7 @@
 #include "xml_schema_inference.hpp"
 #include <libxml/parser.h>
 #include <libxml/xmlstring.h>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -44,6 +45,11 @@ struct SAXRecordAccumulator {
 	std::unordered_map<std::string, std::vector<FieldOccurrence>> current_fields; // field_name -> ordered occurrences
 	std::unordered_map<std::string, std::string> current_attributes;              // attr_name -> value
 
+	// Namespace declarations (prefix -> URI) seen anywhere in the document, accumulated globally so
+	// reparsed nested-XML fragments can resolve prefixed names. Intentionally NOT cleared by Reset()
+	// since root-level xmlns: declarations appear before the first record.
+	std::map<std::string, std::string> namespace_declarations;
+
 	// Text accumulation (SAX may split text across multiple characters() callbacks)
 	std::string current_text;
 	std::string current_element_name; // Name of the element whose text we're accumulating
@@ -60,6 +66,10 @@ struct SAXRecordAccumulator {
 
 	// Get a field's occurrences in document order (empty vector if the field is absent)
 	const std::vector<FieldOccurrence> &GetOccurrences(const std::string &name) const;
+
+	// Serialize accumulated namespace declarations as ` xmlns:prefix="uri"...` (empty if none),
+	// ready to splice into a synthetic wrapper element's open tag.
+	std::string BuildNamespaceDeclarations() const;
 
 	// Check if an attribute exists
 	bool HasAttribute(const std::string &name) const;

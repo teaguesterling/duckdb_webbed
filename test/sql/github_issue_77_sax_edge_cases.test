@@ -37,3 +37,62 @@ SELECT (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element
      = (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record'));
 ----
 true
+
+# =============================================================================
+# Fix 1: namespace declarations injected into reparsed SAX fragments
+# =============================================================================
+#
+# sax_ns_keep.xml declares xmlns:ns on the root and uses <ns:tag> inside a
+# nested element. With namespaces:='keep' the SAX reader captures the prefixed
+# name into the fragment; reparsing it requires the xmlns:ns declaration, which
+# is injected from the accumulated document declarations. Without the fix the
+# strict reparse failed and the value collapsed to a typed NULL.
+
+# DOM reference: keep mode surfaces the nested value
+query II
+SELECT typeof(data), data.tag
+FROM read_xml('test/xml/sax_ns_keep.xml', record_element:='record', namespaces:='keep');
+----
+STRUCT(tag VARCHAR)	value
+
+# SAX: keep mode must also surface the value, not a typed NULL
+query II
+SELECT typeof(data), data.tag
+FROM read_xml('test/xml/sax_ns_keep.xml', record_element:='record', namespaces:='keep', maximum_file_size:=1);
+----
+STRUCT(tag VARCHAR)	value
+
+# strip-mode control: default strips the prefix before capture; behavior unchanged
+query II
+SELECT typeof(data), data.tag
+FROM read_xml('test/xml/sax_ns_keep.xml', record_element:='record');
+----
+STRUCT(tag VARCHAR)	value
+
+query II
+SELECT typeof(data), data.tag
+FROM read_xml('test/xml/sax_ns_keep.xml', record_element:='record', maximum_file_size:=1);
+----
+STRUCT(tag VARCHAR)	value
+
+# Namespace first declared on a later record (not the document root). Schema
+# inference must declare the cumulative set of prefixes on the synthetic root,
+# so the prefix resolves (field named 'b', not 'ns:b') and the value surfaces.
+
+# DOM reference
+query III
+SELECT typeof(item), item.a, item.b
+FROM read_xml('test/xml/sax_ns_later_record.xml', record_element:='record', namespaces:='keep')
+ORDER BY item.a NULLS LAST;
+----
+STRUCT(a INTEGER, b INTEGER)	1	NULL
+STRUCT(a INTEGER, b INTEGER)	NULL	2
+
+# SAX: must match DOM (was field 'ns:b' with value lost before the back() fix)
+query III
+SELECT typeof(item), item.a, item.b
+FROM read_xml('test/xml/sax_ns_later_record.xml', record_element:='record', namespaces:='keep', maximum_file_size:=1)
+ORDER BY item.a NULLS LAST;
+----
+STRUCT(a INTEGER, b INTEGER)	1	NULL
+STRUCT(a INTEGER, b INTEGER)	NULL	2
