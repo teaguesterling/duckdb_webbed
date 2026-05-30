@@ -547,10 +547,18 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			// STRUCT column: the child element had element children, captured as inner XML during
 			// streaming. Re-parse and dispatch through the DOM extractor.
 			std::string inner_xml = accumulator.GetXmlValue(col_name);
-			if (inner_xml.empty()) {
-				value = Value(col_type); // typed NULL
-			} else {
+			if (!inner_xml.empty()) {
 				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, inner_xml, col_type, options);
+			} else {
+				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
+				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
+				std::string text = accumulator.GetValue(col_name);
+				if (text.empty() || IsNullString(text, options)) {
+					value = Value(col_type); // typed NULL
+				} else {
+					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(text), col_type,
+					                                                        options);
+				}
 			}
 		} else if (col_type.id() == LogicalTypeId::LIST) {
 			// LIST column. Combine text-shaped items (current_lists / current_values) and
@@ -622,6 +630,18 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 				std::string inner_xml = accumulator.GetXmlValue(col_name);
 				if (!inner_xml.empty() && col_type.id() == LogicalTypeId::VARCHAR) {
 					value = Value(inner_xml);
+				} else if (col_type.id() == LogicalTypeId::VARCHAR) {
+					// Widened to VARCHAR but the element repeated: concatenate the list-map items so they
+					// are not dropped. Text items get wrapped in their element tag (mirroring the LIST
+					// branch); XML items are already serialized fragments. Order across maps is not kept.
+					std::string serialized;
+					for (const auto &item : accumulator.GetListValues(col_name)) {
+						serialized += "<" + col_name + ">" + XmlEscapeText(item) + "</" + col_name + ">";
+					}
+					for (const auto &frag : accumulator.GetXmlListValues(col_name)) {
+						serialized += frag;
+					}
+					value = serialized.empty() ? Value() : Value(serialized);
 				} else {
 					value = Value(); // NULL
 				}

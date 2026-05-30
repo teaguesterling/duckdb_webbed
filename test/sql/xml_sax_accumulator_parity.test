@@ -1,0 +1,57 @@
+# name: test/sql/xml_sax_accumulator_parity.test
+# description: The SAX streaming path produces the same values as DOM for text-only STRUCT
+#             fields and for list-shaped columns that union_by_name widens to VARCHAR.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Text-only occurrence of a STRUCT column. <addr> is STRUCT(street VARCHAR):
+# one record carries element children, a later record is text-only. Both paths
+# represent the text-only row as a non-NULL struct shell with street NULL.
+# =============================================================================
+
+# DOM baseline: text-only row (id=2) yields a non-NULL struct shell, street NULL.
+query III
+SELECT id, (addr IS NULL) AS addr_is_null, addr.street AS street
+FROM read_xml('test/xml/sax_struct_text_parity.xml', record_element := 'rec')
+ORDER BY id;
+----
+1	false	X
+2	false	NULL
+
+# SAX (maximum_file_size := 1) must match the DOM baseline exactly.
+query III
+SELECT id, (addr IS NULL) AS addr_is_null, addr.street AS street
+FROM read_xml('test/xml/sax_struct_text_parity.xml', record_element := 'rec', maximum_file_size := 1)
+ORDER BY id;
+----
+1	false	X
+2	false	NULL
+
+# =============================================================================
+# List-shaped column widened to VARCHAR by union_by_name. File A (read via SAX,
+# exceeds maximum_file_size) repeats <t> as text (LIST<VARCHAR>) and <s> as
+# nested XML (LIST<STRUCT(k)>). File B (DOM) collides each so both widen to
+# VARCHAR: <t> is a STRUCT, <s> is scalar text. <t> covers GetListValues, <s>
+# covers GetXmlListValues, so both columns are checked.
+# =============================================================================
+
+# Both colliding columns widen to VARCHAR.
+query TT
+SELECT typeof(t), typeof(s)
+FROM read_xml(['test/xml/sax_list_widen_varchar_big.xml', 'test/xml/sax_list_widen_varchar_small.xml'],
+    record_element := 'doc', union_by_name := true, maximum_file_size := 1024)
+LIMIT 1;
+----
+VARCHAR	VARCHAR
+
+# Every row carries non-NULL values for both widened columns: 30 SAX rows from
+# File A plus 1 DOM row from File B.
+query II
+SELECT COUNT(*) FILTER (WHERE t IS NOT NULL) AS nonnull_t,
+       COUNT(*) FILTER (WHERE s IS NOT NULL) AS nonnull_s
+FROM read_xml(['test/xml/sax_list_widen_varchar_big.xml', 'test/xml/sax_list_widen_varchar_small.xml'],
+    record_element := 'doc', union_by_name := true, maximum_file_size := 1024);
+----
+31	31
