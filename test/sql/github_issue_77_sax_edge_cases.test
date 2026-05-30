@@ -1,0 +1,39 @@
+# name: test/sql/github_issue_77_sax_edge_cases.test
+# description: SAX rich-typing edge cases (issue #77): mixed text/XML list order, namespace decls
+# group: [sql]
+
+require webbed
+
+statement ok
+PRAGMA enable_verification
+
+# =============================================================================
+# Fix 2: document order preserved for mixed bare-text / nested-XML occurrences
+# =============================================================================
+#
+# sax_mixed_order.xml has a repeated <item>: text, nested-XML, text (in that
+# order). The list child unifies to STRUCT(nested), so the distinguishing
+# occurrence is the middle one ({nested: deep}). Before the fix the SAX reader
+# emitted all text occurrences first then all XML, pushing {nested: deep} to the
+# end; document order keeps it in the middle.
+
+# DOM reference: nested-XML occurrence stays in the middle
+query IIII
+SELECT len(item), item[1].nested IS NULL, item[2].nested, item[3].nested IS NULL
+FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record');
+----
+3	true	deep	true
+
+# SAX: same document order (was text-then-XML before the fix)
+query IIII
+SELECT len(item), item[1].nested IS NULL, item[2].nested, item[3].nested IS NULL
+FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record', maximum_file_size:=1);
+----
+3	true	deep	true
+
+# SAX <-> DOM equivalence on the full ordered list
+query I
+SELECT (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record', maximum_file_size:=1))
+     = (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record'));
+----
+true

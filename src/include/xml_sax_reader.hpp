@@ -17,6 +17,13 @@ enum class SAXAccumulatorState {
 	RECORD_COMPLETE // A complete record has been accumulated
 };
 
+// A single occurrence of a record field, tagged by payload kind. Occurrences are stored in
+// document order so a field mixing bare-text and nested-XML siblings keeps its original sequence.
+struct FieldOccurrence {
+	bool is_xml;         // true = nested-XML fragment, false = text payload
+	std::string payload; // serialized XML fragment (is_xml) or cleaned text (!is_xml)
+};
+
 // Accumulates field data from SAX events for a single XML record
 struct SAXRecordAccumulator {
 	// Current state
@@ -31,13 +38,11 @@ struct SAXRecordAccumulator {
 	std::vector<std::string> element_stack; // Stack of element names
 	int current_depth = 0;                  // Current nesting depth
 
-	// Accumulated data for current record. Scalar/text values and nested-XML values are tracked
-	// in parallel maps so the rich-typing path (STRUCT, LIST<STRUCT>) can re-parse the inner XML.
-	std::unordered_map<std::string, std::string> current_values;                 // field_name -> scalar value
-	std::unordered_map<std::string, std::vector<std::string>> current_lists;     // field_name -> repeated values
-	std::unordered_map<std::string, std::string> current_xml_values;             // field_name -> inner XML fragment
-	std::unordered_map<std::string, std::vector<std::string>> current_xml_lists; // field_name -> repeated inner XML
-	std::unordered_map<std::string, std::string> current_attributes;             // attr_name -> value
+	// Accumulated data for current record. Each field maps to its occurrences in document order,
+	// each tagged as text or nested-XML so the rich-typing path (STRUCT, LIST<STRUCT>) can re-parse
+	// the inner XML while preserving the original sequence of mixed text/XML siblings.
+	std::unordered_map<std::string, std::vector<FieldOccurrence>> current_fields; // field_name -> ordered occurrences
+	std::unordered_map<std::string, std::string> current_attributes;              // attr_name -> value
 
 	// Text accumulation (SAX may split text across multiple characters() callbacks)
 	std::string current_text;
@@ -53,17 +58,8 @@ struct SAXRecordAccumulator {
 	// Reset accumulator for next record
 	void Reset();
 
-	// Get a scalar value by field name (empty string if not found)
-	std::string GetValue(const std::string &name) const;
-
-	// Get list values by field name (empty vector if not found)
-	const std::vector<std::string> &GetListValues(const std::string &name) const;
-
-	// Get an inner-XML fragment by field name (empty string if the field carried only text)
-	std::string GetXmlValue(const std::string &name) const;
-
-	// Get inner-XML fragments for a repeated field (empty vector if not present)
-	const std::vector<std::string> &GetXmlListValues(const std::string &name) const;
+	// Get a field's occurrences in document order (empty vector if the field is absent)
+	const std::vector<FieldOccurrence> &GetOccurrences(const std::string &name) const;
 
 	// Check if an attribute exists
 	bool HasAttribute(const std::string &name) const;
