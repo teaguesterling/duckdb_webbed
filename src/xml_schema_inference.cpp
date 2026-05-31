@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <regex>
@@ -46,6 +47,27 @@ void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::stri
 			}
 			if (sibling_name == child_name) {
 				result.push_back(sibling);
+			}
+		}
+	}
+}
+
+// Helper: Collect the union of distinct child element names across all parent instances,
+// preserving first-seen document order so optional fields absent from the first instance
+// are still represented in the inferred struct.
+void XMLSchemaInference::CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances,
+                                                  const XMLSchemaOptions &options, std::vector<std::string> &result) {
+	std::unordered_set<std::string> seen;
+	for (xmlNodePtr instance : instances) {
+		for (xmlNodePtr child = instance->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				std::string child_name((const char *)child->name);
+				if (options.namespaces == "strip") {
+					child_name = StripNamespacePrefix(child_name);
+				}
+				if (seen.insert(child_name).second) {
+					result.push_back(child_name);
+				}
 			}
 		}
 	}
@@ -482,41 +504,29 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
-			std::unordered_set<std::string> seen_children;
+			// Iterate over children across ALL instances in document order so that optional
+			// fields absent from the first occurrence are still included in the struct.
+			std::vector<std::string> ordered_child_names;
+			CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+			for (const std::string &child_name : ordered_child_names) {
+				// Create a ColumnAnalysis for this nested child
+				ColumnAnalysis nested_col(child_name, false);
 
-			// Iterate over children in document order to preserve field order
-			for (xmlNodePtr child = first->children; child; child = child->next) {
-				if (child->type == XML_ELEMENT_NODE) {
-					std::string child_name((const char *)child->name);
-					if (options.namespaces == "strip") {
-						child_name = StripNamespacePrefix(child_name);
-					}
-
-					// Only process each unique child name once (first occurrence)
-					if (seen_children.find(child_name) == seen_children.end()) {
-						seen_children.insert(child_name);
-
-						// Create a ColumnAnalysis for this nested child
-						ColumnAnalysis nested_col(child_name, false);
-
-						// Collect ALL instances of this child element from ALL parent instances
-						for (xmlNodePtr instance : column.instances) {
-							CollectChildElements(instance, child_name, options, nested_col.instances);
-						}
-
-						nested_col.occurrence_count = child_max_counts[child_name];
-						nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
-
-						// Recursively infer type with decreased depth
-						// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
-						// Custom datetime formats in nested STRUCTs fall back to default parsing.
-						// Proper fix requires a format-per-field map threaded through extraction.
-						std::string nested_winning_fmt;
-						LogicalType child_type =
-						    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
-						struct_fields.push_back(make_pair(child_name, child_type));
-					}
+				// Collect ALL instances of this child element from ALL parent instances
+				for (xmlNodePtr instance : column.instances) {
+					CollectChildElements(instance, child_name, options, nested_col.instances);
 				}
+
+				nested_col.occurrence_count = child_max_counts[child_name];
+				nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+
+				// Recursively infer type with decreased depth
+				// TODO(#38): nested_winning_fmt is computed but discarded for STRUCT children.
+				// Custom datetime formats in nested STRUCTs fall back to default parsing.
+				// Proper fix requires a format-per-field map threaded through extraction.
+				std::string nested_winning_fmt;
+				LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
+				struct_fields.push_back(make_pair(child_name, child_type));
 			}
 		}
 
@@ -554,39 +564,28 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	if (!child_max_counts.empty()) {
 		// Build STRUCT type from children IN DOCUMENT ORDER
 		child_list_t<LogicalType> struct_fields;
-		std::unordered_set<std::string> seen_children;
 
-		// Iterate over children in document order to preserve field order
-		for (xmlNodePtr child = first->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				std::string child_name((const char *)child->name);
-				if (options.namespaces == "strip") {
-					child_name = StripNamespacePrefix(child_name);
-				}
+		// Iterate over children across ALL instances in document order so that optional
+		// fields absent from the first occurrence are still included in the struct.
+		std::vector<std::string> ordered_child_names;
+		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+		for (const std::string &child_name : ordered_child_names) {
+			// Create a ColumnAnalysis for this nested child
+			ColumnAnalysis nested_col(child_name, false);
 
-				// Only process each unique child name once (first occurrence)
-				if (seen_children.find(child_name) == seen_children.end()) {
-					seen_children.insert(child_name);
-
-					// Create a ColumnAnalysis for this nested child
-					ColumnAnalysis nested_col(child_name, false);
-
-					// Collect ALL instances of this child element from ALL parent instances
-					for (xmlNodePtr instance : column.instances) {
-						CollectChildElements(instance, child_name, options, nested_col.instances);
-					}
-
-					nested_col.occurrence_count = child_max_counts[child_name];
-					nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
-
-					// Recursively infer type with decreased depth
-					// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
-					std::string nested_winning_fmt2;
-					LogicalType child_type =
-					    InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
-					struct_fields.push_back(make_pair(child_name, child_type));
-				}
+			// Collect ALL instances of this child element from ALL parent instances
+			for (xmlNodePtr instance : column.instances) {
+				CollectChildElements(instance, child_name, options, nested_col.instances);
 			}
+
+			nested_col.occurrence_count = child_max_counts[child_name];
+			nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+
+			// Recursively infer type with decreased depth
+			// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
+			std::string nested_winning_fmt2;
+			LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
+			struct_fields.push_back(make_pair(child_name, child_type));
 		}
 
 		if (!struct_fields.empty()) {
@@ -1276,6 +1275,101 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	return result;
 }
 
+LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b) {
+	if (a == b) {
+		return a;
+	}
+
+	if (a.id() == LogicalTypeId::STRUCT && b.id() == LogicalTypeId::STRUCT) {
+		auto &a_children = StructType::GetChildTypes(a);
+		auto &b_children = StructType::GetChildTypes(b);
+
+		// DuckDB STRUCT requires case-insensitive uniqueness of field names (LogicalType::Verify
+		// asserts this), so we must merge case-insensitively. The first-seen casing wins.
+		// ExtractStructFromNode does case-insensitive matching against XML element names to keep
+		// extraction consistent with this merge semantic.
+		case_insensitive_map_t<idx_t> b_index;
+		for (idx_t i = 0; i < b_children.size(); i++) {
+			b_index[b_children[i].first] = i;
+		}
+
+		child_list_t<LogicalType> merged;
+		for (auto &ac : a_children) {
+			auto it = b_index.find(ac.first);
+			if (it == b_index.end()) {
+				merged.emplace_back(ac.first, ac.second);
+			} else {
+				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second));
+				b_index.erase(it);
+			}
+		}
+		// Append b-only fields in b's original order
+		for (auto &bc : b_children) {
+			auto it = b_index.find(bc.first);
+			if (it != b_index.end()) {
+				merged.emplace_back(bc.first, bc.second);
+				b_index.erase(it);
+			}
+		}
+		return LogicalType::STRUCT(std::move(merged));
+	}
+
+	if (a.id() == LogicalTypeId::LIST && b.id() == LogicalTypeId::LIST) {
+		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b)));
+	}
+
+	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
+	auto is_complex = [](const LogicalType &t) {
+		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST || t.id() == LogicalTypeId::MAP ||
+		       t.id() == LogicalTypeId::ARRAY;
+	};
+
+	// Cardinality mismatch: an element occurring once infers as a scalar T, the same element
+	// occurring 2+ times in another file infers as LIST<T>. Reconcile by treating the singleton
+	// as a one-element list and widening the element types, so the union is LIST<T'> rather than
+	// collapsing to VARCHAR and dropping rows. This applies when the singleton and the list's
+	// element are compatible: the same complex kind (e.g. STRUCT vs LIST<STRUCT>) or both scalar.
+	// A genuinely different shape such as STRUCT vs LIST<VARCHAR> is a true collision and falls
+	// through to the VARCHAR fallback below.
+	auto reconcilable = [&](const LogicalType &element, const LogicalType &singleton) {
+		if (is_complex(element) || is_complex(singleton)) {
+			return element.id() == singleton.id();
+		}
+		return true;
+	};
+	if (a.id() == LogicalTypeId::LIST && b.id() != LogicalTypeId::LIST) {
+		auto &element = ListType::GetChildType(a);
+		if (reconcilable(element, b)) {
+			return LogicalType::LIST(MergeXMLColumnType(element, b));
+		}
+	}
+	if (b.id() == LogicalTypeId::LIST && a.id() != LogicalTypeId::LIST) {
+		auto &element = ListType::GetChildType(b);
+		if (reconcilable(element, a)) {
+			return LogicalType::LIST(MergeXMLColumnType(a, element));
+		}
+	}
+
+	if (is_complex(a) || is_complex(b)) {
+		return LogicalType::VARCHAR;
+	}
+
+	// Scalar/temporal/decimal: use the implicit-cast ladder when one exists.
+	// ForceMaxLogicalType picks the higher-scored type when no cast path exists (e.g., DATE vs INTEGER
+	// → DATE), which then throws ConversionException on the non-temporal file's rows. Verify both
+	// sides have an implicit cast path to the candidate; otherwise fall back to VARCHAR to preserve
+	// textual data. This avoids depending on TryGetMaxLogicalTypeUnchecked, which only exists on
+	// newer DuckDB.
+	LogicalType candidate = LogicalType::ForceMaxLogicalType(a, b);
+	auto castable = [&candidate](const LogicalType &t) {
+		return t == candidate || CastRules::ImplicitCast(t, candidate) >= 0;
+	};
+	if (castable(a) && castable(b)) {
+		return candidate;
+	}
+	return LogicalType::VARCHAR;
+}
+
 std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
 	// UTF-8-safe trim: only strip ASCII whitespace.
 	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
@@ -1759,6 +1853,34 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
+Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                      const LogicalType &target_type, const XMLSchemaOptions &options) {
+	if (inner_xml.empty()) {
+		return Value(target_type);
+	}
+	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
+	// receives a node whose ->children are the original siblings.
+	std::string wrapped;
+	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + 5);
+	wrapped.append("<")
+	    .append(wrapper_name)
+	    .append(">")
+	    .append(inner_xml)
+	    .append("</")
+	    .append(wrapper_name)
+	    .append(">");
+
+	XMLDocRAII doc(wrapped);
+	if (!doc.doc) {
+		return Value(target_type);
+	}
+	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
+	if (!root) {
+		return Value(target_type);
+	}
+	return ExtractValueFromNode(root, target_type, options);
+}
+
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
                                                const XMLSchemaOptions &options) {
 	if (!node) {
@@ -1774,8 +1896,45 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 	case LogicalTypeId::STRUCT:
 		return ExtractStructFromNode(node, target_type, options);
 	default: {
-		// For primitive types, extract text content and convert
+		// For primitive types, extract text content and convert.
 		// TODO(#38): No datetime_format passed here — nested primitives use default parsing.
+		// When target is VARCHAR and the node has element children (e.g., the column was widened
+		// from STRUCT to VARCHAR by union_by_name), serialize the XML fragment instead of
+		// concatenating descendant text. Without this, structured payloads collapse to joined text.
+		if (target_type.id() == LogicalTypeId::VARCHAR) {
+			bool has_element_children = false;
+			for (xmlNodePtr child = node->children; child; child = child->next) {
+				if (child->type == XML_ELEMENT_NODE) {
+					has_element_children = true;
+					break;
+				}
+			}
+			if (has_element_children) {
+				xmlBufferPtr buffer = xmlBufferCreate();
+				if (buffer) {
+					// Dump element children plus any real text content (mixed content like
+					// "foo <b/> bar"). Skip whitespace-only text nodes that libxml2 inserts
+					// between elements during pretty-print parsing, and use format=0 to avoid
+					// re-adding pretty-print whitespace.
+					for (xmlNodePtr child = node->children; child; child = child->next) {
+						if (child->type == XML_TEXT_NODE && xmlIsBlankNode(child)) {
+							continue;
+						}
+						xmlNodeDump(buffer, child->doc, child, 0, 0);
+					}
+					const xmlChar *content = xmlBufferContent(buffer);
+					Value result;
+					if (content) {
+						std::string fragment = (const char *)content;
+						result = ConvertToValue(fragment, target_type, options);
+					} else {
+						result = Value(); // NULL
+					}
+					xmlBufferFree(buffer);
+					return result;
+				}
+			}
+		}
 		xmlChar *text_content = xmlNodeGetContent(node);
 		if (text_content) {
 			std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
@@ -1823,18 +1982,19 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			xmlFree(attr_value);
 			found = true;
 		} else {
-			// Look for child element(s) with matching name
-			// If field_type is LIST, collect all matching children; otherwise just the first
+			// Look for child element(s) with matching name. Match case-insensitively because
+			// DuckDB STRUCTs enforce case-insensitive uniqueness of field names. Cross-file
+			// union_by_name widening (MergeXMLColumnType) keeps the first-seen casing, so an
+			// XML element from another file with a different case must still resolve to it.
 			if (field_type.id() == LogicalTypeId::LIST) {
-				// Field is a LIST - collect ALL matching child elements
+				// Field is a LIST: collect ALL matching child elements
 				auto element_type = ListType::GetChildType(field_type);
 				vector<Value> list_values;
 
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-						// Extract each matching child element
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						Value element_value = ExtractValueFromNode(child, element_type, options);
 						list_values.push_back(element_value);
 						found = true;
@@ -1846,12 +2006,11 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 					field_value = Value::LIST(element_type, list_values);
 				}
 			} else {
-				// Field is not a LIST - extract only the first matching child
+				// Field is not a LIST: extract only the first matching child
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-						// Found matching child element - extract recursively
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
 						field_value = ExtractValueFromNode(child, field_type, options);
 						found = true;
 						break;

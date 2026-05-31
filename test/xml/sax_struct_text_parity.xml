@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <rec>
+    <id>1</id>
+    <addr>
+      <street>X</street>
+    </addr>
+  </rec>
+  <rec>
+    <id>2</id>
+    <addr>plain text</addr>
+  </rec>
+</root>

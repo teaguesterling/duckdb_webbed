@@ -13,6 +13,8 @@ void SAXRecordAccumulator::Reset() {
 	state = SAXAccumulatorState::SEEKING_RECORD;
 	current_values.clear();
 	current_lists.clear();
+	current_xml_values.clear();
+	current_xml_lists.clear();
 	current_attributes.clear();
 	current_text.clear();
 	current_element_name.clear();
@@ -34,6 +36,22 @@ std::string SAXRecordAccumulator::GetValue(const std::string &name) const {
 const std::vector<std::string> &SAXRecordAccumulator::GetListValues(const std::string &name) const {
 	auto it = current_lists.find(name);
 	if (it != current_lists.end()) {
+		return it->second;
+	}
+	return EMPTY_LIST;
+}
+
+std::string SAXRecordAccumulator::GetXmlValue(const std::string &name) const {
+	auto it = current_xml_values.find(name);
+	if (it != current_xml_values.end()) {
+		return it->second;
+	}
+	return "";
+}
+
+const std::vector<std::string> &SAXRecordAccumulator::GetXmlListValues(const std::string &name) const {
+	auto it = current_xml_lists.find(name);
+	if (it != current_xml_lists.end()) {
 		return it->second;
 	}
 	return EMPTY_LIST;
@@ -254,35 +272,36 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				sax_ctx->stop_parsing = true;
 			}
 		} else if (relative_depth == 1) {
-			// Closing a direct child of the record
+			// Closing a direct child of the record. If we accumulated nested XML (the child has
+			// element children), store it in the XML-value map so rich-typing can re-parse it.
+			// Otherwise treat the value as text.
+			bool is_xml = !acc->nested_xml.empty();
 			std::string value;
-			if (!acc->nested_xml.empty()) {
-				// If we accumulated nested XML, use that instead
+			if (is_xml) {
 				value = acc->nested_xml;
 				acc->nested_xml.clear();
 			} else {
-				// Process whitespace to match DOM's CleanTextContent behavior
 				value = XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
 
-			// Check if this field already has a value (repeated element -> list)
-			auto it = acc->current_values.find(name);
-			if (it != acc->current_values.end()) {
-				// Move existing value to list and add new value
-				auto &list = acc->current_lists[name];
+			auto &scalar_map = is_xml ? acc->current_xml_values : acc->current_values;
+			auto &list_map = is_xml ? acc->current_xml_lists : acc->current_lists;
+
+			// Repeated element -> list. Promote existing scalar to a list, or append to existing list.
+			auto it = scalar_map.find(name);
+			if (it != scalar_map.end()) {
+				auto &list = list_map[name];
 				if (list.empty()) {
 					list.push_back(it->second);
 				}
 				list.push_back(value);
-				acc->current_values.erase(it);
+				scalar_map.erase(it);
 			} else {
-				auto list_it = acc->current_lists.find(name);
-				if (list_it != acc->current_lists.end()) {
-					// Already a list, append
+				auto list_it = list_map.find(name);
+				if (list_it != list_map.end()) {
 					list_it->second.push_back(value);
 				} else {
-					// First occurrence, store as scalar
-					acc->current_values[name] = value;
+					scalar_map[name] = value;
 				}
 			}
 
@@ -452,6 +471,18 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 			}
 		}
 
+		// Emit nested-XML values structurally so DOM inference reconstructs STRUCT shape.
+		for (const auto &val : record.current_xml_values) {
+			xml << "<" << val.first << ">" << val.second << "</" << val.first << ">";
+		}
+
+		// Emit nested-XML lists structurally as repeated elements.
+		for (const auto &list : record.current_xml_lists) {
+			for (const auto &item : list.second) {
+				xml << "<" << list.first << ">" << item << "</" << list.first << ">";
+			}
+		}
+
 		xml << "</record>";
 	}
 
@@ -512,45 +543,108 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			} else {
 				value = XMLSchemaInference::ConvertToValuePublic(attr_val, col_type, options, datetime_fmt);
 			}
-		} else if (col_type.id() == LogicalTypeId::LIST) {
-			// LIST column: use accumulated list values
-			const auto &list_values = accumulator.GetListValues(col_name);
-			if (list_values.empty()) {
-				// Check scalar values too (single element that should be a list)
-				std::string scalar = accumulator.GetValue(col_name);
-				if (scalar.empty()) {
-					value = Value(LogicalType::LIST(ListType::GetChildType(col_type)));
-					// Empty list
-				} else if (IsNullString(scalar, options)) {
-					value = Value(); // NULL
-				} else {
-					// Single value as a one-element list
-					auto child_type = ListType::GetChildType(col_type);
-					auto child_val =
-					    XMLSchemaInference::ConvertToValuePublic(scalar, child_type, options, datetime_fmt);
-					std::vector<Value> list_vals;
-					list_vals.push_back(std::move(child_val));
-					value = Value::LIST(child_type, std::move(list_vals));
-				}
+		} else if (col_type.id() == LogicalTypeId::STRUCT) {
+			// STRUCT column: the child element had element children, captured as inner XML during
+			// streaming. Re-parse and dispatch through the DOM extractor.
+			std::string inner_xml = accumulator.GetXmlValue(col_name);
+			if (!inner_xml.empty()) {
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, inner_xml, col_type, options);
 			} else {
-				auto child_type = ListType::GetChildType(col_type);
-				std::vector<Value> converted_list;
-				converted_list.reserve(list_values.size());
-				for (const auto &item : list_values) {
-					if (IsNullString(item, options)) {
-						converted_list.push_back(Value());
-					} else {
-						converted_list.push_back(
-						    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
-					}
+				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
+				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
+				std::string text = accumulator.GetValue(col_name);
+				if (text.empty() || IsNullString(text, options)) {
+					value = Value(col_type); // typed NULL
+				} else {
+					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(text), col_type,
+					                                                        options);
 				}
-				value = Value::LIST(child_type, std::move(converted_list));
+			}
+		} else if (col_type.id() == LogicalTypeId::LIST) {
+			// LIST column. Combine text-shaped items (current_lists / current_values) and
+			// nested-XML items (current_xml_lists / current_xml_values). Document order between
+			// text and XML items is not preserved (the accumulator stores them in parallel maps);
+			// items within a single map keep their relative order.
+			auto child_type = ListType::GetChildType(col_type);
+			const bool child_is_complex =
+			    (child_type.id() == LogicalTypeId::STRUCT || child_type.id() == LogicalTypeId::LIST);
+
+			const auto &text_items = accumulator.GetListValues(col_name);
+			std::string text_single = accumulator.GetValue(col_name);
+			const auto &xml_items = accumulator.GetXmlListValues(col_name);
+			std::string xml_single = accumulator.GetXmlValue(col_name);
+
+			std::vector<Value> list_vals;
+
+			auto append_text = [&](const std::string &item) {
+				if (IsNullString(item, options)) {
+					list_vals.push_back(Value(child_type));
+				} else if (child_is_complex) {
+					// Text inside a complex-typed list: wrap so ExtractValueFromXmlFragment can
+					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
+					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(item),
+					                                                                    child_type, options));
+				} else {
+					list_vals.push_back(
+					    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
+				}
+			};
+			auto append_xml = [&](const std::string &frag) {
+				if (child_is_complex) {
+					list_vals.push_back(
+					    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, frag, child_type, options));
+				} else if (child_type.id() == LogicalTypeId::VARCHAR) {
+					// Scalar-typed list with an XML item: surface the serialized fragment.
+					list_vals.push_back(Value(frag));
+				} else {
+					list_vals.push_back(Value(child_type));
+				}
+			};
+
+			if (!text_items.empty()) {
+				for (const auto &item : text_items) {
+					append_text(item);
+				}
+			} else if (!text_single.empty()) {
+				append_text(text_single);
+			}
+			if (!xml_items.empty()) {
+				for (const auto &frag : xml_items) {
+					append_xml(frag);
+				}
+			} else if (!xml_single.empty()) {
+				append_xml(xml_single);
+			}
+
+			if (list_vals.empty()) {
+				value = Value(LogicalType::LIST(child_type)); // empty list
+			} else {
+				value = Value::LIST(child_type, std::move(list_vals));
 			}
 		} else {
-			// Scalar value
+			// Scalar value. If the column was widened to VARCHAR but the source element had element
+			// children, the data is in the XML map; surface it as the serialized fragment.
 			std::string text = accumulator.GetValue(col_name);
 			if (text.empty()) {
-				value = Value(); // NULL
+				std::string inner_xml = accumulator.GetXmlValue(col_name);
+				if (!inner_xml.empty() && col_type.id() == LogicalTypeId::VARCHAR) {
+					value = Value(inner_xml);
+				} else if (col_type.id() == LogicalTypeId::VARCHAR) {
+					// Widened to VARCHAR but the element repeated: concatenate the list-map items so they
+					// are not dropped. Text items get wrapped in their element tag (mirroring the LIST
+					// branch); XML items are already serialized fragments. Order across maps is not kept.
+					std::string serialized;
+					for (const auto &item : accumulator.GetListValues(col_name)) {
+						serialized += "<" + col_name + ">" + XmlEscapeText(item) + "</" + col_name + ">";
+					}
+					for (const auto &frag : accumulator.GetXmlListValues(col_name)) {
+						serialized += frag;
+					}
+					value = serialized.empty() ? Value() : Value(serialized);
+				} else {
+					value = Value(); // NULL
+				}
 			} else if (IsNullString(text, options)) {
 				value = Value(); // NULL
 			} else {

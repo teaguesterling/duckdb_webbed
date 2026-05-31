@@ -52,3 +52,20 @@ SELECT * FROM (DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', '
 field-a	VARCHAR	YES	NULL	NULL	NULL
 field-b	VARCHAR	YES	NULL	NULL	NULL
 field-c	VARCHAR	YES	NULL	NULL	NULL
+
+# Test 7: STRUCT widening parity with read_xml (union_by_name unions disjoint inner fields)
+query T
+SELECT typeof(item) FROM read_html(['test/html/struct_widen/a1.html', 'test/html/struct_widen/a2.html'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT("field-a" INTEGER, "field-b" INTEGER)
+
+# Both files must contribute rows, with disjoint fields populated.
+query II
+SELECT item."field-a", item."field-b"
+FROM read_html(['test/html/struct_widen/a1.html', 'test/html/struct_widen/a2.html'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY item."field-a" NULLS LAST;
+----
+1	NULL
+NULL	2

@@ -227,8 +227,22 @@ public:
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
 	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
+	// Parse an XML fragment (the inner contents of a wrapper element) and extract a value of the
+	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
+	// inner content was captured as raw XML during streaming.
+	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+	                                         const LogicalType &target_type, const XMLSchemaOptions &options);
+
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
+
+	// Merge two column types from union_by_name inference across files.
+	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
+	// when a complex type collides with a non-matching kind. Scalar promotion uses
+	// LogicalType::ForceMaxLogicalType but only accepts the candidate when both inputs have a
+	// valid implicit cast path to it (via CastRules::ImplicitCast); otherwise falls back to
+	// VARCHAR so textual data is preserved.
+	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b);
 
 private:
 	// 3-phase schema inference helpers
@@ -250,6 +264,11 @@ private:
 	// Handles namespace stripping based on options.
 	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name, const XMLSchemaOptions &options,
 	                                 std::vector<xmlNodePtr> &result);
+
+	// Collect the union of distinct child element names across all parent instances, preserving
+	// first-seen document order. Ensures optional fields absent from the first instance are included.
+	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
+	                                     std::vector<std::string> &result);
 
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 

@@ -106,3 +106,174 @@ query I
 SELECT (SELECT COUNT(*) FROM pragma_table_info('with_union')) > (SELECT COUNT(*) FROM pragma_table_info('without_union'));
 ----
 true
+
+# ---------------------------------------------------------------------------
+# STRUCT widening / scalar promotion ladder for union_by_name
+# ---------------------------------------------------------------------------
+
+# Test 11 (issue repro): disjoint struct fields → STRUCT(a, b), one NULL per row
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_a1.xml', 'test/xml/struct_widen_a2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT(a BOOLEAN, b BOOLEAN)
+
+query II
+SELECT item.a, item.b
+FROM read_xml(['test/xml/struct_widen_a1.xml', 'test/xml/struct_widen_a2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY item.a NULLS LAST;
+----
+true	NULL
+NULL	true
+
+# Test 12: overlapping struct fields with scalar widening (INTEGER + DOUBLE -> DOUBLE)
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_b1.xml', 'test/xml/struct_widen_b2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT(n DOUBLE)
+
+query R
+SELECT item.n FROM read_xml(['test/xml/struct_widen_b1.xml', 'test/xml/struct_widen_b2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY item.n;
+----
+1.0
+1.5
+
+# Test 13: nested struct widening, STRUCT(inner STRUCT(a INT, b INT))
+query T
+SELECT typeof(r) FROM read_xml(['test/xml/struct_widen_c1.xml', 'test/xml/struct_widen_c2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT("inner" STRUCT(a INTEGER, b INTEGER))
+
+query II
+SELECT r.inner.a, r.inner.b FROM read_xml(['test/xml/struct_widen_c1.xml', 'test/xml/struct_widen_c2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY r.inner.a NULLS LAST;
+----
+1	NULL
+NULL	2
+
+# Test 14: LIST<STRUCT> widening, LIST<STRUCT(union of fields)>
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_d1.xml', 'test/xml/struct_widen_d2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT(a INTEGER, b INTEGER)[]
+
+query II
+SELECT len(item), (item[1]).a IS NOT NULL OR (item[1]).b IS NOT NULL AS has_data
+FROM read_xml(['test/xml/struct_widen_d1.xml', 'test/xml/struct_widen_d2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY (item[1]).a NULLS LAST;
+----
+2	true
+2	true
+
+# Test 15: scalar promotion ladder INTEGER -> DOUBLE
+query T
+SELECT typeof(x) FROM read_xml(['test/xml/struct_widen_e1.xml', 'test/xml/struct_widen_e2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+DOUBLE
+
+query R
+SELECT x FROM read_xml(['test/xml/struct_widen_e1.xml', 'test/xml/struct_widen_e2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY x;
+----
+1.0
+1.5
+
+# Test 16: scalar promotion ladder INTEGER -> VARCHAR
+query T
+SELECT typeof(x) FROM read_xml(['test/xml/struct_widen_e1.xml', 'test/xml/struct_widen_f2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+VARCHAR
+
+query T
+SELECT x FROM read_xml(['test/xml/struct_widen_e1.xml', 'test/xml/struct_widen_f2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY x;
+----
+1
+hello
+
+# Test 17: STRUCT vs VARCHAR collision -> VARCHAR (no data loss; both surface as text)
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_g1.xml', 'test/xml/struct_widen_g2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+VARCHAR
+
+# File A's STRUCT-shaped item serializes to an XML fragment; file B's text passes through verbatim.
+query T
+SELECT item FROM read_xml(['test/xml/struct_widen_g1.xml', 'test/xml/struct_widen_g2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY item;
+----
+<a>1</a>
+plain text
+
+# Test 18: LIST vs STRUCT collision -> VARCHAR
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_h1.xml', 'test/xml/struct_widen_g1.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+VARCHAR
+
+# Verify both files contribute rows (LIMIT 1 + typeof alone would not).
+query I
+SELECT COUNT(*) FROM read_xml(['test/xml/struct_widen_h1.xml', 'test/xml/struct_widen_g1.xml'],
+    record_element := 'doc', union_by_name := true)
+WHERE item IS NOT NULL;
+----
+2
+
+# Test 19: case-insensitive STRUCT field merge. DuckDB STRUCTs enforce case-insensitive
+# uniqueness, so two case-distinct XML element names collapse into a single field, and
+# data from both files surfaces under that field at extract time.
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_case1.xml', 'test/xml/struct_widen_case2.xml'],
+    record_element := 'doc', union_by_name := true) LIMIT 1;
+----
+STRUCT(Foo INTEGER)
+
+query I
+SELECT item.Foo FROM read_xml(['test/xml/struct_widen_case1.xml', 'test/xml/struct_widen_case2.xml'],
+    record_element := 'doc', union_by_name := true)
+ORDER BY item.Foo;
+----
+1
+2
+
+# Test 20: SAX path produces real STRUCT columns. Force SAX by lowering maximum_file_size.
+# The big file (~44KB) is read via SAX; the small file via DOM. Their schemas merge to a
+# union STRUCT and both contribute rows.
+query T
+SELECT typeof(item) FROM read_xml(['test/xml/struct_widen_sax_big.xml', 'test/xml/struct_widen_sax_small.xml'],
+    record_element := 'doc', union_by_name := true, maximum_file_size := 1024) LIMIT 1;
+----
+STRUCT(b INTEGER, a INTEGER)
+
+# 800 rows from the SAX-read big file + 1 row from the DOM-read small file.
+query I
+SELECT COUNT(*) FROM read_xml(['test/xml/struct_widen_sax_big.xml', 'test/xml/struct_widen_sax_small.xml'],
+    record_element := 'doc', union_by_name := true, maximum_file_size := 1024);
+----
+801
+
+# Values from both paths survive: the small file's row has a=1/b=NULL; one of the big file's
+# rows has b=42/a=NULL.
+query II
+SELECT item.a, item.b FROM read_xml(['test/xml/struct_widen_sax_big.xml', 'test/xml/struct_widen_sax_small.xml'],
+    record_element := 'doc', union_by_name := true, maximum_file_size := 1024)
+WHERE item.a IS NOT NULL OR item.b = 42
+ORDER BY item.b NULLS LAST;
+----
+NULL	42
+1	NULL
