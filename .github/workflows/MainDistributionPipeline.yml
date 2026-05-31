@@ -30,7 +30,13 @@ jobs:
       ci_tools_version: v1.5.3
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      exclude_archs: 'windows_amd64'
+      # windows_amd64_mingw excluded on v1.5.3 stable: duckdb's
+      # scripts/ci/run_tests.py prints a U+274C ❌ glyph on test-batch failure,
+      # which Windows' default cp1252 stdout can't encode (UnicodeEncodeError),
+      # masking the underlying test result. Affects every extension migrating
+      # to v1.5.3 on this runner (see duckdb_urlpattern's exclude list);
+      # revisit once upstream sets PYTHONIOENCODING / utf8_mode in the runner.
+      exclude_archs: 'windows_amd64;windows_amd64_mingw'
 
 #  code-quality-check:
 #    name: Code Quality Check
