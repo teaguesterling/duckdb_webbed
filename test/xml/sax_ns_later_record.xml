@@ -1,0 +1,4 @@
+<root>
+  <record><item><a>1</a></item></record>
+  <record xmlns:ns="http://example.com/ns"><item><ns:b>2</ns:b></item></record>
+</root>

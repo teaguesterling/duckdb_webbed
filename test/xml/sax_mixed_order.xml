@@ -1,0 +1,7 @@
+<root>
+  <record>
+    <item>text1</item>
+    <item><nested>deep</nested></item>
+    <item>text2</item>
+  </record>
+</root>

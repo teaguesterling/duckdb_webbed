@@ -1,0 +1,5 @@
+<root xmlns:ns="http://example.com/ns">
+  <record>
+    <data><ns:tag>value</ns:tag></data>
+  </record>
+</root>

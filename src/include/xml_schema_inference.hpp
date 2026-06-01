@@ -231,7 +231,8 @@ public:
 	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
 	// inner content was captured as raw XML during streaming.
 	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-	                                         const LogicalType &target_type, const XMLSchemaOptions &options);
+	                                         const LogicalType &target_type, const XMLSchemaOptions &options,
+	                                         const std::string &extra_ns_decls = "");
 
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);

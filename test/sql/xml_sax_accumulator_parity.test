@@ -33,8 +33,8 @@ ORDER BY id;
 # List-shaped column widened to VARCHAR by union_by_name. File A (read via SAX,
 # exceeds maximum_file_size) repeats <t> as text (LIST<VARCHAR>) and <s> as
 # nested XML (LIST<STRUCT(k)>). File B (DOM) collides each so both widen to
-# VARCHAR: <t> is a STRUCT, <s> is scalar text. <t> covers GetListValues, <s>
-# covers GetXmlListValues, so both columns are checked.
+# VARCHAR: <t> is a STRUCT, <s> is scalar text. <t> covers text-shaped
+# occurrences, <s> covers nested-XML occurrences, so both columns are checked.
 # =============================================================================
 
 # Both colliding columns widen to VARCHAR.
