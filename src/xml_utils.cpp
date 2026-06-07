@@ -38,6 +38,53 @@ void XMLSilentErrorHandler(void *ctx, const char *msg, ...) {
 	xml_parse_error_occurred = true;
 }
 
+// Escape a UTF-8 string for safe embedding inside a JSON string literal (GitHub Issue #78).
+// libxml2 returns entity-decoded text (e.g. &quot; -> ", &#10; -> newline), so characters that
+// are illegal raw inside a JSON string must be re-escaped here at emit time. Only " , \ and the
+// C0 control range (0x00-0x1F) require escaping per RFC 8259; raw UTF-8 multibyte sequences and
+// characters such as / < > & are valid unescaped and are passed through untouched.
+static std::string EscapeJSONString(const std::string &input) {
+	std::string out;
+	out.reserve(input.size() + 8);
+	for (unsigned char c : input) {
+		switch (c) {
+		case '"':
+			out += "\\\"";
+			break;
+		case '\\':
+			out += "\\\\";
+			break;
+		case '\b':
+			out += "\\b";
+			break;
+		case '\f':
+			out += "\\f";
+			break;
+		case '\n':
+			out += "\\n";
+			break;
+		case '\r':
+			out += "\\r";
+			break;
+		case '\t':
+			out += "\\t";
+			break;
+		default:
+			if (c < 0x20) {
+				// Remaining C0 control characters: emit as \u00XX (lowercase hex).
+				static const char *hex = "0123456789abcdef";
+				out += "\\u00";
+				out += hex[(c >> 4) & 0xF];
+				out += hex[c & 0xF];
+			} else {
+				out += static_cast<char>(c);
+			}
+			break;
+		}
+	}
+	return out;
+}
+
 // Silent error handler for schema validation (with varargs to match xmlSchemaValidityErrorFunc)
 void XMLSilentSchemaErrorHandler(void *ctx, const char *msg, ...) {
 	// Silently capture schema validation errors without printing to stderr
@@ -914,7 +961,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1)); // DuckDB-style smart pointer
 			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "";
 
-			result += "\"@" + attr_name + "\":\"" + attr_val + "\"";
+			result += "\"@" + EscapeJSONString(attr_name) + "\":\"" + EscapeJSONString(attr_val) + "\"";
 			has_content = true;
 		}
 
@@ -934,7 +981,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 		if (!direct_text.empty()) {
 			if (has_content)
 				result += ",";
-			result += "\"#text\":\"" + direct_text + "\"";
+			result += "\"#text\":\"" + EscapeJSONString(direct_text) + "\"";
 			has_content = true;
 		}
 
@@ -953,9 +1000,9 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 				result += ",";
 
 			if (child_group.second.size() == 1) {
-				result += "\"" + child_group.first + "\":" + child_group.second[0];
+				result += "\"" + EscapeJSONString(child_group.first) + "\":" + child_group.second[0];
 			} else {
-				result += "\"" + child_group.first + "\":[";
+				result += "\"" + EscapeJSONString(child_group.first) + "\":[";
 				for (size_t i = 0; i < child_group.second.size(); i++) {
 					if (i > 0)
 						result += ",";
@@ -970,7 +1017,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 
 		// For the root element, wrap it with the element name
 		if (is_root) {
-			return "{\"" + node_name + "\":" + result + "}";
+			return "{\"" + EscapeJSONString(node_name) + "\":" + result + "}";
 		}
 
 		return result;
@@ -1044,7 +1091,8 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1));
 			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "";
 
-			result += "\"" + options.attr_prefix + attr_name + "\":\"" + attr_val + "\"";
+			result += "\"" + EscapeJSONString(options.attr_prefix + attr_name) + "\":\"" + EscapeJSONString(attr_val) +
+			          "\"";
 			has_content = true;
 		}
 
@@ -1066,12 +1114,12 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			if (!namespaces.empty()) {
 				if (has_content)
 					result += ",";
-				result += "\"" + options.xmlns_key + "\":{";
+				result += "\"" + EscapeJSONString(options.xmlns_key) + "\":{";
 				bool first_ns = true;
 				for (const auto &ns_pair : namespaces) {
 					if (!first_ns)
 						result += ",";
-					result += "\"" + ns_pair.first + "\":\"" + ns_pair.second + "\"";
+					result += "\"" + EscapeJSONString(ns_pair.first) + "\":\"" + EscapeJSONString(ns_pair.second) + "\"";
 					first_ns = false;
 				}
 				result += "}";
@@ -1095,7 +1143,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		if (!direct_text.empty()) {
 			if (has_content)
 				result += ",";
-			result += "\"" + options.text_key + "\":\"" + direct_text + "\"";
+			result += "\"" + EscapeJSONString(options.text_key) + "\":\"" + EscapeJSONString(direct_text) + "\"";
 			has_content = true;
 		}
 
@@ -1130,7 +1178,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			bool should_be_array = force_list_set.count(child_group.first) > 0 || child_group.second.size() > 1;
 
 			if (should_be_array) {
-				result += "\"" + child_group.first + "\":[";
+				result += "\"" + EscapeJSONString(child_group.first) + "\":[";
 				for (size_t i = 0; i < child_group.second.size(); i++) {
 					if (i > 0)
 						result += ",";
@@ -1138,7 +1186,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 				}
 				result += "]";
 			} else {
-				result += "\"" + child_group.first + "\":" + child_group.second[0];
+				result += "\"" + EscapeJSONString(child_group.first) + "\":" + child_group.second[0];
 			}
 			has_content = true;
 		}
@@ -1157,7 +1205,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 
 		// For the root element, wrap it with the element name
 		if (is_root) {
-			return "{\"" + node_name + "\":" + result + "}";
+			return "{\"" + EscapeJSONString(node_name) + "\":" + result + "}";
 		}
 
 		return result;

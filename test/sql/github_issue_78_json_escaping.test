@@ -1,0 +1,100 @@
+# name: test/sql/github_issue_78_json_escaping.test
+# description: xml_to_json must JSON-escape " \ and C0 control characters so output is valid JSON (GitHub Issue #78)
+# group: [sql]
+
+require webbed
+
+require json
+
+# =============================================================================
+# Trigger A: embedded double quote from XML entities (&quot; / &#34; / &#x22;)
+# =============================================================================
+
+# Attribute value containing decoded double quotes must be escaped as \"
+query I
+SELECT xml_to_json('<r name="Joe &quot;Jocko&quot; Clark"/>');
+----
+{"r":{"@name":"Joe \"Jocko\" Clark"}}
+
+# Numeric and hex entity forms decode to the same character and escape identically
+query I
+SELECT xml_to_json('<r name="a &#34;b&#x22; c"/>');
+----
+{"r":{"@name":"a \"b\" c"}}
+
+# Text content with embedded quote
+query I
+SELECT xml_to_json('<r>say &quot;hi&quot;</r>');
+----
+{"r":{"#text":"say \"hi\""}}
+
+# =============================================================================
+# Trigger B: C0 control characters from numeric character references
+# =============================================================================
+
+# Newline (&#10;) must become \n, not a raw newline
+query I
+SELECT xml_to_json('<r name="line1&#10;line2"/>');
+----
+{"r":{"@name":"line1\nline2"}}
+
+# Tab (&#9;) and carriage return (&#13;)
+query I
+SELECT xml_to_json('<r name="a&#9;b&#13;c"/>');
+----
+{"r":{"@name":"a\tb\rc"}}
+
+# Backslash itself must be escaped
+query I
+SELECT xml_to_json('<r name="C:\path"/>');
+----
+{"r":{"@name":"C:\\path"}}
+
+# =============================================================================
+# The discriminating check: output must round-trip through CAST(... AS JSON)
+# =============================================================================
+
+query I
+SELECT CAST(xml_to_json('<r name="a &quot;b&quot; c"/>') AS JSON) IS NOT NULL;
+----
+true
+
+query I
+SELECT CAST(xml_to_json('<r name="a&#10;b"/>') AS JSON) IS NOT NULL;
+----
+true
+
+# json_extract on the escaped output succeeds and recovers the original value
+query I
+SELECT json_extract_string(CAST(xml_to_json('<r name="Joe &quot;Jocko&quot; Clark"/>') AS JSON), '$.r."@name"');
+----
+Joe "Jocko" Clark
+
+# The \n round-trips back to a real newline (compared as a single boolean row
+# because sqllogictest would otherwise read an embedded newline as two rows)
+query I
+SELECT json_extract_string(CAST(xml_to_json('<r name="line1&#10;line2"/>') AS JSON), '$.r."@name"') = 'line1' || chr(10) || 'line2';
+----
+true
+
+# =============================================================================
+# Regression: characters that are valid raw in JSON must NOT be over-escaped
+# =============================================================================
+
+# / < > & are legal unescaped inside a JSON string (see issue #63 expectations)
+query I
+SELECT xml_to_json('<data><![CDATA[<html> a/b & c]]></data>');
+----
+{"data":{"#text":"<html> a/b & c"}}
+
+# Non-ASCII UTF-8 must pass through untouched (signed-char trap guard)
+query I
+SELECT xml_to_json('<r name="café—北京"/>');
+----
+{"r":{"@name":"café—北京"}}
+
+# Schema-variant overload (xml_to_json with options) escapes too
+query I
+SELECT CAST(xml_to_json('<r name="a &quot;b&quot;"/>', attr_prefix := '@') AS JSON) IS NOT NULL;
+----
+true
