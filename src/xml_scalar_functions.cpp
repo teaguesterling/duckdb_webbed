@@ -76,6 +76,12 @@ void XMLScalarFunctions::XMLExtractElementsFunction(DataChunk &args, ExpressionS
 
 // Returns LIST(VARCHAR) of all matching text content (PostgreSQL-compatible)
 void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// A trailing `namespaces` argument (positional or `namespaces := <map/mode>`) arrives as a third
+	// column via varargs; delegate to the namespace-aware implementation.
+	if (args.ColumnCount() > 2) {
+		XMLExtractTextListWithNamespacesFunction(args, state, result);
+		return;
+	}
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
@@ -156,6 +162,12 @@ void XMLScalarFunctions::XMLExtractTextListWithNamespacesFunction(DataChunk &arg
 
 // Returns LIST(XMLFragment) of all matching elements (PostgreSQL-compatible)
 void XMLScalarFunctions::XMLExtractElementsListFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// A trailing `namespaces` argument (positional or `namespaces := <map/mode>`) arrives as a third
+	// column via varargs; delegate to the namespace-aware implementation.
+	if (args.ColumnCount() > 2) {
+		XMLExtractElementsListWithNamespacesFunction(args, state, result);
+		return;
+	}
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
@@ -235,6 +247,12 @@ void XMLScalarFunctions::XMLExtractElementsListWithNamespacesFunction(DataChunk 
 }
 
 void XMLScalarFunctions::XMLExtractElementsStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// A trailing `namespaces` argument (positional or `namespaces := <map/mode>`) arrives as a third
+	// column via varargs; delegate to the namespace-aware implementation.
+	if (args.ColumnCount() > 2) {
+		XMLExtractElementsStringWithNamespacesFunction(args, state, result);
+		return;
+	}
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 
@@ -305,6 +323,12 @@ void XMLScalarFunctions::XMLWrapFragmentFunction(DataChunk &args, ExpressionStat
 }
 
 void XMLScalarFunctions::XMLExtractAttributesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// A trailing `namespaces` argument (positional or `namespaces := <map/mode>`) arrives as a third
+	// column via varargs; delegate to the namespace-aware implementation.
+	if (args.ColumnCount() > 2) {
+		XMLExtractAttributesWithNamespacesFunction(args, state, result);
+		return;
+	}
 	auto &xml_vector = args.data[0];
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
@@ -1065,6 +1089,17 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 }
 
 void XMLScalarFunctions::Register(ExtensionLoader &loader) {
+	// Helper: add a base (2-argument) extract overload that also accepts an optional trailing
+	// `namespaces` argument, supplied positionally or as `namespaces := <map/mode>`. Marking the
+	// overload as varargs makes DuckDB's binder accept the named argument as a named vararg; the
+	// execute function then delegates to its namespace-aware sibling when a third column is present.
+	// Required for forward-compat with DuckDB main, which (unlike <=v1.5.3) no longer silently
+	// ignores argument labels on scalar functions. (GitHub Issue #78 follow-up / DuckDB main drift.)
+	auto add_ns_aware = [](ScalarFunctionSet &set, ScalarFunction fn) {
+		SetScalarFunctionVarArgs(fn, LogicalType::ANY);
+		set.AddFunction(std::move(fn));
+	};
+
 	// Register xml function (same as to_xml for now) - using VARCHAR for now, will enhance type system later
 	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
 	loader.RegisterFunction(xml_function);
@@ -1111,25 +1146,28 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_text_functions("xml_extract_text");
 
 	// XML + VARCHAR -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                                                        LogicalType::LIST(LogicalType::VARCHAR),
+	                                                        XMLExtractTextListFunction));
 	// XML + STRING_LITERAL -> LIST(VARCHAR)
+	// (no varargs on STRING_LITERAL overloads: varargs + a literal parameter makes DuckDB resolve a
+	//  literal return type and trip an internal error. The named-arg case routes through the VARCHAR
+	//  overload below, with the literal xpath implicitly cast to VARCHAR.)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + VARCHAR -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                                                        LogicalType::LIST(LogicalType::VARCHAR),
+	                                                        XMLExtractTextListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
-	xml_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                        LogicalType::LIST(LogicalType::VARCHAR),
+	                                                        XMLExtractTextListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1171,33 +1209,34 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
 
 	// XML + VARCHAR -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                            XMLExtractElementsListFunction));
 	// XML + STRING_LITERAL -> LIST(XMLFragment)
+	// (STRING_LITERAL overloads stay varargs-free; see note on xml_extract_text above.)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + VARCHAR -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
+	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                            XMLExtractElementsListFunction));
 	// HTML + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                            XMLExtractElementsListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
-	xml_extract_elements_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
+	                                                            XMLExtractElementsListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1225,10 +1264,12 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register xml_extract_elements_string function as a function set
 	ScalarFunctionSet xml_extract_elements_string_functions("xml_extract_elements_string");
-	xml_extract_elements_string_functions.AddFunction(ScalarFunction(
-	    {XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction));
-	xml_extract_elements_string_functions.AddFunction(ScalarFunction(
-	    {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractElementsStringFunction));
+	add_ns_aware(xml_extract_elements_string_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                            XMLExtractElementsStringFunction));
+	add_ns_aware(xml_extract_elements_string_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
+	                            XMLExtractElementsStringFunction));
 	// 3-argument variants with namespaces MAP
 	xml_extract_elements_string_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
@@ -1257,15 +1298,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("line_number", LogicalType::BIGINT)});
 	// Register xml_extract_attributes function as a function set
 	ScalarFunctionSet xml_extract_attributes_functions("xml_extract_attributes");
-	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(attr_struct_type),
-	                                                            XMLExtractAttributesFunction));
-	xml_extract_attributes_functions.AddFunction(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(attr_struct_type),
-	                                                            XMLExtractAttributesFunction));
-	xml_extract_attributes_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(attr_struct_type),
-	                                                            XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                                                              LogicalType::LIST(attr_struct_type),
+	                                                              XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
+	                                                              LogicalType::LIST(attr_struct_type),
+	                                                              XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                              LogicalType::LIST(attr_struct_type),
+	                                                              XMLExtractAttributesFunction));
 	// Add 3-argument variants with namespace map
 	xml_extract_attributes_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
