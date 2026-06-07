@@ -942,10 +942,16 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(DUCKDB_SCAL
 void XMLScalarFunctions::XMLToJSONWithSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 
-	// Get options from bind data, or use defaults if not bound
+	// Get options from bind data, or use defaults if not bound.
+	// bind_info became private in newer DuckDB; access it via the BindInfo() accessor there.
 	XMLToJSONOptions options;
-	if (func_expr.bind_info) {
-		auto &bind_data = func_expr.bind_info->Cast<XMLToJSONBindData>();
+#ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
+	auto &bind_info = func_expr.BindInfo();
+#else
+	auto &bind_info = func_expr.bind_info;
+#endif
+	if (bind_info) {
+		auto &bind_data = bind_info->Cast<XMLToJSONBindData>();
 		options = bind_data.options;
 	}
 
