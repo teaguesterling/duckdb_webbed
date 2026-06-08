@@ -1,5 +1,6 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -1269,7 +1270,7 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	// (INTEGER->DOUBLE, DATE->TIMESTAMP, etc.)
 	LogicalType result = types[0];
 	for (size_t i = 1; i < types.size(); i++) {
-		result = LogicalType::ForceMaxLogicalType(result, types[i]);
+		result = CompatForceMaxLogicalType(result, types[i]);
 	}
 
 	return result;
@@ -1360,7 +1361,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	// sides have an implicit cast path to the candidate; otherwise fall back to VARCHAR to preserve
 	// textual data. This avoids depending on TryGetMaxLogicalTypeUnchecked, which only exists on
 	// newer DuckDB.
-	LogicalType candidate = LogicalType::ForceMaxLogicalType(a, b);
+	LogicalType candidate = CompatForceMaxLogicalType(a, b);
 	auto castable = [&candidate](const LogicalType &t) {
 		return t == candidate || CastRules::ImplicitCast(t, candidate) >= 0;
 	};

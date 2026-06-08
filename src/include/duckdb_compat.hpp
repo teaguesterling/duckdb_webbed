@@ -71,6 +71,14 @@ inline void PreventStructConstantFolding(FunctionSet<T> &func_set) {
 	}
 }
 
+// --- Type promotion ---
+// ForceMaxLogicalType(left, right) now requires a ClientContext (to consult extension-registered
+// casts). DefaultForceMaxLogicalType is the context-free variant using only built-in CastRules,
+// which matches the semantics of the old 2-argument overload.
+inline LogicalType CompatForceMaxLogicalType(const LogicalType &left, const LogicalType &right) {
+	return LogicalType::DefaultForceMaxLogicalType(left, right);
+}
+
 #else // Old API
 
 #define DUCKDB_SCALAR_BIND_PARAMS                                                                                      \
@@ -104,6 +112,10 @@ inline void PreventStructConstantFolding(ScalarFunction &) {
 }
 template <typename T>
 inline void PreventStructConstantFolding(FunctionSet<T> &) {
+}
+
+inline LogicalType CompatForceMaxLogicalType(const LogicalType &left, const LogicalType &right) {
+	return LogicalType::ForceMaxLogicalType(left, right);
 }
 
 #endif
