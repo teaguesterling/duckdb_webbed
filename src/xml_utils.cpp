@@ -2154,11 +2154,16 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name) {
 	auto list_suffix = "_list";
 	auto element_name = node_name;
+	auto child_type = ListType::GetChildType(input_vector.GetType());
 
 	for (idx_t i = 0; i < count; i++) {
-		auto list_value = FlatVector::GetData<list_entry_t>(input_vector)[i];
-		auto &child_vector = CompatListGetChild(input_vector);
-		auto child_type = ListType::GetChildType(input_vector.GetType());
+		// Vector::GetValue handles FLAT, CONSTANT and DICTIONARY input vectors safely
+		Value list_value = input_vector.GetValue(i);
+		if (list_value.IsNull()) {
+			// NULL in -> NULL out
+			result.SetValue(i, Value(result.GetType()));
+			continue;
+		}
 
 		XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
 		if (!doc) {
@@ -2171,23 +2176,22 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		xmlDocSetRootElement(doc.get(), root_node);
 
 		// Process each list element
-		for (idx_t j = 0; j < list_value.length; j++) {
-			idx_t child_idx = list_value.offset + j;
-
+		for (const auto &child_value : ListValue::GetChildren(list_value)) {
 			// Create element node for each list item
 			xmlNodePtr item_node = xmlNewNode(nullptr, BAD_CAST element_name.c_str());
 			xmlAddChild(root_node, item_node);
 
 			// Convert the child value based on its type
 			if (child_type.id() == LogicalTypeId::VARCHAR) {
-				auto child_data = FlatVector::GetData<string_t>(child_vector);
-				std::string child_str = child_data[child_idx].GetString();
-				xmlNodePtr text_node = xmlNewText(BAD_CAST child_str.c_str());
-				if (text_node)
-					xmlAddChild(item_node, text_node);
+				// Plain text content (NULL list elements stay as empty nodes)
+				if (!child_value.IsNull()) {
+					std::string child_str = StringValue::Get(child_value);
+					xmlNodePtr text_node = xmlNewText(BAD_CAST child_str.c_str());
+					if (text_node)
+						xmlAddChild(item_node, text_node);
+				}
 			} else {
 				// For other types, convert recursively
-				Value child_value = child_vector.GetValue(child_idx);
 				xmlNodePtr child_node = ConvertValueToXMLNode(child_value, child_type, element_name, doc.get());
 				if (child_node) {
 					// Add the child node's children to the item node
@@ -2222,6 +2226,15 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 	auto &child_types = StructType::GetChildTypes(struct_type);
 
 	for (idx_t i = 0; i < count; i++) {
+		// Vector::GetValue handles FLAT, CONSTANT and DICTIONARY input vectors safely
+		Value struct_value = input_vector.GetValue(i);
+		if (struct_value.IsNull()) {
+			// NULL in -> NULL out
+			result.SetValue(i, Value(result.GetType()));
+			continue;
+		}
+		auto &field_values = StructValue::GetChildren(struct_value);
+
 		XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
 		if (!doc) {
 			result.SetValue(i, Value("<" + node_name + "></" + node_name + ">"));
@@ -2237,15 +2250,12 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 			auto &field_name = child_types[field_idx].first;
 			auto &field_type = child_types[field_idx].second;
 
-			// Get the child vector for this field
-			auto &field_vector = CompatStructGetField(input_vector, field_idx);
-
 			// Create field element
 			xmlNodePtr field_node = xmlNewNode(nullptr, BAD_CAST field_name.c_str());
 			xmlAddChild(root_node, field_node);
 
-			// Get field value and convert recursively using new node-based function
-			Value field_value = field_vector.GetValue(i);
+			// Convert recursively using the node-based function
+			auto &field_value = field_values[field_idx];
 			if (!field_value.IsNull()) {
 				xmlNodePtr child_node = ConvertValueToXMLNode(field_value, field_type, field_name, doc.get());
 				if (child_node) {
