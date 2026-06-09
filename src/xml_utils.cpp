@@ -156,8 +156,18 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
 			xml_parse_error_occurred = true;
+			// Capture whether the failure was an allocation failure rather than malformed
+			// input. The error object belongs to the parser context, so read it before free.
+			const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
+			if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
+				resource_error = true;
+			}
 		}
 		xmlFreeParserCtxt(parser_ctx);
+	} else {
+		// The parser context itself could not be allocated, which only happens when
+		// libxml2 is out of memory. Treat it as a resource failure, not malformed input.
+		resource_error = true;
 	}
 
 	if (doc) {
@@ -192,7 +202,19 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		if (parser_ctx) {
 			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr,
 			                        XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+			if (!doc) {
+				// Distinguish an allocation failure from malformed input before freeing
+				// the context (the error object is owned by the parser context).
+				const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
+				if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
+					resource_error = true;
+				}
+			}
 			xmlFreeParserCtxt(parser_ctx);
+		} else {
+			// The parser context itself could not be allocated, which only happens when
+			// libxml2 is out of memory. Treat it as a resource failure, not malformed input.
+			resource_error = true;
 		}
 	}
 
@@ -299,6 +321,16 @@ bool XMLUtils::IsValidXML(const std::string &xml_str) {
 
 bool XMLUtils::IsWellFormedXML(const std::string &xml_str) {
 	return IsValidXML(xml_str);
+}
+
+XMLValidity XMLUtils::CheckXML(const std::string &xml_str) {
+	XMLDocRAII xml_doc(xml_str);
+	if (xml_doc.IsValid()) {
+		return XMLValidity::Valid;
+	}
+	// A failed parse is either malformed input or an allocation failure under memory
+	// pressure; the latter must not be reported as invalid input.
+	return xml_doc.HadResourceError() ? XMLValidity::ResourceError : XMLValidity::Malformed;
 }
 
 std::string XMLUtils::GetNodePath(xmlNodePtr node) {

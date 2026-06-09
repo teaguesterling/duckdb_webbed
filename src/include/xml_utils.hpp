@@ -43,6 +43,10 @@ struct XMLToJSONBindData : public FunctionData {
 struct XMLDocRAII {
 	xmlDocPtr doc = nullptr;
 	xmlXPathContextPtr xpath_ctx = nullptr;
+	// True when the parse failed because libxml2 could not allocate memory
+	// (XML_ERR_NO_MEMORY), as opposed to the document being malformed. A null doc
+	// alone cannot distinguish the two; this captures the difference at parse time.
+	bool resource_error = false;
 
 	XMLDocRAII() = default;
 	XMLDocRAII(const std::string &xml_str);
@@ -59,6 +63,11 @@ struct XMLDocRAII {
 
 	bool IsValid() const {
 		return doc != nullptr;
+	}
+
+	// True only when parsing failed due to an allocation failure, not malformed input.
+	bool HadResourceError() const {
+		return resource_error;
 	}
 
 	// Register custom namespace prefix-to-URI mappings for XPath evaluation
@@ -210,12 +219,19 @@ struct HTMLTable {
 	int64_t num_rows;
 };
 
+// Outcome of parsing XML content: a valid parse, a malformed document, or a parse that
+// failed because libxml2 ran out of memory (distinct so callers can avoid mislabeling a
+// transient resource failure as invalid input).
+enum class XMLValidity { Valid, Malformed, ResourceError };
+
 // Utility functions
 class XMLUtils {
 public:
 	// Validation functions
 	static bool IsValidXML(const std::string &xml_str);
 	static bool IsWellFormedXML(const std::string &xml_str);
+	// Like IsValidXML but distinguishes an allocation failure from malformed input.
+	static XMLValidity CheckXML(const std::string &xml_str);
 	static bool ValidateXMLSchema(const std::string &xml_str, const std::string &xsd_schema);
 
 	// Extraction functions
