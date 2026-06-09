@@ -293,8 +293,12 @@ void XMLUtils::CleanupLibXML() {
 }
 
 bool XMLUtils::IsValidXML(const std::string &xml_str) {
+	// Validity is determined solely by this thread's own parse result (doc != nullptr).
+	// A shared process-global flag must never gate the result: another thread's failed
+	// parse could otherwise poison this check and mislabel a valid document as invalid
+	// under concurrent execution.
 	XMLDocRAII xml_doc(xml_str);
-	return xml_doc.IsValid() && !xml_parse_error_occurred;
+	return xml_doc.IsValid();
 }
 
 bool XMLUtils::IsWellFormedXML(const std::string &xml_str) {
