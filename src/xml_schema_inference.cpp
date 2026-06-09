@@ -3,10 +3,12 @@
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
+#include <cmath>
 #include <regex>
 #include <unordered_set>
 #include <libxml/xpath.h>
@@ -132,12 +134,10 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	}
 
 	// Phase 2: Identify Columns (immediate children of records)
-	auto column_map = IdentifyColumns(record_elements, options);
+	auto column_list = IdentifyColumns(record_elements, options);
 
 	// Phase 3: Infer Type for each column
-	for (auto &pair : column_map) {
-		const auto &col_analysis = pair.second;
-
+	for (auto &col_analysis : column_list) {
 		std::string winning_fmt;
 		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options, winning_fmt);
 
@@ -233,9 +233,21 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 }
 
 // Phase 2: Identify Columns
-std::unordered_map<std::string, ColumnAnalysis>
-XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options) {
-	std::unordered_map<std::string, ColumnAnalysis> columns;
+// Columns are returned in first-seen document order (attributes of a record before its child
+// elements) so the inferred top-level column order is deterministic.
+std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elements,
+                                                                const XMLSchemaOptions &options) {
+	std::vector<ColumnAnalysis> columns;
+	std::unordered_map<std::string, size_t> column_index;
+
+	auto get_column = [&](const std::string &column_name, bool is_attribute) -> ColumnAnalysis & {
+		auto it = column_index.find(column_name);
+		if (it == column_index.end()) {
+			it = column_index.emplace(column_name, columns.size()).first;
+			columns.emplace_back(column_name, is_attribute);
+		}
+		return columns[it->second];
+	};
 
 	// Iterate through each record element
 	for (xmlNodePtr record : record_elements) {
@@ -257,11 +269,7 @@ XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elemen
 						column_name = attr_name;
 					}
 
-					auto it = columns.find(column_name);
-					if (it == columns.end()) {
-						it = columns.emplace(column_name, ColumnAnalysis(column_name, true)).first;
-					}
-					auto &col = it->second;
+					auto &col = get_column(column_name, true);
 					col.instances.push_back(record); // Store record node for attribute access
 					col.occurrence_count++;
 					columns_in_this_record[column_name]++;
@@ -280,11 +288,7 @@ XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elemen
 					element_name = StripNamespacePrefix(element_name);
 				}
 
-				auto it = columns.find(element_name);
-				if (it == columns.end()) {
-					it = columns.emplace(element_name, ColumnAnalysis(element_name, false)).first;
-				}
-				auto &col = it->second;
+				auto &col = get_column(element_name, false);
 				col.instances.push_back(child);
 				col.occurrence_count++;
 				columns_in_this_record[element_name]++;
@@ -294,10 +298,7 @@ XMLSchemaInference::IdentifyColumns(const std::vector<xmlNodePtr> &record_elemen
 		// Check if any column appeared multiple times in this record
 		for (const auto &pair : columns_in_this_record) {
 			if (pair.second > 1) {
-				auto col_it = columns.find(pair.first);
-				if (col_it != columns.end()) {
-					col_it->second.repeats_in_record = true;
-				}
+				columns[column_index[pair.first]].repeats_in_record = true;
 			}
 		}
 	}
@@ -1068,7 +1069,14 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		if (sample.empty())
 			continue;
 		if (options.numeric_detection && IsInteger(sample)) {
-			detected_types.push_back(LogicalType::INTEGER);
+			// Pick the narrowest integer type that can hold the value;
+			// GetMostSpecificType widens INTEGER to BIGINT when samples mix.
+			int32_t int32_result;
+			if (TryCast::Operation(string_t(sample), int32_result, true)) {
+				detected_types.push_back(LogicalType::INTEGER);
+			} else {
+				detected_types.push_back(LogicalType::BIGINT);
+			}
 		} else if (options.numeric_detection && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
 		} else if (options.boolean_detection && IsBoolean(sample)) {
@@ -1156,26 +1164,20 @@ bool XMLSchemaInference::IsInteger(const std::string &value) {
 	if (value.empty())
 		return false;
 
-	try {
-		size_t pos;
-		std::stoll(value, &pos);
-		return pos == value.length(); // Entire string was converted
-	} catch (...) {
-		return false;
-	}
+	int64_t result;
+	return TryCast::Operation(string_t(value), result, true);
 }
 
 bool XMLSchemaInference::IsDouble(const std::string &value) {
 	if (value.empty())
 		return false;
 
-	try {
-		size_t pos;
-		std::stod(value, &pos);
-		return pos == value.length(); // Entire string was converted
-	} catch (...) {
+	double result;
+	if (!TryCast::Operation(string_t(value), result, true)) {
 		return false;
 	}
+	// Strings like "inf" and "nan" parse as DOUBLE but are not numeric data
+	return std::isfinite(result);
 }
 
 // IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
@@ -1371,6 +1373,16 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	return LogicalType::VARCHAR;
 }
 
+std::string XMLSchemaInference::AttributeNameFromColumn(const std::string &column_name,
+                                                        const XMLSchemaOptions &options) {
+	if (options.attr_mode == "prefixed" && !options.attr_prefix.empty() &&
+	    column_name.size() > options.attr_prefix.size() &&
+	    column_name.compare(0, options.attr_prefix.size(), options.attr_prefix) == 0) {
+		return column_name.substr(options.attr_prefix.size());
+	}
+	return column_name;
+}
+
 std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
 	// UTF-8-safe trim: only strip ASCII whitespace.
 	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
@@ -1453,13 +1465,8 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 		Value value;
 
 		if (column.is_attribute) {
-			// Extract attribute value
-			std::string attr_name = column.name;
-			// Remove element prefix if present (e.g., "employee_id" -> "id")
-			size_t underscore_pos = attr_name.find('_');
-			if (underscore_pos != std::string::npos) {
-				attr_name = attr_name.substr(underscore_pos + 1);
-			}
+			// Extract attribute value (strip attr_prefix in 'prefixed' mode)
+			std::string attr_name = AttributeNameFromColumn(column.name, options);
 
 			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
@@ -1631,8 +1638,9 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 
 		Value value;
 
-		// First check if it's an attribute
-		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)column_name.c_str());
+		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode)
+		std::string attr_name = AttributeNameFromColumn(column_name, options);
+		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
 			value = ConvertToValue(str_value, column_type, options, col_fmt);
@@ -1763,12 +1771,27 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			return Value(); // NULL for unrecognized boolean
 		}
-		case LogicalTypeId::INTEGER:
-			return Value::INTEGER(std::stoi(text));
-		case LogicalTypeId::BIGINT:
-			return Value::BIGINT(std::stoll(text));
-		case LogicalTypeId::DOUBLE:
-			return Value::DOUBLE(std::stod(text));
+		case LogicalTypeId::INTEGER: {
+			int32_t int_result;
+			if (TryCast::Operation(string_t(text), int_result, false)) {
+				return Value::INTEGER(int_result);
+			}
+			return Value(text); // Fall back to VARCHAR value on conversion failure
+		}
+		case LogicalTypeId::BIGINT: {
+			int64_t bigint_result;
+			if (TryCast::Operation(string_t(text), bigint_result, false)) {
+				return Value::BIGINT(bigint_result);
+			}
+			return Value(text);
+		}
+		case LogicalTypeId::DOUBLE: {
+			double double_result;
+			if (TryCast::Operation(string_t(text), double_result, false)) {
+				return Value::DOUBLE(double_result);
+			}
+			return Value(text);
+		}
 		case LogicalTypeId::DATE: {
 			if (!datetime_format.empty()) {
 				StrpTimeFormat strp_format;

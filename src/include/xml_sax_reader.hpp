@@ -45,6 +45,11 @@ struct SAXRecordAccumulator {
 	std::unordered_map<std::string, std::vector<FieldOccurrence>> current_fields; // field_name -> ordered occurrences
 	std::unordered_map<std::string, std::string> current_attributes;              // attr_name -> value
 
+	// First-seen insertion order of current_fields / current_attributes keys, so synthetic XML
+	// built for schema inference reflects document order (deterministic column order).
+	std::vector<std::string> field_order;
+	std::vector<std::string> attribute_order;
+
 	// Namespace declarations (prefix -> URI) seen anywhere in the document, accumulated globally so
 	// reparsed nested-XML fragments can resolve prefixed names. Intentionally NOT cleared by Reset()
 	// since root-level xmlns: declarations appear before the first record.
