@@ -7,6 +7,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
+#include <libxml/tree.h>
 #include <regex>
 #include <set>
 
@@ -314,6 +315,13 @@ void XMLScalarFunctions::XMLWrapFragmentFunction(DataChunk &args, ExpressionStat
 	    fragment_vector, wrapper_vector, result, args.size(), [&](string_t fragment_str, string_t wrapper_str) {
 		    std::string fragment = fragment_str.GetString();
 		    std::string wrapper = wrapper_str.GetString();
+
+		    // Reject wrapper names that are not valid XML element names to prevent markup injection.
+		    // The embedded NUL check guards against names that truncate during C-string validation.
+		    if (wrapper.find('\0') != std::string::npos ||
+		        xmlValidateName(reinterpret_cast<const xmlChar *>(wrapper.c_str()), 0) != 0) {
+			    throw InvalidInputException("xml_wrap_fragment: '%s' is not a valid XML element name", wrapper);
+		    }
 
 		    // Create wrapped XML: <wrapper>fragment</wrapper>
 		    std::string wrapped_xml = "<" + wrapper + ">" + fragment + "</" + wrapper + ">";
