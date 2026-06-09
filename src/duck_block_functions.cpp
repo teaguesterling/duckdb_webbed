@@ -4,6 +4,7 @@
 #include "xml_types.hpp"
 #include "xml_utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 #include <libxml/HTMLparser.h>
@@ -37,6 +38,11 @@ static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or 
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
 
+// Helper to read a VARCHAR struct field, treating NULL as an empty string
+static std::string GetVarcharField(const Value &val) {
+	return val.IsNull() ? std::string() : val.GetValue<string>();
+}
+
 // Helper to extract attributes MAP into std::map
 static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_val) {
 	std::map<std::string, std::string> attrs;
@@ -44,6 +50,10 @@ static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_v
 		auto &map_children = MapValue::GetChildren(attrs_val);
 		for (auto &entry : map_children) {
 			auto &entry_struct = StructValue::GetChildren(entry);
+			// Skip entries with NULL key or value - treat the attribute as absent
+			if (entry_struct[0].IsNull() || entry_struct[1].IsNull()) {
+				continue;
+			}
 			std::string key = entry_struct[0].GetValue<string>();
 			std::string value = entry_struct[1].GetValue<string>();
 			attrs[key] = value;
@@ -494,14 +504,12 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 			auto &struct_values = StructValue::GetChildren(block);
 			// Struct format: kind, element_type, content, level, encoding, attributes, element_order
-			std::string kind = struct_values[DuckBlockTypes::KIND_IDX].GetValue<string>();
-			std::string element_type = struct_values[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-			// Handle NULL content (parent elements with inline children have NULL content)
-			std::string content = struct_values[DuckBlockTypes::CONTENT_IDX].IsNull()
-			                          ? ""
-			                          : struct_values[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+			// All VARCHAR fields may be NULL (e.g. parent elements with inline children have NULL content)
+			std::string kind = GetVarcharField(struct_values[DuckBlockTypes::KIND_IDX]);
+			std::string element_type = GetVarcharField(struct_values[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+			std::string content = GetVarcharField(struct_values[DuckBlockTypes::CONTENT_IDX]);
 			Value level_val = struct_values[DuckBlockTypes::LEVEL_IDX];
-			std::string encoding = struct_values[DuckBlockTypes::ENCODING_IDX].GetValue<string>();
+			std::string encoding = GetVarcharField(struct_values[DuckBlockTypes::ENCODING_IDX]);
 			Value attrs_val = struct_values[DuckBlockTypes::ATTRIBUTES_IDX];
 
 			// Extract attributes from MAP using helper
@@ -516,10 +524,13 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 			// Generate HTML based on block element type
 			if (element_type == DuckBlockTypes::TYPE_HEADING) {
-				// Read heading level from attributes
+				// Read heading level from attributes; non-numeric values fall back to the default
 				int lvl = 1;
 				if (attrs.count(DuckBlockTypes::ATTR_HEADING_LEVEL)) {
-					lvl = std::stoi(attrs[DuckBlockTypes::ATTR_HEADING_LEVEL]);
+					int32_t parsed_lvl;
+					if (TryCast::Operation(string_t(attrs[DuckBlockTypes::ATTR_HEADING_LEVEL]), parsed_lvl, false)) {
+						lvl = parsed_lvl;
+					}
 				}
 				if (lvl < 1)
 					lvl = 1;
@@ -547,7 +558,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						continue;
 					}
 					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = next_struct[DuckBlockTypes::KIND_IDX].GetValue<string>();
+					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
 					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
 
 					// Stop if we hit a block or an element back at base level (NULL)
@@ -559,10 +570,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 
 					// Render this inline child
-					std::string next_type = next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].IsNull()
-					                               ? ""
-					                               : next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
 					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
 					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 
@@ -589,7 +598,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						continue;
 					}
 					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = next_struct[DuckBlockTypes::KIND_IDX].GetValue<string>();
+					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
 					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
 
 					// Stop if we hit a block or an element back at base level (NULL)
@@ -601,10 +610,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 
 					// Render this inline child
-					std::string next_type = next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX].GetValue<string>();
-					std::string next_content = next_struct[DuckBlockTypes::CONTENT_IDX].IsNull()
-					                               ? ""
-					                               : next_struct[DuckBlockTypes::CONTENT_IDX].GetValue<string>();
+					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
 					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
 					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 
@@ -1033,6 +1040,10 @@ static void SkipJsonValue(const std::string &json, size_t &pos) {
 					else
 						pos++;
 				}
+				if (pos >= json.size()) {
+					// Unterminated string: stop without stepping past the end
+					return;
+				}
 			}
 			pos++;
 		}
@@ -1053,6 +1064,10 @@ static void SkipJsonValue(const std::string &json, size_t &pos) {
 					else
 						pos++;
 				}
+				if (pos >= json.size()) {
+					// Unterminated string: stop without stepping past the end
+					return;
+				}
 			}
 			pos++;
 		}
@@ -1062,6 +1077,16 @@ static void SkipJsonValue(const std::string &json, size_t &pos) {
 		       json[pos] != '\n' && json[pos] != '\r' && json[pos] != '\t') {
 			pos++;
 		}
+	}
+}
+
+// Skip a JSON value, always consuming at least one character so malformed
+// input cannot stall caller loops
+static void SkipJsonValueWithProgress(const std::string &json, size_t &pos) {
+	size_t before = pos;
+	SkipJsonValue(json, pos);
+	if (pos == before && pos < json.size()) {
+		pos++;
 	}
 }
 
@@ -1077,6 +1102,9 @@ static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &po
 
 	while (pos < json.size()) {
 		SkipWhitespace(json, pos);
+		if (pos >= json.size()) {
+			break;
+		}
 		if (json[pos] == ']') {
 			pos++;
 			break;
@@ -1118,8 +1146,9 @@ static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &po
 				}
 			}
 			SkipWhitespace(json, pos);
-			if (json[pos] == ',')
-				pos++;
+			if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
+				pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
+			}
 		}
 		if (pos < json.size())
 			pos++; // Skip '}'
@@ -1225,6 +1254,9 @@ static std::string RenderPandocCellToHtml(const std::string &json, size_t &pos) 
 
 	while (pos < json.size()) {
 		SkipWhitespace(json, pos);
+		if (pos >= json.size()) {
+			break;
+		}
 		if (json[pos] == ']') {
 			pos++;
 			break;
@@ -1265,8 +1297,9 @@ static std::string RenderPandocCellToHtml(const std::string &json, size_t &pos) 
 				}
 			}
 			SkipWhitespace(json, pos);
-			if (json[pos] == ',')
-				pos++;
+			if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
+				pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
+			}
 		}
 		if (pos < json.size())
 			pos++; // Skip '}'
@@ -1309,6 +1342,9 @@ static std::string PandocTableToHtml(const std::string &json) {
 		pos++;
 		while (pos < json.size() && json[pos] != ']') {
 			SkipWhitespace(json, pos);
+			if (pos >= json.size() || json[pos] == ']') {
+				break;
+			}
 			if (json[pos] == ',') {
 				pos++;
 				continue;
@@ -1334,11 +1370,14 @@ static std::string PandocTableToHtml(const std::string &json) {
 						}
 					}
 					SkipWhitespace(json, pos);
-					if (json[pos] == ',')
-						pos++;
+					if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
+						pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
+					}
 				}
 				if (pos < json.size())
 					pos++; // Skip '}'
+			} else {
+				pos++; // Skip unexpected character so malformed input cannot stall the loop
 			}
 		}
 		if (pos < json.size())
@@ -1369,6 +1408,9 @@ static std::string PandocTableToHtml(const std::string &json) {
 			size_t col_idx = 0;
 			while (pos < json.size() && json[pos] != ']') {
 				SkipWhitespace(json, pos);
+				if (pos >= json.size() || json[pos] == ']') {
+					break;
+				}
 				if (json[pos] == ',') {
 					pos++;
 					continue;
@@ -1387,7 +1429,7 @@ static std::string PandocTableToHtml(const std::string &json) {
 					html << "<th" << align_style << ">" << RenderPandocCellToHtml(json, pos) << "</th>";
 					col_idx++;
 				} else {
-					SkipJsonValue(json, pos);
+					SkipJsonValueWithProgress(json, pos);
 				}
 			}
 			html << "</tr></thead>";
@@ -1410,6 +1452,9 @@ static std::string PandocTableToHtml(const std::string &json) {
 		html << "<tbody>";
 		while (pos < json.size() && json[pos] != ']') {
 			SkipWhitespace(json, pos);
+			if (pos >= json.size() || json[pos] == ']') {
+				break;
+			}
 			if (json[pos] == ',') {
 				pos++;
 				continue;
@@ -1421,6 +1466,9 @@ static std::string PandocTableToHtml(const std::string &json) {
 				size_t col_idx = 0;
 				while (pos < json.size() && json[pos] != ']') {
 					SkipWhitespace(json, pos);
+					if (pos >= json.size() || json[pos] == ']') {
+						break;
+					}
 					if (json[pos] == ',') {
 						pos++;
 						continue;
@@ -1439,14 +1487,14 @@ static std::string PandocTableToHtml(const std::string &json) {
 						html << "<td" << align_style << ">" << RenderPandocCellToHtml(json, pos) << "</td>";
 						col_idx++;
 					} else {
-						SkipJsonValue(json, pos);
+						SkipJsonValueWithProgress(json, pos);
 					}
 				}
 				html << "</tr>";
 				if (pos < json.size())
 					pos++; // Skip row's closing ']'
 			} else {
-				SkipJsonValue(json, pos);
+				SkipJsonValueWithProgress(json, pos);
 			}
 		}
 		html << "</tbody>";
