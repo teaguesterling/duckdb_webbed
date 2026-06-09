@@ -1,0 +1,50 @@
+# name: test/sql/parse_html_whitespace.test
+# description: parse_html must preserve significant inline whitespace and handle non-ASCII bytes
+# group: [sql]
+
+require webbed
+
+# Space between an inline element and following text must be preserved
+query I
+SELECT parse_html('<p>Hello <b>world</b> again</p>') AS html_content;
+----
+<html><body><p>Hello <b>world</b> again</p></body></html>
+
+# Space separating two inline elements must be preserved
+query I
+SELECT parse_html('<p><b>bold</b> <i>italic</i></p>') AS html_content;
+----
+<html><body><p><b>bold</b> <i>italic</i></p></body></html>
+
+# Runs of whitespace inside text collapse to a single space
+query I
+SELECT parse_html('<p>Hello   	  world</p>') AS html_content;
+----
+<html><body><p>Hello world</p></body></html>
+
+# Newlines around inline elements collapse to a single separating space
+query I
+SELECT parse_html('<p>Hello
+<b>world</b>
+again</p>') AS html_content;
+----
+<html><body><p>Hello <b>world</b> again</p></body></html>
+
+# Non-ASCII text survives minification (UTF-8 continuation bytes such as 0xA0
+# in 'à' must not be treated as whitespace)
+query I
+SELECT parse_html('<p>voilà café naïve</p>') AS html_content;
+----
+<html><body><p>voilà café naïve</p></body></html>
+
+# Non-ASCII text around inline elements keeps separating spaces
+query I
+SELECT parse_html('<p>héllo <b>wörld</b> ągain</p>') AS html_content;
+----
+<html><body><p>héllo <b>wörld</b> ągain</p></body></html>
+
+# A DOCTYPE literal inside a comment survives DOCTYPE stripping
+query I
+SELECT parse_html('<html><body><!-- keep <!DOCTYPE html> inside --><p>x</p></body></html>') AS html_content;
+----
+<html><body><!-- keep <!DOCTYPE html> inside --><p>x</p></body></html>
