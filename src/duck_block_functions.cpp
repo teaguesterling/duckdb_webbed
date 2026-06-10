@@ -1090,6 +1090,15 @@ static void SkipJsonValueWithProgress(const std::string &json, size_t &pos) {
 	}
 }
 
+// Between fields of a JSON object, consume ',' or any unexpected character so
+// malformed input cannot stall caller loops scanning for '"' or '}'
+static void ConsumeObjectFieldSeparator(const std::string &json, size_t &pos) {
+	SkipWhitespace(json, pos);
+	if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
+		pos++;
+	}
+}
+
 // Render Pandoc inlines array to HTML
 // pos should point to the start of the inlines array '['
 static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &pos) {
@@ -1145,10 +1154,7 @@ static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &po
 					}
 				}
 			}
-			SkipWhitespace(json, pos);
-			if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
-				pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
-			}
+			ConsumeObjectFieldSeparator(json, pos);
 		}
 		if (pos < json.size())
 			pos++; // Skip '}'
@@ -1296,10 +1302,7 @@ static std::string RenderPandocCellToHtml(const std::string &json, size_t &pos) 
 					}
 				}
 			}
-			SkipWhitespace(json, pos);
-			if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
-				pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
-			}
+			ConsumeObjectFieldSeparator(json, pos);
 		}
 		if (pos < json.size())
 			pos++; // Skip '}'
@@ -1369,10 +1372,7 @@ static std::string PandocTableToHtml(const std::string &json) {
 							}
 						}
 					}
-					SkipWhitespace(json, pos);
-					if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
-						pos++; // Consume ',' or any unexpected character so malformed input cannot stall the loop
-					}
+					ConsumeObjectFieldSeparator(json, pos);
 				}
 				if (pos < json.size())
 					pos++; // Skip '}'
