@@ -298,7 +298,10 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 		// Check if any column appeared multiple times in this record
 		for (const auto &pair : columns_in_this_record) {
 			if (pair.second > 1) {
-				columns[column_index[pair.first]].repeats_in_record = true;
+				auto idx_it = column_index.find(pair.first);
+				if (idx_it != column_index.end()) {
+					columns[idx_it->second].repeats_in_record = true;
+				}
 			}
 		}
 	}
