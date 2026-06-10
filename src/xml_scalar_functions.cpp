@@ -1848,7 +1848,7 @@ static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
 		return false;
 	}
 	XMLCharPtr html_ptr(html_output);
-	std::string normalized_html(reinterpret_cast<const char *>(html_ptr.get()));
+	std::string normalized_html(reinterpret_cast<const char *>(html_ptr.get()), static_cast<size_t>(output_size));
 
 	// Remove the leading XML declaration if present
 	if (normalized_html.compare(0, 2, "<?") == 0) {
