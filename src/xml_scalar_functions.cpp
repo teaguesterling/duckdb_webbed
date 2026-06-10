@@ -24,7 +24,7 @@ static void ExecuteNullSafeString(Vector &input, Vector &result, idx_t count, PR
 	for (idx_t i = 0; i < count; i++) {
 		auto input_idx = input_data.sel->get_index(i);
 		if (!input_data.validity.RowIsValid(input_idx)) {
-			result.SetValue(i, Value(result.GetType()));
+			FlatVector::SetNull(result, i, true);
 			continue;
 		}
 		process_row(i, input_strings[input_idx].GetString());
