@@ -2234,7 +2234,7 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 
 		// Process each struct field
 		for (idx_t field_idx = 0; field_idx < child_types.size(); field_idx++) {
-			auto &field_name = child_types[field_idx].first;
+			const std::string &field_name = CompatIdentifierName(child_types[field_idx].first);
 			auto &field_type = child_types[field_idx].second;
 
 			// Get the child vector for this field
@@ -2335,7 +2335,7 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 
 		// Add each struct field as a child node
 		for (size_t i = 0; i < child_types.size(); i++) {
-			auto &field_name = child_types[i].first;
+			const std::string &field_name = CompatIdentifierName(child_types[i].first);
 			auto &field_type = child_types[i].second;
 			auto &field_value = struct_value[i];
 
