@@ -3,6 +3,7 @@
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -1842,6 +1843,98 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 	});
 }
 
+// Elements whose descendant text is whitespace-significant and must be preserved verbatim:
+// raw-text elements (script, style) and preformatted elements (pre, textarea).
+static bool IsWhitespacePreservingElement(const xmlChar *name) {
+	if (!name) {
+		return false;
+	}
+	std::string n(reinterpret_cast<const char *>(name));
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") ||
+	       StringUtil::CIEquals(n, "script") || StringUtil::CIEquals(n, "style");
+}
+
+// Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
+// on the parse tree before serialization. CDATA and comment nodes are left untouched, and text
+// inside whitespace-preserving elements (pre/textarea/script/style) is left verbatim. Working on
+// the tree (rather than the serialized string) means a literal '>' or '&' in raw content is never
+// mistaken for a tag boundary, and libxml2 still handles escaping, CDATA wrapping and self-closing
+// on dump. The rewrite is done in place because the collapsed text is never longer than the
+// original, so no reallocation or entity round-trip is required. StringUtil::CharacterIsSpace is
+// used so UTF-8 continuation bytes are never misclassified as whitespace.
+static void CollapseTextWhitespace(xmlNodePtr node, bool preserve) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollapseTextWhitespace(child, preserve || IsWhitespacePreservingElement(child->name));
+		} else if (child->type == XML_TEXT_NODE && !preserve && child->content) {
+			xmlChar *content = child->content;
+			size_t w = 0;
+			bool pending_space = false;
+			for (size_t r = 0; content[r] != '\0'; r++) {
+				if (StringUtil::CharacterIsSpace(static_cast<char>(content[r]))) {
+					pending_space = true;
+					continue;
+				}
+				if (pending_space) {
+					// Keep a single separating space (significant between inline elements)
+					content[w++] = ' ';
+					pending_space = false;
+				}
+				content[w++] = content[r];
+			}
+			if (pending_space) {
+				content[w++] = ' ';
+			}
+			content[w] = '\0';
+		}
+		// CDATA_SECTION_NODE, COMMENT_NODE, etc. are intentionally left untouched
+	}
+}
+
+// Serialize a parsed HTML document without the XML declaration or DOCTYPE, collapsing each run of
+// whitespace to a single space except inside CDATA sections, comments, and whitespace-preserving
+// elements (see CollapseTextWhitespace). Returns false if the document could not be serialized.
+static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
+	// Normalize whitespace on the parse tree first, then let libxml2 serialize.
+	CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false);
+
+	xmlChar *html_output = nullptr;
+	int output_size = 0;
+	xmlDocDumpMemory(doc, &html_output, &output_size);
+	if (!html_output) {
+		return false;
+	}
+	XMLCharPtr html_ptr(html_output);
+	std::string result(reinterpret_cast<const char *>(html_ptr.get()), static_cast<size_t>(output_size));
+
+	// Remove the leading XML declaration if present
+	if (result.compare(0, 2, "<?") == 0) {
+		size_t xml_decl_end = result.find("?>");
+		if (xml_decl_end != std::string::npos) {
+			result.erase(0, xml_decl_end + 2);
+		}
+	}
+
+	// Remove the leading DOCTYPE if present
+	size_t content_start = result.find_first_not_of(" \t\n\r");
+	if (content_start != std::string::npos && result.compare(content_start, 9, "<!DOCTYPE") == 0) {
+		size_t doctype_end = result.find('>', content_start);
+		if (doctype_end != std::string::npos) {
+			result.erase(content_start, doctype_end - content_start + 1);
+		}
+	}
+
+	// Trim whitespace introduced at the document edges (e.g. the serializer's trailing newline)
+	size_t first = result.find_first_not_of(" \t\n\r");
+	if (first == std::string::npos) {
+		minified_html.clear();
+		return true;
+	}
+	size_t last = result.find_last_not_of(" \t\n\r");
+	minified_html.assign(result, first, last - first + 1);
+	return true;
+}
+
 void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &file_path_vector = args.data[0];
 
@@ -1867,64 +1960,8 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 			// Parse the HTML using the HTML parser to normalize it (removes DOCTYPE)
 			XMLDocRAII html_doc(content, true); // Use HTML parser
 			if (html_doc.IsValid()) {
-				// Serialize the document back to string (without DOCTYPE)
-				xmlChar *html_output = nullptr;
-				int output_size = 0;
-				xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
-
-				if (html_output) {
-					XMLCharPtr html_ptr(html_output);
-					std::string normalized_html = std::string(reinterpret_cast<const char *>(html_ptr.get()));
-
-					// Remove XML declaration if present
-					size_t xml_decl_end = normalized_html.find("?>");
-					if (xml_decl_end != std::string::npos) {
-						normalized_html = normalized_html.substr(xml_decl_end + 2);
-						// Remove leading whitespace/newlines
-						normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-					}
-
-					// Remove DOCTYPE if present
-					size_t doctype_start = normalized_html.find("<!DOCTYPE");
-					if (doctype_start != std::string::npos) {
-						size_t doctype_end = normalized_html.find(">", doctype_start);
-						if (doctype_end != std::string::npos) {
-							normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
-							// Remove leading whitespace/newlines after DOCTYPE removal
-							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-						}
-					}
-
-					// Minify HTML: remove whitespace between tags
-					std::string minified_html;
-					bool in_tag = false;
-					bool in_content = false;
-					for (size_t i = 0; i < normalized_html.length(); i++) {
-						char c = normalized_html[i];
-
-						if (c == '<') {
-							in_tag = true;
-							in_content = false;
-							minified_html += c;
-						} else if (c == '>') {
-							in_tag = false;
-							in_content = true;
-							minified_html += c;
-						} else if (in_tag) {
-							// Inside tag: keep all characters
-							minified_html += c;
-						} else if (in_content) {
-							// Between tags: trim whitespace but keep content
-							if (!std::isspace(c)) {
-								minified_html += c;
-							} else if (!minified_html.empty() && minified_html.back() != '>' &&
-							           i + 1 < normalized_html.length() && normalized_html[i + 1] != '<') {
-								// Keep single space between words, but not between tags
-								minified_html += ' ';
-							}
-						}
-					}
-
+				std::string minified_html;
+				if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
 					return StringVector::AddString(result, minified_html);
 				}
 			}
@@ -1954,79 +1991,8 @@ void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &stat
 			    // Parse the HTML using the HTML parser to normalize it
 			    XMLDocRAII html_doc(html_content, true); // Use HTML parser
 			    if (html_doc.IsValid()) {
-				    // Serialize the document back to string
-				    xmlChar *html_output = nullptr;
-				    int output_size = 0;
-				    xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
-
-				    if (html_output) {
-					    XMLCharPtr html_ptr(html_output);
-					    std::string normalized_html = std::string(reinterpret_cast<const char *>(html_ptr.get()));
-
-					    // Remove XML declaration if present
-					    size_t xml_decl_end = normalized_html.find("?>");
-					    if (xml_decl_end != std::string::npos) {
-						    normalized_html = normalized_html.substr(xml_decl_end + 2);
-						    // Remove leading whitespace/newlines
-						    normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-					    }
-
-					    // Remove DOCTYPE if present
-					    size_t doctype_start = normalized_html.find("<!DOCTYPE");
-					    if (doctype_start != std::string::npos) {
-						    size_t doctype_end = normalized_html.find(">", doctype_start);
-						    if (doctype_end != std::string::npos) {
-							    normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
-							    // Remove leading whitespace/newlines after DOCTYPE removal
-							    normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-						    }
-					    }
-
-					    // Minify HTML: remove whitespace between tags
-					    std::string minified_html;
-					    bool inside_tag = false;
-					    bool last_was_space = false;
-					    bool between_tags = true; // Start assuming we're between tags
-
-					    for (size_t i = 0; i < normalized_html.length(); i++) {
-						    char c = normalized_html[i];
-
-						    if (c == '<') {
-							    inside_tag = true;
-							    between_tags = false;
-							    minified_html += c;
-							    last_was_space = false;
-						    } else if (c == '>') {
-							    inside_tag = false;
-							    between_tags = true;
-							    minified_html += c;
-							    last_was_space = false;
-						    } else if (inside_tag) {
-							    minified_html += c;
-							    last_was_space = false;
-						    } else {
-							    if (std::isspace(c)) {
-								    if (between_tags) {
-									    // Skip all whitespace between tags
-									    continue;
-								    } else if (!last_was_space) {
-									    // Keep single space between words within text content
-									    minified_html += ' ';
-								    }
-								    last_was_space = true;
-							    } else {
-								    between_tags = false;
-								    minified_html += c;
-								    last_was_space = false;
-							    }
-						    }
-					    }
-
-					    // Trim trailing whitespace
-					    if (!minified_html.empty() && std::isspace(minified_html.back())) {
-						    minified_html.erase(minified_html.find_last_not_of(" \t\n\r") + 1);
-					    }
-
+				    std::string minified_html;
+				    if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
 					    return StringVector::AddString(result, minified_html);
 				    }
 			    }
