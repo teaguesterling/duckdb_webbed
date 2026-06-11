@@ -12,6 +12,25 @@
 
 namespace duckdb {
 
+// Iterates a string input vector via UnifiedVectorFormat (handles FLAT, DICTIONARY and CONSTANT
+// vectors) and propagates NULL inputs to NULL results. The callback receives the row index and
+// the row's string value, and stores its result via result.SetValue.
+template <class PROCESS_ROW>
+static void ExecuteNullSafeString(Vector &input, Vector &result, idx_t count, PROCESS_ROW process_row) {
+	UnifiedVectorFormat input_data;
+	CompatToUnifiedFormat(input, count, input_data);
+	auto input_strings = UnifiedVectorFormat::GetData<string_t>(input_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto input_idx = input_data.sel->get_index(i);
+		if (!input_data.validity.RowIsValid(input_idx)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		process_row(i, input_strings[input_idx].GetString());
+	}
+}
+
 void XMLScalarFunctions::XMLValidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 
@@ -484,10 +503,7 @@ void XMLScalarFunctions::XMLExtractCommentsFunction(DataChunk &args, ExpressionS
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto comments = XMLUtils::ExtractComments(xml_string);
 
 		// Create list of comment structs
@@ -507,17 +523,14 @@ void XMLScalarFunctions::XMLExtractCommentsFunction(DataChunk &args, ExpressionS
 
 		Value list_value = Value::LIST(comment_struct_type, comment_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLExtractCDataFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto cdata_sections = XMLUtils::ExtractCData(xml_string);
 
 		// Create list of CDATA structs
@@ -537,17 +550,14 @@ void XMLScalarFunctions::XMLExtractCDataFunction(DataChunk &args, ExpressionStat
 
 		Value list_value = Value::LIST(cdata_struct_type, cdata_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLStatsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto stats = XMLUtils::GetXMLStats(xml_string);
 
 		// Create stats struct
@@ -560,17 +570,14 @@ void XMLScalarFunctions::XMLStatsFunction(DataChunk &args, ExpressionState &stat
 
 		Value stats_value = Value::STRUCT(stats_children);
 		result.SetValue(i, stats_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto namespaces = XMLUtils::ExtractNamespaces(xml_string);
 
 		// Create MAP(VARCHAR, VARCHAR) with prefix -> uri mappings
@@ -586,7 +593,7 @@ void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState 
 		// Create MAP value
 		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
 		result.SetValue(i, map_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -686,10 +693,7 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
 	    "self"};
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
-		std::string xpath = xpath_str.GetString();
-
+	ExecuteNullSafeString(xpath_vector, result, count, [&](idx_t i, const std::string &xpath) {
 		// Find all prefixes
 		std::set<std::string> prefixes;
 		std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
@@ -712,7 +716,7 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 
 		Value list_value = Value::LIST(LogicalType::VARCHAR, prefix_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLMockNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -752,12 +756,25 @@ void XMLScalarFunctions::XMLFindUndefinedPrefixesFunction(DataChunk &args, Expre
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat xpath_data;
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
-		std::string xml_string = xml_str.GetString();
-		std::string xpath = xpath_str.GetString();
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
+
+		if (!xml_data.validity.RowIsValid(xml_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value(result.GetType()));
+			continue;
+		}
+
+		std::string xml_string = xml_strings[xml_idx].GetString();
+		std::string xpath = xpath_strings[xpath_idx].GetString();
 
 		// Get prefixes used in XPath
 		auto xpath_prefixes = DetectXPathPrefixes(xpath);
@@ -792,11 +809,8 @@ void XMLScalarFunctions::XMLAddNamespaceDeclarationsFunction(DataChunk &args, Ex
 	auto &ns_map_vector = args.data[1];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto ns_map_value = ns_map_vector.GetValue(i);
-
-		std::string xml_string = xml_str.GetString();
 
 		// Parse the MAP value into case_insensitive_map
 		case_insensitive_map_t<string> namespaces_to_inject;
@@ -815,7 +829,7 @@ void XMLScalarFunctions::XMLAddNamespaceDeclarationsFunction(DataChunk &args, Ex
 		// Inject the namespaces
 		std::string modified_xml = InjectNamespaceDeclarations(xml_string, namespaces_to_inject);
 		result.SetValue(i, StringVector::AddString(result, modified_xml));
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLLookupNamespaceFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -825,17 +839,14 @@ void XMLScalarFunctions::XMLLookupNamespaceFunction(DataChunk &args, ExpressionS
 	auto &prefix_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto prefix_str = FlatVector::GetData<string_t>(prefix_vector)[i];
-		std::string prefix = prefix_str.GetString();
-
+	ExecuteNullSafeString(prefix_vector, result, count, [&](idx_t i, const std::string &prefix) {
 		std::string uri = GetCommonNamespaceURI(prefix);
 		if (uri.empty()) {
 			FlatVector::SetNull(result, i, true);
 		} else {
 			result.SetValue(i, Value(uri));
 		}
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -1067,7 +1078,9 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 				std::string input_str;
 
 				if (input_value.IsNull()) {
-					input_str = "";
+					// NULL in -> NULL out
+					result.SetValue(i, Value(result.GetType()));
+					continue;
 				} else if (input_type.id() == LogicalTypeId::VARCHAR) {
 					input_str = input_value.GetValue<string>();
 				} else {
@@ -1606,10 +1619,7 @@ void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionSta
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto links = XMLUtils::ExtractHTMLLinks(html_string);
 
 		vector<Value> link_values;
@@ -1629,17 +1639,14 @@ void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionSta
 
 		Value list_value = Value::LIST(link_struct_type, link_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto images = XMLUtils::ExtractHTMLImages(html_string);
 
 		vector<Value> image_values;
@@ -1662,17 +1669,14 @@ void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionSt
 
 		Value list_value = Value::LIST(image_struct_type, image_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto tables = XMLUtils::ExtractHTMLTables(html_string);
 
 		vector<Value> row_values;
@@ -1721,17 +1725,14 @@ void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, Expressio
 
 		Value list_value = Value::LIST(table_row_struct_type, row_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto tables = XMLUtils::ExtractHTMLTables(html_string);
 
 		vector<Value> table_values;
@@ -1830,7 +1831,7 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 
 		Value list_value = Value::LIST(table_json_struct_type, table_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {

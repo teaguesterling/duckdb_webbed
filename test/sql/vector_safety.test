@@ -1,0 +1,219 @@
+# name: test/sql/vector_safety.test
+# description: Regression tests for vector memory safety (NULL rows, constant vectors, multi-row inputs)
+# group: [sql]
+
+require webbed
+
+# --- xml_stats ---
+
+# Constant input replicated over multiple rows
+query I
+SELECT (xml_stats('<a/>')).element_count FROM range(3);
+----
+1
+1
+1
+
+# NULL in -> NULL out
+query I
+SELECT xml_stats(x) IS NULL FROM (VALUES ('<a/>'), (NULL), ('<b><c/></b>')) t(x);
+----
+false
+true
+false
+
+# --- xml_namespaces ---
+
+query I
+SELECT xml_namespaces('<r xmlns:p="urn:a"/>')['p'] FROM range(3);
+----
+urn:a
+urn:a
+urn:a
+
+query I
+SELECT xml_namespaces(x) IS NULL FROM (VALUES ('<r xmlns:p="urn:a"/>'), (NULL)) t(x);
+----
+false
+true
+
+# --- xml_extract_comments / xml_extract_cdata ---
+
+query I
+SELECT len(xml_extract_comments(x::XML)) FROM (VALUES ('<a><!--hi--></a>'), (NULL), ('<a/>')) t(x);
+----
+1
+NULL
+0
+
+query I
+SELECT len(xml_extract_cdata(x::XML)) FROM (VALUES ('<a><![CDATA[hi]]></a>'), (NULL), ('<a/>')) t(x);
+----
+1
+NULL
+0
+
+query I
+SELECT len(xml_extract_comments('<a><!--hi--></a>')) FROM range(3);
+----
+1
+1
+1
+
+# --- xml_detect_prefixes ---
+
+query I
+SELECT xml_detect_prefixes(x) FROM (VALUES ('//svg:circle'), (NULL)) t(x);
+----
+[svg]
+NULL
+
+# --- xml_find_undefined_prefixes ---
+
+query I
+SELECT xml_find_undefined_prefixes(x, p) FROM (VALUES ('<r/>', '//svg:circle'), (NULL, '//svg:circle'), ('<r/>', NULL)) t(x, p);
+----
+[svg]
+NULL
+NULL
+
+# --- xml_add_namespace_declarations ---
+
+query I
+SELECT xml_add_namespace_declarations(x, MAP {'p': 'urn:a'}) FROM (VALUES ('<r/>'), (NULL)) t(x);
+----
+<r xmlns:p="urn:a"/>
+NULL
+
+# --- xml_lookup_namespace ---
+
+query I
+SELECT xml_lookup_namespace(NULL);
+----
+NULL
+
+query I
+SELECT xml_lookup_namespace(p) FROM (VALUES ('svg'), (NULL), ('nosuchprefix')) t(p);
+----
+http://www.w3.org/2000/svg
+NULL
+NULL
+
+query I
+SELECT xml_lookup_namespace('svg') FROM range(3);
+----
+http://www.w3.org/2000/svg
+http://www.w3.org/2000/svg
+http://www.w3.org/2000/svg
+
+# --- to_xml: NULL propagation for scalars, lists and structs ---
+
+query II
+SELECT x, to_xml(x) IS NULL FROM (VALUES (1), (NULL)) t(x) ORDER BY x NULLS LAST;
+----
+1	false
+NULL	true
+
+query I
+SELECT to_xml(x) IS NULL FROM (VALUES (['a', 'b']), (NULL)) t(x);
+----
+false
+true
+
+query I
+SELECT to_xml(x) IS NULL FROM (VALUES ({'a': 1}), (NULL)) t(x);
+----
+false
+true
+
+# Constant list input replicated over many rows
+query I
+SELECT count(*) FROM (SELECT to_xml([1, 2, 3]) AS x FROM range(5000)) t WHERE x IS NOT NULL;
+----
+5000
+
+query I
+SELECT REPLACE(to_xml(['a', 'b'])::VARCHAR, chr(10), '') FROM range(2);
+----
+<?xml version="1.0"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
+<?xml version="1.0"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
+
+# Constant struct input replicated over multiple rows
+query I
+SELECT REPLACE(to_xml({'a': 1})::VARCHAR, chr(10), '') FROM range(2);
+----
+<?xml version="1.0"?><xml><a>1</a></xml>
+<?xml version="1.0"?><xml><a>1</a></xml>
+
+# NULL list elements become empty item nodes
+query I
+SELECT REPLACE(to_xml(['a', NULL, 'b'])::VARCHAR, chr(10), '');
+----
+<?xml version="1.0"?><xml_list><xml>a</xml><xml/><xml>b</xml></xml_list>
+
+# --- HTML extraction functions ---
+
+query I
+SELECT len(html_extract_links('<a href="https://example.com">x</a>')) FROM range(3);
+----
+1
+1
+1
+
+query I
+SELECT html_extract_links(h::HTML) IS NULL FROM (VALUES ('<a href="https://example.com">x</a>'), (NULL)) t(h);
+----
+false
+true
+
+query I
+SELECT html_extract_images(h::HTML) IS NULL FROM (VALUES ('<img src="a.png"/>'), (NULL)) t(h);
+----
+false
+true
+
+query I
+SELECT html_extract_table_rows(h::HTML) IS NULL FROM (VALUES ('<table><tr><td>1</td></tr></table>'), (NULL)) t(h);
+----
+false
+true
+
+# (documents without tables only: returning actual table data trips a pre-existing
+#  type mismatch between the declared STRUCT({}) fields and the produced values)
+query I
+SELECT html_extract_tables_json(h::HTML) IS NULL FROM (VALUES ('<p>x</p>'), (NULL)) t(h);
+----
+false
+true
+
+query I
+SELECT len(html_extract_images('<img src="a.png"/>')) FROM range(3);
+----
+1
+1
+1
+
+# --- multi-row mixed validity over a larger table ---
+
+statement ok
+CREATE TABLE vs_docs AS
+SELECT CASE WHEN i % 3 = 0 THEN NULL ELSE '<r xmlns:p="urn:a"><!--c--><![CDATA[d]]></r>' END AS doc
+FROM range(100) t(i);
+
+query III
+SELECT count(*) FILTER (s IS NULL), count(*) FILTER (s IS NOT NULL), max((s).element_count)
+FROM (SELECT xml_stats(doc) AS s FROM vs_docs) t;
+----
+34
+66
+1
+
+query II
+SELECT count(*) FILTER (c IS NULL), max(len(c))
+FROM (SELECT xml_extract_comments(doc::XML) AS c FROM vs_docs) t;
+----
+34
+1
+
+statement ok
+DROP TABLE vs_docs;
