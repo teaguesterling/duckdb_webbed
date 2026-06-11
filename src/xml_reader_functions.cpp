@@ -474,7 +474,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(name);
+				names.push_back(CompatIdentifierName(name));
 			}
 
 			if (return_types.empty()) {
@@ -1348,7 +1348,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(name);
+				names.push_back(CompatIdentifierName(name));
 			}
 
 			if (return_types.empty()) {
@@ -1521,7 +1521,7 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	// Set alias for non-glob patterns
 	if (!FileSystem::HasGlob(table_name)) {
 		auto &fs = FileSystem::GetFileSystem(context);
-		table_function->alias = fs.ExtractBaseName(table_name);
+		table_function->alias = CompatMakeIdentifier(fs.ExtractBaseName(table_name));
 	}
 
 	return std::move(table_function);
@@ -1799,7 +1799,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 				return_types.push_back(logical_type);
-				names.push_back(name);
+				names.push_back(CompatIdentifierName(name));
 			}
 
 			if (return_types.empty()) {

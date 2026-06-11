@@ -477,7 +477,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 						attr_name = StripNamespacePrefix(attr_name);
 					}
 					// Attributes are always VARCHAR
-					struct_fields.push_back(make_pair(attr_name, LogicalType::VARCHAR));
+					struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 				}
 			}
 		}
@@ -503,7 +503,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				std::string list_text_winning_fmt;
 				LogicalType text_type = InferTypeFromSamples(list_text_samples, options, list_text_winning_fmt);
 				// Insert #text as first field (before attribute fields)
-				struct_fields.insert(struct_fields.begin(), make_pair(options.text_key, text_type));
+				struct_fields.insert(struct_fields.begin(), make_pair(CompatMakeIdentifier(options.text_key), text_type));
 			}
 		}
 
@@ -531,7 +531,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				// Proper fix requires a format-per-field map threaded through extraction.
 				std::string nested_winning_fmt;
 				LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt);
-				struct_fields.push_back(make_pair(child_name, child_type));
+				struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 			}
 		}
 
@@ -590,7 +590,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			// TODO(#38): nested_winning_fmt2 is computed but discarded (see nested format limitation above).
 			std::string nested_winning_fmt2;
 			LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
-			struct_fields.push_back(make_pair(child_name, child_type));
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 		}
 
 		if (!struct_fields.empty()) {
@@ -639,13 +639,13 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			// Add text content field with inferred type
 			std::string text_winning_fmt;
 			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
-			struct_fields.push_back(make_pair(options.text_key, text_type));
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(options.text_key), text_type));
 
 			// Add attribute fields (sorted for determinism)
 			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());
 			std::sort(sorted_attrs.begin(), sorted_attrs.end());
 			for (const auto &attr_name : sorted_attrs) {
-				struct_fields.push_back(make_pair(attr_name, LogicalType::VARCHAR));
+				struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 			}
 
 			return LogicalType::STRUCT(struct_fields);
@@ -1144,7 +1144,7 @@ LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
 					child_type = InferNestedType(child_pattern, all_patterns, options);
 				}
 
-				struct_fields.push_back(make_pair(child_name, child_type));
+				struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 			}
 		}
 
@@ -1296,12 +1296,12 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		// extraction consistent with this merge semantic.
 		case_insensitive_map_t<idx_t> b_index;
 		for (idx_t i = 0; i < b_children.size(); i++) {
-			b_index[b_children[i].first] = i;
+			b_index[CompatIdentifierName(b_children[i].first)] = i;
 		}
 
 		child_list_t<LogicalType> merged;
 		for (auto &ac : a_children) {
-			auto it = b_index.find(ac.first);
+			auto it = b_index.find(CompatIdentifierName(ac.first));
 			if (it == b_index.end()) {
 				merged.emplace_back(ac.first, ac.second);
 			} else {
@@ -1311,7 +1311,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		}
 		// Append b-only fields in b's original order
 		for (auto &bc : b_children) {
-			auto it = b_index.find(bc.first);
+			auto it = b_index.find(CompatIdentifierName(bc.first));
 			if (it != b_index.end()) {
 				merged.emplace_back(bc.first, bc.second);
 				b_index.erase(it);
