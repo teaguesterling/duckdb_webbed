@@ -19,7 +19,41 @@
 #include "duckdb/function/function_set.hpp"
 #endif
 
+// Detect the duckdb::Identifier type (newer DuckDB main), which replaced std::string as the key
+// of child_list_t (STRUCT/UNION field names) and several name-typed fields (e.g. table alias,
+// Expression::GetAlias). Identifier does not implicitly convert to/from std::string, so reads and
+// constructions at the boundary must go through the helpers below. Detected by header presence so
+// it stays orthogonal to DUCKDB_HAS_NEW_VECTOR_HEADERS.
+#if __has_include("duckdb/common/identifier.hpp")
+#define DUCKDB_HAS_IDENTIFIER 1
+#include "duckdb/common/identifier.hpp"
+#endif
+
 namespace duckdb {
+
+// --- Identifier <-> string boundary helpers ---
+// CompatIdentifierName: read the raw string name from a child_list_t key / aliased name.
+// CompatMakeIdentifier: build a child_list_t key (or name-typed field) from a runtime string.
+// On older DuckDB these are pass-throughs (the key already is a std::string).
+#ifdef DUCKDB_HAS_IDENTIFIER
+inline const string &CompatIdentifierName(const Identifier &id) {
+	return id.GetIdentifierName();
+}
+inline const string &CompatIdentifierName(const string &name) {
+	return name;
+}
+inline Identifier CompatMakeIdentifier(string name) {
+	return Identifier(std::move(name));
+}
+#else
+inline const string &CompatIdentifierName(const string &name) {
+	return name;
+}
+inline string CompatMakeIdentifier(string name) {
+	return name;
+}
+#endif
+
 
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
 
