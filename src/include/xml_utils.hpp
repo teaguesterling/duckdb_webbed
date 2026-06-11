@@ -217,6 +217,10 @@ public:
 	static bool IsValidXML(const std::string &xml_str);
 	static bool IsWellFormedXML(const std::string &xml_str);
 	static bool ValidateXMLSchema(const std::string &xml_str, const std::string &xsd_schema);
+	// Throw InvalidInputException unless `name` is a usable XML element name. Used to prevent markup
+	// injection through user-controlled names (to_xml's node_name argument and STRUCT field names),
+	// which are otherwise concatenated/emitted into trusted `xml`-typed output unvalidated.
+	static void ValidateXMLElementName(const std::string &name);
 
 	// Extraction functions
 	static std::vector<XMLElement> ExtractByXPath(const std::string &xml_str, const std::string &xpath);
