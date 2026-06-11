@@ -1834,13 +1834,61 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 	}
 }
 
-// Serialize a parsed HTML document without the XML declaration or DOCTYPE,
-// collapsing each run of whitespace outside tags to a single space. Runs are
-// collapsed rather than deleted because whitespace adjacent to tags can be
-// significant (e.g. between inline elements). Uses StringUtil::CharacterIsSpace
-// so UTF-8 continuation bytes are never misclassified as whitespace.
-// Returns false if the document could not be serialized.
+// Elements whose descendant text is whitespace-significant and must be preserved verbatim:
+// raw-text elements (script, style) and preformatted elements (pre, textarea).
+static bool IsWhitespacePreservingElement(const xmlChar *name) {
+	if (!name) {
+		return false;
+	}
+	std::string n(reinterpret_cast<const char *>(name));
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") ||
+	       StringUtil::CIEquals(n, "script") || StringUtil::CIEquals(n, "style");
+}
+
+// Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
+// on the parse tree before serialization. CDATA and comment nodes are left untouched, and text
+// inside whitespace-preserving elements (pre/textarea/script/style) is left verbatim. Working on
+// the tree (rather than the serialized string) means a literal '>' or '&' in raw content is never
+// mistaken for a tag boundary, and libxml2 still handles escaping, CDATA wrapping and self-closing
+// on dump. The rewrite is done in place because the collapsed text is never longer than the
+// original, so no reallocation or entity round-trip is required. StringUtil::CharacterIsSpace is
+// used so UTF-8 continuation bytes are never misclassified as whitespace.
+static void CollapseTextWhitespace(xmlNodePtr node, bool preserve) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollapseTextWhitespace(child, preserve || IsWhitespacePreservingElement(child->name));
+		} else if (child->type == XML_TEXT_NODE && !preserve && child->content) {
+			xmlChar *content = child->content;
+			size_t w = 0;
+			bool pending_space = false;
+			for (size_t r = 0; content[r] != '\0'; r++) {
+				if (StringUtil::CharacterIsSpace(static_cast<char>(content[r]))) {
+					pending_space = true;
+					continue;
+				}
+				if (pending_space) {
+					// Keep a single separating space (significant between inline elements)
+					content[w++] = ' ';
+					pending_space = false;
+				}
+				content[w++] = content[r];
+			}
+			if (pending_space) {
+				content[w++] = ' ';
+			}
+			content[w] = '\0';
+		}
+		// CDATA_SECTION_NODE, COMMENT_NODE, etc. are intentionally left untouched
+	}
+}
+
+// Serialize a parsed HTML document without the XML declaration or DOCTYPE, collapsing each run of
+// whitespace to a single space except inside CDATA sections, comments, and whitespace-preserving
+// elements (see CollapseTextWhitespace). Returns false if the document could not be serialized.
 static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
+	// Normalize whitespace on the parse tree first, then let libxml2 serialize.
+	CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false);
+
 	xmlChar *html_output = nullptr;
 	int output_size = 0;
 	xmlDocDumpMemory(doc, &html_output, &output_size);
@@ -1848,49 +1896,33 @@ static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
 		return false;
 	}
 	XMLCharPtr html_ptr(html_output);
-	std::string normalized_html(reinterpret_cast<const char *>(html_ptr.get()), static_cast<size_t>(output_size));
+	std::string result(reinterpret_cast<const char *>(html_ptr.get()), static_cast<size_t>(output_size));
 
 	// Remove the leading XML declaration if present
-	if (normalized_html.compare(0, 2, "<?") == 0) {
-		size_t xml_decl_end = normalized_html.find("?>");
+	if (result.compare(0, 2, "<?") == 0) {
+		size_t xml_decl_end = result.find("?>");
 		if (xml_decl_end != std::string::npos) {
-			normalized_html.erase(0, xml_decl_end + 2);
+			result.erase(0, xml_decl_end + 2);
 		}
 	}
 
 	// Remove the leading DOCTYPE if present
-	size_t content_start = normalized_html.find_first_not_of(" \t\n\r");
-	if (content_start != std::string::npos && normalized_html.compare(content_start, 9, "<!DOCTYPE") == 0) {
-		size_t doctype_end = normalized_html.find('>', content_start);
+	size_t content_start = result.find_first_not_of(" \t\n\r");
+	if (content_start != std::string::npos && result.compare(content_start, 9, "<!DOCTYPE") == 0) {
+		size_t doctype_end = result.find('>', content_start);
 		if (doctype_end != std::string::npos) {
-			normalized_html.erase(content_start, doctype_end - content_start + 1);
+			result.erase(content_start, doctype_end - content_start + 1);
 		}
 	}
 
-	minified_html.clear();
-	minified_html.reserve(normalized_html.length());
-	bool inside_tag = false;
-	bool pending_space = false;
-	for (char c : normalized_html) {
-		if (!inside_tag && StringUtil::CharacterIsSpace(c)) {
-			pending_space = true;
-			continue;
-		}
-		if (pending_space) {
-			// Collapse the run to one space; drop it at the document start
-			if (!minified_html.empty()) {
-				minified_html += ' ';
-			}
-			pending_space = false;
-		}
-		if (c == '<') {
-			inside_tag = true;
-		} else if (c == '>') {
-			inside_tag = false;
-		}
-		minified_html += c;
+	// Trim whitespace introduced at the document edges (e.g. the serializer's trailing newline)
+	size_t first = result.find_first_not_of(" \t\n\r");
+	if (first == std::string::npos) {
+		minified_html.clear();
+		return true;
 	}
-	// A pending run at the document end is dropped, trimming trailing whitespace
+	size_t last = result.find_last_not_of(" \t\n\r");
+	minified_html.assign(result, first, last - first + 1);
 	return true;
 }
 

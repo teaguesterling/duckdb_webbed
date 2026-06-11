@@ -56,16 +56,38 @@ SELECT parse_html('<html><body><p>a &lt; b   &gt;   c</p></body></html>') AS htm
 ----
 <html><body><p>a &lt; b &gt; c</p></body></html>
 
-# Whitespace inside <pre> collapses to single spaces under the minification
-# policy (collapsed, never deleted); content is otherwise untouched
+# Whitespace inside <pre> is preserved verbatim: preformatted content is
+# whitespace-significant, so newlines and runs are NOT collapsed. Compared as a
+# boolean because the value contains newlines.
 query I
-SELECT parse_html('<html><body><pre>line1' || chr(10) || '  line2' || chr(10) || chr(9) || 'line3</pre></body></html>') AS html_content;
+SELECT parse_html('<html><body><pre>line1' || chr(10) || '  line2' || chr(10) || chr(9) || 'line3</pre></body></html>')
+       = '<html><body><pre>line1' || chr(10) || '  line2' || chr(10) || chr(9) || 'line3</pre></body></html>';
 ----
-<html><body><pre>line1 line2 line3</pre></body></html>
+true
 
-# Script content is wrapped in CDATA by the serializer; whitespace runs in it
-# collapse to single spaces but tokens are never fused together
+# Script content is raw text (wrapped in CDATA by the serializer) and preserved
+# verbatim: whitespace runs are NOT collapsed and a literal '>' inside it is never
+# treated as a tag boundary
 query I
 SELECT parse_html('<html><body><script>if (a > 0)  {  a  =  1;  }</script></body></html>') AS html_content;
 ----
-<html><body><script><![CDATA[if (a > 0) { a = 1; }]]></script></body></html>
+<html><body><script><![CDATA[if (a > 0)  {  a  =  1;  }]]></script></body></html>
+
+# Style content (also raw text) is preserved verbatim
+query I
+SELECT parse_html('<html><head><style>a {  color :  red ;  }</style></head></html>') AS html_content;
+----
+<html><head><style><![CDATA[a {  color :  red ;  }]]></style></head></html>
+
+# A comment containing a literal '>' and internal whitespace is preserved verbatim
+query I
+SELECT parse_html('<html><body><p>x<!-- a > b   c --></p></body></html>') AS html_content;
+----
+<html><body><p>x<!-- a > b   c --></p></body></html>
+
+# Non-breaking spaces (U+00A0) are NOT whitespace and must be preserved, not collapsed.
+# Compared as a boolean since the value contains non-ASCII bytes.
+query I
+SELECT parse_html('<p>a&nbsp;&nbsp;b</p>') = '<html><body><p>a' || chr(160) || chr(160) || 'b</p></body></html>';
+----
+true
