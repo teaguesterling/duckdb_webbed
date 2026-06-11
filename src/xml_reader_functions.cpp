@@ -32,6 +32,16 @@ static bool HasComplexXPath(const std::string &record_element) {
 	return re.find_first_of("/[@]()*:.") != std::string::npos;
 }
 
+// Raise the error used when libxml2 cannot allocate memory while parsing a file. A
+// libxml2 allocation failure is a transient resource condition, not a per-file data
+// quality problem, so callers throw this regardless of ignore_errors and let the
+// per-file catch blocks re-raise OutOfMemoryException so the scan fails loudly.
+[[noreturn]] static void ThrowLibxmlOutOfMemory(const std::string &file_path) {
+	throw duckdb::OutOfMemoryException(
+	    "Failed to parse file \"%s\": libxml2 could not allocate memory (the system may be under memory pressure)",
+	    file_path);
+}
+
 // Resolve a datetime_format preset name or format string to a list of format strings
 std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 	if (input == "auto") {
@@ -553,7 +563,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						file_handle->Read((void *)content.data(), file_size);
 
 						if (mode == ParseMode::XML) {
-							if (!XMLUtils::IsValidXML(content)) {
+							auto validity = XMLUtils::CheckXML(content);
+							if (validity == XMLValidity::ResourceError) {
+								ThrowLibxmlOutOfMemory(file_path);
+							}
+							if (validity != XMLValidity::Valid) {
 								if (!result->ignore_errors) {
 									throw InvalidInputException("File %s contains invalid XML", file_path);
 								}
@@ -571,6 +585,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
 
+				} catch (const OutOfMemoryException &) {
+					throw;
 				} catch (const Exception &e) {
 					if (!result->ignore_errors) {
 						throw;
@@ -608,6 +624,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				}
 			}
 
+		} catch (const OutOfMemoryException &) {
+			throw;
 		} catch (const Exception &e) {
 			if (!result->ignore_errors) {
 				throw;
@@ -692,8 +710,11 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 				}
 			} else {
 				// XML mode: strict validation
-				bool is_valid = XMLUtils::IsValidXML(content);
-				if (!is_valid) {
+				auto validity = XMLUtils::CheckXML(content);
+				if (validity == XMLValidity::ResourceError) {
+					ThrowLibxmlOutOfMemory(filename);
+				}
+				if (validity != XMLValidity::Valid) {
 					if (bind_data.ignore_errors) {
 						continue; // Skip this invalid file
 					} else {
@@ -710,6 +731,8 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 			output.data[col_idx++].SetValue(output_idx, Value(content));
 			output_idx++;
 
+		} catch (const OutOfMemoryException &) {
+			throw;
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
@@ -823,28 +846,24 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					content.resize(file_size);
 					file_handle->Read((void *)content.data(), file_size);
 
-					// Validate content based on mode
-					if (!is_html) {
-						if (!XMLUtils::IsValidXML(content)) {
-							if (bind_data.ignore_errors) {
-								gstate.file_index++;
-								continue;
-							} else {
-								throw InvalidInputException("File %s contains invalid XML", filename);
-							}
-						}
-					}
-
-					// Parse DOM — DOM makes its own copy, so content string can be freed
+					// Parse DOM — DOM makes its own copy, so content string can be freed.
+					// This single parse is also the validity check: a separate pre-validation
+					// pass would parse the document twice and could not see why a parse failed.
 					gstate.current_doc = XMLDocRAII(content, is_html);
 
 					if (!gstate.current_doc.IsValid()) {
+						if (gstate.current_doc.HadResourceError()) {
+							ThrowLibxmlOutOfMemory(filename);
+						}
 						if (bind_data.ignore_errors) {
 							gstate.current_doc = XMLDocRAII();
 							gstate.file_index++;
 							continue;
 						}
-						throw InvalidInputException("Failed to parse file %s", filename);
+						if (is_html) {
+							throw InvalidInputException("Failed to parse file %s", filename);
+						}
+						throw InvalidInputException("File %s contains invalid XML", filename);
 					}
 
 					xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
@@ -970,6 +989,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				}
 			}
 
+		} catch (const OutOfMemoryException &) {
+			throw;
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
@@ -1118,8 +1139,11 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 			file_handle->Read((void *)content.data(), file_size);
 
 			// Validate XML
-			bool is_valid = XMLUtils::IsValidXML(content);
-			if (!is_valid) {
+			auto validity = XMLUtils::CheckXML(content);
+			if (validity == XMLValidity::ResourceError) {
+				ThrowLibxmlOutOfMemory(filename);
+			}
+			if (validity != XMLValidity::Valid) {
 				if (bind_data.ignore_errors) {
 					continue; // Skip this invalid file
 				} else {
@@ -1139,6 +1163,8 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 			}
 			output_idx++;
 
+		} catch (const OutOfMemoryException &) {
+			throw;
 		} catch (const Exception &e) {
 			if (!bind_data.ignore_errors) {
 				throw;
@@ -1423,7 +1449,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						content.resize(file_size);
 						file_handle->Read((void *)content.data(), file_size);
 
-						if (!XMLUtils::IsValidXML(content)) {
+						auto validity = XMLUtils::CheckXML(content);
+						if (validity == XMLValidity::ResourceError) {
+							ThrowLibxmlOutOfMemory(file_path);
+						}
+						if (validity != XMLValidity::Valid) {
 							if (!result->ignore_errors) {
 								throw InvalidInputException("File %s contains invalid XML", file_path);
 							}
@@ -1435,6 +1465,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
 
+				} catch (const OutOfMemoryException &) {
+					throw;
 				} catch (const Exception &e) {
 					if (!result->ignore_errors) {
 						throw;
@@ -1467,6 +1499,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				names.push_back("xml");
 			}
 
+		} catch (const OutOfMemoryException &) {
+			throw;
 		} catch (const Exception &e) {
 			if (!result->ignore_errors) {
 				throw;
