@@ -216,13 +216,13 @@ priority	VARCHAR
 status	VARCHAR
 
 # SAX: schema includes all attributes from all records
-# Note: SAX emits attributes as elements in synthetic XML, so id gets type-inferred as INTEGER
-# (DOM keeps attributes as VARCHAR). This is a known difference.
+# SAX emits attributes as real attributes in the synthetic XML, so attribute typing and naming
+# match DOM (attributes stay VARCHAR).
 query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/cross_record_attrs.xml', record_element:='item', maximum_file_size:=1)) ORDER BY column_name;
 ----
 data	VARCHAR
-id	INTEGER
+id	VARCHAR
 priority	VARCHAR
 status	VARCHAR
 

@@ -3,14 +3,35 @@
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
+#include <libxml/tree.h>
 #include <regex>
 #include <set>
 
 namespace duckdb {
+
+// Iterates a string input vector via UnifiedVectorFormat (handles FLAT, DICTIONARY and CONSTANT
+// vectors) and propagates NULL inputs to NULL results. The callback receives the row index and
+// the row's string value, and stores its result via result.SetValue.
+template <class PROCESS_ROW>
+static void ExecuteNullSafeString(Vector &input, Vector &result, idx_t count, PROCESS_ROW process_row) {
+	UnifiedVectorFormat input_data;
+	CompatToUnifiedFormat(input, count, input_data);
+	auto input_strings = UnifiedVectorFormat::GetData<string_t>(input_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto input_idx = input_data.sel->get_index(i);
+		if (!input_data.validity.RowIsValid(input_idx)) {
+			FlatVector::SetNull(result, i, true);
+			continue;
+		}
+		process_row(i, input_strings[input_idx].GetString());
+	}
+}
 
 void XMLScalarFunctions::XMLValidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
@@ -315,6 +336,13 @@ void XMLScalarFunctions::XMLWrapFragmentFunction(DataChunk &args, ExpressionStat
 		    std::string fragment = fragment_str.GetString();
 		    std::string wrapper = wrapper_str.GetString();
 
+		    // Reject wrapper names that are not valid XML element names to prevent markup injection.
+		    // The embedded NUL check guards against names that truncate during C-string validation.
+		    if (wrapper.find('\0') != std::string::npos ||
+		        xmlValidateName(reinterpret_cast<const xmlChar *>(wrapper.c_str()), 0) != 0) {
+			    throw InvalidInputException("xml_wrap_fragment: '%s' is not a valid XML element name", wrapper);
+		    }
+
 		    // Create wrapped XML: <wrapper>fragment</wrapper>
 		    std::string wrapped_xml = "<" + wrapper + ">" + fragment + "</" + wrapper + ">";
 
@@ -484,10 +512,7 @@ void XMLScalarFunctions::XMLExtractCommentsFunction(DataChunk &args, ExpressionS
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto comments = XMLUtils::ExtractComments(xml_string);
 
 		// Create list of comment structs
@@ -507,17 +532,14 @@ void XMLScalarFunctions::XMLExtractCommentsFunction(DataChunk &args, ExpressionS
 
 		Value list_value = Value::LIST(comment_struct_type, comment_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLExtractCDataFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto cdata_sections = XMLUtils::ExtractCData(xml_string);
 
 		// Create list of CDATA structs
@@ -537,17 +559,14 @@ void XMLScalarFunctions::XMLExtractCDataFunction(DataChunk &args, ExpressionStat
 
 		Value list_value = Value::LIST(cdata_struct_type, cdata_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLStatsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto stats = XMLUtils::GetXMLStats(xml_string);
 
 		// Create stats struct
@@ -560,17 +579,14 @@ void XMLScalarFunctions::XMLStatsFunction(DataChunk &args, ExpressionState &stat
 
 		Value stats_value = Value::STRUCT(stats_children);
 		result.SetValue(i, stats_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &xml_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		std::string xml_string = xml_str.GetString();
-
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto namespaces = XMLUtils::ExtractNamespaces(xml_string);
 
 		// Create MAP(VARCHAR, VARCHAR) with prefix -> uri mappings
@@ -586,7 +602,7 @@ void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState 
 		// Create MAP value
 		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
 		result.SetValue(i, map_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -686,10 +702,7 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
 	    "self"};
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
-		std::string xpath = xpath_str.GetString();
-
+	ExecuteNullSafeString(xpath_vector, result, count, [&](idx_t i, const std::string &xpath) {
 		// Find all prefixes
 		std::set<std::string> prefixes;
 		std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
@@ -712,7 +725,7 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 
 		Value list_value = Value::LIST(LogicalType::VARCHAR, prefix_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLMockNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -752,12 +765,25 @@ void XMLScalarFunctions::XMLFindUndefinedPrefixesFunction(DataChunk &args, Expre
 	auto &xpath_vector = args.data[1];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
-		auto xpath_str = FlatVector::GetData<string_t>(xpath_vector)[i];
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat xpath_data;
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(xpath_vector, count, xpath_data);
 
-		std::string xml_string = xml_str.GetString();
-		std::string xpath = xpath_str.GetString();
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto xpath_strings = UnifiedVectorFormat::GetData<string_t>(xpath_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto xpath_idx = xpath_data.sel->get_index(i);
+
+		if (!xml_data.validity.RowIsValid(xml_idx) || !xpath_data.validity.RowIsValid(xpath_idx)) {
+			result.SetValue(i, Value(result.GetType()));
+			continue;
+		}
+
+		std::string xml_string = xml_strings[xml_idx].GetString();
+		std::string xpath = xpath_strings[xpath_idx].GetString();
 
 		// Get prefixes used in XPath
 		auto xpath_prefixes = DetectXPathPrefixes(xpath);
@@ -792,11 +818,8 @@ void XMLScalarFunctions::XMLAddNamespaceDeclarationsFunction(DataChunk &args, Ex
 	auto &ns_map_vector = args.data[1];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto xml_str = FlatVector::GetData<string_t>(xml_vector)[i];
+	ExecuteNullSafeString(xml_vector, result, count, [&](idx_t i, const std::string &xml_string) {
 		auto ns_map_value = ns_map_vector.GetValue(i);
-
-		std::string xml_string = xml_str.GetString();
 
 		// Parse the MAP value into case_insensitive_map
 		case_insensitive_map_t<string> namespaces_to_inject;
@@ -815,7 +838,7 @@ void XMLScalarFunctions::XMLAddNamespaceDeclarationsFunction(DataChunk &args, Ex
 		// Inject the namespaces
 		std::string modified_xml = InjectNamespaceDeclarations(xml_string, namespaces_to_inject);
 		result.SetValue(i, StringVector::AddString(result, modified_xml));
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLLookupNamespaceFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -825,17 +848,14 @@ void XMLScalarFunctions::XMLLookupNamespaceFunction(DataChunk &args, ExpressionS
 	auto &prefix_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto prefix_str = FlatVector::GetData<string_t>(prefix_vector)[i];
-		std::string prefix = prefix_str.GetString();
-
+	ExecuteNullSafeString(prefix_vector, result, count, [&](idx_t i, const std::string &prefix) {
 		std::string uri = GetCommonNamespaceURI(prefix);
 		if (uri.empty()) {
 			FlatVector::SetNull(result, i, true);
 		} else {
 			result.SetValue(i, Value(uri));
 		}
-	}
+	});
 }
 
 void XMLScalarFunctions::XMLToJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -1070,7 +1090,9 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 				std::string input_str;
 
 				if (input_value.IsNull()) {
-					input_str = "";
+					// NULL in -> NULL out
+					result.SetValue(i, Value(result.GetType()));
+					continue;
 				} else if (input_type.id() == LogicalTypeId::VARCHAR) {
 					input_str = input_value.GetValue<string>();
 				} else {
@@ -1609,10 +1631,7 @@ void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionSta
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto links = XMLUtils::ExtractHTMLLinks(html_string);
 
 		vector<Value> link_values;
@@ -1632,17 +1651,14 @@ void XMLScalarFunctions::HTMLExtractLinksFunction(DataChunk &args, ExpressionSta
 
 		Value list_value = Value::LIST(link_struct_type, link_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto images = XMLUtils::ExtractHTMLImages(html_string);
 
 		vector<Value> image_values;
@@ -1665,17 +1681,14 @@ void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionSt
 
 		Value list_value = Value::LIST(image_struct_type, image_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto tables = XMLUtils::ExtractHTMLTables(html_string);
 
 		vector<Value> row_values;
@@ -1724,17 +1737,14 @@ void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, Expressio
 
 		Value list_value = Value::LIST(table_row_struct_type, row_values);
 		result.SetValue(i, list_value);
-	}
+	});
 }
 
 void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
-	for (idx_t i = 0; i < count; i++) {
-		auto html_str = FlatVector::GetData<string_t>(html_vector)[i];
-		std::string html_string = html_str.GetString();
-
+	ExecuteNullSafeString(html_vector, result, count, [&](idx_t i, const std::string &html_string) {
 		auto tables = XMLUtils::ExtractHTMLTables(html_string);
 
 		vector<Value> table_values;
@@ -1833,7 +1843,99 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 
 		Value list_value = Value::LIST(table_json_struct_type, table_values);
 		result.SetValue(i, list_value);
+	});
+}
+
+// Elements whose descendant text is whitespace-significant and must be preserved verbatim:
+// raw-text elements (script, style) and preformatted elements (pre, textarea).
+static bool IsWhitespacePreservingElement(const xmlChar *name) {
+	if (!name) {
+		return false;
 	}
+	std::string n(reinterpret_cast<const char *>(name));
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") ||
+	       StringUtil::CIEquals(n, "script") || StringUtil::CIEquals(n, "style");
+}
+
+// Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
+// on the parse tree before serialization. CDATA and comment nodes are left untouched, and text
+// inside whitespace-preserving elements (pre/textarea/script/style) is left verbatim. Working on
+// the tree (rather than the serialized string) means a literal '>' or '&' in raw content is never
+// mistaken for a tag boundary, and libxml2 still handles escaping, CDATA wrapping and self-closing
+// on dump. The rewrite is done in place because the collapsed text is never longer than the
+// original, so no reallocation or entity round-trip is required. StringUtil::CharacterIsSpace is
+// used so UTF-8 continuation bytes are never misclassified as whitespace.
+static void CollapseTextWhitespace(xmlNodePtr node, bool preserve) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollapseTextWhitespace(child, preserve || IsWhitespacePreservingElement(child->name));
+		} else if (child->type == XML_TEXT_NODE && !preserve && child->content) {
+			xmlChar *content = child->content;
+			size_t w = 0;
+			bool pending_space = false;
+			for (size_t r = 0; content[r] != '\0'; r++) {
+				if (StringUtil::CharacterIsSpace(static_cast<char>(content[r]))) {
+					pending_space = true;
+					continue;
+				}
+				if (pending_space) {
+					// Keep a single separating space (significant between inline elements)
+					content[w++] = ' ';
+					pending_space = false;
+				}
+				content[w++] = content[r];
+			}
+			if (pending_space) {
+				content[w++] = ' ';
+			}
+			content[w] = '\0';
+		}
+		// CDATA_SECTION_NODE, COMMENT_NODE, etc. are intentionally left untouched
+	}
+}
+
+// Serialize a parsed HTML document without the XML declaration or DOCTYPE, collapsing each run of
+// whitespace to a single space except inside CDATA sections, comments, and whitespace-preserving
+// elements (see CollapseTextWhitespace). Returns false if the document could not be serialized.
+static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
+	// Normalize whitespace on the parse tree first, then let libxml2 serialize.
+	CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false);
+
+	xmlChar *html_output = nullptr;
+	int output_size = 0;
+	xmlDocDumpMemory(doc, &html_output, &output_size);
+	if (!html_output) {
+		return false;
+	}
+	XMLCharPtr html_ptr(html_output);
+	std::string result(reinterpret_cast<const char *>(html_ptr.get()), static_cast<size_t>(output_size));
+
+	// Remove the leading XML declaration if present
+	if (result.compare(0, 2, "<?") == 0) {
+		size_t xml_decl_end = result.find("?>");
+		if (xml_decl_end != std::string::npos) {
+			result.erase(0, xml_decl_end + 2);
+		}
+	}
+
+	// Remove the leading DOCTYPE if present
+	size_t content_start = result.find_first_not_of(" \t\n\r");
+	if (content_start != std::string::npos && result.compare(content_start, 9, "<!DOCTYPE") == 0) {
+		size_t doctype_end = result.find('>', content_start);
+		if (doctype_end != std::string::npos) {
+			result.erase(content_start, doctype_end - content_start + 1);
+		}
+	}
+
+	// Trim whitespace introduced at the document edges (e.g. the serializer's trailing newline)
+	size_t first = result.find_first_not_of(" \t\n\r");
+	if (first == std::string::npos) {
+		minified_html.clear();
+		return true;
+	}
+	size_t last = result.find_last_not_of(" \t\n\r");
+	minified_html.assign(result, first, last - first + 1);
+	return true;
 }
 
 void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -1861,64 +1963,8 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 			// Parse the HTML using the HTML parser to normalize it (removes DOCTYPE)
 			XMLDocRAII html_doc(content, true); // Use HTML parser
 			if (html_doc.IsValid()) {
-				// Serialize the document back to string (without DOCTYPE)
-				xmlChar *html_output = nullptr;
-				int output_size = 0;
-				xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
-
-				if (html_output) {
-					XMLCharPtr html_ptr(html_output);
-					std::string normalized_html = std::string(reinterpret_cast<const char *>(html_ptr.get()));
-
-					// Remove XML declaration if present
-					size_t xml_decl_end = normalized_html.find("?>");
-					if (xml_decl_end != std::string::npos) {
-						normalized_html = normalized_html.substr(xml_decl_end + 2);
-						// Remove leading whitespace/newlines
-						normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-					}
-
-					// Remove DOCTYPE if present
-					size_t doctype_start = normalized_html.find("<!DOCTYPE");
-					if (doctype_start != std::string::npos) {
-						size_t doctype_end = normalized_html.find(">", doctype_start);
-						if (doctype_end != std::string::npos) {
-							normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
-							// Remove leading whitespace/newlines after DOCTYPE removal
-							normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-						}
-					}
-
-					// Minify HTML: remove whitespace between tags
-					std::string minified_html;
-					bool in_tag = false;
-					bool in_content = false;
-					for (size_t i = 0; i < normalized_html.length(); i++) {
-						char c = normalized_html[i];
-
-						if (c == '<') {
-							in_tag = true;
-							in_content = false;
-							minified_html += c;
-						} else if (c == '>') {
-							in_tag = false;
-							in_content = true;
-							minified_html += c;
-						} else if (in_tag) {
-							// Inside tag: keep all characters
-							minified_html += c;
-						} else if (in_content) {
-							// Between tags: trim whitespace but keep content
-							if (!std::isspace(c)) {
-								minified_html += c;
-							} else if (!minified_html.empty() && minified_html.back() != '>' &&
-							           i + 1 < normalized_html.length() && normalized_html[i + 1] != '<') {
-								// Keep single space between words, but not between tags
-								minified_html += ' ';
-							}
-						}
-					}
-
+				std::string minified_html;
+				if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
 					return StringVector::AddString(result, minified_html);
 				}
 			}
@@ -1948,79 +1994,8 @@ void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &stat
 			    // Parse the HTML using the HTML parser to normalize it
 			    XMLDocRAII html_doc(html_content, true); // Use HTML parser
 			    if (html_doc.IsValid()) {
-				    // Serialize the document back to string
-				    xmlChar *html_output = nullptr;
-				    int output_size = 0;
-				    xmlDocDumpMemory(html_doc.doc, &html_output, &output_size);
-
-				    if (html_output) {
-					    XMLCharPtr html_ptr(html_output);
-					    std::string normalized_html = std::string(reinterpret_cast<const char *>(html_ptr.get()));
-
-					    // Remove XML declaration if present
-					    size_t xml_decl_end = normalized_html.find("?>");
-					    if (xml_decl_end != std::string::npos) {
-						    normalized_html = normalized_html.substr(xml_decl_end + 2);
-						    // Remove leading whitespace/newlines
-						    normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-					    }
-
-					    // Remove DOCTYPE if present
-					    size_t doctype_start = normalized_html.find("<!DOCTYPE");
-					    if (doctype_start != std::string::npos) {
-						    size_t doctype_end = normalized_html.find(">", doctype_start);
-						    if (doctype_end != std::string::npos) {
-							    normalized_html.erase(doctype_start, doctype_end - doctype_start + 1);
-							    // Remove leading whitespace/newlines after DOCTYPE removal
-							    normalized_html.erase(0, normalized_html.find_first_not_of(" \t\n\r"));
-						    }
-					    }
-
-					    // Minify HTML: remove whitespace between tags
-					    std::string minified_html;
-					    bool inside_tag = false;
-					    bool last_was_space = false;
-					    bool between_tags = true; // Start assuming we're between tags
-
-					    for (size_t i = 0; i < normalized_html.length(); i++) {
-						    char c = normalized_html[i];
-
-						    if (c == '<') {
-							    inside_tag = true;
-							    between_tags = false;
-							    minified_html += c;
-							    last_was_space = false;
-						    } else if (c == '>') {
-							    inside_tag = false;
-							    between_tags = true;
-							    minified_html += c;
-							    last_was_space = false;
-						    } else if (inside_tag) {
-							    minified_html += c;
-							    last_was_space = false;
-						    } else {
-							    if (std::isspace(c)) {
-								    if (between_tags) {
-									    // Skip all whitespace between tags
-									    continue;
-								    } else if (!last_was_space) {
-									    // Keep single space between words within text content
-									    minified_html += ' ';
-								    }
-								    last_was_space = true;
-							    } else {
-								    between_tags = false;
-								    minified_html += c;
-								    last_was_space = false;
-							    }
-						    }
-					    }
-
-					    // Trim trailing whitespace
-					    if (!minified_html.empty() && std::isspace(minified_html.back())) {
-						    minified_html.erase(minified_html.find_last_not_of(" \t\n\r") + 1);
-					    }
-
+				    std::string minified_html;
+				    if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
 					    return StringVector::AddString(result, minified_html);
 				    }
 			    }

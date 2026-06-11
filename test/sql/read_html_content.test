@@ -28,7 +28,7 @@ SELECT parse_html('') AS html_content;
 ----
 <html></html>
 
-# Test HTML with extra whitespace (should be minified)
+# Test HTML with extra whitespace (runs collapse to a single space)
 query I
 SELECT parse_html('<html>
     <body>
@@ -37,7 +37,7 @@ SELECT parse_html('<html>
     </body>
 </html>') AS html_content;
 ----
-<html><body><h1>Title</h1><p>Some text with multiple spaces</p></body></html>
+<html> <body> <h1>Title</h1> <p>Some text with multiple spaces</p> </body> </html>
 
 # Test HTML with self-closing tags
 query I

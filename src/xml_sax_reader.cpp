@@ -13,6 +13,8 @@ void SAXRecordAccumulator::Reset() {
 	state = SAXAccumulatorState::SEEKING_RECORD;
 	current_fields.clear();
 	current_attributes.clear();
+	field_order.clear();
+	attribute_order.clear();
 	current_text.clear();
 	current_element_name.clear();
 	nested_xml.clear();
@@ -187,7 +189,9 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 				}
 
 				std::string attr_value(value_start, value_end);
-				acc->current_attributes[attr_name] = attr_value;
+				if (acc->current_attributes.emplace(attr_name, attr_value).second) {
+					acc->attribute_order.push_back(attr_name);
+				}
 			}
 		}
 	} else if (acc->state == SAXAccumulatorState::IN_RECORD) {
@@ -280,7 +284,12 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				value = XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
 
-			acc->current_fields[name].push_back({is_xml, std::move(value)});
+			auto field_it = acc->current_fields.find(name);
+			if (field_it == acc->current_fields.end()) {
+				field_it = acc->current_fields.emplace(name, std::vector<FieldOccurrence>()).first;
+				acc->field_order.push_back(name);
+			}
+			field_it->second.push_back({is_xml, std::move(value)});
 
 			acc->current_text.clear();
 			acc->current_element_name.clear();
@@ -425,27 +434,28 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	xml << "<root" << records.back().BuildNamespaceDeclarations() << ">";
 
 	for (const auto &record : records) {
-		xml << "<record>";
-
-		// Emit record-level attributes as elements for schema inference
+		// Emit record-level attributes as real attributes, in document order, so DOM inference
+		// applies the same attr_mode naming (e.g. 'prefixed') and typing as it does on real files
 		// (skip when attr_mode='discard' to match DOM behavior)
+		xml << "<record";
 		if (options.attr_mode != "discard") {
-			for (const auto &attr : record.current_attributes) {
+			for (const auto &attr_name : record.attribute_order) {
 				// Skip child element attributes (contain a dot)
-				if (attr.first.find('.') != std::string::npos) {
+				if (attr_name.find('.') != std::string::npos) {
 					continue;
 				}
-				xml << "<" << attr.first << ">" << XmlEscapeText(attr.second) << "</" << attr.first << ">";
+				xml << " " << attr_name << "=\"" << XmlEscapeAttr(record.GetAttribute(attr_name)) << "\"";
 			}
 		}
+		xml << ">";
 
 		// Emit each field's occurrences in document order: text payloads escaped, nested-XML
 		// fragments emitted structurally so DOM inference reconstructs the STRUCT / LIST shape.
-		for (const auto &field : record.current_fields) {
-			for (const auto &occ : field.second) {
-				xml << "<" << field.first << ">";
+		for (const auto &field_name : record.field_order) {
+			for (const auto &occ : record.GetOccurrences(field_name)) {
+				xml << "<" << field_name << ">";
 				xml << (occ.is_xml ? occ.payload : XmlEscapeText(occ.payload));
-				xml << "</" << field.first << ">";
+				xml << "</" << field_name << ">";
 			}
 		}
 
@@ -503,9 +513,12 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			is_attribute = inferred_schema[i].is_attribute;
 		}
 
-		if (is_attribute || accumulator.HasAttribute(col_name)) {
+		// Attributes are accumulated under their bare XML names; in attr_mode='prefixed' the
+		// column name carries attr_prefix, so strip it before lookup.
+		const std::string attr_name = XMLSchemaInference::AttributeNameFromColumn(col_name, options);
+		if (is_attribute || accumulator.HasAttribute(attr_name)) {
 			// Attribute value
-			std::string attr_val = accumulator.GetAttribute(col_name);
+			std::string attr_val = accumulator.GetAttribute(attr_name);
 			if (attr_val.empty()) {
 				value = Value(); // NULL
 			} else if (IsNullString(attr_val, options)) {

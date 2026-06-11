@@ -237,6 +237,11 @@ public:
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
 
+	// Map a column name back to the underlying XML attribute name. In attr_mode='prefixed' the
+	// inferred column name is attr_prefix + attribute name, so the prefix must be stripped before
+	// looking up the attribute on the node (used by both DOM and SAX extraction paths).
+	static std::string AttributeNameFromColumn(const std::string &column_name, const XMLSchemaOptions &options);
+
 	// Merge two column types from union_by_name inference across files.
 	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
 	// when a complex type collides with a non-matching kind. Scalar promotion uses
@@ -247,8 +252,9 @@ public:
 
 private:
 	// 3-phase schema inference helpers
-	static std::unordered_map<std::string, ColumnAnalysis>
-	IdentifyColumns(const std::vector<xmlNodePtr> &record_elements, const XMLSchemaOptions &options);
+	// Returns columns in first-seen document order so the inferred column order is deterministic.
+	static std::vector<ColumnAnalysis> IdentifyColumns(const std::vector<xmlNodePtr> &record_elements,
+	                                                   const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
 	                                   const XMLSchemaOptions &options, std::string &winning_datetime_format);
 

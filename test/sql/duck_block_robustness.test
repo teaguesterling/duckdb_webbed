@@ -1,0 +1,184 @@
+# name: test/sql/duck_block_robustness.test
+# description: Malformed-input tests for duck_blocks_to_html: invalid heading_level values,
+#              NULL struct fields, and truncated Pandoc table JSON
+# group: [sql]
+
+require webbed
+
+# -----------------------------------------------------------------------------
+# Invalid heading_level attribute values fall back to the default level
+# (previously threw an uncaught std::stoi "Invalid Error: stoi: no conversion")
+# -----------------------------------------------------------------------------
+
+# Non-numeric heading_level falls back to level 1
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'Title',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': 'abc'}, element_order: 0}]);
+----
+<h1>Title</h1>
+
+# Empty heading_level falls back to level 1
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'Title',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': ''}, element_order: 0}]);
+----
+<h1>Title</h1>
+
+# heading_level too large for INT32 falls back to level 1
+# (previously threw an uncaught std::stoi out_of_range)
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'Title',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': '99999999999999999999'}, element_order: 0}]);
+----
+<h1>Title</h1>
+
+# In-range but invalid heading level is still clamped to 6
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'Title',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': '9'}, element_order: 0}]);
+----
+<h6>Title</h6>
+
+# Negative heading level is clamped to 1
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'Title',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': '-3'}, element_order: 0}]);
+----
+<h1>Title</h1>
+
+# -----------------------------------------------------------------------------
+# NULL struct fields are handled defensively
+# -----------------------------------------------------------------------------
+
+# NULL kind is treated as a block
+query I
+SELECT duck_blocks_to_html([{kind: NULL, element_type: 'paragraph', content: 'x',
+                            level: NULL, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<p>x</p>
+
+# NULL element_type renders nothing
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: NULL, content: 'x',
+                            level: NULL, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+(empty)
+
+# NULL encoding is treated as text (content is escaped)
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'paragraph', content: '<b>x</b>',
+                            level: NULL, encoding: NULL, attributes: MAP{}, element_order: 0}]);
+----
+<p>&lt;b&gt;x&lt;/b&gt;</p>
+
+# NULL attribute value is treated as an absent attribute
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'heading', content: 'T',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'heading_level': NULL}, element_order: 0}]);
+----
+<h1>T</h1>
+
+# NULL attribute value no longer leaks a literal "NULL" string into the output
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'image', content: '',
+                            level: NULL, encoding: 'text',
+                            attributes: MAP{'src': NULL, 'alt': 'x'}, element_order: 0}]);
+----
+<img src="" alt="x">
+
+# NULL list entries are skipped
+query I
+SELECT duck_blocks_to_html([NULL, {kind: 'block', element_type: 'paragraph', content: 'x',
+                            level: NULL, encoding: 'text', attributes: MAP{}, element_order: 0}]);
+----
+<p>x</p>
+
+# Struct with every field NULL renders nothing
+query I
+SELECT duck_blocks_to_html([{kind: NULL, element_type: NULL, content: NULL,
+                            level: NULL, encoding: NULL, attributes: NULL, element_order: NULL}]);
+----
+(empty)
+
+# NULL fields on an inline child consumed by look-ahead
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: 'inline', element_type: NULL, content: NULL, level: 1,
+     encoding: 'text', attributes: MAP{}, element_order: 1}
+]);
+----
+<p></p>
+
+# NULL kind on a following element stops inline look-ahead cleanly
+query I
+SELECT duck_blocks_to_html([
+    {kind: 'block', element_type: 'paragraph', content: 'Para', level: NULL,
+     encoding: 'text', attributes: MAP{}, element_order: 0},
+    {kind: NULL, element_type: 'hr', content: NULL, level: 1,
+     encoding: NULL, attributes: MAP{}, element_order: 1}
+]);
+----
+<p>Para</p><hr>
+
+# -----------------------------------------------------------------------------
+# Truncated Pandoc table JSON does not read past the end of the input
+# -----------------------------------------------------------------------------
+
+# Input ending mid-string (unterminated JSON string)
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'table', content: '[["abc',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]);
+----
+<table></table>
+
+# Input that is just an opening bracket
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'table', content: '[',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]);
+----
+<table></table>
+
+# Input truncated inside a header cell string
+query I
+SELECT contains(duck_blocks_to_html([{kind: 'block', element_type: 'table',
+                            content: '[[],[{"t":"AlignDefault"}],[0],[[{"t":"Plain","c":[{"t":"Str","c":"H',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]), '</table>');
+----
+true
+
+# Garbage inside a Pandoc object previously hung the parser (no forward progress)
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'table', content: '[null,[{x',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]);
+----
+<table></table>
+
+# Garbage element inside the alignments array previously hung the parser
+query I
+SELECT contains(duck_blocks_to_html([{kind: 'block', element_type: 'table', content: '[null,[x],[],[],[]]',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]), '</table>');
+----
+true
+
+# Stray '}' inside a rows array previously hung the parser
+query I
+SELECT contains(duck_blocks_to_html([{kind: 'block', element_type: 'table', content: '[null,[],[],[],[[}',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]), '</table>');
+----
+true
+
+# Well-formed Pandoc table still renders correctly
+query I
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'table',
+                            content: '[[],[{"t":"AlignDefault"}],[0],[[{"t":"Plain","c":[{"t":"Str","c":"H"}]}]],[[[{"t":"Plain","c":[{"t":"Str","c":"D"}]}]]]]',
+                            level: NULL, encoding: 'json', attributes: MAP{}, element_order: 0}]);
+----
+<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>D</td></tr></tbody></table>

@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<root>
+  <row><delta>1</delta><alpha>2</alpha><echo>3</echo><bravo>4</bravo><zulu>5</zulu><charlie>6</charlie><yankee>7</yankee><mike>8</mike></row>
+  <row><delta>9</delta><alpha>10</alpha><echo>11</echo><bravo>12</bravo><zulu>13</zulu><charlie>14</charlie><yankee>15</yankee><mike>16</mike></row>
+</root>
