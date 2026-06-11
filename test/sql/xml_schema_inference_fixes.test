@@ -1,0 +1,126 @@
+# name: test/sql/xml_schema_inference_fixes.test
+# description: Regression tests for schema inference fixes: integer widening, prefixed
+#              attributes, deterministic column order, inf/nan handling, and NULL-filling
+#              of fallback schema columns
+# group: [sql]
+
+require webbed
+
+# -----------------------------------------------------------------------------
+# Integer widening: values that do not fit INT32 must infer BIGINT, and values
+# beyond INT64 must infer DOUBLE
+# -----------------------------------------------------------------------------
+
+query IIIII
+SELECT typeof(small), typeof(big), typeof(mixed), typeof(neg), typeof(huge)
+FROM read_xml('test/xml/schema_inference/bigint_widening.xml') LIMIT 1;
+----
+INTEGER	BIGINT	BIGINT	BIGINT	DOUBLE
+
+query III
+SELECT small, big, mixed FROM read_xml('test/xml/schema_inference/bigint_widening.xml') ORDER BY small;
+----
+5	3000000000	7
+6	4000000001	3000000000
+
+query I
+SELECT neg FROM read_xml('test/xml/schema_inference/bigint_widening.xml') ORDER BY neg;
+----
+-4000000001
+-5
+
+# -----------------------------------------------------------------------------
+# attr_mode='prefixed': prefixed attribute columns must be populated
+# -----------------------------------------------------------------------------
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_xml('test/xml/schema_inference/attr_prefixed.xml', attr_mode := 'prefixed'));
+----
+@id	VARCHAR
+v	INTEGER
+
+query II
+SELECT "@id", v FROM read_xml('test/xml/schema_inference/attr_prefixed.xml', attr_mode := 'prefixed') ORDER BY v;
+----
+1	1
+2	2
+
+# Custom prefix
+query II
+SELECT attr_id, v FROM read_xml('test/xml/schema_inference/attr_prefixed.xml', attr_mode := 'prefixed', attr_prefix := 'attr_') ORDER BY v;
+----
+1	1
+2	2
+
+# Default 'columns' mode still works
+query II
+SELECT id, v FROM read_xml('test/xml/schema_inference/attr_prefixed.xml') ORDER BY v;
+----
+1	1
+2	2
+
+# SAX streaming path (forced via maximum_file_size) must apply the same prefixed naming
+query II
+SELECT "@id", v FROM read_xml('test/xml/schema_inference/attr_prefixed.xml', attr_mode := 'prefixed', maximum_file_size := 1) ORDER BY v;
+----
+1	1
+2	2
+
+# -----------------------------------------------------------------------------
+# Deterministic column order: top-level columns must come out in document order
+# -----------------------------------------------------------------------------
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/schema_inference/column_order.xml'));
+----
+delta
+alpha
+echo
+bravo
+zulu
+charlie
+yankee
+mike
+
+# SAX streaming inference must also preserve document order
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM read_xml('test/xml/schema_inference/column_order.xml', maximum_file_size := 1));
+----
+delta
+alpha
+echo
+bravo
+zulu
+charlie
+yankee
+mike
+
+# -----------------------------------------------------------------------------
+# inf/nan strings must not be classified as DOUBLE
+# -----------------------------------------------------------------------------
+
+query IIII
+SELECT typeof(a), typeof(b), typeof(c), typeof(d)
+FROM read_xml('test/xml/schema_inference/inf_nan.xml') LIMIT 1;
+----
+VARCHAR	VARCHAR	VARCHAR	DOUBLE
+
+query II
+SELECT a, b FROM read_xml('test/xml/schema_inference/inf_nan.xml') ORDER BY b;
+----
+inf	NaN
+inf	nan
+
+# -----------------------------------------------------------------------------
+# Fallback schema must NULL-fill output columns instead of leaving them
+# uninitialized (invalid first file with ignore_errors yields the simple
+# 'xml' fallback schema, then rows from the valid file carry no values)
+# -----------------------------------------------------------------------------
+
+query I
+SELECT xml IS NULL
+FROM read_xml(['test/invalid/invalid.xml', 'test/xml/schema_inference/attr_prefixed.xml'], ignore_errors := true);
+----
+true
+true

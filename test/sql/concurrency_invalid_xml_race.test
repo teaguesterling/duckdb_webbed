@@ -1,0 +1,28 @@
+# name: test/sql/concurrency_invalid_xml_race.test
+# description: Valid XML must never be reported invalid when validated concurrently
+# group: [sql]
+
+require webbed
+
+statement ok
+PRAGMA threads=4;
+
+# Validate a large mix of valid and malformed XML under multiple threads in a single
+# scan. Even-numbered rows are well-formed; odd-numbered rows are malformed. Each row is
+# independent, so every even row must validate as true regardless of how many odd rows
+# fail to parse on other threads at the same time. A shared parse-error flag would let an
+# odd row's failure poison an even row's check and report valid XML as invalid. The two
+# counts below tally any valid row reported invalid (false negative) and any malformed
+# row reported valid (false positive); both must be zero.
+query II
+SELECT
+  count(*) FILTER (WHERE i % 2 = 0 AND ok = false) AS valid_reported_invalid,
+  count(*) FILTER (WHERE i % 2 = 1 AND ok = true)  AS malformed_reported_valid
+FROM (
+  SELECT i, xml_valid(CASE WHEN i % 2 = 0
+                             THEN '<r><i>' || i || '</i></r>'
+                             ELSE '<r><unclosed>' END) AS ok
+  FROM range(100000) t(i)
+);
+----
+0	0

@@ -1,0 +1,71 @@
+# name: test/sql/xml_wrap_fragment_validation.test
+# description: Test xml_wrap_fragment wrapper name validation (markup injection prevention)
+# group: [sql]
+
+require webbed
+
+# Valid simple wrapper name still works
+query I
+SELECT xml_wrap_fragment('<item>A</item>', 'items')::VARCHAR;
+----
+<items><item>A</item></items>
+
+# Valid namespace-prefixed wrapper name still works
+query I
+SELECT xml_wrap_fragment('<item>A</item>', 'ns:items')::VARCHAR;
+----
+<ns:items><item>A</item></ns:items>
+
+# Valid names with allowed punctuation (dash, dot, underscore)
+query I
+SELECT xml_wrap_fragment('x', 'my-wrapper._1')::VARCHAR;
+----
+<my-wrapper._1>x</my-wrapper._1>
+
+# Valid unicode wrapper name (XML Name allows non-ASCII letters)
+query I
+SELECT xml_wrap_fragment('x', 'über')::VARCHAR;
+----
+<über>x</über>
+
+# Injection attempt via '>' in wrapper name errors
+statement error
+SELECT xml_wrap_fragment('x', 'a><evil');
+----
+Invalid Input Error: xml_wrap_fragment: 'a><evil' is not a valid XML element name
+
+# Injection attempt via attribute in wrapper name errors
+statement error
+SELECT xml_wrap_fragment('x', 'a onload="evil"');
+----
+not a valid XML element name
+
+# Injection attempt via closing tag errors
+statement error
+SELECT xml_wrap_fragment('x', 'a></a><b');
+----
+not a valid XML element name
+
+# Empty wrapper name errors
+statement error
+SELECT xml_wrap_fragment('x', '');
+----
+not a valid XML element name
+
+# Name starting with a digit errors
+statement error
+SELECT xml_wrap_fragment('x', '1abc');
+----
+not a valid XML element name
+
+# Whitespace-only wrapper name errors
+statement error
+SELECT xml_wrap_fragment('x', ' ');
+----
+not a valid XML element name
+
+# NULL inputs still propagate as NULL
+query I
+SELECT xml_wrap_fragment('x', NULL) IS NULL;
+----
+true

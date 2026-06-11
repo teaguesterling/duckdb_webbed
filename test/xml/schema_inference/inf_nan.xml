@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<root>
+  <r><a>inf</a><b>nan</b><c>-inf</c><d>1.5</d></r>
+  <r><a>inf</a><b>NaN</b><c>Infinity</c><d>2.5</d></r>
+</root>

@@ -1,0 +1,93 @@
+# name: test/sql/parse_html_whitespace.test
+# description: parse_html must preserve significant inline whitespace and handle non-ASCII bytes
+# group: [sql]
+
+require webbed
+
+# Space between an inline element and following text must be preserved
+query I
+SELECT parse_html('<p>Hello <b>world</b> again</p>') AS html_content;
+----
+<html><body><p>Hello <b>world</b> again</p></body></html>
+
+# Space separating two inline elements must be preserved
+query I
+SELECT parse_html('<p><b>bold</b> <i>italic</i></p>') AS html_content;
+----
+<html><body><p><b>bold</b> <i>italic</i></p></body></html>
+
+# Runs of whitespace inside text collapse to a single space
+query I
+SELECT parse_html('<p>Hello   	  world</p>') AS html_content;
+----
+<html><body><p>Hello world</p></body></html>
+
+# Newlines around inline elements collapse to a single separating space
+query I
+SELECT parse_html('<p>Hello
+<b>world</b>
+again</p>') AS html_content;
+----
+<html><body><p>Hello <b>world</b> again</p></body></html>
+
+# Non-ASCII text survives minification (UTF-8 continuation bytes such as 0xA0
+# in 'à' must not be treated as whitespace)
+query I
+SELECT parse_html('<p>voilà café naïve</p>') AS html_content;
+----
+<html><body><p>voilà café naïve</p></body></html>
+
+# Non-ASCII text around inline elements keeps separating spaces
+query I
+SELECT parse_html('<p>héllo <b>wörld</b> ągain</p>') AS html_content;
+----
+<html><body><p>héllo <b>wörld</b> ągain</p></body></html>
+
+# A DOCTYPE literal inside a comment survives DOCTYPE stripping
+query I
+SELECT parse_html('<html><body><!-- keep <!DOCTYPE html> inside --><p>x</p></body></html>') AS html_content;
+----
+<html><body><!-- keep <!DOCTYPE html> inside --><p>x</p></body></html>
+
+# Literal angle brackets in text are entity-escaped by the serializer, so the
+# whitespace scanner never mistakes them for tag boundaries
+query I
+SELECT parse_html('<html><body><p>a &lt; b   &gt;   c</p></body></html>') AS html_content;
+----
+<html><body><p>a &lt; b &gt; c</p></body></html>
+
+# Whitespace inside <pre> is preserved verbatim: preformatted content is
+# whitespace-significant, so newlines and runs are NOT collapsed. Compared as a
+# boolean because the value contains newlines.
+query I
+SELECT parse_html('<html><body><pre>line1' || chr(10) || '  line2' || chr(10) || chr(9) || 'line3</pre></body></html>')
+       = '<html><body><pre>line1' || chr(10) || '  line2' || chr(10) || chr(9) || 'line3</pre></body></html>';
+----
+true
+
+# Script content is raw text (wrapped in CDATA by the serializer) and preserved
+# verbatim: whitespace runs are NOT collapsed and a literal '>' inside it is never
+# treated as a tag boundary
+query I
+SELECT parse_html('<html><body><script>if (a > 0)  {  a  =  1;  }</script></body></html>') AS html_content;
+----
+<html><body><script><![CDATA[if (a > 0)  {  a  =  1;  }]]></script></body></html>
+
+# Style content (also raw text) is preserved verbatim
+query I
+SELECT parse_html('<html><head><style>a {  color :  red ;  }</style></head></html>') AS html_content;
+----
+<html><head><style><![CDATA[a {  color :  red ;  }]]></style></head></html>
+
+# A comment containing a literal '>' and internal whitespace is preserved verbatim
+query I
+SELECT parse_html('<html><body><p>x<!-- a > b   c --></p></body></html>') AS html_content;
+----
+<html><body><p>x<!-- a > b   c --></p></body></html>
+
+# Non-breaking spaces (U+00A0) are NOT whitespace and must be preserved, not collapsed.
+# Compared as a boolean since the value contains non-ASCII bytes.
+query I
+SELECT parse_html('<p>a&nbsp;&nbsp;b</p>') = '<html><body><p>a' || chr(160) || chr(160) || 'b</p></body></html>';
+----
+true

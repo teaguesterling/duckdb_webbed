@@ -744,6 +744,24 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 	CompatSetOutputCardinality(output, output_idx);
 }
 
+// Write one extracted row into the output chunk: optional filename column first, then the row's
+// values. Any output columns the row does not provide are NULL-filled so no vector slot is left
+// uninitialized (e.g. fallback schemas where extraction yields fewer values).
+static void EmitRow(DataChunk &output, idx_t output_idx, const std::vector<Value> &row, bool include_filename,
+                    const string &filename) {
+	idx_t output_col_idx = 0;
+	if (include_filename) {
+		output.data[output_col_idx++].SetValue(output_idx, Value(filename));
+	}
+	for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
+	     row_col_idx++, output_col_idx++) {
+		output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
+	}
+	for (; output_col_idx < output.ColumnCount(); output_col_idx++) {
+		output.data[output_col_idx].SetValue(output_idx, Value(output.data[output_col_idx].GetType()));
+	}
+}
+
 void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
@@ -889,14 +907,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						    record, bind_data.column_names, bind_data.column_types, schema_options,
 						    bind_data.column_datetime_formats, bind_data.inferred_schema);
 
-						idx_t output_col_idx = 0;
-						if (bind_data.include_filename) {
-							output.data[output_col_idx++].SetValue(output_idx, Value(filename));
-						}
-						for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-						     row_col_idx++, output_col_idx++) {
-							output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
-						}
+						EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 
 						output_idx++;
 						gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
@@ -930,14 +941,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					                                             schema_options, bind_data.column_datetime_formats,
 					                                             bind_data.inferred_schema);
 
-					idx_t output_col_idx = 0;
-					if (bind_data.include_filename) {
-						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
-					}
-					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-					     row_col_idx++, output_col_idx++) {
-						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
-					}
+					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 					output_idx++;
 					gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
 				}
@@ -970,14 +974,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						                                              gstate.remaining_depth, schema_options);
 					}
 
-					idx_t output_col_idx = 0;
-					if (bind_data.include_filename) {
-						output.data[output_col_idx++].SetValue(output_idx, Value(filename));
-					}
-					for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-					     row_col_idx++, output_col_idx++) {
-						output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
-					}
+					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 
 					output_idx++;
 					gstate.current_record_index++;
@@ -1970,8 +1967,10 @@ void XMLReaderFunctions::ParseDocumentFunction(ClientContext &context, TableFunc
 	while (output_idx < STANDARD_VECTOR_SIZE && gstate.current_row < gstate.extracted_rows.size()) {
 		const auto &row = gstate.extracted_rows[gstate.current_row];
 
-		for (idx_t col_idx = 0; col_idx < row.size() && col_idx < output.ColumnCount(); col_idx++) {
-			output.data[col_idx].SetValue(output_idx, row[col_idx]);
+		for (idx_t col_idx = 0; col_idx < output.ColumnCount(); col_idx++) {
+			// NULL-fill columns the row did not provide so no vector slot is left uninitialized
+			Value value = col_idx < row.size() ? row[col_idx] : Value(output.data[col_idx].GetType());
+			output.data[col_idx].SetValue(output_idx, value);
 		}
 
 		output_idx++;
