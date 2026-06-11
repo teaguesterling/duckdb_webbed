@@ -245,7 +245,8 @@ XMLDocRAII::~XMLDocRAII() {
 	}
 }
 
-XMLDocRAII::XMLDocRAII(XMLDocRAII &&other) noexcept : doc(other.doc), xpath_ctx(other.xpath_ctx) {
+XMLDocRAII::XMLDocRAII(XMLDocRAII &&other) noexcept
+    : doc(other.doc), xpath_ctx(other.xpath_ctx), resource_error(other.resource_error) {
 	other.doc = nullptr;
 	other.xpath_ctx = nullptr;
 }
@@ -261,6 +262,7 @@ XMLDocRAII &XMLDocRAII::operator=(XMLDocRAII &&other) noexcept {
 		// Move from other
 		doc = other.doc;
 		xpath_ctx = other.xpath_ctx;
+		resource_error = other.resource_error;
 		other.doc = nullptr;
 		other.xpath_ctx = nullptr;
 	}
