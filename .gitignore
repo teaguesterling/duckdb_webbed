@@ -26,8 +26,9 @@ vcpkg/
 test/xml/sax_stress_test.xml
 test/xml/sax_stress_test.xml.gz
 
-# blq
-.lq/*
-!.lq/hooks/
-!.lq/config.toml
-!.lq/commands.toml
+# blq (working dir renamed from .lq/ to .bird/ in blq-cli 1.0)
+.bird/*
+!.bird/hooks/
+!.bird/config.toml
+!.bird/commands.toml
+.cache/
