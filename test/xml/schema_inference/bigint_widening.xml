@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<root>
+  <r><small>5</small><big>3000000000</big><mixed>7</mixed><neg>-4000000001</neg><huge>99999999999999999999</huge></r>
+  <r><small>6</small><big>4000000001</big><mixed>3000000000</mixed><neg>-5</neg><huge>1</huge></r>
+</root>
