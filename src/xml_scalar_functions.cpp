@@ -872,7 +872,7 @@ unique_ptr<FunctionData> XMLScalarFunctions::XMLToJSONWithSchemaBind(DUCKDB_SCAL
 	// Process named parameters (if any)
 	for (idx_t i = 1; i < bind_args.size(); i++) {
 		auto &arg = bind_args[i];
-		std::string param_name = arg->GetAlias();
+		std::string param_name = CompatIdentifierName(arg->GetAlias());
 
 		if (param_name.empty()) {
 			throw BinderException(
@@ -1780,7 +1780,7 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 			for (const auto &row : rows) {
 				child_list_t<Value> row_obj;
 				for (size_t j = 0; j < headers.size() && j < row.size(); j++) {
-					row_obj.push_back({headers[j], Value(row[j])});
+					row_obj.push_back({CompatMakeIdentifier(headers[j]), Value(row[j])});
 				}
 				object_rows.push_back(Value::STRUCT(row_obj));
 			}
