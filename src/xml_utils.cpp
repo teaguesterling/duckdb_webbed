@@ -7,6 +7,7 @@
 #include <libxml/HTMLparser.h>
 #include <libxml/entities.h>
 #include <libxml/xpathInternals.h>
+#include <libxml/valid.h>
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -2119,6 +2120,17 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 	return results;
 }
 
+void XMLUtils::ValidateXMLElementName(const std::string &name) {
+	// An embedded NUL would let the name validate as a truncated prefix (C-string APIs stop at the
+	// NUL) while the full std::string still concatenates into markup, so reject it explicitly.
+	// xmlValidateName(name, 0) accepts the XML Name production, including namespace-prefixed names
+	// like "ns:item", and rejects anything containing '<', '>', '"', '/', whitespace, etc.
+	if (name.find('\0') != std::string::npos ||
+	    xmlValidateName(reinterpret_cast<const xmlChar *>(name.c_str()), 0) != 0) {
+		throw InvalidInputException("Invalid XML element name '%s': cannot be used to construct XML output", name);
+	}
+}
+
 std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &node_name) {
 	// Use RAII-safe libxml2 document creation
 	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
@@ -2252,6 +2264,8 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		// Process each struct field
 		for (idx_t field_idx = 0; field_idx < child_types.size(); field_idx++) {
 			const std::string &field_name = CompatIdentifierName(child_types[field_idx].first);
+			// STRUCT field names become element names; reject any that would inject markup.
+			ValidateXMLElementName(field_name);
 			auto &field_type = child_types[field_idx].second;
 
 			// Create field element
@@ -2350,6 +2364,8 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 		// Add each struct field as a child node
 		for (size_t i = 0; i < child_types.size(); i++) {
 			const std::string &field_name = CompatIdentifierName(child_types[i].first);
+			// STRUCT field names become element names; reject any that would inject markup.
+			ValidateXMLElementName(field_name);
 			auto &field_type = child_types[i].second;
 			auto &field_value = struct_value[i];
 

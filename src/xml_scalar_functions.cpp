@@ -1042,6 +1042,9 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 			}
 		}
 	}
+	// The node name becomes an element name; reject any that would inject markup into the
+	// trusted xml-typed output (e.g. to_xml(v, 'a><evil')).
+	XMLUtils::ValidateXMLElementName(default_node_name);
 
 	// Apply our type hierarchy
 	if (XMLTypes::IsXMLFragmentType(input_type)) {

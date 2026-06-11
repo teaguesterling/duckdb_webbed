@@ -1,0 +1,98 @@
+# name: test/sql/to_xml_name_injection.test
+# description: to_xml must reject element names (node_name arg and STRUCT field names) that would inject markup
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Injection via the node_name argument is rejected
+# =============================================================================
+
+statement error
+SELECT to_xml(42, 'a><injected');
+----
+Invalid XML element name
+
+statement error
+SELECT to_xml('v', 'x></x><script>evil</script><x');
+----
+Invalid XML element name
+
+statement error
+SELECT to_xml([1, 2], 'r><evil');
+----
+Invalid XML element name
+
+# Attribute injection via the name
+statement error
+SELECT to_xml(42, 'a onload="evil"');
+----
+Invalid XML element name
+
+# =============================================================================
+# Injection via STRUCT field names is rejected
+# =============================================================================
+
+statement error
+SELECT to_xml({'a><evil x="1"': 42});
+----
+Invalid XML element name
+
+# Nested struct field name
+statement error
+SELECT to_xml({'ok': {'b><evil': 1}});
+----
+Invalid XML element name
+
+# =============================================================================
+# Names that are invalid XML are rejected (empty, leading digit, whitespace)
+# =============================================================================
+
+statement error
+SELECT to_xml(42, '');
+----
+Invalid XML element name
+
+statement error
+SELECT to_xml(42, '1abc');
+----
+Invalid XML element name
+
+statement error
+SELECT to_xml(42, 'a b');
+----
+Invalid XML element name
+
+# =============================================================================
+# Legitimate names still work
+# =============================================================================
+
+# Simple node name
+query I
+SELECT REPLACE(to_xml(42, 'count')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0"?><count>42</count>
+
+# Namespace-prefixed name (XML Name allows ':')
+query I
+SELECT REPLACE(to_xml(42, 'ns:count')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0"?><ns:count>42</ns:count>
+
+# Struct with valid field names
+query I
+SELECT REPLACE(to_xml({'name': 'Joe', 'age': 30})::VARCHAR, chr(10), '');
+----
+<?xml version="1.0"?><xml><name>Joe</name><age>30</age></xml>
+
+# Default node name (no second argument) is unaffected
+query I
+SELECT to_xml(42) IS NOT NULL;
+----
+true
+
+# Punctuated valid name (dash, dot, underscore)
+query I
+SELECT REPLACE(to_xml('x', 'my-node._1')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0"?><my-node._1>x</my-node._1>
