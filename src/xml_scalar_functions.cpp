@@ -9,6 +9,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 
 #include <libxml/tree.h>
+#include <libxml/xmlmemory.h>
 #include <regex>
 #include <set>
 
@@ -603,6 +604,76 @@ void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState 
 		Value map_value = Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
 		result.SetValue(i, map_value);
 	});
+}
+
+// --- Internal OOM-path regression self-test (xml_oom_selftest) ---
+// The libxml2 out-of-memory path cannot be reached from a SQL test, so this exercises it directly:
+// an always-failing allocator makes xmlNewParserCtxt return NULL, which must surface as
+// XMLValidity::ResourceError (not Malformed), and the resource-failure flag must survive XMLDocRAII
+// moves (the read_xml DOM path relies on `gstate.current_doc = XMLDocRAII(...)`). Allocator setup is
+// process-global, so it is installed and restored within this single call. On platforms where
+// xmlMemSetup is a no-op (e.g. macOS system libxml2) the injected failure has no effect and the
+// allocation-failure half is reported as skipped rather than failing.
+namespace {
+void *OOMFailMalloc(size_t) {
+	return nullptr;
+}
+void *OOMFailRealloc(void *, size_t) {
+	return nullptr;
+}
+char *OOMFailStrdup(const char *) {
+	return nullptr;
+}
+void OOMNoopFree(void *) {
+}
+
+std::string RunOOMSelfTest() {
+	// Part 1: move operations must carry resource_error (pure, no allocator involved).
+	{
+		XMLDocRAII a;
+		a.resource_error = true;
+		XMLDocRAII moved_ctor(std::move(a));
+		if (!moved_ctor.HadResourceError()) {
+			return "FAIL: move constructor dropped resource_error";
+		}
+		XMLDocRAII moved_assign;
+		moved_assign = std::move(moved_ctor);
+		if (!moved_assign.HadResourceError()) {
+			return "FAIL: move assignment dropped resource_error";
+		}
+	}
+
+	// Part 2: an allocation failure must be reported as ResourceError, not Malformed.
+	xmlFreeFunc saved_free = nullptr;
+	xmlMallocFunc saved_malloc = nullptr;
+	xmlReallocFunc saved_realloc = nullptr;
+	xmlStrdupFunc saved_strdup = nullptr;
+	xmlMemGet(&saved_free, &saved_malloc, &saved_realloc, &saved_strdup);
+
+	if (xmlMemSetup(OOMNoopFree, OOMFailMalloc, OOMFailRealloc, OOMFailStrdup) != 0) {
+		return "OK (oom check skipped: custom allocator could not be installed)";
+	}
+	XMLValidity validity = XMLUtils::CheckXML("<r/>");
+	// Restore the real allocators before anything else allocates through libxml2.
+	xmlMemSetup(saved_free, saved_malloc, saved_realloc, saved_strdup);
+
+	if (validity == XMLValidity::Valid) {
+		// The injected allocator had no effect (no-op on this libxml2 build).
+		return "OK (oom check skipped: allocator injection not supported on this platform)";
+	}
+	if (validity != XMLValidity::ResourceError) {
+		return "FAIL: allocation failure reported as Malformed instead of ResourceError";
+	}
+	return "OK";
+}
+} // namespace
+
+void XMLScalarFunctions::OOMSelfTestFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	// Run once (it mutates process-global allocator state) and replicate to all output rows.
+	std::string status = RunOOMSelfTest();
+	for (idx_t i = 0; i < args.size(); i++) {
+		result.SetValue(i, Value(status));
+	}
 }
 
 void XMLScalarFunctions::XMLCommonNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -1409,6 +1480,12 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   XMLCommonNamespacesFunction);
 	PreventStructConstantFolding(xml_common_namespaces_function);
 	loader.RegisterFunction(xml_common_namespaces_function);
+
+	// Internal regression self-test for the libxml2 out-of-memory path (see OOMSelfTestFunction).
+	// Returns 'OK' (or 'OK (oom check skipped...)' where the allocator can't be injected); any other
+	// value indicates a regression. Result is deterministic, so default stability is fine.
+	loader.RegisterFunction(
+	    ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
