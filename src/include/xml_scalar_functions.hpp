@@ -14,6 +14,10 @@ private:
 	static void XMLValidFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLWellFormedFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLValidateSchemaFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	// Internal regression self-test for the libxml2 out-of-memory path (xml_oom_selftest()): verifies
+	// CheckXML reports ResourceError (not Malformed) under an injected allocation failure and that the
+	// resource-failure flag survives XMLDocRAII moves. The OOM path cannot be reached from SQL otherwise.
+	static void OOMSelfTestFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// Text extraction functions
 	static void XMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);

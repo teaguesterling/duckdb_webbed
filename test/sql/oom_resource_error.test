@@ -1,0 +1,25 @@
+# name: test/sql/oom_resource_error.test
+# description: libxml2 out-of-memory path (#84/#94) — CheckXML must report ResourceError (not
+#              Malformed) under allocation failure, and resource_error must survive XMLDocRAII moves
+# group: [sql]
+
+require webbed
+
+# The OOM path cannot be triggered from SQL directly (it needs an injected failing libxml2
+# allocator), so xml_oom_selftest() exercises it in-process: it installs an always-failing
+# allocator, confirms CheckXML('<r/>') returns ResourceError rather than Malformed, restores the
+# allocator, and checks that the resource-failure flag is carried through the XMLDocRAII move
+# constructor and move-assignment (the bug on the read_xml DOM path). It returns 'OK' on success,
+# 'OK (oom check skipped...)' where the allocator cannot be injected (e.g. macOS system libxml2),
+# or 'FAIL: <reason>' on a regression.
+
+query I
+SELECT xml_oom_selftest() LIKE 'OK%';
+----
+true
+
+# A regression would start with 'FAIL'
+query I
+SELECT starts_with(xml_oom_selftest(), 'FAIL');
+----
+false
