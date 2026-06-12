@@ -37,7 +37,7 @@ DuckDB `main` introduced `duckdb::Identifier`, replacing `std::string` as the ke
 
 ## Test coverage
 
-New suites: `vector_safety`, `xml_wrap_fragment_validation`, `to_xml_name_injection`, `xml_schema_inference_fixes`, `parse_html_whitespace`, `duck_block_robustness`, `concurrency_invalid_xml_race`. The suite is now **2864 assertions across 81 test cases**.
+New suites: `vector_safety`, `xml_wrap_fragment_validation`, `to_xml_name_injection`, `xml_schema_inference_fixes`, `parse_html_whitespace`, `duck_block_robustness`, `concurrency_invalid_xml_race`, and `oom_resource_error` — which exercises the otherwise-unreachable libxml2 out-of-memory path (via an internal `xml_oom_selftest()` that injects an allocation failure) to guard the resource-error detection and the `XMLDocRAII` move-propagation fix. The suite is now **2866 assertions across 82 test cases**.
 
 ## Acknowledgments
 
