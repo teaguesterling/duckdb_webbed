@@ -211,7 +211,7 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			// attributes under SAX streaming, while the DOM path keeps them. Held in current_field_attrs
 			// until the element closes (children, if any, arrive in between). Skipped under
 			// attr_mode='discard' to match DOM, where attributes are dropped entirely.
-			if (sax_ctx->attr_mode != "discard") {
+			if (!sax_ctx->discard_attrs) {
 				for (int i = 0; i < nb_attributes; i++) {
 					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
@@ -396,7 +396,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 	ctx.stop_parsing = false;
 	ctx.completed_records = &results;
 	ctx.preserve_whitespace = options.preserve_whitespace;
-	ctx.attr_mode = options.attr_mode;
+	ctx.discard_attrs = (options.attr_mode == "discard");
 
 	xmlSAXHandler handler = CreateSAXHandler();
 
@@ -551,8 +551,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 		} else if (col_type.id() == LogicalTypeId::STRUCT) {
 			// STRUCT column: a non-LIST struct implies a single occurrence. If it carried element
 			// children or its own attributes it was captured as inner XML; re-parse and dispatch through
-			// the DOM extractor. occ.own_attrs is appended to the wrapper open tag (via extra_ns_decls,
-			// which is spliced there verbatim) so attribute-only children yield their @attr fields.
+			// the DOM extractor. occ.own_attrs is appended to the wrapper open tag (via the extra_attrs
+			// parameter, which is spliced there verbatim) so attribute-only children yield their @attr fields.
 			const auto &occs = accumulator.GetOccurrences(col_name);
 			if (occs.empty()) {
 				value = Value(col_type); // typed NULL
@@ -581,7 +581,7 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			std::vector<Value> list_vals;
 
 			// own_attrs (pre-escaped, empty unless the element carried attributes) is appended to the
-			// wrapper open tag via extra_ns_decls so list items keep their @attr fields.
+			// wrapper open tag via the extra_attrs parameter so list items keep their @attr fields.
 			auto append_text = [&](const std::string &item, const std::string &own_attrs) {
 				if (IsNullString(item, options)) {
 					list_vals.push_back(Value(child_type));

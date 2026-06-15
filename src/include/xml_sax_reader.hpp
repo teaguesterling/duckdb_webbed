@@ -100,7 +100,7 @@ struct SAXCallbackContext {
 	bool stop_parsing = false;                                      // Signal to stop the push parser
 	std::vector<SAXRecordAccumulator> *completed_records = nullptr; // Where to store completed records
 	bool preserve_whitespace = true;
-	std::string attr_mode = "columns"; // mirrors XMLSchemaOptions::attr_mode; "discard" drops attributes
+	bool discard_attrs = false; // precomputed from XMLSchemaOptions::attr_mode == "discard" (hot-path flag)
 };
 
 // SAX2 callback functions (static, matching libxml2 signatures)
