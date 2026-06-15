@@ -21,8 +21,12 @@ enum class SAXAccumulatorState {
 // A single occurrence of a record field, tagged by payload kind. Occurrences are stored in
 // document order so a field mixing bare-text and nested-XML siblings keeps its original sequence.
 struct FieldOccurrence {
-	bool is_xml;         // true = nested-XML fragment, false = text payload
-	std::string payload; // serialized XML fragment (is_xml) or cleaned text (!is_xml)
+	bool is_xml;          // true = nested-XML fragment, false = text payload
+	std::string payload;  // serialized XML fragment (is_xml) or cleaned text (!is_xml)
+	std::string own_attrs; // the field element's OWN attributes, pre-serialized and escaped as
+	                        // ` name="value"...` (empty if none), spliced into the reconstructed
+	                        // open tag so a direct child like <CustomFunctionReference id=".."/>
+	                        // keeps its attributes under streaming (DOM parity).
 };
 
 // Accumulates field data from SAX events for a single XML record
@@ -59,6 +63,11 @@ struct SAXRecordAccumulator {
 	std::string current_text;
 	std::string current_element_name; // Name of the element whose text we're accumulating
 
+	// Own attributes of the direct child of the record currently being accumulated (relative_depth==1),
+	// serialized as ` name="value"...` (escaped). Held from the child's start until its close, then
+	// stored on the FieldOccurrence so reconstruction can splice them into the field's open tag.
+	std::string current_field_attrs;
+
 	// Nested XML accumulation (for elements deeper than record_depth+1)
 	std::string nested_xml;
 	int nested_depth = 0; // How deep we are in nested elements (0 = direct child of record)
@@ -91,6 +100,7 @@ struct SAXCallbackContext {
 	bool stop_parsing = false;                                      // Signal to stop the push parser
 	std::vector<SAXRecordAccumulator> *completed_records = nullptr; // Where to store completed records
 	bool preserve_whitespace = true;
+	std::string attr_mode = "columns"; // mirrors XMLSchemaOptions::attr_mode; "discard" drops attributes
 };
 
 // SAX2 callback functions (static, matching libxml2 signatures)
