@@ -54,4 +54,58 @@ node load_test.mjs path/to/webbed.duckdb_extension.wasm
 ## CI
 
 Both run in the `wasm-load-test` job of `.github/workflows/MainDistributionPipeline.yml`,
-which `needs:` the build job and downloads its `webbed-*-extension-wasm_*` artifacts.
+which `needs:` the v1.5.3 build job and downloads its `webbed-v1.5.3-extension-wasm_*`
+artifacts. The job (add it after `duckdb-stable-build`):
+
+```yaml
+  wasm-load-test:
+    # Regression guard for #96: the WASM build installed but failed to LOAD because libxml2
+    # was not linked into the -sSIDE_MODULE=2 module. The build jobs produce the .wasm but
+    # never load it, so a missing-symbol regression ships silently. This job downloads the
+    # freshly built wasm artifacts and (1) statically asserts libxml2 is linked in, then
+    # (2) actually loads the extension in duckdb-wasm and runs a query.
+    name: WASM load test
+    # Scoped to the v1.5.3 stable build: that artifact has a matching published duckdb-wasm
+    # (engine-version-locked, see above), and not depending on duckdb-next-build keeps this
+    # guard running even when DuckDB-main drift breaks the next build.
+    needs: [duckdb-stable-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download built wasm artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: webbed-v1.5.3-extension-wasm_*
+          path: wasm-artifacts
+
+      - name: Static symbol check (libxml2 must be linked, not imported)
+        run: |
+          set -euo pipefail
+          python3 test/wasm/check_wasm_symbols.py --selftest
+          mapfile -t WASMS < <(find wasm-artifacts -name '*.wasm' | sort)
+          if [ "${#WASMS[@]}" -eq 0 ]; then
+            echo "No .wasm artifacts were downloaded — cannot run the #96 guard." >&2
+            exit 1
+          fi
+          python3 test/wasm/check_wasm_symbols.py "${WASMS[@]}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Runtime load test (duckdb-wasm)
+        working-directory: test/wasm
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          EXT=$(find "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.3-extension-wasm_eh" -name '*.wasm' | head -n1)
+          node load_test.mjs "$EXT"
+```
+
+> This job lives in a workflow file, which the automated branch push could not create
+> (the push credential lacks GitHub's `workflow` scope). It is captured here verbatim so it
+> can be lifted into `MainDistributionPipeline.yml` by a push that has that scope — e.g. folded
+> into the #96 `LINKED_LIBS` build-fix PR, which it pairs with.
