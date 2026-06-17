@@ -1,0 +1,14 @@
+{
+  "name": "webbed-wasm-load-test",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime load test for the webbed DuckDB extension under duckdb-wasm (regression guard for #96).",
+  "scripts": {
+    "test": "node load_test.mjs"
+  },
+  "//": "Pin MUST match the DuckDB engine the tested .wasm is built against. 1.33.1-dev55.0 bundles engine v1.5.3 (source_id 14eca11bd9) — the exact duckdb submodule commit webbed's v1.5.3 build uses — so it loads the v1.5.3 / wasm_eh artifact. A loadable extension is version-hash-locked to its engine; bump this in lockstep with the duckdb submodule (verify with: node -e PRAGMA version) when the stable build moves off v1.5.3.",
+  "dependencies": {
+    "@duckdb/duckdb-wasm": "1.33.1-dev55.0"
+  }
+}
