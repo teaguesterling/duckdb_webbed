@@ -1,0 +1,9 @@
+{
+  "name": "webbed-wasm-tests",
+  "private": true,
+  "description": "Dependencies for the duckdb-wasm live load test (load_test.cjs). The static check (check_wasm_imports.mjs / run_wasm_checks.sh) needs no dependencies.",
+  "dependencies": {
+    "@haybarn/haybarn-wasm": "1.5.3-rc15",
+    "web-worker": "1.2.0"
+  }
+}

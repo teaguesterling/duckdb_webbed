@@ -51,19 +51,45 @@ Empirically: a broken build has 58 unresolved libxml2 symbols
 (`xmlNewParserCtxt`, `htmlReadMemory`, …); the fixed build has 0 across libxml2
 and zlib.
 
-### Layer 2 — end-to-end sqllogictest against duckdb-wasm (high fidelity)
+### Layer 2 — live load test in duckdb-wasm (`load_test.cjs`)
 
-Rusty Conover's harness instantiates the published WASM engine in Node, does
-`INSTALL ... FROM community; LOAD ...`, and runs the extension's existing
-`test/sql/*.test` files against it. This validates that the extension actually
-*works* under wasm (incl. that iconv really is host-provided), and surfaces
-version/ABI problems. Requires a published artifact + matching engine.
+`load_test.cjs` actually instantiates a duckdb-wasm engine in Node, serves the
+built extension repository over HTTP, `INSTALL`s + `LOAD`s the extension, and
+runs a query (`SELECT xml_valid('<a/>')`). This is the end-to-end proof that the
+module not only resolves symbols but instantiates and runs. It needs the npm
+deps in `package.json` (`npm install` here first).
 
-- Harness: https://github.com/Query-farm-haybarn/haybarn-extension-wasm-tester
-- Writeup: https://rusty.today/blog/testing-duckdb-wasm-extensions/
+```bash
+make wasm_eh
+cd test/wasm && npm install
+mkdir -p repo/v1.5.3/wasm_eh
+cp ../../build/wasm_eh/repository/v1.5.3/wasm_eh/webbed.duckdb_extension.wasm repo/v1.5.3/wasm_eh/
+node load_test.cjs --repo repo --name webbed --platform eh \
+    --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
+```
+
+**Engine matching (important).** A clean `LOAD` requires an engine matching
+**both** the extension's duckdb version (v1.5.3) **and** its emscripten ABI
+(`extension-ci-tools@v1.5.3` pins emsdk 3.1.71). As of this writing no public
+engine satisfies both:
+
+| engine | duckdb | emsdk ABI | LOAD result |
+| --- | --- | --- | --- |
+| `@duckdb/duckdb-wasm` 1.33 | v1.5.1 (behind) | matches 3.1.71 | `memory access out of bounds` (version skew) |
+| `@haybarn/haybarn-wasm` 1.5.3-rc15 | v1.5.3 | newer emscripten | `lseek` import type mismatch (toolchain skew) |
+
+In both engines the load gets **past symbol resolution** (no missing/undefined
+symbol) — confirming the LINKED_LIBS fix — and fails only on version/toolchain
+ABI. The live test will go green once the official duckdb-wasm ships v1.5.3
+(built with the same pinned emsdk). Until then it is wired into CI as a
+**non-blocking** (informational) step; the Layer 1 static check is the hard gate.
+
+Background: https://rusty.today/blog/testing-duckdb-wasm-extensions/ ·
+https://github.com/Query-farm-haybarn/haybarn-extension-wasm-tester
 
 ## CI
 
-`wasm-symbol-check` in `MainDistributionPipeline.yml` downloads the v1.5.3 wasm
-artifacts and runs Layer 1. The reusable distribution workflow builds the
-`.wasm` but never inspects or loads it — which is why this bug shipped green.
+`wasm-load-test` in `MainDistributionPipeline.yml` downloads the v1.5.3 wasm
+artifacts and runs Layer 1 (hard gate) plus Layer 2 (`continue-on-error`, see
+above). The reusable distribution workflow builds the `.wasm` but never inspects
+or loads it — which is why this bug shipped green.

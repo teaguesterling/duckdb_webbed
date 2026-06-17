@@ -46,11 +46,13 @@ jobs:
   # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
   # distribution workflow builds and uploads the .wasm but never inspects or
   # loads it, so a side module with unresolved libxml2/zlib symbols ships green.
-  # This downloads the built v1.5.3 wasm artifacts and statically checks that no
-  # libxml2/zlib symbol is imported-but-undefined (no duckdb-wasm runtime needed).
-  # See test/wasm/ for the full explanation.
-  wasm-symbol-check:
-    name: WASM symbol resolution check
+  # Two layers (see test/wasm/):
+  #   1. static symbol check (hard gate) — no duckdb-wasm runtime needed.
+  #   2. live load+query in duckdb-wasm (informational / continue-on-error) —
+  #      expected-red until official duckdb-wasm ships v1.5.3 (the only public
+  #      v1.5.3 engine, haybarn, uses a newer emscripten -> lseek ABI skew).
+  wasm-load-test:
+    name: WASM load test
     needs: [duckdb-stable-build]
     runs-on: ubuntu-latest
     steps:
@@ -63,8 +65,19 @@ jobs:
         with:
           pattern: webbed-v1.5.3-extension-wasm_*
           path: wasm-artifacts
-      - name: Check for unresolved libxml2/zlib symbols
+      - name: Static symbol check (libxml2/zlib must be linked, not unresolved)
         run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
+      - name: Live load test in duckdb-wasm (informational until official v1.5.3)
+        continue-on-error: true
+        working-directory: test/wasm
+        run: |
+          set -euo pipefail
+          npm install --no-save
+          mkdir -p repo/v1.5.3/wasm_eh
+          cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.3-extension-wasm_eh/webbed.duckdb_extension.wasm" \
+             repo/v1.5.3/wasm_eh/
+          node load_test.cjs --repo repo --name webbed --platform eh \
+            --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
 #  code-quality-check:
 #    name: Code Quality Check
