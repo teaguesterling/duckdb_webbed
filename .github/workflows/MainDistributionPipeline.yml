@@ -43,6 +43,29 @@ jobs:
       # revisit once upstream sets PYTHONIOENCODING / utf8_mode in the runner.
       exclude_archs: 'windows_amd64;windows_amd64_mingw'
 
+  # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
+  # distribution workflow builds and uploads the .wasm but never inspects or
+  # loads it, so a side module with unresolved libxml2/zlib symbols ships green.
+  # This downloads the built v1.5.3 wasm artifacts and statically checks that no
+  # libxml2/zlib symbol is imported-but-undefined (no duckdb-wasm runtime needed).
+  # See test/wasm/ for the full explanation.
+  wasm-symbol-check:
+    name: WASM symbol resolution check
+    needs: [duckdb-stable-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Download WASM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: webbed-v1.5.3-extension-wasm_*
+          path: wasm-artifacts
+      - name: Check for unresolved libxml2/zlib symbols
+        run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
+
 #  code-quality-check:
 #    name: Code Quality Check
 #    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
