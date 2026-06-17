@@ -230,9 +230,15 @@ public:
 	// Parse an XML fragment (the inner contents of a wrapper element) and extract a value of the
 	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
 	// inner content was captured as raw XML during streaming.
+	// extra_ns_decls / extra_attrs are spliced verbatim into the synthetic wrapper's open tag
+	// (`<wrapper extra_ns_decls extra_attrs>inner</wrapper>`). extra_attrs carries the wrapped
+	// element's OWN attributes (e.g. ` id="1" UUID=".."`) so an attribute-only fragment (empty
+	// inner_xml) still yields a non-NULL STRUCT — needed by the SAX path where a nested element's
+	// attributes are captured separately from its inner content.
 	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
 	                                         const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                         const std::string &extra_ns_decls = "");
+	                                         const std::string &extra_ns_decls = "",
+	                                         const std::string &extra_attrs = "");
 
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);

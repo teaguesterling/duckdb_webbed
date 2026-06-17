@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <rec id="1"><CustomFunctionReference id="101" UUID="AAAA-0001" name="MyFunc"/><CustomFunctionReference id="102" UUID="AAAA-0002" name="OtherFunc"/></rec>
+  <rec id="2"><CustomFunctionReference id="103" UUID="AAAA-0003" name="ThirdFunc"/><CustomFunctionReference id="104" UUID="AAAA-0004" name="FourthFunc"/></rec>
+</root>

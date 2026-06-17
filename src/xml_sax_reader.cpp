@@ -17,6 +17,7 @@ void SAXRecordAccumulator::Reset() {
 	attribute_order.clear();
 	current_text.clear();
 	current_element_name.clear();
+	current_field_attrs.clear();
 	nested_xml.clear();
 	nested_depth = 0;
 	row_ready = false;
@@ -202,23 +203,30 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			acc->current_text.clear();
 			acc->current_element_name = name;
 			acc->nested_depth = 0;
+			acc->current_field_attrs.clear();
 
-			// Extract attributes from child elements too
-			for (int i = 0; i < nb_attributes; i++) {
-				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
-				const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
-				const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
-				const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
+			// Serialize this direct child's OWN attributes so they can be spliced into the field
+			// element's open tag during reconstruction (schema inference + row build). Without this an
+			// attribute-only child such as <CustomFunctionReference id=".." UUID=".."/> loses its
+			// attributes under SAX streaming, while the DOM path keeps them. Held in current_field_attrs
+			// until the element closes (children, if any, arrive in between). Skipped under
+			// attr_mode='discard' to match DOM, where attributes are dropped entirely.
+			if (!sax_ctx->discard_attrs) {
+				for (int i = 0; i < nb_attributes; i++) {
+					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
+					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
+					const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
+					const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
 
-				std::string attr_name;
-				if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
-					attr_name = std::string(attr_prefix_ptr) + ":" + attr_localname;
-				} else {
-					attr_name = attr_localname;
+					std::string attr_name;
+					if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
+						attr_name = std::string(attr_prefix_ptr) + ":" + attr_localname;
+					} else {
+						attr_name = attr_localname;
+					}
+					std::string attr_value(value_start, value_end);
+					acc->current_field_attrs += " " + attr_name + "=\"" + XmlEscapeAttr(attr_value) + "\"";
 				}
-				std::string attr_value(value_start, value_end);
-				// Store child attributes with element.attribute naming
-				acc->current_attributes[name + "." + attr_name] = attr_value;
 			}
 		} else if (relative_depth > 1) {
 			// Deeper nested element: accumulate raw XML
@@ -271,15 +279,24 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				sax_ctx->stop_parsing = true;
 			}
 		} else if (relative_depth == 1) {
-			// Closing a direct child of the record. If we accumulated nested XML (the child has
-			// element children), the payload is the raw fragment so rich-typing can re-parse it;
-			// otherwise it is text. Append in close order, capturing document order across a field's
-			// text and XML occurrences.
-			bool is_xml = !acc->nested_xml.empty();
+			// Closing a direct child of the record. The child is captured as a nested-XML fragment when
+			// it has element children (acc->nested_xml) OR carries its own attributes
+			// (acc->current_field_attrs), so the rich-typing path reconstructs a STRUCT (@attrs plus
+			// #text/children); otherwise it is plain text. own_attrs rides on the occurrence and is
+			// spliced into the reconstructed open tag. Append in close order, capturing document order
+			// across a field's text and XML occurrences.
+			std::string own_attrs = std::move(acc->current_field_attrs);
+			bool has_attrs = !own_attrs.empty();
+			bool is_xml = !acc->nested_xml.empty() || has_attrs;
 			std::string value;
-			if (is_xml) {
-				value = acc->nested_xml;
+			if (!acc->nested_xml.empty()) {
+				value = std::move(acc->nested_xml);
 				acc->nested_xml.clear();
+			} else if (has_attrs) {
+				// Attribute-only (or attribute + text) child: the inner content is the element's text,
+				// escaped so it stays well-formed when wrapped as <field own_attrs>text</field>.
+				value = XmlEscapeText(
+				    XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace));
 			} else {
 				value = XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
@@ -289,10 +306,11 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				field_it = acc->current_fields.emplace(name, std::vector<FieldOccurrence>()).first;
 				acc->field_order.push_back(name);
 			}
-			field_it->second.push_back({is_xml, std::move(value)});
+			field_it->second.push_back({is_xml, std::move(value), std::move(own_attrs)});
 
 			acc->current_text.clear();
 			acc->current_element_name.clear();
+			acc->current_field_attrs.clear();
 			acc->nested_depth = 0;
 		} else {
 			// Closing a deeper nested element: append closing tag to raw XML
@@ -378,6 +396,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 	ctx.stop_parsing = false;
 	ctx.completed_records = &results;
 	ctx.preserve_whitespace = options.preserve_whitespace;
+	ctx.discard_attrs = (options.attr_mode == "discard");
 
 	xmlSAXHandler handler = CreateSAXHandler();
 
@@ -453,7 +472,10 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 		// fragments emitted structurally so DOM inference reconstructs the STRUCT / LIST shape.
 		for (const auto &field_name : record.field_order) {
 			for (const auto &occ : record.GetOccurrences(field_name)) {
-				xml << "<" << field_name << ">";
+				// occ.own_attrs is pre-escaped and only populated when attr_mode != 'discard', so the
+				// synthetic element carries the child's own attributes and DOM inference types it as a
+				// STRUCT (@attrs + #text/children) — matching the non-streaming path.
+				xml << "<" << field_name << occ.own_attrs << ">";
 				xml << (occ.is_xml ? occ.payload : XmlEscapeText(occ.payload));
 				xml << "</" << field_name << ">";
 			}
@@ -528,13 +550,15 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			}
 		} else if (col_type.id() == LogicalTypeId::STRUCT) {
 			// STRUCT column: a non-LIST struct implies a single occurrence. If it carried element
-			// children it was captured as inner XML; re-parse and dispatch through the DOM extractor.
+			// children or its own attributes it was captured as inner XML; re-parse and dispatch through
+			// the DOM extractor. occ.own_attrs is appended to the wrapper open tag (via the extra_attrs
+			// parameter, which is spliced there verbatim) so attribute-only children yield their @attr fields.
 			const auto &occs = accumulator.GetOccurrences(col_name);
 			if (occs.empty()) {
 				value = Value(col_type); // typed NULL
 			} else if (occs.front().is_xml) {
-				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, occs.front().payload, col_type,
-				                                                        options, ns_decls);
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(
+				    col_name, occs.front().payload, col_type, options, ns_decls, occs.front().own_attrs);
 			} else {
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
 				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
@@ -556,24 +580,26 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 
 			std::vector<Value> list_vals;
 
-			auto append_text = [&](const std::string &item) {
+			// own_attrs (pre-escaped, empty unless the element carried attributes) is appended to the
+			// wrapper open tag via the extra_attrs parameter so list items keep their @attr fields.
+			auto append_text = [&](const std::string &item, const std::string &own_attrs) {
 				if (IsNullString(item, options)) {
 					list_vals.push_back(Value(child_type));
 				} else if (child_is_complex) {
 					// Text inside a complex-typed list: wrap so ExtractValueFromXmlFragment can
 					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
 					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
-					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(item),
-					                                                                    child_type, options, ns_decls));
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
+					    col_name, XmlEscapeText(item), child_type, options, ns_decls, own_attrs));
 				} else {
 					list_vals.push_back(
 					    XMLSchemaInference::ConvertToValuePublic(item, child_type, options, datetime_fmt));
 				}
 			};
-			auto append_xml = [&](const std::string &frag) {
+			auto append_xml = [&](const std::string &frag, const std::string &own_attrs) {
 				if (child_is_complex) {
-					list_vals.push_back(
-					    XMLSchemaInference::ExtractValueFromXmlFragment(col_name, frag, child_type, options, ns_decls));
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
+					    col_name, frag, child_type, options, ns_decls, own_attrs));
 				} else if (child_type.id() == LogicalTypeId::VARCHAR) {
 					// Scalar-typed list with an XML item: surface the serialized fragment.
 					list_vals.push_back(Value(frag));
@@ -584,9 +610,9 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 
 			for (const auto &occ : accumulator.GetOccurrences(col_name)) {
 				if (occ.is_xml) {
-					append_xml(occ.payload);
+					append_xml(occ.payload, occ.own_attrs);
 				} else {
-					append_text(occ.payload);
+					append_text(occ.payload, occ.own_attrs);
 				}
 			}
 

@@ -1,0 +1,41 @@
+# name: test/sql/sax_nested_child_attr_parity.test
+# description: SAX streaming must keep the OWN attributes of repeated nested child elements,
+#             which webbed exposes as LIST<STRUCT(@attrs...)>. Regression for: under streaming
+#             the per-item attributes were dropped, so each list STRUCT came back NULL
+#             ([NULL, NULL]) while the DOM path returned the attribute values.
+# group: [sql]
+
+require webbed
+
+# <rec> repeats <CustomFunctionReference id=".." UUID=".." name=".."/>, so the column is
+# LIST<STRUCT(id, UUID, name)> built from the elements' own attributes.
+
+# DOM baseline (non-streaming): first reference's UUID per record.
+query II
+SELECT id, (CustomFunctionReference[1]).UUID AS first_uuid
+FROM read_xml('test/xml/sax_nested_child_attr_parity.xml', record_element := 'rec')
+ORDER BY id;
+----
+1	AAAA-0001
+2	AAAA-0003
+
+# SAX streaming (maximum_file_size := 1 forces streaming) must match the DOM baseline.
+# Before the fix this returned NULL — the per-item STRUCT was empty.
+query II
+SELECT id, (CustomFunctionReference[1]).UUID AS first_uuid
+FROM read_xml('test/xml/sax_nested_child_attr_parity.xml', record_element := 'rec', maximum_file_size := 1)
+ORDER BY id;
+----
+1	AAAA-0001
+2	AAAA-0003
+
+# Every nested reference keeps all its attributes under streaming: 4 refs, none NULL.
+query I
+SELECT COUNT(*)
+FROM (
+    SELECT UNNEST(CustomFunctionReference) AS cfr
+    FROM read_xml('test/xml/sax_nested_child_attr_parity.xml', record_element := 'rec', maximum_file_size := 1)
+)
+WHERE cfr.id IS NOT NULL AND cfr.UUID IS NOT NULL;
+----
+4
