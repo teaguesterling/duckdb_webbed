@@ -31,6 +31,146 @@ v2.3.0 (Current)
 
 - ``vcpkg.json`` manifest version → 2.3.0. No DuckDB submodule bump (stays on v1.5.3).
 
+v2.2.0
+------
+
+A large correctness and security release: memory-safety, injection, and
+denial-of-service fixes across the scalar functions and parsers, ``read_xml``
+schema-inference fixes, faithful ``parse_html`` whitespace handling, and
+forward-compatibility with current DuckDB ``main``. No DuckDB submodule bump.
+
+**Security**
+
+- Vector memory safety — twelve scalar functions plus ``ConvertList/StructToXML``
+  indexed raw ``FlatVector`` data by row, corrupting the heap on NULL, constant, or
+  dictionary-encoded inputs; they now use ``UnifiedVectorFormat`` with NULL-in/NULL-out
+  semantics (Issue #86)
+- Fixed markup injection in ``xml_wrap_fragment`` — the wrapper name is now validated
+  with ``xmlValidateName`` plus an embedded-NUL guard (Issue #89)
+- Fixed markup injection in ``to_xml`` — the ``node_name`` argument and STRUCT field
+  names are now validated before being emitted into ``xml``-typed output (Issue #93)
+- Fixed memory disclosure in ``read_xml`` — with ``ignore_errors:=true`` and the
+  single-column fallback schema, rows left output slots uninitialized and returned
+  stale heap bytes; a shared ``EmitRow`` helper NULL-fills every column (Issue #87)
+- Fixed denial of service in ``duck_blocks_to_html`` — malformed Pandoc-table JSON
+  could hang the parser indefinitely; the parse loops now guarantee forward progress
+  and no longer read past the end of truncated input (Issue #90)
+
+**Bug Fixes**
+
+- Fixed valid XML mislabeled invalid under ``threads > 1`` — ``IsValidXML`` gated on a
+  process-global parse-error flag; validity is now decided per-thread (Issue #83)
+- Distinguished libxml2 out-of-memory from malformed input — a transient
+  ``XML_ERR_NO_MEMORY`` was reported as invalid XML and dropped under ``ignore_errors``;
+  it now raises ``OutOfMemoryException`` (propagated through ``XMLDocRAII`` moves)
+  (Issues #84, #94)
+- Fixed ``parse_html`` whitespace handling — significant inline whitespace was deleted
+  and ``script``/``style``/CDATA content mangled; whitespace is now normalized on the
+  parse tree, preserving ``pre``/``textarea``/``script``/``style``/CDATA verbatim
+  (Issues #88, #91)
+
+**read_xml Schema Inference** (Issue #87)
+
+- Integer columns now widen INTEGER → BIGINT → DOUBLE by value range (was INT32, then
+  threw at extract time)
+- ``attr_mode:='prefixed'`` columns now extract correctly (prefix stripped on lookup)
+- DESCRIBE column order is now deterministic (first-seen document order, DOM and SAX)
+- Locale-independent numeric parsing via strict ``TryCast``; ``inf``/``nan`` infer VARCHAR
+
+**Compatibility**
+
+- DuckDB ``main`` ``duckdb::Identifier`` change absorbed via ``duckdb_compat.hpp``
+  (no-op against the pinned v1.5.3 build) (Issue #92)
+
+**Testing**
+
+- 2866 assertions across 82 test cases; new ``vector_safety``, injection-validation,
+  schema-inference, ``parse_html_whitespace``, robustness, concurrency-race, and
+  out-of-memory suites
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.2.0
+
+v2.1.1
+------
+
+**Bug Fixes**
+
+- Fixed ``xml_to_json`` emitting malformed JSON for values containing quotes or C0
+  control characters, so output could not round-trip through ``CAST(... AS JSON)``;
+  a new ``EscapeJSONString`` helper escapes ``"``, ``\``, and the C0 range per RFC 8259
+  while leaving valid raw characters and UTF-8 untouched (Issue #78)
+
+**Compatibility**
+
+- Restored ``duckdb-next-build`` against current DuckDB ``main`` (private ``bind_info``,
+  ``ForceMaxLogicalType`` signature change, strict named-argument matching); all changes
+  are no-ops against the pinned v1.5.3 build
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.1.1
+
+v2.1.0
+------
+
+**New Features**
+
+- STRUCT widening in ``read_xml(union_by_name:=true)`` — cross-file STRUCT shape
+  disagreements previously collapsed to VARCHAR; ``MergeXMLColumnType`` now recursively
+  unions STRUCT fields and LIST element types, reconciles scalar-vs-``LIST`` cardinality,
+  and infers a repeated element's fields from all occurrences in document order (Issue #75)
+- SAX streaming path now produces rich types and participates in ``union_by_name``
+  widening, with document-order fragment accumulation and namespace-declaration handling
+  (Issues #75, #77, #80)
+
+**Changes**
+
+- ``duckdb-stable-build`` CI matrix bumped to DuckDB v1.5.3; ``duckdb`` submodule →
+  ``14eca11bd9``, ``extension-ci-tools`` → ``4b3b37b0`` (Issue #79)
+
+**Compatibility**
+
+- ``duckdb_compat.hpp`` keeps ``duckdb-next-build`` green against DuckDB ``main``
+  (per-vector buffer sizing, StructVector/ListVector API changes) (Issue #76)
+- MSVC build fix for DuckDB's vendored ``fmt`` (C++17 inline variables)
+
+**Bug Fixes**
+
+- Mixed text/XML document order and prefixed names under ``namespaces:='keep'`` are now
+  preserved through the SAX path (Issue #77)
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.1.0
+
+v2.0.1
+------
+
+**Bug Fixes**
+
+- Fixed whitespace collapsing in text content — ``read_xml`` collapsed internal
+  whitespace (newlines, tabs, multi-space runs) into a single space, destroying
+  semantically meaningful structure in CDATA sections, source code, and multi-line
+  content (Issue #73)
+
+**New Parameter**
+
+- Added ``preserve_whitespace`` (BOOLEAN, default ``true``) to ``read_xml`` and
+  ``read_html``. Default trims leading/trailing whitespace, normalizes CRLF/CR to LF per
+  XML 1.0 §2.11, and preserves internal whitespace as-is; ``false`` restores the previous
+  collapsing behavior
+
+**Compatibility**
+
+- Added compatibility layer for upcoming DuckDB API breaking changes (bind function
+  signature, private ScalarFunction fields, vector header relocations)
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.0.1
+
 v2.0.0
 -----------------
 
