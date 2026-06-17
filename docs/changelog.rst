@@ -1,7 +1,37 @@
 Changelog
 =========
 
-v2.0.0 (Current)
+v2.3.0 (Current)
+-----------------
+
+**Bug Fixes**
+
+- Fixed the DuckDB-WASM build installing but failing to load — libxml2 (and its
+  ``zlib`` dependency) were not linked into the ``emcc -sSIDE_MODULE=2`` side
+  module, so their symbols were left unresolved and the ``.wasm`` failed to load.
+  ``target_link_libraries`` is ignored by that separate emcc link step; both
+  archives are now passed via ``LINKED_LIBS``. (Issue #96)
+- Fixed SAX streaming dropping the attributes of a record's repeated nested child
+  elements — a ``LIST<STRUCT(@attr…)>`` streamed back as ``[NULL, NULL]`` while the
+  DOM path returned the attribute values. Each direct child's own attributes are
+  now carried through the fragment extractor, restoring DOM/SAX parity. (Issues #97, #98)
+
+**Testing**
+
+- Added a ``test/wasm/`` regression suite wired into CI as the ``wasm-load-test``
+  job: a runtime-free static symbol check (hard gate — libxml2/zlib must be linked
+  into the side module, not left unresolved) plus a duckdb-wasm live load test
+  (informational / ``continue-on-error`` until official duckdb-wasm ships v1.5.3).
+  The reusable distribution workflow builds the ``.wasm`` but never loads it, which
+  is why #96 shipped green.
+- Added ``test/sql/sax_nested_child_attr_parity.test`` (DOM/SAX parity for the
+  repeated-nested-attribute case); native suite at 83 cases / 2875 assertions.
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.3.0. No DuckDB submodule bump (stays on v1.5.3).
+
+v2.0.0
 -----------------
 
 **New Features**
