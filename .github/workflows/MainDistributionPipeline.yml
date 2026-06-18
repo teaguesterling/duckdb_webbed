@@ -69,14 +69,15 @@ jobs:
         run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
       - name: Live load test in duckdb-wasm (informational until official v1.5.3)
         continue-on-error: true
+        timeout-minutes: 10
         working-directory: test/wasm
         run: |
-          set -euo pipefail
-          npm install --no-save
+          set -uo pipefail
+          timeout 300 npm install --no-save
           mkdir -p repo/v1.5.3/wasm_eh
           cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.3-extension-wasm_eh/webbed.duckdb_extension.wasm" \
              repo/v1.5.3/wasm_eh/
-          node load_test.cjs --repo repo --name webbed --platform eh \
+          timeout 240 node load_test.cjs --repo repo --name webbed --platform eh \
             --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
 #  code-quality-check:
