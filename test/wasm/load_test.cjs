@@ -33,10 +33,15 @@ const BUNDLES = {
 
 const repoRoot = path.resolve(repoDir);
 const server = http.createServer((req, res) => {
+  // decodeURIComponent throws URIError on malformed percent-encoding; catch it so a bad request
+  // returns 400 instead of crashing the in-process server (which would hang the load test).
+  let rel;
+  try { rel = decodeURIComponent(req.url.split("?")[0]); }
+  catch { res.writeHead(400); return res.end("bad request URI"); }
   // Resolve to an absolute path before the traversal check: path.join with a relative repoDir
   // (e.g. --repo repo, as CI invokes it) yields a relative fp that never startsWith the absolute
   // repoRoot, so the guard returned 403 for the extension fetch and the engine hung on LOAD.
-  const fp = path.resolve(repoRoot, "." + path.sep + decodeURIComponent(req.url.split("?")[0]));
+  const fp = path.resolve(repoRoot, "." + path.sep + rel);
   if (fp !== repoRoot && !fp.startsWith(repoRoot + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(fp, (err, buf) => {
     if (err) { res.writeHead(404); return res.end(String(err)); }
