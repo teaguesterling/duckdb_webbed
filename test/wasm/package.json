@@ -1,9 +1,9 @@
 {
   "name": "webbed-wasm-tests",
   "private": true,
-  "description": "Dependencies for the duckdb-wasm live load test (load_test.cjs). The static check (check_wasm_imports.mjs / run_wasm_checks.sh) needs no dependencies.",
+  "description": "Dependencies for the duckdb-wasm live load test (load_test.cjs). The static check (check_wasm_imports.mjs / run_wasm_checks.sh) needs no dependencies. The engine pin must match the DuckDB the extension is built against: 1.33.1-dev55.0 ships engine v1.5.3 (source_id 14eca11bd9), the exact duckdb commit the v1.5.3 build targets. Bump in lockstep with the duckdb submodule.",
   "dependencies": {
-    "@haybarn/haybarn-wasm": "1.5.3-rc15",
+    "@duckdb/duckdb-wasm": "1.33.1-dev55.0",
     "web-worker": "1.2.0"
   }
 }
