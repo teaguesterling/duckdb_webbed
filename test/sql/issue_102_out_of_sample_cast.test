@@ -1,0 +1,38 @@
+# name: test/sql/issue_102_out_of_sample_cast.test
+# description: Reproduction for #102 — read_xml() auto type-detection hard-fails on an
+#              out-of-sample value instead of falling back, aborting the whole scan.
+# group: [sql]
+
+require webbed
+
+# -----------------------------------------------------------------------------
+# Control (works today): when the non-numeric value is WITHIN the type-detection
+# sample window, the column is correctly inferred as VARCHAR and the read succeeds.
+# Here the column has only 3 values, all sampled, so the '24 495,40 Kč' is seen.
+# -----------------------------------------------------------------------------
+
+query I
+SELECT count(*) FROM read_xml('test/xml/schema_inference/issue_102_in_sample_mixed.xml')
+WHERE amount = '24 495,40 Kč';
+----
+1
+
+# -----------------------------------------------------------------------------
+# Reproduction (#102): 30 numeric <amount> values followed by one '24 495,40 Kč'.
+# InferColumnType samples only the first 20 instances (src/xml_schema_inference.cpp,
+# `text_samples.size() < 20`), so it infers INTEGER and never sees the outlier. At
+# extraction, ConvertToValue's numeric TryCast fails and returns a VARCHAR Value,
+# which then aborts when written into the INTEGER output column:
+#
+#   Invalid Input Error: Failed to cast value: Could not convert string '24 495,40 Kč' to INT32
+#
+# Expected after the fix: read_xml must NOT abort the scan on an out-of-sample value.
+# It should return all 31 rows (ideally widening the column to VARCHAR and preserving
+# the value, matching read_csv's robustness). This assertion currently FAILS (the
+# query errors) and is what the fix must make pass.
+# -----------------------------------------------------------------------------
+
+query I
+SELECT count(*) FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml');
+----
+31
