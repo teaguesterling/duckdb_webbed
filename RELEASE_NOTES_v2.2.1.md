@@ -11,5 +11,15 @@ separate `emcc` step, which links only the libraries named in `LINKED_LIBS`.
 - Add `test/wasm/`: a static symbol-resolution gate (hard CI check) plus a live
   duckdb-wasm load test (non-blocking until official duckdb-wasm ships v1.5.3).
 
-No functional/source changes; native build and full test suite are unchanged
-(2866 assertions, 82 cases).
+The WASM fix itself is build-only — no source changes.
+
+## SAX streaming: nested child attributes (#98, closes #97)
+
+Also included in this release: a SAX streaming fix that landed just before it.
+Under streaming, a record's *repeated* nested child element typed as
+`LIST<STRUCT(@attr…)>` lost its per-item attributes (`[NULL, NULL]`), while the
+DOM path returned them. Each direct child's own attributes are now carried
+(pre-escaped) through the existing fragment extractor, restoring DOM/SAX parity.
+Honors `attr_mode := 'discard'`.
+
+Native build and full test suite pass: **2875 assertions, 83 cases**.
