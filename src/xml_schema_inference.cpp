@@ -357,6 +357,30 @@ static std::unordered_set<std::string> ParseForceListElements(const std::string 
 }
 
 // Phase 3: Infer Column Type
+// #102: how many element values the type sniffer inspects before locking a column's type.
+// options.sample_size <= 0 means "sample every value" -> always-correct detection (the bind-time
+// half of read_csv-style robustness; the runtime-widening half is tracked as #102 "C").
+static size_t XmlSampleLimit(const XMLSchemaOptions &options) {
+	return options.sample_size <= 0 ? static_cast<size_t>(-1) : static_cast<size_t>(options.sample_size);
+}
+
+// #102: a value that does not match the column type the sniffer inferred from the sample window.
+// Under ignore_errors we emit a typed NULL (row preserved, value dropped); otherwise we raise a
+// clear, actionable error. (Previously this path returned a VARCHAR Value, which then aborted with
+// a generic cast error when written into the typed output column.) This is the single chokepoint a
+// future read_csv-style runtime column-widening (#102 "C") would hook into.
+static Value XmlUncastableValue(const std::string &text, const LogicalType &target_type,
+                                const XMLSchemaOptions &options) {
+	if (options.ignore_errors) {
+		return Value(target_type);
+	}
+	throw InvalidInputException(
+	    "read_xml: value '%s' does not match column type %s, which was inferred from the first %d "
+	    "sampled values. Increase sample_size (or set sample_size := -1 to sample every value), set "
+	    "all_varchar := true, or set ignore_errors := true to skip such values. (issue #102)",
+	    text, target_type.ToString(), options.sample_size);
+}
+
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
                                                 const XMLSchemaOptions &options, std::string &winning_datetime_format) {
 	winning_datetime_format.clear();
@@ -406,7 +430,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 
 		// Collect text content for type detection
-		if (text_samples.size() < 20) {
+		if (text_samples.size() < XmlSampleLimit(options)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
@@ -487,7 +511,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			// Collect text samples from all instances for type inference
 			std::vector<std::string> list_text_samples;
 			for (xmlNodePtr instance : column.instances) {
-				if (list_text_samples.size() >= 20) {
+				if (list_text_samples.size() >= XmlSampleLimit(options)) {
 					break;
 				}
 				xmlChar *content = xmlNodeGetContent(instance);
@@ -620,7 +644,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				}
 			}
 			// Collect text content samples for type inference
-			if (cross_record_text_samples.size() < 20) {
+			if (cross_record_text_samples.size() < XmlSampleLimit(options)) {
 				xmlChar *content = xmlNodeGetContent(instance);
 				if (content) {
 					std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
@@ -863,7 +887,7 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 		std::string text_content = CleanTextContent((const char *)content, options.preserve_whitespace);
 		if (!text_content.empty()) {
 			pattern.has_text = true;
-			if (pattern.sample_values.size() < 20) { // Limit sample size
+			if (pattern.sample_values.size() < XmlSampleLimit(options)) { // #102: was hardcoded 20
 				pattern.sample_values.push_back(text_content);
 			}
 		}
@@ -1779,21 +1803,21 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			if (TryCast::Operation(string_t(text), int_result, false)) {
 				return Value::INTEGER(int_result);
 			}
-			return Value(text); // Fall back to VARCHAR value on conversion failure
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::BIGINT: {
 			int64_t bigint_result;
 			if (TryCast::Operation(string_t(text), bigint_result, false)) {
 				return Value::BIGINT(bigint_result);
 			}
-			return Value(text);
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::DOUBLE: {
 			double double_result;
 			if (TryCast::Operation(string_t(text), double_result, false)) {
 				return Value::DOUBLE(double_result);
 			}
-			return Value(text);
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::DATE: {
 			if (!datetime_format.empty()) {
@@ -1868,10 +1892,23 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return Value(text);
 		}
 	} catch (ConversionException &) {
-		throw; // Re-throw ConversionException as-is
+		// A typed parse failure (e.g. DATE/TIMESTAMP). Under ignore_errors drop to NULL instead of
+		// aborting the whole scan; otherwise surface the original conversion error.
+		if (options.ignore_errors && target_type.id() != LogicalTypeId::VARCHAR) {
+			return Value(target_type);
+		}
+		throw;
+	} catch (InvalidInputException &) {
+		// Our own #102 error from XmlUncastableValue() (thrown from a typed branch above) — it is
+		// already actionable, so propagate it as-is rather than re-entering the chokepoint.
+		throw;
 	} catch (...) {
-		// If conversion fails, return as VARCHAR
-		return Value(text);
+		// VARCHAR target keeps the text; a typed target routes through the #102 chokepoint rather
+		// than returning a VARCHAR Value that would abort when written into the typed output column.
+		if (target_type.id() == LogicalTypeId::VARCHAR) {
+			return Value(text);
+		}
+		return XmlUncastableValue(text, target_type, options);
 	}
 }
 
