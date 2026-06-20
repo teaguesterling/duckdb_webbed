@@ -5,6 +5,7 @@
 #include "duckdb_compat.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/helper.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/replacement_scan.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
@@ -30,6 +31,21 @@ static bool HasComplexXPath(const std::string &record_element) {
 	}
 	// Any remaining XPath tokens mean SAX can't handle it
 	return re.find_first_of("/[@]()*:.") != std::string::npos;
+}
+
+// Read an entire file into `data` (which must already hold `size` bytes) using bounded
+// chunks. A single FileHandle::Read of more than ~2 GiB fails on platforms whose underlying
+// read/pread caps at INT_MAX bytes — notably macOS, where it surfaces as
+// "IO Error: Could not read from file ...: Invalid argument". Reading in <=1 GiB chunks lets
+// XML files larger than 2 GiB load instead of erroring. (libxml2 DOM parsing of the result
+// is still memory-bound; true >RAM streaming is the SAX path.)
+static void ReadFileFully(duckdb::FileHandle &handle, char *data, duckdb::idx_t size) {
+	duckdb::idx_t offset = 0;
+	while (offset < size) {
+		duckdb::idx_t want = duckdb::MinValue<duckdb::idx_t>(size - offset, duckdb::idx_t(1) << 30);
+		handle.Read(data + offset, want);
+		offset += want;
+	}
 }
 
 // Raise the error used when libxml2 cannot allocate memory while parsing a file. A
@@ -560,7 +576,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 						string content;
 						content.resize(file_size);
-						file_handle->Read((void *)content.data(), file_size);
+						ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 						if (mode == ParseMode::XML) {
 							auto validity = XMLUtils::CheckXML(content);
@@ -696,7 +712,7 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 			// Read file content
 			string content;
 			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
+			ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 			// Validate content based on mode
 			if (is_html) {
@@ -844,7 +860,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					// DOM mode: read file content and build DOM
 					string content;
 					content.resize(file_size);
-					file_handle->Read((void *)content.data(), file_size);
+					ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 					// Parse DOM — DOM makes its own copy, so content string can be freed.
 					// This single parse is also the validity check: a separate pre-validation
@@ -1136,7 +1152,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 			// Read file content
 			string content;
 			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
+			ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 			// Validate XML
 			auto validity = XMLUtils::CheckXML(content);
@@ -1447,7 +1463,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 						string content;
 						content.resize(file_size);
-						file_handle->Read((void *)content.data(), file_size);
+						ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 						auto validity = XMLUtils::CheckXML(content);
 						if (validity == XMLValidity::ResourceError) {
