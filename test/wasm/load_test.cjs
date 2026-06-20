@@ -14,7 +14,10 @@ const Worker = require("web-worker");
 function arg(name, def) { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : def; }
 
 const repoDir = arg("repo"), name = arg("name"), platform = arg("platform", "eh");
-const enginePkg = arg("engine", "@haybarn/haybarn-wasm"), query = arg("query"), expect = arg("expect");
+// @duckdb/duckdb-wasm@1.33.1-dev55.0 ships engine v1.5.3 (source_id 14eca11bd9) -- the exact
+// duckdb commit the v1.5.3 build targets -- so it loads the v1.5.3/wasm_eh artifact cleanly.
+// (@haybarn/haybarn-wasm has drifted to v1.5.4-dev, a version skew that fails to load.)
+const enginePkg = arg("engine", "@duckdb/duckdb-wasm"), query = arg("query"), expect = arg("expect");
 
 if (!repoDir || !name || !query) {
   console.error("usage: node load_test.cjs --repo <dir> --name <ext> --query <sql> [--expect s] [--platform eh|mvp] [--engine pkg]");
@@ -28,9 +31,18 @@ const BUNDLES = {
   eh: { mainModule: path.join(dist, "duckdb-eh.wasm"), mainWorker: path.join(dist, "duckdb-node-eh.worker.cjs") },
 };
 
+const repoRoot = path.resolve(repoDir);
 const server = http.createServer((req, res) => {
-  const fp = path.join(repoDir, decodeURIComponent(req.url.split("?")[0]));
-  if (!fp.startsWith(path.resolve(repoDir))) { res.writeHead(403); return res.end(); }
+  // decodeURIComponent throws URIError on malformed percent-encoding; catch it so a bad request
+  // returns 400 instead of crashing the in-process server (which would hang the load test).
+  let rel;
+  try { rel = decodeURIComponent(req.url.split("?")[0]); }
+  catch { res.writeHead(400); return res.end("bad request URI"); }
+  // Resolve to an absolute path before the traversal check: path.join with a relative repoDir
+  // (e.g. --repo repo, as CI invokes it) yields a relative fp that never startsWith the absolute
+  // repoRoot, so the guard returned 403 for the extension fetch and the engine hung on LOAD.
+  const fp = path.resolve(repoRoot, "." + path.sep + rel);
+  if (fp !== repoRoot && !fp.startsWith(repoRoot + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(fp, (err, buf) => {
     if (err) { res.writeHead(404); return res.end(String(err)); }
     res.writeHead(200, { "Content-Type": "application/wasm" }); res.end(buf);
