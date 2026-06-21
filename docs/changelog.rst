@@ -1,8 +1,54 @@
 Changelog
 =========
 
-v2.2.1 (Current)
+v2.3.0 (Current)
 ----------------
+
+Makes ``read_xml`` type detection robust to out-of-sample values, matching
+``read_csv``'s recovery instead of aborting the scan. No DuckDB submodule bump
+(stays on v1.5.3).
+
+**New Features**
+
+- ``sample_size`` now actually controls type detection. The option existed but was
+  ignored — the sniffer hardcoded a 20-value window — so a non-numeric value
+  beyond the first 20 was never seen and the column mis-typed. It is now honored by
+  ``read_xml`` / ``read_html`` / ``parse_xml`` / ``parse_html`` across every
+  detection path. ``sample_size := -1`` samples every value (always-correct
+  detection); the default window is 50. (Issue #102)
+
+**Bug Fixes**
+
+- ``read_xml`` no longer hard-fails when a value outside the type-detection sample
+  doesn't match the inferred type — e.g. ``'24 495,40 Kč'`` after a run of integers
+  raised ``Could not convert string ... to INT32`` and aborted the whole query.
+  An out-of-sample / uncastable value now degrades safely: with
+  ``ignore_errors := true`` it becomes NULL and the scan continues; otherwise it
+  raises a clear, actionable error naming the value, the inferred type, and the
+  remedies (``sample_size``, ``all_varchar``, ``ignore_errors``). Applies to
+  numeric and ``TIME`` / ``TIME_TZ`` columns. (Issue #102)
+
+**Behavior changes (review before upgrading)**
+
+- A numeric/temporal column with a value beyond the detection sample now widens
+  (larger ``sample_size``), NULLs the value (``ignore_errors``), or errors with a
+  clear message — previously it aborted with a generic cast error.
+- Under ``ignore_errors := true``, a value that cannot be cast to a column's
+  inferred type is now skipped (NULL) instead of aborting the file.
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.3.0.
+
+**Known limitations / next**
+
+- The SAX streaming inference path has its own sampling and is unchanged here.
+- Runtime VARCHAR widening (preserve an out-of-sample value with no options set,
+  like ``read_csv``) is a tracked follow-up; the ``XmlUncastableValue`` chokepoint
+  is in place (see ``test/sql/issue_102_runtime_widening.test.future``).
+
+v2.2.1
+------
 
 A patch release: the DuckDB-WASM build now loads, plus a SAX streaming
 attribute-parity fix. No DuckDB submodule bump (stays on v1.5.3).
