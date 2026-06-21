@@ -16,9 +16,13 @@ the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
   run of integers — is now seen during inference, so the column widens to VARCHAR and
   the value is preserved, with no options set. Previously such a value aborted the scan
   (or required ``sample_size``/``ignore_errors``/``all_varchar``). (Issue #102)
-- Type detection now scans up to 10240 records (DOM and SAX paths alike) instead of 50,
-  trading a larger inference prefix for correctness on real-world files. ``sample_size``
-  still overrides it per call; ``sample_size := -1`` samples every value (DOM).
+- The larger window applies to both inference paths, though ``sample_size`` means
+  slightly different things in each: the DOM path caps the number of sampled *values
+  per field*, while the SAX streaming path caps the number of *records* read into the
+  inference prefix. Either way the effective window grows from 50 to 10240, trading a
+  larger prefix for correctness on real-world files. ``sample_size`` still overrides it
+  per call; ``sample_size := -1`` samples every value on the DOM path (the SAX path
+  treats a non-positive value as the finite 50-record fallback).
 
 **Known limitations / next**
 
