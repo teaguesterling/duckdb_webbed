@@ -527,7 +527,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 				std::string list_text_winning_fmt;
 				LogicalType text_type = InferTypeFromSamples(list_text_samples, options, list_text_winning_fmt);
 				// Insert #text as first field (before attribute fields)
-				struct_fields.insert(struct_fields.begin(), make_pair(CompatMakeIdentifier(options.text_key), text_type));
+				struct_fields.insert(struct_fields.begin(),
+				                     make_pair(CompatMakeIdentifier(options.text_key), text_type));
 			}
 		}
 
@@ -1869,7 +1870,14 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				}
 				throw ConversionException("Could not parse '%s' as TIME with format '%s'", text, datetime_format);
 			}
-			return Value(text);
+			// #102: empty datetime_format (e.g. an explicit TIME column) — parse via DuckDB's default
+			// cast and route failures through the chokepoint instead of returning a VARCHAR Value that
+			// would abort at the typed output column.
+			Value parsed_time;
+			if (Value(text).DefaultTryCastAs(target_type, parsed_time, nullptr)) {
+				return parsed_time;
+			}
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::TIME_TZ: {
 			if (!datetime_format.empty()) {
@@ -1885,7 +1893,13 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				}
 				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
 			}
-			return Value(text);
+			// #102: empty datetime_format — parse via DuckDB's default cast and route failures through
+			// the chokepoint instead of returning a VARCHAR Value.
+			Value parsed_timetz;
+			if (Value(text).DefaultTryCastAs(target_type, parsed_timetz, nullptr)) {
+				return parsed_timetz;
+			}
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::VARCHAR:
 		default:
