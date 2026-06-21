@@ -1,0 +1,65 @@
+# name: test/sql/issue_102_out_of_sample_cast.test
+# description: #102 — read_xml() auto type-detection on an out-of-sample value. Covers
+#              A (configurable sample_size) and B (safe ignore_errors fallback + clear error).
+#              The C target (runtime VARCHAR widening) lives in issue_102_runtime_widening.test.future.
+# group: [sql]
+
+require webbed
+
+# Fixtures:
+#   issue_102_in_sample_mixed.xml     — 2 ints + 1 non-numeric, all within the sample window.
+#   issue_102_out_of_sample_cast.xml  — 30 ints (<amount>1..30</amount>) then one '24 495,40 Kč'.
+
+# -----------------------------------------------------------------------------
+# Baseline: a non-numeric value WITHIN the detection window is correctly inferred
+# as VARCHAR (this already worked, and must keep working).
+# -----------------------------------------------------------------------------
+query I
+SELECT count(*) FROM read_xml('test/xml/schema_inference/issue_102_in_sample_mixed.xml')
+WHERE amount = '24 495,40 Kč';
+----
+1
+
+# -----------------------------------------------------------------------------
+# A — configurable sample_size. Previously the sniffer hardcoded a 20-value window
+# and ignored the sample_size option entirely. With the default window (50) now
+# covering all 31 values, the bare call sees the outlier and infers VARCHAR,
+# preserving the value (31 rows, 31 non-null, VARCHAR) instead of aborting.
+# -----------------------------------------------------------------------------
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml');
+----
+31	31	VARCHAR
+
+# A — an explicit window large enough to see the outlier: same correct result.
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := 40);
+----
+31	31	VARCHAR
+
+# A — sample_size := -1 samples every value (always-correct detection).
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := -1);
+----
+31	31	VARCHAR
+
+# A (negative) / B (clear error): force the window below the outlier (sample_size := 10)
+# so the column is inferred INTEGER, and DON'T opt into recovery. Instead of the old generic
+# "Could not convert string '24 495,40 Kč' to INT32" abort, the error now names the value, the
+# inferred type, and the remedies.
+statement error
+SELECT amount FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := 10);
+----
+does not match column type INTEGER
+
+# B — safe fallback: same too-small window, but ignore_errors:=true. The scan no longer aborts;
+# the out-of-sample value becomes NULL while the column stays INTEGER (detection is unchanged).
+# 31 rows, 30 non-null, INTEGER — distinct from A, which widens to VARCHAR and keeps the value.
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := 10, ignore_errors := true);
+----
+31	30	INTEGER

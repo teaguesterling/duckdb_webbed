@@ -1,0 +1,21 @@
+# name: test/sql/issue_102_runtime_widening.test.future
+# description: #102 "C" target — read_csv-style RUNTIME column widening. When an out-of-sample
+#              value cannot fit the type inferred from the sample, the column should auto-widen to
+#              VARCHAR and PRESERVE the value, with NO sample_size bump and NO ignore_errors.
+#              NOT yet implemented: A widens the *detection window* (needs a big-enough sample),
+#              B NULLs the value under ignore_errors. C preserves it unconditionally.
+#              Parked as .test.future so the suite does not run it. The XmlUncastableValue()
+#              chokepoint in src/xml_schema_inference.cpp is where C would hook in.
+# group: [sql]
+
+require webbed
+
+# Out-of-sample outlier (sample_size := 10 forces the window below it), no ignore_errors:
+# C must return all 31 rows AND keep the value as text — 31 / 31 / VARCHAR. Today this errors
+# (see issue_102_out_of_sample_cast.test). Neither A (too-small window) nor B (NULLs the value)
+# produces this result, which is exactly what distinguishes C.
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := 10);
+----
+31	31	VARCHAR

@@ -406,6 +406,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
 			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "sample_size") {
+			// #102: how many element values the type sniffer inspects before locking a column's
+			// type. <= 0 samples every value (always-correct detection at the cost of a full scan
+			// at bind time).
+			schema_options.sample_size = kv.second.GetValue<int32_t>();
 		} else if (kv.first == "unnest_as") {
 			auto unnest_mode = kv.second.ToString();
 			if (unnest_mode == "columns") {
@@ -1297,6 +1302,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
 			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "sample_size") {
+			// #102: how many element values the type sniffer inspects before locking a column's
+			// type. <= 0 samples every value (always-correct detection at the cost of a full scan
+			// at bind time).
+			schema_options.sample_size = kv.second.GetValue<int32_t>();
 		} else if (kv.first == "unnest_as") {
 			auto unnest_mode = kv.second.ToString();
 			if (unnest_mode == "columns") {
@@ -1762,6 +1772,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
 			schema_options.max_depth = kv.second.GetValue<int32_t>();
+		} else if (kv.first == "sample_size") {
+			// #102: how many element values the type sniffer inspects before locking a column's
+			// type. <= 0 samples every value (always-correct detection at the cost of a full scan
+			// at bind time).
+			schema_options.sample_size = kv.second.GetValue<int32_t>();
 		} else if (kv.first == "unnest_as") {
 			auto unnest_mode = kv.second.ToString();
 			if (unnest_mode == "columns") {
@@ -2045,6 +2060,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_xml_single.named_parameters["sample_size"] = LogicalType::INTEGER;
 	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_xml_single.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2076,6 +2092,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_xml_array.named_parameters["sample_size"] = LogicalType::INTEGER;
 	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_xml_array.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2111,6 +2128,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_html_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_html_single.named_parameters["sample_size"] = LogicalType::INTEGER;
 	read_html_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_html_single.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2141,6 +2159,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
 	read_html_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["max_depth"] = LogicalType::INTEGER;
+	read_html_array.named_parameters["sample_size"] = LogicalType::INTEGER;
 	read_html_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_html_array.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2215,6 +2234,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_xml.named_parameters["empty_elements"] = LogicalType::VARCHAR;
 	parse_xml.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	parse_xml.named_parameters["max_depth"] = LogicalType::INTEGER;
+	parse_xml.named_parameters["sample_size"] = LogicalType::INTEGER;
 	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	parse_xml.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
@@ -2239,6 +2259,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_html.named_parameters["empty_elements"] = LogicalType::VARCHAR;
 	parse_html.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	parse_html.named_parameters["max_depth"] = LogicalType::INTEGER;
+	parse_html.named_parameters["sample_size"] = LogicalType::INTEGER;
 	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
 	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
 	parse_html.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
