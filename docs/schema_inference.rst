@@ -176,9 +176,11 @@ SAX Streaming and Schema Inference
 When files exceed ``maximum_file_size`` (16MB by default), the extension uses SAX-based
 streaming instead of building a full DOM tree. This affects schema inference in two ways:
 
-1. **Sample-based inference** — SAX mode reads the first ``sample_size`` records (default: 50)
+1. **Sample-based inference** — SAX mode reads the first ``sample_size`` records (default: 10240)
    to infer the schema, then streams the rest for extraction. The schema is not revised after
-   the sample window, so columns or types that only appear in later records may not be detected.
+   the sample window, so columns or types that only appear beyond ``sample_size`` records may not
+   be detected. Set ``sample_size := -1`` to sample every value (DOM path) for always-correct
+   detection at the cost of scanning the whole input.
 
 2. **Simple ``record_element`` only** — SAX mode matches record elements by simple tag name
    (e.g., ``'item'``). XPath expressions like ``'//ns:item[@type="active"]'`` or path-based
