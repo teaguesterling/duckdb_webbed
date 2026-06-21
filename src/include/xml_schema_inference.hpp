@@ -20,10 +20,14 @@ enum class XMLTier {
 // Configuration options for schema inference
 struct XMLSchemaOptions {
 	// Schema inference controls
-	std::string root_element; // Extract only children of specified root (empty = auto-detect)
-	bool auto_detect = true;  // Automatic type detection
-	int32_t max_depth = 10;   // Maximum introspection depth (default 10, hard cap at 20)
-	int32_t sample_size = 50; // Number of elements to sample for inference
+	std::string root_element;    // Extract only children of specified root (empty = auto-detect)
+	bool auto_detect = true;     // Automatic type detection
+	int32_t max_depth = 10;      // Maximum introspection depth (default 10, hard cap at 20)
+	int32_t sample_size = 10240; // Sampled values per field for type inference (records, in SAX mode).
+	                             // Large default so a late outlier still within the window is seen during
+	                             // inference and the column is typed to fit it (e.g. VARCHAR); a value
+	                             // beyond the window can still fail to cast. -1 samples every value (DOM
+	                             // path). (issue #102)
 
 	// Attribute handling (aligned with xml_to_json)
 	std::string attr_mode = "columns"; // 'columns' | 'prefixed' | 'map' | 'discard'

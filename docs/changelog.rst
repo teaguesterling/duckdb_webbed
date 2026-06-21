@@ -1,8 +1,47 @@
 Changelog
 =========
 
-v2.3.0 (Current)
+v2.4.0 (Current)
 ----------------
+
+Raises the default type-detection window so common out-of-sample outliers are
+caught and widened at inference time instead of erroring — the pragmatic part of
+the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
+
+**Behavior changes (review before upgrading)**
+
+- The default ``sample_size`` for ``read_xml`` / ``read_html`` / ``parse_xml`` /
+  ``parse_html`` is now **10240** (was 50). A value beyond the first 50 records that
+  doesn't fit the type inferred from the earlier rows — e.g. ``'24 495,40 Kč'`` after a
+  run of integers — is now seen during inference, so the column widens to VARCHAR and
+  the value is preserved, with no options set. Previously such a value aborted the scan
+  (or required ``sample_size``/``ignore_errors``/``all_varchar``). (Issue #102)
+- The larger window applies to both inference paths, though ``sample_size`` means
+  slightly different things in each: the DOM path caps the number of sampled *values
+  per field*, while the SAX streaming path caps the number of *records* read into the
+  inference prefix. Either way the effective window grows from 50 to 10240, trading a
+  larger prefix for correctness on real-world files. ``sample_size`` still overrides it
+  per call; ``sample_size := -1`` samples every value on the DOM path (the SAX path
+  treats a non-positive value as the finite 50-record fallback).
+
+**Known limitations / next**
+
+- This is the *large-default* form of #102 "C", not unconditional runtime widening: an
+  outlier past an explicitly-set, too-small ``sample_size`` still errors (or NULLs under
+  ``ignore_errors``). True runtime VARCHAR widening remains the tracked follow-up — the
+  ``XmlUncastableValue`` chokepoint is in place (see
+  ``test/sql/issue_102_runtime_widening.test.future``).
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.4.0.
+- New test fixture ``test/xml/schema_inference/issue_102_large_default.xml`` (60 ints then
+  one ``'24 495,40 Kč'`` at position 61) with positive (bare call widens to VARCHAR) and
+  negative (``sample_size := 50`` reverts to the clear pre-change error) cases in
+  ``test/sql/issue_102_out_of_sample_cast.test``.
+
+v2.3.0
+------
 
 Makes ``read_xml`` type detection robust to out-of-sample values, matching
 ``read_csv``'s recovery instead of aborting the scan. No DuckDB submodule bump

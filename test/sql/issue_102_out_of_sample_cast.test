@@ -1,14 +1,17 @@
 # name: test/sql/issue_102_out_of_sample_cast.test
-# description: #102 — read_xml() auto type-detection on an out-of-sample value. Covers
-#              A (configurable sample_size) and B (safe ignore_errors fallback + clear error).
-#              The C target (runtime VARCHAR widening) lives in issue_102_runtime_widening.test.future.
+# description: #102 read_xml() out-of-sample type detection: A (sample_size), B (ignore_errors), C (large default)
 # group: [sql]
+
+# A = configurable sample_size; B = safe ignore_errors fallback + clear error; C = large default window.
+# The remaining C target (runtime VARCHAR widening) lives in issue_102_runtime_widening.test.future.
 
 require webbed
 
 # Fixtures:
 #   issue_102_in_sample_mixed.xml     — 2 ints + 1 non-numeric, all within the sample window.
 #   issue_102_out_of_sample_cast.xml  — 30 ints (<amount>1..30</amount>) then one '24 495,40 Kč'.
+#   issue_102_large_default.xml       — 60 ints then one '24 495,40 Kč' at position 61 (beyond the
+#                                       old hardcoded 50/20 window, within the large default).
 
 # -----------------------------------------------------------------------------
 # Baseline: a non-numeric value WITHIN the detection window is correctly inferred
@@ -63,3 +66,23 @@ SELECT count(*), count(amount), max(typeof(amount))
 FROM read_xml('test/xml/schema_inference/issue_102_out_of_sample_cast.xml', sample_size := 10, ignore_errors := true);
 ----
 31	30	INTEGER
+
+# -----------------------------------------------------------------------------
+# C — large default sample_size. The detection window now defaults to 10240, so an
+# outlier at position 61 (past the old hardcoded 20/50 window) is seen with NO options
+# set: the column infers VARCHAR and the value is preserved. Before this change the bare
+# call would have inferred INTEGER from the first 50 and aborted on the outlier.
+# -----------------------------------------------------------------------------
+query III
+SELECT count(*), count(amount), max(typeof(amount))
+FROM read_xml('test/xml/schema_inference/issue_102_large_default.xml');
+----
+61	61	VARCHAR
+
+# C (negative) — explicitly capping the window below the outlier (sample_size := 50, the old
+# default) reverts to the pre-change behavior: INTEGER is inferred and the outlier no longer
+# fits, so the scan errors with the clear #102 message naming the value, type, and remedies.
+statement error
+SELECT amount FROM read_xml('test/xml/schema_inference/issue_102_large_default.xml', sample_size := 50);
+----
+does not match column type INTEGER
