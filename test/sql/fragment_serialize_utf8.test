@@ -1,0 +1,36 @@
+# name: test/sql/fragment_serialize_utf8.test
+# description: xml_extract_elements()/XMLFragment::VARCHAR must serialize non-ASCII text as literal UTF-8, not numeric character references
+# group: [sql]
+
+require webbed
+
+# Non-ASCII stored as literal UTF-8 must round-trip as literal UTF-8.
+# Before the fix this serialized as '<c>H&#xF6;he</c>'.
+query T
+SELECT unnest(xml_extract_elements('<r><c>Höhe</c></r>', '//c'))::VARCHAR;
+----
+<c>Höhe</c>
+
+# Non-ASCII stored as a numeric character reference is decoded to literal UTF-8.
+query T
+SELECT unnest(xml_extract_elements('<r><c>H&#xF6;he</c></r>', '//c'))::VARCHAR;
+----
+<c>Höhe</c>
+
+# Mandatory markup escaping is preserved (&, <, > stay escaped).
+query T
+SELECT unnest(xml_extract_elements('<r><c>a &amp; b</c></r>', '//c'))::VARCHAR;
+----
+<c>a &amp; b</c>
+
+# No numeric character reference must leak for non-ASCII text.
+query I
+SELECT instr(unnest(xml_extract_elements('<r><c>öäüß ≠ —</c></r>', '//c'))::VARCHAR, '&#x');
+----
+0
+
+# Accented Latin-1 character round-trips literally as well.
+query T
+SELECT unnest(xml_extract_elements('<r><c>café</c></r>', '//c'))::VARCHAR;
+----
+<c>café</c>

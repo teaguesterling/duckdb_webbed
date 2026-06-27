@@ -1607,7 +1607,13 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 					// Dump the node as XML string
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -1668,7 +1674,13 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -1727,7 +1739,13 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 					// Dump the node as XML string
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -1797,7 +1815,13 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -1902,7 +1926,13 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -1968,7 +1998,13 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 					// Dump the node as XML string
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -2029,7 +2065,13 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
@@ -2126,7 +2168,13 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 
 					xmlChar *node_str = nullptr;
 					int size = 0;
-					xmlDocDumpMemory(temp_doc.get(), &node_str, &size);
+					// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no
+					// output-encoding handler (temp_doc has encoding=NULL), so libxml2
+					// escapes every non-ASCII character to a numeric character reference
+					// (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" explicitly keeps non-ASCII
+					// literal, matching the read_xml reader and xml_extract_text. The
+					// JSON->XML path already does this (see xmlDocDumpFormatMemoryEnc above).
+					xmlDocDumpFormatMemoryEnc(temp_doc.get(), &node_str, &size, "UTF-8", 0);
 
 					if (node_str) {
 						XMLCharPtr node_ptr(node_str);
