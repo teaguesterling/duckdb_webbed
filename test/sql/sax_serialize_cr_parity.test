@@ -1,0 +1,30 @@
+# name: test/sql/sax_serialize_cr_parity.test
+# description: SAX streaming must serialize carriage returns in captured raw XML the same
+#             way DOM does (&#13;), so a captured-subtree VARCHAR is byte-identical across
+#             reader modes. Regression for: SAX emitted a raw CR byte where DOM emits &#13;.
+# group: [sql]
+
+require webbed
+
+# CR is stored as the &#13; reference in the source. DOM (non-streaming) serializes
+# the captured subtree with CR escaped to &#13; in both text content and attribute value.
+query T
+SELECT s::VARCHAR
+FROM read_xml('test/xml/sax_cr_parity.xml', record_element := 'doc', columns := {'s': 'VARCHAR'}, streaming := false);
+----
+<k a="p&#13;q">k0&#13;m0</k>
+
+# SAX (maximum_file_size := 1 forces streaming) must produce the identical bytes.
+# Before the fix it emitted a raw CR byte instead of &#13;.
+query T
+SELECT s::VARCHAR
+FROM read_xml('test/xml/sax_cr_parity.xml', record_element := 'doc', columns := {'s': 'VARCHAR'}, maximum_file_size := 1);
+----
+<k a="p&#13;q">k0&#13;m0</k>
+
+# No raw CR byte leaks via the SAX path (it is escaped, exactly like DOM).
+query I
+SELECT instr(s::VARCHAR, chr(13))
+FROM read_xml('test/xml/sax_cr_parity.xml', record_element := 'doc', columns := {'s': 'VARCHAR'}, maximum_file_size := 1);
+----
+0

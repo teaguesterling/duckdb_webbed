@@ -61,6 +61,15 @@ static std::string XmlEscapeText(const std::string &text) {
 		case '>':
 			result += "&gt;";
 			break;
+		case '\r':
+			// Match libxml2's DOM serializer. A literal CR in text content is
+			// normalized to LF on the next parse (XML 1.0 §2.11), so it must be
+			// escaped to round-trip. DOM (xmlNodeDump/xmlDocDumpMemory) emits
+			// "&#13;"; without this the SAX path emitted a raw CR byte, so the
+			// same node serialized to different bytes under DOM vs SAX — which
+			// also silently breaks any downstream \s-based text processing.
+			result += "&#13;";
+			break;
 		default:
 			result += c;
 			break;
@@ -85,6 +94,18 @@ static std::string XmlEscapeAttr(const std::string &text) {
 			break;
 		case '"':
 			result += "&quot;";
+			break;
+		case '\r':
+			// Attribute-value normalization (XML 1.0 §3.3.3) turns CR/LF/TAB into
+			// spaces on parse, so libxml2's DOM serializer escapes all three in
+			// attribute values. Mirror that here for DOM/SAX byte-parity.
+			result += "&#13;";
+			break;
+		case '\n':
+			result += "&#10;";
+			break;
+		case '\t':
+			result += "&#9;";
 			break;
 		default:
 			result += c;
