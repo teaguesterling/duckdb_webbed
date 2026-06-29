@@ -1,0 +1,42 @@
+# name: test/sql/to_xml_serialize_utf8.test
+# description: to_xml() must serialize non-ASCII text as literal UTF-8, not numeric character references; the declaration now states encoding="UTF-8"
+# group: [sql]
+
+require webbed
+
+# Scalar: non-ASCII stays literal; the declaration now explicitly states encoding="UTF-8".
+# Before the fix this serialized as '<?xml version="1.0"?><xml>H&#xF6;he</xml>'.
+query T
+SELECT REPLACE(to_xml('Höhe')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0" encoding="UTF-8"?><xml>Höhe</xml>
+
+# Custom node name with non-ASCII / accented Latin-1 content.
+query T
+SELECT REPLACE(to_xml('café', 'greeting')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0" encoding="UTF-8"?><greeting>café</greeting>
+
+# No numeric character reference leaks for non-ASCII text.
+query I
+SELECT instr(to_xml('öäüß ≠ —')::VARCHAR, '&#x');
+----
+0
+
+# STRUCT field values keep non-ASCII literal.
+query T
+SELECT REPLACE(to_xml({'name': 'Müller'})::VARCHAR, chr(10), '');
+----
+<?xml version="1.0" encoding="UTF-8"?><xml><name>Müller</name></xml>
+
+# LIST element values keep non-ASCII literal.
+query T
+SELECT REPLACE(to_xml(['Köln', 'Zürich'])::VARCHAR, chr(10), '');
+----
+<?xml version="1.0" encoding="UTF-8"?><xml_list><xml>Köln</xml><xml>Zürich</xml></xml_list>
+
+# Mandatory markup escaping (&, <, >) is preserved.
+query T
+SELECT REPLACE(to_xml('a & b')::VARCHAR, chr(10), '');
+----
+<?xml version="1.0" encoding="UTF-8"?><xml>a &amp; b</xml>

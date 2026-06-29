@@ -2276,7 +2276,11 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	// Convert to string using RAII-safe memory management
 	xmlChar *xml_string = nullptr;
 	int size = 0;
-	xmlDocDumpMemory(doc.get(), &xml_string, &size);
+	// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+	// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+	// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+	// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+	xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 	// Use XMLCharPtr for automatic cleanup
 	XMLCharPtr xml_ptr(xml_string);
@@ -2348,7 +2352,11 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		// Convert document to string
 		xmlChar *xml_string = nullptr;
 		int size = 0;
-		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+		// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+		// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+		// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+		xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
@@ -2419,7 +2427,11 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		// Convert document to string
 		xmlChar *xml_string = nullptr;
 		int size = 0;
-		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+		// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+		// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+		// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+		xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))

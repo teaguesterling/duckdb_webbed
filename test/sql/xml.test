@@ -15,7 +15,7 @@ require webbed
 query I
 SELECT REPLACE(xml('Sam'), chr(10), '');
 ----
-<?xml version="1.0"?><xml>Sam</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>Sam</xml>
 
 query I
 SELECT xml_libxml2_version('Michael') ILIKE 'Xml Michael, my linked libxml2 version is%';

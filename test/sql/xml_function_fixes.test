@@ -8,25 +8,25 @@ require webbed
 query I
 SELECT REPLACE(xml('test'), chr(10), '') AS xml_function_test;
 ----
-<?xml version="1.0"?><xml>test</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>test</xml>
 
 # Test 2: xml() function with different input
 query I
 SELECT REPLACE(xml('Hello World'), chr(10), '') AS xml_hello_world;
 ----
-<?xml version="1.0"?><xml>Hello World</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>Hello World</xml>
 
 # Test 3: xml() function with special characters
 query I
 SELECT REPLACE(xml('Text with <brackets> & "quotes"'), chr(10), '') AS xml_special_chars;
 ----
-<?xml version="1.0"?><xml>Text with &lt;brackets&gt; &amp; "quotes"</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>Text with &lt;brackets&gt; &amp; "quotes"</xml>
 
 # Test 4: xml() function with empty string
 query I
 SELECT REPLACE(xml(''), chr(10), '') AS xml_empty_string;
 ----
-<?xml version="1.0"?><xml></xml>
+<?xml version="1.0" encoding="UTF-8"?><xml></xml>
 
 # Test 5: xml() function with already valid XML (should convert to XML element)
 query I
@@ -44,7 +44,7 @@ true
 query I
 SELECT REPLACE(xml('123'), chr(10), '') AS xml_numeric_string;
 ----
-<?xml version="1.0"?><xml>123</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>123</xml>
 
 # Test 8: xml() function should not contain any emoji or toy output
 query I
@@ -62,4 +62,4 @@ true
 query I
 SELECT REPLACE(xml('multiple words here'), chr(10), '') AS xml_multiword;
 ----
-<?xml version="1.0"?><xml>multiple words here</xml>
+<?xml version="1.0" encoding="UTF-8"?><xml>multiple words here</xml>
