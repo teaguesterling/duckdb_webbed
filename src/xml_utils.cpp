@@ -2213,23 +2213,6 @@ void XMLUtils::ValidateXMLElementName(const std::string &name) {
 	}
 }
 
-// libxml2's UTF-8 document dump writes the declaration as
-// `<?xml version="1.0" encoding="UTF-8"?>`. to_xml has historically emitted
-// `<?xml version="1.0"?>` (UTF-8 is the XML default), so strip the explicit encoding to
-// keep that declaration byte-for-byte compatible — the actual fix is that non-ASCII text
-// now stays literal instead of being escaped to numeric character references.
-static void StripUTF8EncodingDecl(std::string &xml) {
-	size_t decl_end = xml.find("?>");
-	if (decl_end == std::string::npos) {
-		return;
-	}
-	static const std::string kEnc = " encoding=\"UTF-8\"";
-	size_t pos = xml.find(kEnc);
-	if (pos != std::string::npos && pos < decl_end) {
-		xml.erase(pos, kEnc.size());
-	}
-}
-
 std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &node_name) {
 	// Use RAII-safe libxml2 document creation
 	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
@@ -2264,9 +2247,7 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	XMLCharPtr xml_ptr(xml_string);
 
 	if (xml_ptr) {
-		std::string xml_result(reinterpret_cast<const char *>(xml_ptr.get()));
-		StripUTF8EncodingDecl(xml_result);
-		return xml_result;
+		return std::string(reinterpret_cast<const char *>(xml_ptr.get()));
 	} else {
 		return "<" + node_name + ">" + value + "</" + node_name + ">";
 	}
@@ -2341,7 +2322,6 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + list_suffix + "></" + node_name + list_suffix + ">";
-		StripUTF8EncodingDecl(xml_result);
 
 		result.SetValue(i, Value(xml_result));
 	}
@@ -2417,7 +2397,6 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + "></" + node_name + ">";
-		StripUTF8EncodingDecl(xml_result);
 
 		result.SetValue(i, Value(xml_result));
 	}

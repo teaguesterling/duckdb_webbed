@@ -31,10 +31,11 @@ the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
   reference (``ö`` → ``&#xF6;``). The encoding-less fragment serializer is switched to
   ``xmlDocDumpFormatMemoryEnc(..., "UTF-8", 0)``, matching the ``read_xml`` reader capture
   and ``xml_extract_text``. (Issue #108, PR #110 by @marcel-more)
-- ``to_xml`` (and its ``LIST`` / ``STRUCT`` forms) likewise now keeps non-ASCII text literal
-  rather than NCR-escaping it. The historical ``<?xml version="1.0"?>`` declaration is
-  preserved (UTF-8 is the XML default), so only the non-ASCII escaping changes — existing
-  output is otherwise byte-compatible. (Follow-up to #108 / #110)
+- ``to_xml`` / ``xml`` (and the ``LIST`` / ``STRUCT`` forms) likewise now keep non-ASCII text
+  literal rather than NCR-escaping it. As a result the XML declaration these emit now states
+  the encoding explicitly — ``<?xml version="1.0" encoding="UTF-8"?>`` instead of
+  ``<?xml version="1.0"?>`` — so consumers that exact-string-match the declaration should
+  update. (Follow-up to #108 / #110)
 - SAX streaming now serializes control characters in captured raw XML the same way the DOM
   path does: a carriage return becomes ``&#13;`` in text content, and CR/LF/TAB become
   ``&#13;`` / ``&#10;`` / ``&#9;`` in attribute values (XML 1.0 §2.11 / §3.3.3). Previously

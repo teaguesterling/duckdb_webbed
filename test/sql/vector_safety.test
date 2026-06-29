@@ -135,21 +135,21 @@ SELECT count(*) FROM (SELECT to_xml([1, 2, 3]) AS x FROM range(5000)) t WHERE x 
 query I
 SELECT REPLACE(to_xml(['a', 'b'])::VARCHAR, chr(10), '') FROM range(2);
 ----
-<?xml version="1.0"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
-<?xml version="1.0"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
+<?xml version="1.0" encoding="UTF-8"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
+<?xml version="1.0" encoding="UTF-8"?><xml_list><xml>a</xml><xml>b</xml></xml_list>
 
 # Constant struct input replicated over multiple rows
 query I
 SELECT REPLACE(to_xml({'a': 1})::VARCHAR, chr(10), '') FROM range(2);
 ----
-<?xml version="1.0"?><xml><a>1</a></xml>
-<?xml version="1.0"?><xml><a>1</a></xml>
+<?xml version="1.0" encoding="UTF-8"?><xml><a>1</a></xml>
+<?xml version="1.0" encoding="UTF-8"?><xml><a>1</a></xml>
 
 # NULL list elements become empty item nodes
 query I
 SELECT REPLACE(to_xml(['a', NULL, 'b'])::VARCHAR, chr(10), '');
 ----
-<?xml version="1.0"?><xml_list><xml>a</xml><xml/><xml>b</xml></xml_list>
+<?xml version="1.0" encoding="UTF-8"?><xml_list><xml>a</xml><xml/><xml>b</xml></xml_list>
 
 # --- HTML extraction functions ---
 

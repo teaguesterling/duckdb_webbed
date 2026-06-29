@@ -71,19 +71,19 @@ Invalid XML element name
 query I
 SELECT REPLACE(to_xml(42, 'count')::VARCHAR, chr(10), '');
 ----
-<?xml version="1.0"?><count>42</count>
+<?xml version="1.0" encoding="UTF-8"?><count>42</count>
 
 # Namespace-prefixed name (XML Name allows ':')
 query I
 SELECT REPLACE(to_xml(42, 'ns:count')::VARCHAR, chr(10), '');
 ----
-<?xml version="1.0"?><ns:count>42</ns:count>
+<?xml version="1.0" encoding="UTF-8"?><ns:count>42</ns:count>
 
 # Struct with valid field names
 query I
 SELECT REPLACE(to_xml({'name': 'Joe', 'age': 30})::VARCHAR, chr(10), '');
 ----
-<?xml version="1.0"?><xml><name>Joe</name><age>30</age></xml>
+<?xml version="1.0" encoding="UTF-8"?><xml><name>Joe</name><age>30</age></xml>
 
 # Default node name (no second argument) is unaffected
 query I
@@ -95,4 +95,4 @@ true
 query I
 SELECT REPLACE(to_xml('x', 'my-node._1')::VARCHAR, chr(10), '');
 ----
-<?xml version="1.0"?><my-node._1>x</my-node._1>
+<?xml version="1.0" encoding="UTF-8"?><my-node._1>x</my-node._1>
