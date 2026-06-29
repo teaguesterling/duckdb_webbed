@@ -10,6 +10,7 @@
 #include <libxml/valid.h>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <iostream>
 #include <functional>
 #include <map>
@@ -38,6 +39,41 @@ void XMLSilentErrorHandler(void *ctx, const char *msg, ...) {
 	// Silently capture errors without printing to stderr
 	xml_parse_error_occurred = true;
 }
+
+// Parse documents larger than ~2 GiB. libxml2's in-memory parse entry points
+// (xmlCtxtReadMemory / htmlReadMemory) take the buffer length as an `int`, so a document
+// larger than INT_MAX (~2.147 GB) wraps to a negative size and the parse fails with a spurious
+// "invalid document" error — even after the file itself is read correctly. The IO-based entry
+// points (xmlCtxtReadIO / htmlReadIO) take no total-size parameter: they pull bytes through a
+// callback whose per-call length is always a small, safe int, so they parse buffers up to
+// libxml2's true (size_t) limits. We feed libxml2 from the already-in-memory document via this
+// callback. (DuckDB caps a single string/XML value at 4 GiB, so whole-document readers still top
+// out there; genuinely larger inputs must use record-level streaming via read_xml.)
+namespace {
+struct InMemoryReader {
+	const char *data;
+	size_t size;
+	size_t pos;
+};
+
+int InMemoryReaderRead(void *context, char *buffer, int len) {
+	if (len < 0) {
+		return -1;
+	}
+	auto *reader = static_cast<InMemoryReader *>(context);
+	size_t remaining = reader->size - reader->pos;
+	size_t n = remaining < static_cast<size_t>(len) ? remaining : static_cast<size_t>(len);
+	if (n > 0) {
+		memcpy(buffer, reader->data + reader->pos, n);
+		reader->pos += n;
+	}
+	return static_cast<int>(n);
+}
+
+int InMemoryReaderClose(void *context) {
+	return 0;
+}
+} // namespace
 
 // Escape a UTF-8 string for safe embedding inside a JSON string literal (GitHub Issue #78).
 // libxml2 returns entity-decoded text (e.g. &quot; -> ", &#10; -> newline), so characters that
@@ -151,8 +187,9 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 	if (parser_ctx) {
-		doc = xmlCtxtReadMemory(parser_ctx, xml_str.c_str(), xml_str.length(), nullptr, nullptr,
-		                        XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+		InMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+		doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
+		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
@@ -194,15 +231,17 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
 		// TODO: Future enhancement - consider making encoding configurable via parameter
 		// (with UTF-8 as default) or deriving it from database collation settings
-		doc = htmlReadMemory(content.c_str(), content.length(), nullptr, "UTF-8",
-		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+		InMemoryReader reader {content.data(), content.size(), 0};
+		doc = htmlReadIO(InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, "UTF-8",
+		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
-			doc = xmlCtxtReadMemory(parser_ctx, content.c_str(), content.length(), nullptr, nullptr,
-			                        XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+			InMemoryReader reader {content.data(), content.size(), 0};
+			doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
+			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
 			if (!doc) {
 				// Distinguish an allocation failure from malformed input before freeing
 				// the context (the error object is owned by the parser context).
