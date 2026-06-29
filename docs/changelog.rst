@@ -24,6 +24,24 @@ the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
   per call; ``sample_size := -1`` samples every value on the DOM path (the SAX path
   treats a non-positive value as the finite 50-record fallback).
 
+**Bug Fixes — serialization consistency**
+
+- ``xml_extract_elements(...)`` / ``XMLFragment::VARCHAR`` now serialize non-ASCII text as
+  literal UTF-8 instead of escaping every non-ASCII character to a numeric character
+  reference (``ö`` → ``&#xF6;``). The encoding-less fragment serializer is switched to
+  ``xmlDocDumpFormatMemoryEnc(..., "UTF-8", 0)``, matching the ``read_xml`` reader capture
+  and ``xml_extract_text``. (Issue #108, PR #110 by @marcel-more)
+- ``to_xml`` (and its ``LIST`` / ``STRUCT`` forms) likewise now keeps non-ASCII text literal
+  rather than NCR-escaping it. The historical ``<?xml version="1.0"?>`` declaration is
+  preserved (UTF-8 is the XML default), so only the non-ASCII escaping changes — existing
+  output is otherwise byte-compatible. (Follow-up to #108 / #110)
+- SAX streaming now serializes control characters in captured raw XML the same way the DOM
+  path does: a carriage return becomes ``&#13;`` in text content, and CR/LF/TAB become
+  ``&#13;`` / ``&#10;`` / ``&#9;`` in attribute values (XML 1.0 §2.11 / §3.3.3). Previously
+  the SAX path emitted a raw CR byte, so a captured-subtree ``VARCHAR`` was not byte-identical
+  across reader modes and could silently break downstream ``\s``-based text processing.
+  (Issue #109, PR #111 by @marcel-more)
+
 **Known limitations / next**
 
 - This is the *large-default* form of #102 "C", not unconditional runtime widening: an

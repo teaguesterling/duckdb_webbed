@@ -2213,6 +2213,23 @@ void XMLUtils::ValidateXMLElementName(const std::string &name) {
 	}
 }
 
+// libxml2's UTF-8 document dump writes the declaration as
+// `<?xml version="1.0" encoding="UTF-8"?>`. to_xml has historically emitted
+// `<?xml version="1.0"?>` (UTF-8 is the XML default), so strip the explicit encoding to
+// keep that declaration byte-for-byte compatible — the actual fix is that non-ASCII text
+// now stays literal instead of being escaped to numeric character references.
+static void StripUTF8EncodingDecl(std::string &xml) {
+	size_t decl_end = xml.find("?>");
+	if (decl_end == std::string::npos) {
+		return;
+	}
+	static const std::string kEnc = " encoding=\"UTF-8\"";
+	size_t pos = xml.find(kEnc);
+	if (pos != std::string::npos && pos < decl_end) {
+		xml.erase(pos, kEnc.size());
+	}
+}
+
 std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &node_name) {
 	// Use RAII-safe libxml2 document creation
 	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
@@ -2237,13 +2254,19 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	// Convert to string using RAII-safe memory management
 	xmlChar *xml_string = nullptr;
 	int size = 0;
-	xmlDocDumpMemory(doc.get(), &xml_string, &size);
+	// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+	// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+	// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+	// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+	xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 	// Use XMLCharPtr for automatic cleanup
 	XMLCharPtr xml_ptr(xml_string);
 
 	if (xml_ptr) {
-		return std::string(reinterpret_cast<const char *>(xml_ptr.get()));
+		std::string xml_result(reinterpret_cast<const char *>(xml_ptr.get()));
+		StripUTF8EncodingDecl(xml_result);
+		return xml_result;
 	} else {
 		return "<" + node_name + ">" + value + "</" + node_name + ">";
 	}
@@ -2309,11 +2332,16 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		// Convert document to string
 		xmlChar *xml_string = nullptr;
 		int size = 0;
-		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+		// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+		// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+		// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+		xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + list_suffix + "></" + node_name + list_suffix + ">";
+		StripUTF8EncodingDecl(xml_result);
 
 		result.SetValue(i, Value(xml_result));
 	}
@@ -2380,11 +2408,16 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		// Convert document to string
 		xmlChar *xml_string = nullptr;
 		int size = 0;
-		xmlDocDumpMemory(doc.get(), &xml_string, &size);
+		// Serialize as literal UTF-8. Plain xmlDocDumpMemory() runs with no output-encoding
+		// handler (doc has encoding=NULL), so libxml2 escapes every non-ASCII character to a
+		// numeric character reference (e.g. 'ö' -> '&#xF6;'). Passing "UTF-8" keeps non-ASCII
+		// literal, matching the fragment serializers (xml_extract_*) and the read_xml reader.
+		xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
 
 		XMLCharPtr xml_ptr(xml_string);
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + "></" + node_name + ">";
+		StripUTF8EncodingDecl(xml_result);
 
 		result.SetValue(i, Value(xml_result));
 	}
