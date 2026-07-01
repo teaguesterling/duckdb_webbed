@@ -4,9 +4,11 @@ Changelog
 v2.4.0 (Current)
 ----------------
 
-Raises the default type-detection window so common out-of-sample outliers are
-caught and widened at inference time instead of erroring — the pragmatic part of
-the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
+A feature-and-robustness release. ``read_xml`` type detection now catches
+out-of-sample outliers by default (the pragmatic part of issue #102 "C"); the XML
+serializers emit consistent literal-UTF-8 / DOM-parity output; whole-document reads
+work past the old 2 GiB barrier (up to DuckDB's 4 GiB single-value cap); and the
+stable build moves to **DuckDB v1.5.4** (Issue #107).
 
 **Behavior changes (review before upgrading)**
 
@@ -23,6 +25,20 @@ the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
   larger prefix for correctness on real-world files. ``sample_size`` still overrides it
   per call; ``sample_size := -1`` samples every value on the DOM path (the SAX path
   treats a non-positive value as the finite 50-record fallback).
+
+**New Features**
+
+- **Large XML/HTML documents (2 GiB – 4 GiB).** ``read_xml`` / ``read_xml_objects`` /
+  ``read_html`` previously failed on documents larger than ~2 GiB (e.g. the ~2.8 GiB Czech
+  justice bulk register) with ``Invalid argument`` (macOS) or ``contains invalid XML``
+  (Linux), even with ``maximum_file_size`` raised above the file size. Two independent
+  ~2 GiB barriers are fixed: the whole-file read is now chunked (``ReadFileFully``, ≤1 GiB
+  per call, advancing by the bytes actually returned), and ``XMLDocRAII`` parses via the
+  IO-based ``xmlCtxtReadIO`` / ``htmlReadIO`` instead of ``xmlCtxtReadMemory`` /
+  ``htmlReadMemory`` (whose ``int`` length parameter overflowed above INT_MAX). No
+  ``XML_PARSE_HUGE`` — the libxml2 DoS limits from the v2.2.0 hardening are preserved. The
+  new ceiling is DuckDB's 4 GiB single-value cap; larger inputs still need record-level
+  streaming via ``read_xml``. (Issue #103, PR #112; read fix based on @onnimonni's #103)
 
 **Bug Fixes — serialization consistency**
 
@@ -50,6 +66,14 @@ the issue #102 "C" goal, without a DuckDB submodule bump (stays on v1.5.3).
   ``ignore_errors``). True runtime VARCHAR widening remains the tracked follow-up — the
   ``XmlUncastableValue`` chokepoint is in place (see
   ``test/sql/issue_102_runtime_widening.test.future``).
+
+**Build / dependencies**
+
+- Stable build moved to **DuckDB v1.5.4**: ``duckdb`` submodule → ``08e34c4`` and
+  ``extension-ci-tools`` → ``b777c70`` (v1.5.4), with the ``duckdb-stable-build`` CI pins
+  (``duckdb_version`` / ``ci_tools_version`` / the reusable workflow ref) and the WASM
+  artifact names bumped to match. Resolves the missing v1.5.4 community-extensions build.
+  The ``duckdb-next-build`` (DuckDB ``main``) job is unchanged. (Issue #107)
 
 **Internal**
 
