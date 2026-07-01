@@ -20,7 +20,7 @@ jobs:
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # Same cp1252 reporter crash as the v1.5.3 stable job (see below) —
+      # Same cp1252 reporter crash as the v1.5.4 stable job (see below) —
       # duckdb's scripts/ci/run_tests.py emits U+274C ❌ on test-batch
       # failure and Windows' default cp1252 stdout can't encode it,
       # masking the actual test result. Excluded here too until upstream
@@ -29,17 +29,17 @@ jobs:
 
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.3
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
     with:
-      duckdb_version: v1.5.3
-      ci_tools_version: v1.5.3
+      duckdb_version: v1.5.4
+      ci_tools_version: v1.5.4
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # windows_amd64_mingw excluded on v1.5.3 stable: duckdb's
+      # windows_amd64_mingw excluded on v1.5.4 stable: duckdb's
       # scripts/ci/run_tests.py prints a U+274C ❌ glyph on test-batch failure,
       # which Windows' default cp1252 stdout can't encode (UnicodeEncodeError),
       # masking the underlying test result. Affects every extension migrating
-      # to v1.5.3 on this runner (see duckdb_urlpattern's exclude list);
+      # to v1.5.4 on this runner (see duckdb_urlpattern's exclude list);
       # revisit once upstream sets PYTHONIOENCODING / utf8_mode in the runner.
       exclude_archs: 'windows_amd64;windows_amd64_mingw'
 
@@ -49,8 +49,8 @@ jobs:
   # Two layers (see test/wasm/):
   #   1. static symbol check (hard gate) — no duckdb-wasm runtime needed.
   #   2. live load+query in duckdb-wasm (informational / continue-on-error) —
-  #      expected-red until official duckdb-wasm ships v1.5.3 (the only public
-  #      v1.5.3 engine, haybarn, uses a newer emscripten -> lseek ABI skew).
+  #      expected-red until official duckdb-wasm ships v1.5.4 (the only public
+  #      v1.5.4 engine, haybarn, uses a newer emscripten -> lseek ABI skew).
   wasm-load-test:
     name: WASM load test
     needs: [duckdb-stable-build]
@@ -63,20 +63,20 @@ jobs:
       - name: Download WASM artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: webbed-v1.5.3-extension-wasm_*
+          pattern: webbed-v1.5.4-extension-wasm_*
           path: wasm-artifacts
       - name: Static symbol check (libxml2/zlib must be linked, not unresolved)
         run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
-      - name: Live load test in duckdb-wasm (informational until official v1.5.3)
+      - name: Live load test in duckdb-wasm (informational until official v1.5.4)
         continue-on-error: true
         timeout-minutes: 10
         working-directory: test/wasm
         run: |
           set -uo pipefail
           timeout 300 npm install --no-save
-          mkdir -p repo/v1.5.3/wasm_eh
-          cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.3-extension-wasm_eh/webbed.duckdb_extension.wasm" \
-             repo/v1.5.3/wasm_eh/
+          mkdir -p repo/v1.5.4/wasm_eh
+          cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.4-extension-wasm_eh/webbed.duckdb_extension.wasm" \
+             repo/v1.5.4/wasm_eh/
           timeout 240 node load_test.cjs --repo repo --name webbed --platform eh \
             --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
