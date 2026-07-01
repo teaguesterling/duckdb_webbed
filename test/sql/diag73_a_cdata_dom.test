@@ -1,0 +1,33 @@
+# name: test/sql/diag73_a_cdata_dom.test
+# description: DIAG split of #73 — CDATA DOM read (preserve + collapse). SCRATCH ONLY.
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <code><![CDATA[Let ( [
+  a = 1 ;
+  b = 2
+] ;
+  a + b
+)]]></code>
+</root>' AS xml) TO '__TEST_DIR__/whitespace_cdata.xml' (FORMAT 'csv', HEADER false, QUOTE '');
+
+query I
+SELECT length(code) - length(replace(code, chr(10), '')) AS lf_count
+FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
+  record_element='root',
+  columns={'code': 'VARCHAR'});
+----
+5
+
+query I
+SELECT code
+FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
+  record_element='root',
+  columns={'code': 'VARCHAR'},
+  preserve_whitespace=false);
+----
+Let ( [ a = 1 ; b = 2 ] ; a + b )

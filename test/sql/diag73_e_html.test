@@ -1,0 +1,27 @@
+# name: test/sql/diag73_e_html.test
+# description: DIAG split of #73 — read_html preserve_whitespace. SCRATCH ONLY.
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<html><body><table><tr><td>line1
+line2
+line3</td></tr></table></body></html>' AS html) TO '__TEST_DIR__/whitespace_html.html' (FORMAT 'csv', HEADER false, QUOTE '');
+
+query I
+SELECT length(td) - length(replace(td, chr(10), '')) AS lf_count
+FROM read_html('__TEST_DIR__/whitespace_html.html',
+  record_element='tr',
+  columns={'td': 'VARCHAR'});
+----
+2
+
+query I
+SELECT td
+FROM read_html('__TEST_DIR__/whitespace_html.html',
+  record_element='tr',
+  columns={'td': 'VARCHAR'},
+  preserve_whitespace=false);
+----
+line1 line2 line3

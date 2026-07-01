@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   duckdb-next-build:
+    if: false  # DIAG (scratch/win73-diag): disabled — Windows-only stable run to localize the #73 hang
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
@@ -32,9 +33,9 @@ jobs:
       ci_tools_version: v1.5.4
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # Windows re-enabled on v1.5.4 / newer extension-ci-tools, expected to carry the
-      # fix for the cp1252 reporter crash (run_tests.py's U+274C ❌ glyph masking test
-      # results on the Windows runner). Validated by this CI run.
+      # DIAG (scratch/win73-diag): build Windows ONLY, to localize the github_issue_73 hang
+      # with the test split into per-section files. Exclude every non-Windows arch.
+      exclude_archs: 'linux_amd64;linux_arm64;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads'
 
   # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
   # distribution workflow builds and uploads the .wasm but never inspects or
@@ -45,6 +46,7 @@ jobs:
   #      expected-red until official duckdb-wasm ships v1.5.4 (the only public
   #      v1.5.4 engine, haybarn, uses a newer emscripten -> lseek ABI skew).
   wasm-load-test:
+    if: false  # DIAG (scratch/win73-diag): disabled — no WASM artifacts in a Windows-only run
     name: WASM load test
     needs: [duckdb-stable-build]
     runs-on: ubuntu-latest

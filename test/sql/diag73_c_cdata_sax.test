@@ -1,0 +1,35 @@
+# name: test/sql/diag73_c_cdata_sax.test
+# description: DIAG split of #73 — CDATA SAX read (maximum_file_size=1). SCRATCH ONLY.
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <code><![CDATA[Let ( [
+  a = 1 ;
+  b = 2
+] ;
+  a + b
+)]]></code>
+</root>' AS xml) TO '__TEST_DIR__/whitespace_cdata.xml' (FORMAT 'csv', HEADER false, QUOTE '');
+
+query I
+SELECT length(code) - length(replace(code, chr(10), '')) AS lf_count
+FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
+  record_element='root',
+  columns={'code': 'VARCHAR'},
+  maximum_file_size=1);
+----
+5
+
+query I
+SELECT code
+FROM read_xml('__TEST_DIR__/whitespace_cdata.xml',
+  record_element='root',
+  columns={'code': 'VARCHAR'},
+  preserve_whitespace=false,
+  maximum_file_size=1);
+----
+Let ( [ a = 1 ; b = 2 ] ; a + b )

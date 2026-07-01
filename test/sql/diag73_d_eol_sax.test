@@ -1,0 +1,26 @@
+# name: test/sql/diag73_d_eol_sax.test
+# description: DIAG split of #73 — EOL (explicit CRLF/CR bytes) SAX read (maximum_file_size=1). SCRATCH ONLY.
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?><root><item>' || chr(13) || chr(10) || 'CRLF' || chr(13) || 'CR' || chr(10) || 'LF' || '</item></root>' AS xml) TO '__TEST_DIR__/whitespace_eol.xml' (FORMAT 'csv', HEADER false, QUOTE '');
+
+query I
+SELECT length(item) - length(replace(item, chr(10), '')) AS lf_count
+FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
+  record_element='root',
+  columns={'item': 'VARCHAR'},
+  maximum_file_size=1);
+----
+2
+
+query I
+SELECT length(item) - length(replace(item, chr(13), '')) AS cr_count
+FROM read_xml('__TEST_DIR__/whitespace_eol.xml',
+  record_element='root',
+  columns={'item': 'VARCHAR'},
+  maximum_file_size=1);
+----
+0
