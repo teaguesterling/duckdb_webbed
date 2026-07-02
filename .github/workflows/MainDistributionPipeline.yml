@@ -20,12 +20,9 @@ jobs:
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # Same cp1252 reporter crash as the v1.5.4 stable job (see below) —
-      # duckdb's scripts/ci/run_tests.py emits U+274C ❌ on test-batch
-      # failure and Windows' default cp1252 stdout can't encode it,
-      # masking the actual test result. Excluded here too until upstream
-      # sets PYTHONIOENCODING / utf8_mode on the mingw runner.
-      exclude_archs: 'windows_amd64;windows_amd64_mingw'
+      # Windows enabled: the old cp1252 reporter crash and the DuckDB fmt/MSVC compile blocker
+      # are both fixed on newer extension-ci-tools / DuckDB 1.5.4. webbed built and passed the
+      # full test suite on Windows (MSVC + mingw) in the v2.4.0 community-extensions build.
 
   duckdb-stable-build:
     name: Build extension binaries
@@ -35,13 +32,8 @@ jobs:
       ci_tools_version: v1.5.4
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # windows_amd64_mingw excluded on v1.5.4 stable: duckdb's
-      # scripts/ci/run_tests.py prints a U+274C ❌ glyph on test-batch failure,
-      # which Windows' default cp1252 stdout can't encode (UnicodeEncodeError),
-      # masking the underlying test result. Affects every extension migrating
-      # to v1.5.4 on this runner (see duckdb_urlpattern's exclude list);
-      # revisit once upstream sets PYTHONIOENCODING / utf8_mode in the runner.
-      exclude_archs: 'windows_amd64;windows_amd64_mingw'
+      # Windows enabled on v1.5.4: the fmt/MSVC compile blocker and the cp1252 reporter crash
+      # are both fixed; validated by the green Windows build in the v2.4.0 community-extensions PR.
 
   # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
   # distribution workflow builds and uploads the .wasm but never inspects or
