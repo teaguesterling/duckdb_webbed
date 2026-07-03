@@ -859,6 +859,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					gstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
 
 					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
+					// Fail-closed entity loader: refuse external DTD/entity fetch during streaming parse.
+					XMLUtils::EnsureSecureParsing();
 					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(&gstate.sax_handler, gstate.sax_ctx.get(), nullptr,
 					                                                0, filename.c_str());
 					if (!gstate.sax_parser_ctx) {

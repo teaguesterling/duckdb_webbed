@@ -251,9 +251,10 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 
 		std::string html_str = html_value.GetValue<string>();
 
-		// Parse HTML using libxml2's HTML parser
+		// Parse HTML using libxml2's HTML parser (fail-closed entity loader + no network)
+		XMLUtils::EnsureSecureParsing();
 		htmlDocPtr doc = htmlReadMemory(html_str.c_str(), html_str.length(), nullptr, "UTF-8",
-		                                HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+		                                HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 
 		if (!doc) {
 			result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), vector<Value>()));
