@@ -14,6 +14,7 @@
 #include <iostream>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <unordered_set>
@@ -50,6 +51,35 @@ void XMLSilentErrorHandler(void *ctx, const char *msg, ...) {
 // callback. (DuckDB caps a single string/XML value at 4 GiB, so whole-document readers still top
 // out there; genuinely larger inputs must use record-level streaming via read_xml.)
 namespace {
+// --- XXE / SSRF hardening: fail-closed external entity loader ---------------
+// This extension only ever parses XML/HTML/XSD content that is already held in
+// memory (string arguments, or files it has itself opened via DuckDB's FileSystem
+// and streamed through an in-memory reader). It never legitimately needs libxml2 to
+// resolve an *external* resource on its behalf. libxml2 would otherwise open arbitrary
+// local files or network URLs referenced from attacker-controlled input via SYSTEM
+// external entities, external DTDs, or XSD <xs:import>/<xs:include schemaLocation="...">.
+// The schema parser (xmlSchemaNewMemParserCtxt/xmlSchemaParse) accepts no XML_PARSE_*
+// flags, so overriding the process-wide external entity loader is the only place these
+// schema-side resolutions can be intercepted. Refusing every external URL closes the
+// class (arbitrary local file read + SSRF) at all parse sites at once.
+xmlExternalEntityLoader g_prev_entity_loader = nullptr;
+std::once_flag g_secure_parsing_once;
+
+xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, xmlParserCtxtPtr ctxt) {
+	if (URL != nullptr) {
+		// Any external resource (file://, http://, ftp://, absolute or relative path):
+		// refuse. Returning nullptr fails the resolution closed — no file is opened and
+		// no network request is attempted.
+		return nullptr;
+	}
+	// URL == nullptr means there is no external resource to fetch (e.g. predefined
+	// entities); defer to libxml2's prior loader so normal parsing is unaffected.
+	if (g_prev_entity_loader) {
+		return g_prev_entity_loader(URL, ID, ctxt);
+	}
+	return nullptr;
+}
+
 struct InMemoryReader {
 	const char *data;
 	size_t size;
@@ -184,12 +214,17 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
 	// XML_PARSE_NOERROR: suppress error reports to stderr
 	// XML_PARSE_NOWARNING: suppress warning reports to stderr
+	// XML_PARSE_NONET: forbid network access. We deliberately do NOT set XML_PARSE_NOENT,
+	//   XML_PARSE_DTDLOAD or XML_PARSE_DTDVALID, so external entities are never substituted or
+	//   fetched. The fail-closed entity loader (EnsureSecureParsing) is the primary XXE defense;
+	//   NONET is belt-and-suspenders for the network case.
 	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
+	XMLUtils::EnsureSecureParsing();
 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 	if (parser_ctx) {
 		InMemoryReader reader {xml_str.data(), xml_str.size(), 0};
 		doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
-		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
@@ -224,6 +259,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 	xml_parse_error_occurred = false;
 	xml_parse_error_message.clear();
 
+	XMLUtils::EnsureSecureParsing();
 	if (is_html) {
 		// Parse as HTML using libxml2's HTML parser with error suppression
 		// HTML needs RECOVER flag to handle malformed HTML gracefully
@@ -233,7 +269,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// (with UTF-8 as default) or deriving it from database collation settings
 		InMemoryReader reader {content.data(), content.size(), 0};
 		doc = htmlReadIO(InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, "UTF-8",
-		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
@@ -241,7 +277,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		if (parser_ctx) {
 			InMemoryReader reader {content.data(), content.size(), 0};
 			doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
-			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING);
+			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 			if (!doc) {
 				// Distinguish an allocation failure from malformed input before freeing
 				// the context (the error object is owned by the parser context).
@@ -347,9 +383,21 @@ case_insensitive_map_t<string> XMLDocRAII::GetDeclaredNamespaces() const {
 	return result;
 }
 
+void XMLUtils::EnsureSecureParsing() {
+	std::call_once(g_secure_parsing_once, []() {
+		xmlInitParser();
+		g_prev_entity_loader = xmlGetExternalEntityLoader();
+		xmlSetExternalEntityLoader(SecureNoExternalEntityLoader);
+	});
+}
+
 void XMLUtils::InitializeLibXML() {
 	xmlInitParser();
 	LIBXML_TEST_VERSION;
+	// Install the fail-closed entity loader at extension load. A call_once guard at every
+	// parse site (below) is the belt-and-suspenders backstop in case any code path parses
+	// before Load() runs.
+	EnsureSecureParsing();
 }
 
 void XMLUtils::CleanupLibXML() {
@@ -816,6 +864,11 @@ std::string XMLUtils::MinifyXML(const std::string &xml_str) {
 }
 
 bool XMLUtils::ValidateXMLSchema(const std::string &xml_str, const std::string &xsd_schema) {
+	// Fail-closed entity loader must be installed before parsing the caller-supplied XSD:
+	// an <xs:import>/<xs:include schemaLocation="file://..."> (or external DTD) would otherwise
+	// make libxml2 open arbitrary local files (GHSA-vf8w-rr6w-h445). The schema parser takes no
+	// XML_PARSE_* options, so the external entity loader is the only interception point.
+	EnsureSecureParsing();
 	// Parse the XSD schema using DuckDB-style smart pointers
 	XMLSchemaParserPtr parser_ctx(xmlSchemaNewMemParserCtxt(xsd_schema.c_str(), xsd_schema.length()));
 	if (!parser_ctx) {
@@ -2518,8 +2571,13 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 			std::string json_str = value.GetValue<string>();
 			std::string xml_result = JSONToXML(json_str);
 
-			// Parse the XML result and add child nodes
-			xmlDocPtr temp_doc = xmlParseMemory(xml_result.c_str(), xml_result.length());
+			// Parse the XML result and add child nodes.
+			// Use xmlReadMemory with explicit safe flags instead of the deprecated xmlParseMemory
+			// (which honors mutable libxml2 globals): forbid network and never substitute/fetch
+			// external entities. See EnsureSecureParsing() for the class-level defense.
+			XMLUtils::EnsureSecureParsing();
+			xmlDocPtr temp_doc = xmlReadMemory(xml_result.c_str(), xml_result.length(), "internal.xml", nullptr,
+			                                   XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 			if (temp_doc && xmlDocGetRootElement(temp_doc)) {
 				xmlNodePtr temp_root = xmlDocGetRootElement(temp_doc);
 
@@ -2550,8 +2608,11 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 
 			// Check if input is already valid XML
 			if (type.id() == LogicalTypeId::VARCHAR && IsValidXML(value_str)) {
-				// Parse and add as child nodes
-				xmlDocPtr temp_doc = xmlParseMemory(value_str.c_str(), value_str.length());
+				// Parse and add as child nodes. Explicit safe flags (see above): no network,
+				// no external entity substitution/fetch.
+				XMLUtils::EnsureSecureParsing();
+				xmlDocPtr temp_doc = xmlReadMemory(value_str.c_str(), value_str.length(), "internal.xml", nullptr,
+				                                   XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 				if (temp_doc && xmlDocGetRootElement(temp_doc)) {
 					xmlNodePtr temp_root = xmlDocGetRootElement(temp_doc);
 					xmlNodePtr copied_node = xmlCopyNode(temp_root, 1);
@@ -2913,8 +2974,9 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	// htmlReadMemory automatically decodes entities and handles UTF-8 correctly
 	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
 	// to ensure correct handling of international characters in HTML entities
+	XMLUtils::EnsureSecureParsing();
 	xmlDocPtr raw_doc = htmlReadMemory(wrapped.c_str(), wrapped.length(), nullptr, "UTF-8",
-	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING);
+	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 
 	if (!raw_doc) {
 		return html_str; // Fallback to original on error

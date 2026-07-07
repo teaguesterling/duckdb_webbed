@@ -1,0 +1,82 @@
+# name: test/sql/xxe_external_entity.test
+# description: XXE hardening — external entity / external XSD resolution must fail closed (GHSA-vf8w-rr6w-h445)
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Positive controls: ordinary, self-contained schema validation still works.
+# These must stay green before AND after the fix (they use no external resources).
+# =============================================================================
+
+query I
+SELECT xml_validate_schema('<root>hi</root>',
+  '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root" type="xs:string"/></xs:schema>');
+----
+true
+
+# Negative control: a document that does not match the schema is invalid.
+query I
+SELECT xml_validate_schema('<other>hi</other>',
+  '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root" type="xs:string"/></xs:schema>');
+----
+false
+
+# Ordinary XML/HTML parsing continues to work (no external references involved).
+query I
+SELECT xml_to_json('<a><b>1</b><b>2</b></a>');
+----
+{"a":{"b":[{"#text":"1"},{"#text":"2"}]}}
+
+query I
+SELECT html_extract_text('<html><body><p>hello</p></body></html>');
+----
+hello
+
+# =============================================================================
+# Fixture: a local, self-created XSD fragment that DEFINES the <root> element and
+# carries a SECRET-CANARY marker in its contents. It never lives at a real system
+# path — it is materialized under the test's own temp dir.
+# =============================================================================
+
+statement ok
+COPY (SELECT '<?xml version="1.0"?><!-- SECRET-CANARY do-not-read --><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:element name="root" type="xs:string"/></xs:schema>' AS x)
+TO '__TEST_DIR__/xxe_include_helper.xsd' (FORMAT 'csv', HEADER false, QUOTE '');
+
+# =============================================================================
+# Core regression: a malicious XSD whose <xs:include schemaLocation="file://...">
+# pulls the <root> definition from the local file above.
+#
+#   * On a VULNERABLE build libxml2 opens and reads that local file, the schema
+#     completes, and the document validates -> TRUE.
+#   * On a HARDENED build the fail-closed external entity loader refuses the read,
+#     the schema fails to parse, and validation returns -> FALSE.
+#
+# Asserting FALSE means this test FAILS on the vulnerable code (reproduce-first)
+# and passes only once external resolution is disabled. The file that would be
+# read carries SECRET-CANARY, so a passing (FALSE) result proves the local file
+# was NOT consulted.
+# =============================================================================
+
+query I
+SELECT xml_validate_schema('<root>hi</root>',
+  '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:include schemaLocation="__TEST_DIR__/xxe_include_helper.xsd"/></xs:schema>');
+----
+false
+
+# An external general entity in the instance document must never be resolved into
+# output (the primary DOM path never substitutes entities). Points at the same
+# local canary file, which must not be read.
+query I
+SELECT xml_to_json('<?xml version="1.0"?><!DOCTYPE r [ <!ENTITY x SYSTEM "__TEST_DIR__/xxe_include_helper.xsd"> ]><r>&x;</r>');
+----
+{"r":{}}
+
+# An http:// SystemId must fail closed with NO network attempt. A reserved
+# ".invalid" host (RFC 2606) guarantees this never touches a real endpoint; the
+# assertion also guards against the call hanging on a network round-trip.
+query I
+SELECT xml_validate_schema('<root>hi</root>',
+  '<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><xs:include schemaLocation="http://webbed-xxe-test.invalid/evil.xsd"/></xs:schema>');
+----
+false

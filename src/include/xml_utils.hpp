@@ -313,6 +313,12 @@ public:
 	static std::string GetNodePath(xmlNodePtr node);
 	static void InitializeLibXML();
 	static void CleanupLibXML();
+
+	// Install libxml2's fail-closed external-entity loader (idempotent, thread-safe).
+	// Must run before any parse so that every entry point — including the XSD schema
+	// parser, which accepts no XML_PARSE_* flags — refuses external file/network
+	// resources (XXE / SSRF hardening). Safe to call from any parse site.
+	static void EnsureSecureParsing();
 };
 
 } // namespace duckdb

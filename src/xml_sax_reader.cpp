@@ -1,4 +1,5 @@
 #include "xml_sax_reader.hpp"
+#include "xml_utils.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include <sstream>
@@ -424,7 +425,8 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 	// Open file via DuckDB FileSystem (supports S3, HTTP, VFS, etc.)
 	auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 
-	// Create push parser context
+	// Create push parser context (fail-closed entity loader: refuse external DTD/entity fetch)
+	XMLUtils::EnsureSecureParsing();
 	xmlParserCtxtPtr parser_ctx = xmlCreatePushParserCtxt(&handler, &ctx, nullptr, 0, filename.c_str());
 	if (!parser_ctx) {
 		throw IOException("Could not create SAX push parser context for '%s'", filename);
