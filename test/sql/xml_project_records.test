@@ -1,0 +1,240 @@
+# name: test/sql/xml_project_records.test
+# description: Test one-pass projection of repeated XML records
+# group: [sql]
+
+require webbed
+
+query I
+SELECT list_transform(
+    xml_project_records(
+        '<report><day>2026-07-10</day><accounts><account><primary>A</primary><amount>10</amount></account><account><fallback>B</fallback><amount>20</amount></account></accounts></report>',
+        ['/report', '//account'],
+        [1::BIGINT, 2::BIGINT],
+        [1::BIGINT, 2::BIGINT, 1::BIGINT],
+        ['./day', './primary', './fallback', './amount']
+    ),
+    record -> record.group_index
+);
+----
+[0, 1, 1]
+
+query I
+SELECT list_transform(
+    xml_project_records(
+        '<report><day>2026-07-10</day><accounts><account><primary>A</primary><amount>10</amount></account><account><fallback>B</fallback><amount>20</amount></account></accounts></report>',
+        ['/report', '//account'],
+        [1::BIGINT, 2::BIGINT],
+        [1::BIGINT, 2::BIGINT, 1::BIGINT],
+        ['./day', './primary', './fallback', './amount']
+    ),
+    record -> record.values
+);
+----
+[[2026-07-10], [A, 10], [B, 20]]
+
+query I
+SELECT length(xml_project_records(
+    '<invalid>',
+    ['/report'],
+    [1::BIGINT],
+    [1::BIGINT],
+    ['./day']
+));
+----
+0
+
+query II
+WITH input(raw_xml) AS (VALUES
+    ('<report><accounts><account><primary>A&amp;B</primary><amount><![CDATA[10]]></amount></account></accounts></report>'),
+    ('<report><accounts><account><fallback>C</fallback><amount>20</amount></account></accounts></report>')
+)
+SELECT
+    xml_project_records(
+        raw_xml, ['//account'], [2::BIGINT], [2::BIGINT, 1::BIGINT],
+        ['./primary', './fallback', './amount']
+    ) = xml_project_records_dom(
+        raw_xml, ['//account'], [2::BIGINT], [2::BIGINT, 1::BIGINT],
+        ['./primary', './fallback', './amount']
+    ),
+    xml_project_records(
+        raw_xml, ['//account'], [2::BIGINT], [2::BIGINT, 1::BIGINT],
+        ['./primary', './fallback', './amount']
+    ) = xml_project_records_sax(
+        raw_xml, ['//account'], [2::BIGINT], [2::BIGINT, 1::BIGINT],
+        ['./primary', './fallback', './amount']
+    )
+FROM input
+ORDER BY raw_xml;
+----
+1	1
+1	1
+
+query I
+SELECT xml_project_records(
+    '<report><accounts><account kind="primary"><amount>10</amount></account><account kind="other"><amount>20</amount></account></accounts></report>',
+    ['//account[@kind="primary"]'],
+    [1::BIGINT],
+    [1::BIGINT],
+    ['./amount']
+) = xml_project_records_dom(
+    '<report><accounts><account kind="primary"><amount>10</amount></account><account kind="other"><amount>20</amount></account></accounts></report>',
+    ['//account[@kind="primary"]'],
+    [1::BIGINT],
+    [1::BIGINT],
+    ['./amount']
+);
+----
+1
+
+statement error
+SELECT xml_project_records_sax(
+    '<report><account kind="primary"><amount>10</amount></account></report>',
+    ['//account[@kind="primary"]'],
+    [1::BIGINT],
+    [1::BIGINT],
+    ['./amount']
+);
+----
+xml_project_records_sax does not support this XPath projection
+
+statement error
+SELECT xml_project_records(
+    '<report/>',
+    ['/report['],
+    [1::BIGINT],
+    [1::BIGINT],
+    ['./day']
+);
+----
+invalid XML record XPath
+
+# NULL propagation is identical for all execution modes.
+query III
+SELECT
+    xml_project_records(NULL, ['//row'], [1::BIGINT], [1::BIGINT], ['./value']) IS NULL,
+    xml_project_records_dom(NULL, ['//row'], [1::BIGINT], [1::BIGINT], ['./value']) IS NULL,
+    xml_project_records_sax(NULL, ['//row'], [1::BIGINT], [1::BIGINT], ['./value']) IS NULL;
+----
+1	1	1
+
+# Exercise filtered/dictionary input and output reuse across multiple vector-sized chunks.
+statement ok
+CREATE TEMP TABLE xml_project_docs AS
+SELECT
+    i,
+    CASE
+        WHEN i % 10 = 0 THEN NULL
+        ELSE format('<root><row><value>{}</value></row></root>', i)
+    END AS raw_xml
+FROM range(5000) t(i);
+
+query III
+WITH projected AS (
+    SELECT
+        i,
+        xml_project_records(raw_xml, ['//row'], [1::BIGINT], [1::BIGINT], ['./value']) AS records
+    FROM xml_project_docs
+    WHERE i % 2 = 0
+)
+SELECT
+    count(*),
+    count(*) FILTER (WHERE records IS NULL),
+    count(*) FILTER (WHERE records IS NOT NULL AND (records[1]).values[1] = i::VARCHAR)
+FROM projected;
+----
+2500	500	2000
+
+statement ok
+DROP TABLE xml_project_docs;
+
+# Absolute field paths are valid DOM XPath, but are outside the relative-field SAX subset.
+query II
+SELECT
+    xml_project_records(
+        '<report><day>2026-07-10</day><account><value>A</value></account></report>',
+        ['//account'], [1::BIGINT], [1::BIGINT], ['/report/day']
+    ) = xml_project_records_dom(
+        '<report><day>2026-07-10</day><account><value>A</value></account></report>',
+        ['//account'], [1::BIGINT], [1::BIGINT], ['/report/day']
+    ),
+    list_transform(
+        xml_project_records(
+            '<report><day>2026-07-10</day><account><value>A</value></account></report>',
+            ['//account'], [1::BIGINT], [1::BIGINT], ['/report/day']
+        ),
+        record -> record.values
+    );
+----
+1	[[2026-07-10]]
+
+statement error
+SELECT xml_project_records_sax(
+    '<report><day>2026-07-10</day><account><value>A</value></account></report>',
+    ['//account'], [1::BIGINT], [1::BIGINT], ['/report/day']
+);
+----
+xml_project_records_sax does not support this XPath projection
+
+# The virtual document root plus self XPath needs DOM string-value semantics.
+query I
+SELECT xml_project_records(
+    '<report>before<value>A</value>after</report>',
+    ['/'], [1::BIGINT], [1::BIGINT], ['.']
+) = xml_project_records_dom(
+    '<report>before<value>A</value>after</report>',
+    ['/'], [1::BIGINT], [1::BIGINT], ['.']
+);
+----
+1
+
+statement error
+SELECT xml_project_records_sax(
+    '<report>before<value>A</value>after</report>',
+    ['/'], [1::BIGINT], [1::BIGINT], ['.']
+);
+----
+xml_project_records_sax does not support this XPath projection
+
+# AUTO falls back to DOM for a DTD/internal entity; forced SAX reports the unsupported input.
+query I
+SELECT xml_project_records(
+    '<!DOCTYPE report [<!ENTITY amount "10">]><report><row><value>&amount;</value></row></report>',
+    ['//row'], [1::BIGINT], [1::BIGINT], ['./value']
+) = xml_project_records_dom(
+    '<!DOCTYPE report [<!ENTITY amount "10">]><report><row><value>&amount;</value></row></report>',
+    ['//row'], [1::BIGINT], [1::BIGINT], ['./value']
+);
+----
+1
+
+statement error
+SELECT xml_project_records_sax(
+    '<!DOCTYPE report [<!ENTITY amount "10">]><report><row><value>&amount;</value></row></report>',
+    ['//row'], [1::BIGINT], [1::BIGINT], ['./value']
+);
+----
+xml_project_records_sax does not support DTD or entity-reference input
+
+# Malformed input retains the established empty-list behavior in every mode.
+query III
+SELECT
+    length(xml_project_records('<invalid>', ['//row'], [1::BIGINT], [1::BIGINT], ['./value'])),
+    length(xml_project_records_dom('<invalid>', ['//row'], [1::BIGINT], [1::BIGINT], ['./value'])),
+    length(xml_project_records_sax('<invalid>', ['//row'], [1::BIGINT], [1::BIGINT], ['./value']));
+----
+0	0	0
+
+# BIGINT extrema must fail from remaining-element checks without overflowing or indexing the lists.
+statement error
+SELECT xml_project_records(
+    '<root/>', ['/root'], [9223372036854775807::BIGINT], []::BIGINT[], []::VARCHAR[]
+);
+----
+sum(field_counts) must equal len(alternative_counts)
+
+statement error
+SELECT xml_project_records(
+    '<root/>', ['/root'], [1::BIGINT], [9223372036854775807::BIGINT], []::VARCHAR[]
+);
+----
+sum(alternative_counts) must equal len(field_paths)

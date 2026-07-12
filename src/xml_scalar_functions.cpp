@@ -10,10 +10,420 @@
 
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
+#include <libxml/xmlerror.h>
+#include <libxml/xmlreader.h>
+#include <cctype>
 #include <regex>
 #include <set>
 
 namespace duckdb {
+
+struct SimpleXMLPath {
+	bool absolute = false;
+	bool descendant = false;
+	bool self = false;
+	bool virtual_root = false;
+	vector<string> elements;
+};
+
+struct SimpleXMLGroup {
+	SimpleXMLPath record_path;
+	vector<vector<SimpleXMLPath>> fields;
+};
+
+static bool IsSimpleElementName(const string &name) {
+	if (name.empty() || !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_')) {
+		return false;
+	}
+	for (auto ch : name) {
+		if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-' || ch == '.')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool ParseSimpleXMLPath(const string &xpath, bool record_path, SimpleXMLPath &result) {
+	string remainder;
+	if (record_path && xpath == "/") {
+		result.virtual_root = true;
+		result.absolute = true;
+		return true;
+	}
+	if (!record_path && xpath == ".") {
+		result.self = true;
+		return true;
+	}
+	if (!record_path && StringUtil::StartsWith(xpath, ".//")) {
+		result.descendant = true;
+		remainder = xpath.substr(3);
+	} else if (!record_path && StringUtil::StartsWith(xpath, "./")) {
+		remainder = xpath.substr(2);
+	} else if (!record_path) {
+		return false;
+	} else if (StringUtil::StartsWith(xpath, "//")) {
+		result.descendant = true;
+		remainder = xpath.substr(2);
+	} else if (StringUtil::StartsWith(xpath, "/")) {
+		result.absolute = true;
+		remainder = xpath.substr(1);
+	} else {
+		return false;
+	}
+	if (remainder.empty()) {
+		return false;
+	}
+	for (auto &element : StringUtil::Split(remainder, '/')) {
+		if (!IsSimpleElementName(element)) {
+			return false;
+		}
+		result.elements.push_back(element);
+	}
+	return !result.elements.empty();
+}
+
+static bool CompileSimpleXMLGroups(const vector<string> &record_paths, const vector<vector<vector<string>>> &fields,
+                                   vector<SimpleXMLGroup> &result) {
+	result.clear();
+	for (idx_t group_index = 0; group_index < record_paths.size(); group_index++) {
+		SimpleXMLGroup group;
+		if (!ParseSimpleXMLPath(record_paths[group_index], true, group.record_path)) {
+			result.clear();
+			return false;
+		}
+		for (auto &field : fields[group_index]) {
+			vector<SimpleXMLPath> alternatives;
+			for (auto &xpath : field) {
+				SimpleXMLPath path;
+				if (!ParseSimpleXMLPath(xpath, false, path) || (group.record_path.virtual_root && path.self)) {
+					result.clear();
+					return false;
+				}
+				alternatives.push_back(std::move(path));
+			}
+			group.fields.push_back(std::move(alternatives));
+		}
+		result.push_back(std::move(group));
+	}
+	return true;
+}
+
+struct XMLProjectRecordsBindData : public FunctionData {
+	vector<string> record_paths;
+	vector<vector<vector<string>>> fields;
+	vector<xmlXPathCompExprPtr> compiled_record_paths;
+	vector<vector<vector<xmlXPathCompExprPtr>>> compiled_fields;
+	vector<SimpleXMLGroup> simple_groups;
+	bool supports_fast_path;
+
+	XMLProjectRecordsBindData(vector<string> record_paths_p, vector<vector<vector<string>>> fields_p)
+	    : record_paths(std::move(record_paths_p)), fields(std::move(fields_p)) {
+		compiled_fields.resize(fields.size());
+		try {
+			for (auto &record_path : record_paths) {
+				auto compiled = xmlXPathCompile(BAD_CAST record_path.c_str());
+				if (!compiled) {
+					throw BinderException("invalid XML record XPath: %s", record_path);
+				}
+				compiled_record_paths.push_back(compiled);
+			}
+			for (idx_t group_index = 0; group_index < fields.size(); group_index++) {
+				compiled_fields[group_index].resize(fields[group_index].size());
+				for (idx_t field_index = 0; field_index < fields[group_index].size(); field_index++) {
+					for (auto &field_path : fields[group_index][field_index]) {
+						auto compiled = xmlXPathCompile(BAD_CAST field_path.c_str());
+						if (!compiled) {
+							throw BinderException("invalid XML field XPath: %s", field_path);
+						}
+						compiled_fields[group_index][field_index].push_back(compiled);
+					}
+				}
+			}
+		} catch (...) {
+			FreeCompiledPaths();
+			throw;
+		}
+		supports_fast_path = CompileSimpleXMLGroups(record_paths, fields, simple_groups);
+	}
+
+	~XMLProjectRecordsBindData() override {
+		FreeCompiledPaths();
+	}
+
+	void FreeCompiledPaths() {
+		for (auto compiled : compiled_record_paths) {
+			xmlXPathFreeCompExpr(compiled);
+		}
+		compiled_record_paths.clear();
+		for (auto &group : compiled_fields) {
+			for (auto &field : group) {
+				for (auto compiled : field) {
+					xmlXPathFreeCompExpr(compiled);
+				}
+				field.clear();
+			}
+		}
+	}
+
+	unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<XMLProjectRecordsBindData>(record_paths, fields);
+	}
+
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = other_p.Cast<XMLProjectRecordsBindData>();
+		return record_paths == other.record_paths && fields == other.fields;
+	}
+};
+
+static vector<string> ReadStringList(const Value &value, const string &name) {
+	if (value.IsNull() || value.type().id() != LogicalTypeId::LIST ||
+	    ListType::GetChildType(value.type()).id() != LogicalTypeId::VARCHAR) {
+		throw BinderException("%s must be a non-NULL LIST<VARCHAR>", name);
+	}
+	vector<string> result;
+	for (auto &child : ListValue::GetChildren(value)) {
+		if (child.IsNull()) {
+			throw BinderException("%s cannot contain NULL values", name);
+		}
+		result.push_back(StringValue::Get(child));
+	}
+	return result;
+}
+
+static vector<int64_t> ReadCountList(const Value &value, const string &name) {
+	if (value.IsNull() || value.type().id() != LogicalTypeId::LIST ||
+	    ListType::GetChildType(value.type()).id() != LogicalTypeId::BIGINT) {
+		throw BinderException("%s must be a non-NULL LIST<BIGINT>", name);
+	}
+	vector<int64_t> result;
+	for (auto &child : ListValue::GetChildren(value)) {
+		if (child.IsNull()) {
+			throw BinderException("%s cannot contain NULL values", name);
+		}
+		result.push_back(child.GetValue<int64_t>());
+	}
+	return result;
+}
+
+static string ExtractFirstNonEmptyText(xmlXPathContextPtr xpath_ctx, xmlNodePtr node,
+                                       const vector<xmlXPathCompExprPtr> &alternatives) {
+	auto previous_node = xpath_ctx->node;
+	xpath_ctx->node = node;
+	for (auto xpath : alternatives) {
+		xmlXPathObjectPtr xpath_obj = xmlXPathCompiledEval(xpath, xpath_ctx);
+		if (!xpath_obj) {
+			continue;
+		}
+		XMLCharPtr content(xmlXPathCastToString(xpath_obj));
+		xmlXPathFreeObject(xpath_obj);
+		if (content && content.get()[0] != '\0') {
+			xpath_ctx->node = previous_node;
+			return reinterpret_cast<const char *>(content.get());
+		}
+	}
+	xpath_ctx->node = previous_node;
+	return "";
+}
+
+struct FastXMLCapture {
+	bool seen = false;
+	idx_t depth = 0;
+	string text;
+};
+
+struct FastXMLRecord {
+	idx_t group_index;
+	idx_t depth;
+	vector<vector<FastXMLCapture>> fields;
+};
+
+static bool MatchesPath(const SimpleXMLPath &path, const vector<string> &stack, idx_t record_depth) {
+	if (path.self) {
+		return stack.size() == record_depth;
+	}
+	idx_t offset = path.absolute ? 0 : record_depth;
+	if (stack.size() < offset || stack.size() - offset < path.elements.size()) {
+		return false;
+	}
+	if (!path.descendant && stack.size() - offset != path.elements.size()) {
+		return false;
+	}
+	idx_t start = path.descendant ? stack.size() - path.elements.size() : offset;
+	for (idx_t i = 0; i < path.elements.size(); i++) {
+		if (stack[start + i] != path.elements[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static void StartFieldCaptures(FastXMLRecord &record, const SimpleXMLGroup &group, const vector<string> &stack) {
+	for (idx_t field_index = 0; field_index < group.fields.size(); field_index++) {
+		for (idx_t alternative_index = 0; alternative_index < group.fields[field_index].size(); alternative_index++) {
+			auto &capture = record.fields[field_index][alternative_index];
+			if (!capture.seen && MatchesPath(group.fields[field_index][alternative_index], stack, record.depth)) {
+				capture.seen = true;
+				capture.depth = stack.size();
+			}
+		}
+	}
+}
+
+static void FinalizeFastRecord(FastXMLRecord &record, vector<vector<vector<string>>> &grouped_records) {
+	vector<string> values;
+	values.reserve(record.fields.size());
+	for (auto &field : record.fields) {
+		string value;
+		for (auto &alternative : field) {
+			if (!alternative.text.empty()) {
+				value = alternative.text;
+				break;
+			}
+		}
+		values.push_back(std::move(value));
+	}
+	grouped_records[record.group_index].push_back(std::move(values));
+}
+
+static void CloseFastXMLDepth(vector<FastXMLRecord> &active_records, idx_t depth,
+                              vector<vector<vector<string>>> &grouped_records) {
+	for (auto &record : active_records) {
+		for (auto &field : record.fields) {
+			for (auto &capture : field) {
+				if (capture.depth == depth) {
+					capture.depth = 0;
+				}
+			}
+		}
+	}
+	idx_t index = 0;
+	while (index < active_records.size()) {
+		if (active_records[index].depth == depth) {
+			FinalizeFastRecord(active_records[index], grouped_records);
+			active_records.erase(active_records.begin() + index);
+		} else {
+			index++;
+		}
+	}
+}
+
+enum class FastXMLProjectionResult : uint8_t { SUCCESS, MALFORMED, NEEDS_DOM_NAMESPACE, NEEDS_DOM_DTD_ENTITY };
+
+static bool IsLibxmlResourceError(const xmlError *error) {
+	return error && error->code == XML_ERR_NO_MEMORY;
+}
+
+[[noreturn]] static void ThrowXMLProjectionOutOfMemory() {
+	throw OutOfMemoryException(
+	    "Failed to project XML records: libxml2 could not allocate memory (the system may be under memory pressure)");
+}
+
+static FastXMLProjectionResult ProjectRecordsFast(const XMLProjectRecordsBindData &spec, const string &xml_string,
+                                                  vector<vector<vector<string>>> &grouped_records) {
+	XMLUtils::EnsureSecureParsing();
+	xmlResetLastError();
+	xmlTextReaderPtr reader =
+	    xmlReaderForMemory(xml_string.data(), NumericCast<int>(xml_string.size()), nullptr, nullptr,
+	                       XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_COMPACT);
+	if (!reader) {
+		if (IsLibxmlResourceError(xmlGetLastError())) {
+			ThrowXMLProjectionOutOfMemory();
+		}
+		grouped_records.assign(spec.simple_groups.size(), {});
+		return FastXMLProjectionResult::MALFORMED;
+	}
+
+	vector<string> stack;
+	vector<FastXMLRecord> active_records;
+	for (idx_t group_index = 0; group_index < spec.simple_groups.size(); group_index++) {
+		if (!spec.simple_groups[group_index].record_path.virtual_root) {
+			continue;
+		}
+		FastXMLRecord record {group_index, 0, {}};
+		for (auto &field : spec.simple_groups[group_index].fields) {
+			record.fields.emplace_back(field.size());
+		}
+		active_records.push_back(std::move(record));
+	}
+
+	int read_status;
+	auto result = FastXMLProjectionResult::SUCCESS;
+	while ((read_status = xmlTextReaderRead(reader)) == 1) {
+		auto node_type = xmlTextReaderNodeType(reader);
+		if (node_type == XML_READER_TYPE_DOCUMENT_TYPE || node_type == XML_READER_TYPE_ENTITY_REFERENCE) {
+			result = FastXMLProjectionResult::NEEDS_DOM_DTD_ENTITY;
+			break;
+		}
+		if (node_type == XML_READER_TYPE_ELEMENT) {
+			auto namespace_uri = xmlTextReaderConstNamespaceUri(reader);
+			if (namespace_uri && namespace_uri[0] != '\0') {
+				result = FastXMLProjectionResult::NEEDS_DOM_NAMESPACE;
+				break;
+			}
+			auto name = xmlTextReaderConstLocalName(reader);
+			if (!name) {
+				continue;
+			}
+			stack.emplace_back(reinterpret_cast<const char *>(name));
+			for (auto &record : active_records) {
+				StartFieldCaptures(record, spec.simple_groups[record.group_index], stack);
+			}
+			for (idx_t group_index = 0; group_index < spec.simple_groups.size(); group_index++) {
+				auto &group = spec.simple_groups[group_index];
+				if (group.record_path.virtual_root || !MatchesPath(group.record_path, stack, 0)) {
+					continue;
+				}
+				FastXMLRecord record {group_index, stack.size(), {}};
+				for (auto &field : group.fields) {
+					record.fields.emplace_back(field.size());
+				}
+				StartFieldCaptures(record, group, stack);
+				active_records.push_back(std::move(record));
+			}
+			if (xmlTextReaderIsEmptyElement(reader)) {
+				CloseFastXMLDepth(active_records, stack.size(), grouped_records);
+				stack.pop_back();
+			}
+		} else if (node_type == XML_READER_TYPE_TEXT || node_type == XML_READER_TYPE_CDATA ||
+		           node_type == XML_READER_TYPE_WHITESPACE || node_type == XML_READER_TYPE_SIGNIFICANT_WHITESPACE) {
+			auto value = xmlTextReaderConstValue(reader);
+			if (!value) {
+				continue;
+			}
+			for (auto &record : active_records) {
+				for (auto &field : record.fields) {
+					for (auto &capture : field) {
+						if (capture.depth > 0) {
+							capture.text += reinterpret_cast<const char *>(value);
+						}
+					}
+				}
+			}
+		} else if (node_type == XML_READER_TYPE_END_ELEMENT && !stack.empty()) {
+			CloseFastXMLDepth(active_records, stack.size(), grouped_records);
+			stack.pop_back();
+		}
+	}
+	const bool resource_error = read_status < 0 && IsLibxmlResourceError(xmlGetLastError());
+	xmlFreeTextReader(reader);
+	if (resource_error) {
+		ThrowXMLProjectionOutOfMemory();
+	}
+	if (result != FastXMLProjectionResult::SUCCESS) {
+		grouped_records.assign(spec.simple_groups.size(), {});
+		return result;
+	}
+	if (read_status < 0) {
+		grouped_records.assign(spec.simple_groups.size(), {});
+		return FastXMLProjectionResult::MALFORMED;
+	}
+	for (auto &record : active_records) {
+		if (record.depth == 0) {
+			FinalizeFastRecord(record, grouped_records);
+		}
+	}
+	return FastXMLProjectionResult::SUCCESS;
+}
 
 // Iterates a string input vector via UnifiedVectorFormat (handles FLAT, DICTIONARY and CONSTANT
 // vectors) and propagates NULL inputs to NULL results. The callback receives the row index and
@@ -138,6 +548,231 @@ void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionS
 		}
 		result.SetValue(i, Value::LIST(LogicalType::VARCHAR, text_values));
 	}
+}
+
+unique_ptr<FunctionData> XMLScalarFunctions::XMLProjectRecordsBind(DUCKDB_SCALAR_BIND_PARAMS) {
+	auto &bind_args = DUCKDB_SCALAR_BIND_ARGS;
+	auto &bind_ctx = DUCKDB_SCALAR_BIND_CONTEXT;
+	if (bind_args.size() != 5) {
+		throw BinderException("xml_project_records requires five arguments");
+	}
+
+	vector<Value> values;
+	values.reserve(4);
+	for (idx_t i = 1; i < bind_args.size(); i++) {
+		if (bind_args[i]->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		if (!bind_args[i]->IsFoldable()) {
+			throw BinderException("xml_project_records specification arguments must be constant");
+		}
+		values.push_back(ExpressionExecutor::EvaluateScalar(bind_ctx, *bind_args[i]));
+	}
+
+	auto record_paths = ReadStringList(values[0], "record_paths");
+	auto field_counts = ReadCountList(values[1], "field_counts");
+	auto alternative_counts = ReadCountList(values[2], "alternative_counts");
+	auto field_paths = ReadStringList(values[3], "field_paths");
+	if (record_paths.empty() || record_paths.size() != field_counts.size()) {
+		throw BinderException("record_paths and field_counts must have the same non-zero length");
+	}
+
+	vector<vector<vector<string>>> fields(record_paths.size());
+	idx_t field_index = 0;
+	idx_t path_index = 0;
+	for (idx_t group_index = 0; group_index < record_paths.size(); group_index++) {
+		auto field_count = field_counts[group_index];
+		if (field_count < 0) {
+			throw BinderException("field_counts cannot contain negative values");
+		}
+		if (static_cast<uint64_t>(field_count) > alternative_counts.size() - field_index) {
+			throw BinderException("sum(field_counts) must equal len(alternative_counts)");
+		}
+		auto group_field_end = field_index + static_cast<idx_t>(field_count);
+		for (; field_index < group_field_end; field_index++) {
+			auto alternative_count = alternative_counts[field_index];
+			if (alternative_count <= 0) {
+				throw BinderException("alternative_counts must contain positive values");
+			}
+			if (static_cast<uint64_t>(alternative_count) > field_paths.size() - path_index) {
+				throw BinderException("sum(alternative_counts) must equal len(field_paths)");
+			}
+			auto field_path_end = path_index + static_cast<idx_t>(alternative_count);
+			vector<string> alternatives;
+			for (; path_index < field_path_end; path_index++) {
+				alternatives.push_back(field_paths[path_index]);
+			}
+			fields[group_index].push_back(std::move(alternatives));
+		}
+	}
+	if (field_index != alternative_counts.size()) {
+		throw BinderException("sum(field_counts) must equal len(alternative_counts)");
+	}
+	if (path_index != field_paths.size()) {
+		throw BinderException("sum(alternative_counts) must equal len(field_paths)");
+	}
+	return make_uniq<XMLProjectRecordsBindData>(std::move(record_paths), std::move(fields));
+}
+
+static XMLProjectRecordsBindData &GetXMLProjectRecordsBindData(ExpressionState &state) {
+	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
+#ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
+	auto &bind_info = func_expr.BindInfo();
+#else
+	auto &bind_info = func_expr.bind_info;
+#endif
+	if (!bind_info) {
+		throw InternalException("xml_project_records bind data is missing");
+	}
+	return bind_info->Cast<XMLProjectRecordsBindData>();
+}
+
+static void ProjectRecordsDOM(const XMLProjectRecordsBindData &spec, const string &xml_string,
+                              vector<vector<vector<string>>> &grouped_records) {
+	XMLDocRAII xml_doc(xml_string);
+	if (!xml_doc.IsValid()) {
+		if (xml_doc.HadResourceError()) {
+			ThrowXMLProjectionOutOfMemory();
+		}
+		return;
+	}
+	if (!xml_doc.xpath_ctx) {
+		ThrowXMLProjectionOutOfMemory();
+	}
+	for (idx_t group_index = 0; group_index < spec.record_paths.size(); group_index++) {
+		xml_doc.xpath_ctx->node = xmlDocGetRootElement(xml_doc.doc);
+		xmlXPathObjectPtr group_obj = xmlXPathCompiledEval(spec.compiled_record_paths[group_index], xml_doc.xpath_ctx);
+		if (!group_obj || !group_obj->nodesetval) {
+			if (group_obj) {
+				xmlXPathFreeObject(group_obj);
+			}
+			continue;
+		}
+		for (int node_index = 0; node_index < group_obj->nodesetval->nodeNr; node_index++) {
+			auto node = group_obj->nodesetval->nodeTab[node_index];
+			if (!node) {
+				continue;
+			}
+			vector<string> values;
+			values.reserve(spec.fields[group_index].size());
+			for (auto &alternatives : spec.compiled_fields[group_index]) {
+				values.emplace_back(ExtractFirstNonEmptyText(xml_doc.xpath_ctx, node, alternatives));
+			}
+			grouped_records[group_index].push_back(std::move(values));
+		}
+		xmlXPathFreeObject(group_obj);
+	}
+}
+
+static void AppendProjectedRecordValues(Vector &result, idx_t row_index,
+                                        const vector<vector<vector<string>>> &grouped_records) {
+	idx_t appended_record_count = 0;
+	idx_t appended_value_count = 0;
+	for (auto &group : grouped_records) {
+		appended_record_count += group.size();
+		for (auto &record : group) {
+			appended_value_count += record.size();
+		}
+	}
+
+	auto record_offset = ListVector::GetListSize(result);
+	auto value_offset = ListVector::GetListSize(CompatStructGetField(CompatListGetChild(result), 1));
+	ListVector::Reserve(result, record_offset + appended_record_count);
+	auto &record_vector = CompatListGetChild(result);
+	record_vector.SetVectorType(VectorType::FLAT_VECTOR);
+	auto &group_index_vector = CompatStructGetField(record_vector, 0);
+	auto &values_vector = CompatStructGetField(record_vector, 1);
+	group_index_vector.SetVectorType(VectorType::FLAT_VECTOR);
+	values_vector.SetVectorType(VectorType::FLAT_VECTOR);
+	ListVector::Reserve(values_vector, value_offset + appended_value_count);
+	auto &string_vector = CompatListGetChild(values_vector);
+	string_vector.SetVectorType(VectorType::FLAT_VECTOR);
+
+	auto row_entries = FlatVector::GetData<list_entry_t>(result);
+	auto group_indices = FlatVector::GetData<int64_t>(group_index_vector);
+	auto value_entries = FlatVector::GetData<list_entry_t>(values_vector);
+	auto strings = FlatVector::GetData<string_t>(string_vector);
+	row_entries[row_index].offset = record_offset;
+	row_entries[row_index].length = appended_record_count;
+	FlatVector::Validity(result).SetValid(row_index);
+
+	auto record_index = record_offset;
+	auto value_index = value_offset;
+	for (idx_t group_index = 0; group_index < grouped_records.size(); group_index++) {
+		for (auto &record : grouped_records[group_index]) {
+			group_indices[record_index] = NumericCast<int64_t>(group_index);
+			FlatVector::Validity(group_index_vector).SetValid(record_index);
+			value_entries[record_index].offset = value_index;
+			value_entries[record_index].length = record.size();
+			FlatVector::Validity(values_vector).SetValid(record_index);
+			for (auto &value : record) {
+				strings[value_index] = StringVector::AddString(string_vector, value);
+				FlatVector::Validity(string_vector).SetValid(value_index);
+				value_index++;
+			}
+			record_index++;
+		}
+	}
+	ListVector::SetListSize(values_vector, value_index);
+	ListVector::SetListSize(result, record_index);
+}
+
+enum class XMLProjectionMode : uint8_t { AUTO, DOM, SAX };
+
+static void ExecuteXMLProjectRecords(DataChunk &args, ExpressionState &state, Vector &result, XMLProjectionMode mode) {
+	auto &spec = GetXMLProjectRecordsBindData(state);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	ListVector::SetListSize(result, 0);
+	auto &values_vector = CompatStructGetField(CompatListGetChild(result), 1);
+	ListVector::SetListSize(values_vector, 0);
+
+	UnifiedVectorFormat input_data;
+	CompatToUnifiedFormat(args.data[0], args.size(), input_data);
+	auto input_strings = UnifiedVectorFormat::GetData<string_t>(input_data);
+	for (idx_t row_index = 0; row_index < args.size(); row_index++) {
+		auto input_index = input_data.sel->get_index(row_index);
+		if (!input_data.validity.RowIsValid(input_index)) {
+			auto row_entries = FlatVector::GetData<list_entry_t>(result);
+			row_entries[row_index].offset = ListVector::GetListSize(result);
+			row_entries[row_index].length = 0;
+			FlatVector::Validity(result).SetInvalid(row_index);
+			continue;
+		}
+		auto xml_string = input_strings[input_index].GetString();
+		vector<vector<vector<string>>> grouped_records(spec.record_paths.size());
+		bool projected = false;
+		if (mode != XMLProjectionMode::DOM && spec.supports_fast_path) {
+			auto fast_result = ProjectRecordsFast(spec, xml_string, grouped_records);
+			projected = fast_result == FastXMLProjectionResult::SUCCESS ||
+			            fast_result == FastXMLProjectionResult::MALFORMED;
+			if (!projected && mode == XMLProjectionMode::SAX) {
+				if (fast_result == FastXMLProjectionResult::NEEDS_DOM_DTD_ENTITY) {
+					throw InvalidInputException(
+					    "xml_project_records_sax does not support DTD or entity-reference input");
+				}
+				throw InvalidInputException("xml_project_records_sax does not support namespaced XML");
+			}
+		} else if (mode == XMLProjectionMode::SAX) {
+			throw InvalidInputException("xml_project_records_sax does not support this XPath projection");
+		}
+		if (!projected) {
+			grouped_records.assign(spec.record_paths.size(), {});
+			ProjectRecordsDOM(spec, xml_string, grouped_records);
+		}
+		AppendProjectedRecordValues(result, row_index, grouped_records);
+	}
+}
+
+void XMLScalarFunctions::XMLProjectRecordsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	ExecuteXMLProjectRecords(args, state, result, XMLProjectionMode::AUTO);
+}
+
+void XMLScalarFunctions::XMLProjectRecordsDOMFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	ExecuteXMLProjectRecords(args, state, result, XMLProjectionMode::DOM);
+}
+
+void XMLScalarFunctions::XMLProjectRecordsSAXFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	ExecuteXMLProjectRecords(args, state, result, XMLProjectionMode::SAX);
 }
 
 // Returns LIST(VARCHAR) with custom namespace mappings
@@ -1291,6 +1926,30 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction));
 
 	loader.RegisterFunction(xml_extract_text_functions);
+
+	auto projected_record_type = LogicalType::STRUCT(
+	    {{"group_index", LogicalType::BIGINT}, {"values", LogicalType::LIST(LogicalType::VARCHAR)}});
+	auto xml_project_records_function = ScalarFunction(
+	    "xml_project_records",
+	    {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), LogicalType::LIST(LogicalType::BIGINT),
+	     LogicalType::LIST(LogicalType::BIGINT), LogicalType::LIST(LogicalType::VARCHAR)},
+	    LogicalType::LIST(projected_record_type), XMLProjectRecordsFunction, XMLProjectRecordsBind);
+	PreventStructConstantFolding(xml_project_records_function);
+	loader.RegisterFunction(xml_project_records_function);
+	auto xml_project_records_dom_function = ScalarFunction(
+	    "xml_project_records_dom",
+	    {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), LogicalType::LIST(LogicalType::BIGINT),
+	     LogicalType::LIST(LogicalType::BIGINT), LogicalType::LIST(LogicalType::VARCHAR)},
+	    LogicalType::LIST(projected_record_type), XMLProjectRecordsDOMFunction, XMLProjectRecordsBind);
+	PreventStructConstantFolding(xml_project_records_dom_function);
+	loader.RegisterFunction(xml_project_records_dom_function);
+	auto xml_project_records_sax_function = ScalarFunction(
+	    "xml_project_records_sax",
+	    {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR), LogicalType::LIST(LogicalType::BIGINT),
+	     LogicalType::LIST(LogicalType::BIGINT), LogicalType::LIST(LogicalType::VARCHAR)},
+	    LogicalType::LIST(projected_record_type), XMLProjectRecordsSAXFunction, XMLProjectRecordsBind);
+	PreventStructConstantFolding(xml_project_records_sax_function);
+	loader.RegisterFunction(xml_project_records_sax_function);
 
 	// Register xml_extract_all_text function - both XML and VARCHAR overloads
 	auto xml_extract_all_text_function =

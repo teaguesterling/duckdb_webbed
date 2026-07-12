@@ -24,6 +24,10 @@ private:
 	static void XMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAllTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLProjectRecordsFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLProjectRecordsDOMFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static void XMLProjectRecordsSAXFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	static unique_ptr<FunctionData> XMLProjectRecordsBind(DUCKDB_SCALAR_BIND_PARAMS);
 
 	// Element extraction functions
 	static void XMLExtractElementsFunction(DataChunk &args, ExpressionState &state, Vector &result);
