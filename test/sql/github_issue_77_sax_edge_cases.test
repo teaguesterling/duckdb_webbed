@@ -31,10 +31,13 @@ FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record', maximum_
 ----
 3	true	deep	true
 
-# SAX <-> DOM equivalence on the full ordered list
+# SAX <-> DOM equivalence on the full ordered list.
+# IS NOT DISTINCT FROM (not =) so the comparison is NULL-safe: the item structs carry NULL
+# `nested` fields, and DuckDB's nested-type = propagates NULL (NULL = NULL -> NULL), which
+# would make a bare `=` yield NULL instead of true (fails on duckdb main).
 query I
 SELECT (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record', maximum_file_size:=1))
-     = (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record'));
+     IS NOT DISTINCT FROM (SELECT item FROM read_xml('test/xml/sax_mixed_order.xml', record_element:='record'));
 ----
 true
 
