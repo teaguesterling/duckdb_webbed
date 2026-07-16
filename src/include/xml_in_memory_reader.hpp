@@ -34,7 +34,7 @@ inline int XMLInMemoryReaderRead(void *context, char *buffer, int len) {
 }
 
 // xmlInputCloseCallback: nothing to release (the buffer is owned by the caller).
-inline int XMLInMemoryReaderClose(void *context) {
+inline int XMLInMemoryReaderClose(void * /*context*/) {
 	return 0;
 }
 

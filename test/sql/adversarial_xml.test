@@ -20,11 +20,15 @@ SELECT xml_extract_all_text(
 ----
 true
 
-# Same via the XPath extractor — also must not leak the canary
+# Same via the XPath extractor — no extracted element may contain the canary. Checked
+# per-element via unnest (not a serialized-list cast) so the assertion is direct and stays
+# valid for any list cardinality or NULL result.
 query I
-SELECT COALESCE(xml_extract_text(
-  '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://__TEST_DIR__/xxe_canary.txt">]><r>&xxe;</r>', '/r'
-)::VARCHAR, '') NOT LIKE '%XXECANARY%' AS xxe_blocked;
+SELECT NOT EXISTS (
+  SELECT 1 FROM unnest(xml_extract_text(
+    '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://__TEST_DIR__/xxe_canary.txt">]><r>&xxe;</r>', '/r'
+  )) AS t(s) WHERE s LIKE '%XXECANARY%'
+) AS xxe_blocked;
 ----
 true
 
@@ -32,14 +36,17 @@ true
 # Billion-laughs: entity expansion must stay bounded (libxml2 DoS limit)
 # =============================================================================
 
-# Nested internal entities: the extractor that DOES resolve entities must not
-# expand this to a large string (libxml2's expansion limit caps it).
-query I
-SELECT length(xml_extract_text(
+# Nested internal entities: the extractor that DOES resolve entities must not expand this to
+# a large string (libxml2's expansion limit caps it). Assert on the extracted element itself
+# (not the serialized list): non-empty proves the expansion path ran (10 x 10 x "lol" = 300
+# chars), the bound proves it can't amplify.
+query II
+WITH t AS (SELECT xml_extract_text(
   '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;"><!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]><lolz>&lol3;</lolz>', '/lolz'
-)::VARCHAR) < 1000 AS expansion_bounded;
+) AS l)
+SELECT length(l[1]) > 0, length(l[1]) < 1000 FROM t;
 ----
-true
+true	true
 
 # =============================================================================
 # Deep nesting: must be rejected, not overflow the stack
