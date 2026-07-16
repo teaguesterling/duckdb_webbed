@@ -1,5 +1,6 @@
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
+#include "xml_in_memory_reader.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include <libxml/xmlerror.h>
@@ -28,15 +29,6 @@ namespace duckdb {
 // written on every parse but never read, and the shared std::string was a data race under
 // parallel execution (heap corruption / intermittent hangs on Windows).
 
-// Parse documents larger than ~2 GiB. libxml2's in-memory parse entry points
-// (xmlCtxtReadMemory / htmlReadMemory) take the buffer length as an `int`, so a document
-// larger than INT_MAX (~2.147 GB) wraps to a negative size and the parse fails with a spurious
-// "invalid document" error — even after the file itself is read correctly. The IO-based entry
-// points (xmlCtxtReadIO / htmlReadIO) take no total-size parameter: they pull bytes through a
-// callback whose per-call length is always a small, safe int, so they parse buffers up to
-// libxml2's true (size_t) limits. We feed libxml2 from the already-in-memory document via this
-// callback. (DuckDB caps a single string/XML value at 4 GiB, so whole-document readers still top
-// out there; genuinely larger inputs must use record-level streaming via read_xml.)
 namespace {
 // --- XXE / SSRF hardening: fail-closed external entity loader ---------------
 // This extension only ever parses XML/HTML/XSD content that is already held in
@@ -67,31 +59,7 @@ xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, 
 	return nullptr;
 }
 
-struct InMemoryReader {
-	const char *data;
-	size_t size;
-	size_t pos;
-};
-
-int InMemoryReaderRead(void *context, char *buffer, int len) {
-	if (len < 0) {
-		return -1;
-	}
-	auto *reader = static_cast<InMemoryReader *>(context);
-	size_t remaining = reader->size - reader->pos;
-	size_t n = remaining < static_cast<size_t>(len) ? remaining : static_cast<size_t>(len);
-	if (n > 0) {
-		memcpy(buffer, reader->data + reader->pos, n);
-		reader->pos += n;
-	}
-	return static_cast<int>(n);
-}
-
-int InMemoryReaderClose(void *context) {
-	return 0;
-}
 } // namespace
-
 // Escape a UTF-8 string for safe embedding inside a JSON string literal (GitHub Issue #78).
 // libxml2 returns entity-decoded text (e.g. &quot; -> ", &#10; -> newline), so characters that
 // are illegal raw inside a JSON string must be re-escaped here at emit time. Only " , \ and the
@@ -205,8 +173,8 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	XMLUtils::EnsureSecureParsing();
 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 	if (parser_ctx) {
-		InMemoryReader reader {xml_str.data(), xml_str.size(), 0};
-		doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
+		XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+		doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
 		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
 		// Check if parsing failed (NULL doc means fatal error)
@@ -246,16 +214,16 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
 		// TODO: Future enhancement - consider making encoding configurable via parameter
 		// (with UTF-8 as default) or deriving it from database collation settings
-		InMemoryReader reader {content.data(), content.size(), 0};
-		doc = htmlReadIO(InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, "UTF-8",
+		XMLInMemoryReader reader {content.data(), content.size(), 0};
+		doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
 		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
-			InMemoryReader reader {content.data(), content.size(), 0};
-			doc = xmlCtxtReadIO(parser_ctx, InMemoryReaderRead, InMemoryReaderClose, &reader, nullptr, nullptr,
+			XMLInMemoryReader reader {content.data(), content.size(), 0};
+			doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
 			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 			if (!doc) {
 				// Distinguish an allocation failure from malformed input before freeing
@@ -2946,13 +2914,14 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	// Wrap the string in a minimal HTML document to parse it
 	std::string wrapped = "<html><body>" + html_str + "</body></html>";
 
-	// Parse using HTML parser with explicit UTF-8 encoding
-	// htmlReadMemory automatically decodes entities and handles UTF-8 correctly
+	// Parse using HTML parser with explicit UTF-8 encoding, via the IO reader so a wrapped
+	// value larger than 2 GiB doesn't overflow htmlReadMemory's int length argument.
 	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
 	// to ensure correct handling of international characters in HTML entities
 	XMLUtils::EnsureSecureParsing();
-	xmlDocPtr raw_doc = htmlReadMemory(wrapped.c_str(), wrapped.length(), nullptr, "UTF-8",
-	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+	XMLInMemoryReader reader {wrapped.data(), wrapped.size(), 0};
+	xmlDocPtr raw_doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+	                               HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 
 	if (!raw_doc) {
 		return html_str; // Fallback to original on error

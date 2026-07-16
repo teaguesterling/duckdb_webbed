@@ -843,6 +843,36 @@ CROSS JOIN read_xml_objects('schema.xsd') AS schema;
 
 ---
 
+## 🔒 Security & Trust Model
+
+webbed parses XML/HTML with libxml2 in a deliberately conservative, read-only posture, so
+ingesting untrusted documents is safe by default:
+
+- **No external entity resolution (XXE-safe).** External `SYSTEM`/`PUBLIC` entities are never
+  fetched. A document containing `<!ENTITY x SYSTEM "file:///etc/passwd">` (or an `http://`
+  URL) resolves the reference to nothing — the file/URL is not read. This is verified by the
+  adversarial test suite (`test/sql/adversarial_xml.test`).
+- **Entity-expansion ("billion laughs") is bounded.** Parsing runs *without* `XML_PARSE_HUGE`,
+  so libxml2's built-in limits on entity expansion, nesting depth, and name/text length stay
+  active. A nested-entity bomb does not amplify, and pathologically deep documents are rejected
+  rather than overflowing the stack.
+- **Internal-entity text handling.** Internal entities defined in a document's DTD subset are
+  expanded within those limits by the XPath extractors (e.g. `xml_extract_text`), but
+  `xml_extract_all_text` currently omits entity-referenced text (returns it empty) — a
+  fidelity-for-safety trade-off, not a correctness guarantee. Do not rely on entity content
+  appearing in extracted text.
+- **Large documents are bounded, not silently truncated.** Whole-document readers cap at
+  DuckDB's 4 GiB single-value limit; reads are chunked so a document between 2 GiB and 4 GiB
+  loads instead of overflowing or truncating. Genuinely larger inputs must use record-level
+  streaming (`read_xml` with `record_element`, optionally a low `maximum_file_size`).
+- **Read-only.** All functions read their inputs; the extension never writes back to source
+  files or fetches remote resources on a document's behalf.
+
+For high-volume or untrusted inputs, prefer the streaming path and set `ignore_errors := true`
+to skip malformed records rather than aborting the whole scan.
+
+---
+
 ## Local development
 
 Clone the repository and the submodules too:

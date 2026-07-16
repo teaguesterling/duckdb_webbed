@@ -1,0 +1,76 @@
+# name: test/sql/adversarial_xml.test
+# description: Pin parser behavior against malformed/adversarial XML (code review #115)
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# XXE: external entity resolution must be disabled (no file/network fetch)
+# =============================================================================
+
+# A canary file whose contents must never appear in extracted text
+statement ok
+COPY (SELECT 'XXECANARY_9F3A2B' AS c) TO '__TEST_DIR__/xxe_canary.txt' (FORMAT csv, HEADER false, QUOTE '');
+
+# SYSTEM entity referencing the canary file — must NOT be fetched
+query I
+SELECT xml_extract_all_text(
+  '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://__TEST_DIR__/xxe_canary.txt">]><r>&xxe;</r>'
+) NOT LIKE '%XXECANARY%' AS xxe_blocked;
+----
+true
+
+# Same via the XPath extractor — also must not leak the canary
+query I
+SELECT COALESCE(xml_extract_text(
+  '<?xml version="1.0"?><!DOCTYPE r [<!ENTITY xxe SYSTEM "file://__TEST_DIR__/xxe_canary.txt">]><r>&xxe;</r>', '/r'
+)::VARCHAR, '') NOT LIKE '%XXECANARY%' AS xxe_blocked;
+----
+true
+
+# =============================================================================
+# Billion-laughs: entity expansion must stay bounded (libxml2 DoS limit)
+# =============================================================================
+
+# Nested internal entities: the extractor that DOES resolve entities must not
+# expand this to a large string (libxml2's expansion limit caps it).
+query I
+SELECT length(xml_extract_text(
+  '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;"><!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]><lolz>&lol3;</lolz>', '/lolz'
+)::VARCHAR) < 1000 AS expansion_bounded;
+----
+true
+
+# =============================================================================
+# Deep nesting: must be rejected, not overflow the stack
+# =============================================================================
+
+query I
+SELECT xml_valid(repeat('<a>', 5000) || repeat('</a>', 5000)) AS deep_valid;
+----
+false
+
+# =============================================================================
+# Malformed / truncated / bad-encoding inputs are rejected cleanly
+# =============================================================================
+
+query I
+SELECT xml_valid('<a><b></a>') AS truncated_valid;
+----
+false
+
+query I
+SELECT xml_valid('<?xml version="1.0" encoding="NOTREAL-99"?><a>x</a>') AS bad_encoding_valid;
+----
+false
+
+query I
+SELECT xml_valid('<a>unclosed') AS unclosed_valid;
+----
+false
+
+# Sanity: a well-formed document still validates
+query I
+SELECT xml_valid('<a><b>ok</b></a>') AS valid_baseline;
+----
+true
