@@ -3,6 +3,7 @@
 #include "duckdb_compat.hpp"
 #include "xml_types.hpp"
 #include "xml_utils.hpp"
+#include "xml_in_memory_reader.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -251,10 +252,13 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 
 		std::string html_str = html_value.GetValue<string>();
 
-		// Parse HTML using libxml2's HTML parser (fail-closed entity loader + no network)
+		// Parse HTML via the IO reader so an html value larger than 2 GiB doesn't overflow
+		// htmlReadMemory's int length argument (#115), with the fail-closed entity loader and no
+		// network (EnsureSecureParsing + HTML_PARSE_NONET, #118).
 		XMLUtils::EnsureSecureParsing();
-		htmlDocPtr doc = htmlReadMemory(html_str.c_str(), html_str.length(), nullptr, "UTF-8",
-		                                HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+		XMLInMemoryReader reader {html_str.data(), html_str.size(), 0};
+		htmlDocPtr doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+		                            HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 
 		if (!doc) {
 			result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), vector<Value>()));
