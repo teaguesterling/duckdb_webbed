@@ -24,9 +24,6 @@ static bool IsNullString(const std::string &text, const XMLSchemaOptions &option
 	return false;
 }
 
-// Forward declaration for silent error handler from xml_utils.cpp
-void XMLSilentErrorHandler(void *ctx, const char *msg, ...);
-
 // Helper: Strip namespace prefix from element name
 std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 	size_t colon_pos = name.find(':');

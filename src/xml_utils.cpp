@@ -21,25 +21,12 @@
 
 namespace duckdb {
 
-// Global error handling for libxml2
-static bool xml_parse_error_occurred = false;
-static std::string xml_parse_error_message;
-
-static void XMLErrorHandler(void *ctx, const char *msg, ...) {
-	xml_parse_error_occurred = true;
-	va_list args;
-	va_start(args, msg);
-	char buffer[1024];
-	vsnprintf(buffer, sizeof(buffer), msg, args);
-	va_end(args);
-	xml_parse_error_message = std::string(buffer);
-}
-
-// Silent error handler that suppresses libxml2 warnings during normal operations
-void XMLSilentErrorHandler(void *ctx, const char *msg, ...) {
-	// Silently capture errors without printing to stderr
-	xml_parse_error_occurred = true;
-}
+// Error suppression is configured per libxml2 context / per parse operation (see the
+// XML_PARSE_NOERROR options and the per-context handlers below), never via global state, so
+// concurrent parses on different threads don't race. A previous global error handler plus two
+// file-static error-state variables (a bool and a std::string) were removed here: they were
+// written on every parse but never read, and the shared std::string was a data race under
+// parallel execution (heap corruption / intermittent hangs on Windows).
 
 // Parse documents larger than ~2 GiB. libxml2's in-memory parse entry points
 // (xmlCtxtReadMemory / htmlReadMemory) take the buffer length as an `int`, so a document
@@ -154,8 +141,8 @@ static std::string EscapeJSONString(const std::string &input) {
 
 // Silent error handler for schema validation (with varargs to match xmlSchemaValidityErrorFunc)
 void XMLSilentSchemaErrorHandler(void *ctx, const char *msg, ...) {
-	// Silently capture schema validation errors without printing to stderr
-	xml_parse_error_occurred = true;
+	// Silently ignore schema validation errors without printing to stderr.
+	// Registered per-context via xmlSchemaSetParserErrors / xmlSchemaSetValidErrors (no global state).
 }
 
 // Forward declarations for namespace handling helpers (defined later in file)
@@ -207,10 +194,6 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
-	// Reset error state
-	xml_parse_error_occurred = false;
-	xml_parse_error_message.clear();
-
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
 	// XML_PARSE_NOERROR: suppress error reports to stderr
 	// XML_PARSE_NOWARNING: suppress warning reports to stderr
@@ -228,7 +211,6 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
-			xml_parse_error_occurred = true;
 			// Capture whether the failure was an allocation failure rather than malformed
 			// input. The error object belongs to the parser context, so read it before free.
 			const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
@@ -247,7 +229,7 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 		xpath_ctx = xmlXPathNewContext(doc);
 		// Set silent error handler on XPath context (thread-safe, per-context)
 		if (xpath_ctx) {
-			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
 			// Register all namespace declarations from the document so XPath with prefixes works
 			RegisterDocumentNamespaces(doc, xpath_ctx);
 		}
@@ -255,11 +237,8 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
-	// Reset error state
-	xml_parse_error_occurred = false;
-	xml_parse_error_message.clear();
-
 	XMLUtils::EnsureSecureParsing();
+
 	if (is_html) {
 		// Parse as HTML using libxml2's HTML parser with error suppression
 		// HTML needs RECOVER flag to handle malformed HTML gracefully
@@ -294,14 +273,11 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		}
 	}
 
-	// Check if parsing failed
-	if (!doc) {
-		xml_parse_error_occurred = true;
-	} else {
+	if (doc) {
 		xpath_ctx = xmlXPathNewContext(doc);
 		// Set silent error handler on XPath context (thread-safe, per-context)
 		if (xpath_ctx) {
-			xmlSetStructuredErrorFunc(xpath_ctx, XMLSilentXPathErrorHandler);
+			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
 			// Register all namespace declarations from the document so XPath with prefixes works
 			RegisterDocumentNamespaces(doc, xpath_ctx);
 		}
@@ -310,8 +286,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 
 XMLDocRAII::~XMLDocRAII() {
 	if (xpath_ctx) {
-		// Reset error handler before freeing context
-		xmlSetStructuredErrorFunc(xpath_ctx, nullptr);
+		// The per-context XPath error handler is released with the context; no global reset needed.
 		xmlXPathFreeContext(xpath_ctx);
 		xpath_ctx = nullptr;
 	}
@@ -1222,8 +1197,8 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1));
 			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "";
 
-			result += "\"" + EscapeJSONString(options.attr_prefix + attr_name) + "\":\"" + EscapeJSONString(attr_val) +
-			          "\"";
+			result +=
+			    "\"" + EscapeJSONString(options.attr_prefix + attr_name) + "\":\"" + EscapeJSONString(attr_val) + "\"";
 			has_content = true;
 		}
 
@@ -1250,7 +1225,8 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 				for (const auto &ns_pair : namespaces) {
 					if (!first_ns)
 						result += ",";
-					result += "\"" + EscapeJSONString(ns_pair.first) + "\":\"" + EscapeJSONString(ns_pair.second) + "\"";
+					result +=
+					    "\"" + EscapeJSONString(ns_pair.first) + "\":\"" + EscapeJSONString(ns_pair.second) + "\"";
 					first_ns = false;
 				}
 				result += "}";
