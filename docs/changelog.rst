@@ -1,8 +1,77 @@
 Changelog
 =========
 
-v2.4.0 (Current)
+v2.5.0 (Current)
 ----------------
+
+A security-hardening release. XML/HTML parsing is now XXE-safe and non-networked
+by default; the >2 GiB whole-document fix is completed for the remaining HTML
+parse sites; libxml2 error handling is made thread-safe by construction; and
+Windows (MSVC) CI is re-enabled. Shippable artifacts continue to build against
+the **DuckDB v1.5.4** release tag; the submodules now track the ``v1.5-variegata``
+branch for development. All platforms green (89 test cases / 2925 assertions),
+including the re-enabled ``windows_amd64`` MSVC job.
+
+**Behavior changes (review before upgrading)**
+
+- **External entity resolution is disabled by default (XXE-safe).** A document
+  containing an external ``SYSTEM``/``PUBLIC`` entity — e.g.
+  ``<!ENTITY x SYSTEM "file:///etc/passwd">`` or an ``http://`` URL — no longer
+  fetches the referenced file/URL; the reference resolves to nothing. Parsing also
+  runs with ``XML_PARSE_NONET`` / ``HTML_PARSE_NONET`` so no network access is
+  attempted on a document's behalf. This closes an XXE/SSRF exposure and is a
+  semantic change for the (unsafe) case of relying on external-entity inlining;
+  internal entities within libxml2's DoS limits are unaffected. (Issue #115, PR #118)
+
+**Security / hardening**
+
+- Fail-closed external-entity loader installed at every parse site
+  (``EnsureSecureParsing()``), composed with ``*_NONET``. (PR #118)
+- New adversarial/security test coverage: an XXE canary (referenced file must never
+  appear in extracted text), bounded entity expansion (billion-laughs stays capped),
+  deep-nesting rejection, and truncated/bad-encoding/unclosed inputs rejected cleanly
+  (``test/sql/adversarial_xml.test``, ``test/sql/xxe_external_entity.test``). (PR #117, #118)
+- libxml2 error handling no longer mutates shared global state: the removed
+  ``xmlSetStructuredErrorFunc`` global is replaced by per-context handlers
+  (``xmlXPathSetErrorHandler``), eliminating a cross-thread race in the in-process
+  multi-threaded scalar paths. (PR #119, follow-up to Issue #7)
+
+**Bug Fixes**
+
+- **>2 GiB HTML documents.** The remaining whole-value HTML parse sites
+  (``html_to_duck_blocks``, ``HTMLUnescape``) used ``htmlReadMemory``, whose ``int``
+  length parameter overflowed above INT_MAX (~2.147 GiB). Both now parse via the
+  IO-based ``htmlReadIO`` through a shared ``src/include/xml_in_memory_reader.hpp``
+  reader, completing the large-document fix started for XML in v2.4.0 (#103/#112).
+  The ceiling remains DuckDB's 4 GiB single-value cap. (Issue #115, PR #117)
+
+**Build / dependencies**
+
+- Submodules now track the ``v1.5-variegata`` branch (``duckdb`` → ``b155d6f``,
+  ``extension-ci-tools`` → ``72e76e9``). The ``duckdb-stable-build`` distribution job
+  keeps ``duckdb_version`` / ``ci_tools_version`` = **v1.5.4** (the release tag), because
+  branch-tip ``-dev`` builds produce non-loadable extensions. ``duckdb-next-build``
+  (DuckDB ``main``) is unchanged. (Issue #107, PR #121)
+- **Windows re-enabled.** ``windows_amd64`` (MSVC) is built and tested again in both
+  build jobs; ``windows_amd64_mingw`` stays excluded (the cp1252 reporter crash is
+  mingw-specific). (PR #121)
+
+**Docs**
+
+- README gains a "Security & Trust Model" section documenting the XXE-safe posture,
+  entity handling, the libxml2 DoS limits, and the 4 GiB single-value cap. (PR #117)
+- Refreshed stale test statistics (89 suites / 2900+ assertions) and DuckDB version
+  references (v1.5+) across README and the Sphinx docs.
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.5.0.
+- GitHub-issue test coverage: NULL-safe SAX/DOM list equivalence
+  (``IS NOT DISTINCT FROM``) so nested-type ``NULL = NULL`` semantics don't produce a
+  false canary failure against DuckDB ``main``. (Issue #77, PR #120)
+
+v2.4.0
+------
 
 A feature-and-robustness release. ``read_xml`` type detection now catches
 out-of-sample outliers by default (the pragmatic part of issue #102 "C"); the XML
