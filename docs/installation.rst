@@ -16,7 +16,7 @@ That's it! The extension is now ready to use.
 Requirements
 ------------
 
-- DuckDB v1.3.2 or later
+- DuckDB v1.5 or later
 - No additional dependencies required (libxml2 is bundled)
 
 Verifying Installation

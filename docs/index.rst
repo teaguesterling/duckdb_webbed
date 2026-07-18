@@ -56,7 +56,7 @@ Features
    - Built on libxml2 for robust parsing
    - Comprehensive error handling
    - Memory-safe RAII implementation
-   - 58 test suites with 1901 assertions
+   - 89 test suites with 2,900+ assertions
 
 
 Indices and tables

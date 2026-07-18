@@ -30,7 +30,7 @@ A comprehensive XML and HTML processing extension for DuckDB that enables SQL-na
 - Built on libxml2 for robust parsing
 - Comprehensive error handling
 - Memory-safe RAII implementation
-- 68 test suites, 2511 assertions
+- 89 test suites, 2,900+ assertions
 
 ---
 
@@ -897,7 +897,7 @@ make test
 ```
 
 **Requirements:**
-- DuckDB v1.3.2+
+- DuckDB v1.5+ (built against the current stable line; see releases for the exact pinned version)
 - libxml2 (managed via vcpkg)
 - C++17 compiler
 
@@ -912,9 +912,10 @@ make test
 - **XPath**: Full libxml2 XPath engine integration
 
 ### 🧪 **Testing**
-- 58 comprehensive test suites
-- 1901 test assertions passing (100% success rate)
-- Real-world test coverage for GitHub issues (#4, #7, #8, #13, #17, #33, #53, #54, #55)
+- 89 comprehensive test suites
+- 2,900+ test assertions passing (100% success rate)
+- Real-world test coverage for GitHub issues (#4, #7, #8, #13, #17, #33, #53, #54, #55, #73, #77, #103, #115, #118)
+- Adversarial/security test coverage (XXE, billion-laughs, deep-nesting, >2 GiB inputs)
 - Cross-platform CI validation
 - Memory leak testing with Valgrind
 - Complete coverage of all XML/HTML functions
