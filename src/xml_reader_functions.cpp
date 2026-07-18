@@ -4,6 +4,7 @@
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/execution/partition_info.hpp" // OperatorPartitionData (batch-index tagging, issue #72)
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -13,6 +14,8 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
+
+#include <algorithm>
 
 namespace {
 
@@ -256,8 +259,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 	for (const auto &pattern : file_patterns) {
 		auto glob_result = fs.Glob(pattern, nullptr);
 		// Extract file paths from OpenFileInfo results
+		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
+		// order (matching read_csv). This is the order preserved across threads under multi-file
+		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
+		// keep the user-provided order.
+		vector<string> matched;
 		for (const auto &file_info : glob_result) {
-			result->files.push_back(file_info.path);
+			matched.push_back(file_info.path);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &matched_path : matched) {
+			result->files.push_back(std::move(matched_path));
 		}
 	}
 
@@ -300,10 +312,25 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadDocumentInit(Client
 	auto result = make_uniq<XMLReadGlobalState>();
 	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
 
+	// Shared work list only; per-file cursor state lives in each worker's local state.
 	result->files = bind_data.files;
-	result->file_index = 0;
 
 	return std::move(result);
+}
+
+unique_ptr<LocalTableFunctionState> XMLReaderFunctions::ReadDocumentInitLocal(ExecutionContext &context,
+                                                                              TableFunctionInitInput &input,
+                                                                              GlobalTableFunctionState *global_state) {
+	// Each worker gets its own cursor; it claims its first file lazily on the first scan call.
+	return make_uniq<XMLReadLocalState>();
+}
+
+OperatorPartitionData XMLReaderFunctions::ReadDocumentGetPartitionData(ClientContext &context,
+                                                                       TableFunctionGetPartitionInput &input) {
+	// Tag the just-produced chunk with the batch index computed at chunk finalization. DuckDB
+	// only calls this for non-empty chunks, so last_batch_index always refers to a real chunk.
+	auto &lstate = input.local_state->Cast<XMLReadLocalState>();
+	return OperatorPartitionData(lstate.last_batch_index);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
@@ -348,8 +375,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	for (const auto &pattern : file_patterns) {
 		auto glob_result = fs.Glob(pattern, nullptr);
 		// Extract file paths from OpenFileInfo results
+		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
+		// order (matching read_csv). This is the order preserved across threads under multi-file
+		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
+		// keep the user-provided order.
+		vector<string> matched;
 		for (const auto &file_info : glob_result) {
-			result->files.push_back(file_info.path);
+			matched.push_back(file_info.path);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &matched_path : matched) {
+			result->files.push_back(std::move(matched_path));
 		}
 	}
 
@@ -697,18 +733,28 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
                                                      DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
-
-	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
-	}
+	auto &lstate = data_p.local_state->Cast<XMLReadLocalState>();
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
 
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
+	// _objects yields exactly one row (the whole document) per file. Under multi-file
+	// parallelism each worker claims one file, emits its single row as one chunk, and tags it
+	// with the file's batch index so output stays in glob order.
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		if (!lstate.have_file) {
+			idx_t claimed = gstate.ClaimNextFile();
+			if (claimed == DConstants::INVALID_INDEX) {
+				break; // no more work for this worker
+			}
+			lstate.file_index = claimed;
+			lstate.current_filename = gstate.files[claimed];
+			lstate.chunk_counter = 0;
+			lstate.have_file = true;
+		}
+		const auto &filename = lstate.current_filename;
+		bool emitted = false;
 
 		try {
 			// Check file size
@@ -720,47 +766,50 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
 				}
-				continue; // Skip this file
-			}
-
-			// Read file content
-			string content;
-			content.resize(file_size);
-			ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
-			// Validate content based on mode
-			if (is_html) {
-				// HTML mode: be lenient, allow empty files
-				if (content.empty()) {
-					if (bind_data.ignore_errors) {
-						continue; // Skip empty file
-					} else {
-						content = "<html></html>"; // Minimal valid HTML
-					}
-				}
+				// Skip this file (fall through to claim the next one)
 			} else {
-				// XML mode: strict validation
-				auto validity = XMLUtils::CheckXML(content);
-				if (validity == XMLValidity::ResourceError) {
-					ThrowLibxmlOutOfMemory(filename);
-				}
-				if (validity != XMLValidity::Valid) {
-					if (bind_data.ignore_errors) {
-						continue; // Skip this invalid file
-					} else {
-						throw InvalidInputException("File %s contains invalid XML", filename);
+				// Read file content
+				string content;
+				content.resize(file_size);
+				ReadFileFully(*file_handle, (char *)content.data(), file_size);
+
+				bool valid = true;
+				// Validate content based on mode
+				if (is_html) {
+					// HTML mode: be lenient, allow empty files
+					if (content.empty()) {
+						if (bind_data.ignore_errors) {
+							valid = false; // Skip empty file
+						} else {
+							content = "<html></html>"; // Minimal valid HTML
+						}
+					}
+				} else {
+					// XML mode: strict validation
+					auto validity = XMLUtils::CheckXML(content);
+					if (validity == XMLValidity::ResourceError) {
+						ThrowLibxmlOutOfMemory(filename);
+					}
+					if (validity != XMLValidity::Valid) {
+						if (bind_data.ignore_errors) {
+							valid = false; // Skip this invalid file
+						} else {
+							throw InvalidInputException("File %s contains invalid XML", filename);
+						}
 					}
 				}
-			}
 
-			// Set output values based on schema
-			idx_t col_idx = 0;
-			if (bind_data.include_filename) {
-				output.data[col_idx++].SetValue(output_idx, Value(filename));
+				if (valid) {
+					// Set output values based on schema
+					idx_t col_idx = 0;
+					if (bind_data.include_filename) {
+						output.data[col_idx++].SetValue(output_idx, Value(filename));
+					}
+					output.data[col_idx++].SetValue(output_idx, Value(content));
+					output_idx++;
+					emitted = true;
+				}
 			}
-			output.data[col_idx++].SetValue(output_idx, Value(content));
-			output_idx++;
-
 		} catch (const OutOfMemoryException &) {
 			throw;
 		} catch (const Exception &e) {
@@ -769,6 +818,15 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 			}
 			// Skip this file and continue
 		}
+
+		// This file is fully handled; claim the next on the following call.
+		lstate.have_file = false;
+		if (emitted) {
+			lstate.last_batch_index = (lstate.file_index << XMLReadLocalState::FILE_SHIFT) | lstate.chunk_counter;
+			lstate.chunk_counter++;
+			break; // one file (one row) per chunk keeps batch indices ordered
+		}
+		// Skipped file produced no row: keep claiming without returning an empty chunk.
 	}
 
 	CompatSetOutputCardinality(output, output_idx);
@@ -795,22 +853,34 @@ static void EmitRow(DataChunk &output, idx_t output_idx, const std::vector<Value
 void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
-
-	if (gstate.file_index >= gstate.files.size()) {
-		return; // No more files to process
-	}
+	auto &lstate = data_p.local_state->Cast<XMLReadLocalState>();
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 	const bool is_html = (bind_data.parse_mode == ParseMode::HTML);
 	const auto &schema_options = bind_data.schema_options;
 
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index];
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		// Ensure this worker owns a file; claim the next one otherwise.
+		if (!lstate.have_file) {
+			idx_t claimed = gstate.ClaimNextFile();
+			if (claimed == DConstants::INVALID_INDEX) {
+				break; // no more work for this worker
+			}
+			lstate.file_index = claimed;
+			lstate.current_filename = gstate.files[claimed];
+			lstate.chunk_counter = 0;
+			lstate.have_file = true;
+			lstate.file_loaded = false;
+		}
+
+		// Per-file value source: the file THIS worker claimed, never the global cursor.
+		const auto &filename = lstate.current_filename;
+		bool file_done = false;
 
 		try {
 			// Load file if not already loaded
-			if (!gstate.file_loaded) {
+			if (!lstate.file_loaded) {
 				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 				auto file_size = fs.GetFileSize(*file_handle);
 
@@ -830,16 +900,18 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 						                            bind_data.max_file_size);
 					}
-					gstate.file_index++;
+					// Skip this file: release and claim the next one without emitting a chunk.
+					lstate.ResetFileResources();
+					lstate.have_file = false;
 					continue;
 				}
 
-				gstate.use_sax = use_sax;
+				lstate.use_sax = use_sax;
 
 				if (use_sax) {
 					// SAX mode: initialize push parser for incremental streaming
-					gstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
-					gstate.sax_accumulator->namespace_mode = schema_options.namespaces;
+					lstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
+					lstate.sax_accumulator->namespace_mode = schema_options.namespaces;
 
 					// Configure record tag matching
 					if (!schema_options.record_element.empty()) {
@@ -847,31 +919,31 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
 							tag = tag.substr(2);
 						}
-						gstate.sax_accumulator->record_tag = tag;
+						lstate.sax_accumulator->record_tag = tag;
 					}
 
-					gstate.sax_ctx = make_uniq<SAXCallbackContext>();
-					gstate.sax_ctx->accumulator = gstate.sax_accumulator.get();
-					gstate.sax_ctx->max_rows = 0; // No limit per chunk
-					gstate.sax_ctx->rows_completed = 0;
-					gstate.sax_ctx->stop_parsing = false;
-					gstate.sax_ctx->completed_records = &gstate.sax_pending_records;
-					gstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
+					lstate.sax_ctx = make_uniq<SAXCallbackContext>();
+					lstate.sax_ctx->accumulator = lstate.sax_accumulator.get();
+					lstate.sax_ctx->max_rows = 0; // No limit per chunk
+					lstate.sax_ctx->rows_completed = 0;
+					lstate.sax_ctx->stop_parsing = false;
+					lstate.sax_ctx->completed_records = &lstate.sax_pending_records;
+					lstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
 
-					gstate.sax_handler = SAXStreamReader::CreateSAXHandler();
+					lstate.sax_handler = SAXStreamReader::CreateSAXHandler();
 					// Fail-closed entity loader: refuse external DTD/entity fetch during streaming parse.
 					XMLUtils::EnsureSecureParsing();
-					gstate.sax_parser_ctx = xmlCreatePushParserCtxt(&gstate.sax_handler, gstate.sax_ctx.get(), nullptr,
+					lstate.sax_parser_ctx = xmlCreatePushParserCtxt(&lstate.sax_handler, lstate.sax_ctx.get(), nullptr,
 					                                                0, filename.c_str());
-					if (!gstate.sax_parser_ctx) {
+					if (!lstate.sax_parser_ctx) {
 						throw IOException("Could not create SAX push parser for '%s'", filename);
 					}
-					xmlCtxtUseOptions(gstate.sax_parser_ctx,
+					xmlCtxtUseOptions(lstate.sax_parser_ctx,
 					                  XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
-					gstate.sax_file_handle = std::move(file_handle);
-					gstate.sax_pending_records.clear();
-					gstate.file_loaded = true;
+					lstate.sax_file_handle = std::move(file_handle);
+					lstate.sax_pending_records.clear();
+					lstate.file_loaded = true;
 				} else {
 					// DOM mode: read file content and build DOM
 					string content;
@@ -881,15 +953,15 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					// Parse DOM — DOM makes its own copy, so content string can be freed.
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
-					gstate.current_doc = XMLDocRAII(content, is_html);
+					lstate.current_doc = XMLDocRAII(content, is_html);
 
-					if (!gstate.current_doc.IsValid()) {
-						if (gstate.current_doc.HadResourceError()) {
+					if (!lstate.current_doc.IsValid()) {
+						if (lstate.current_doc.HadResourceError()) {
 							ThrowLibxmlOutOfMemory(filename);
 						}
 						if (bind_data.ignore_errors) {
-							gstate.current_doc = XMLDocRAII();
-							gstate.file_index++;
+							lstate.ResetFileResources();
+							lstate.have_file = false;
 							continue;
 						}
 						if (is_html) {
@@ -898,33 +970,33 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						throw InvalidInputException("File %s contains invalid XML", filename);
 					}
 
-					xmlNodePtr root = xmlDocGetRootElement(gstate.current_doc.doc);
+					xmlNodePtr root = xmlDocGetRootElement(lstate.current_doc.doc);
 					if (!root) {
 						if (bind_data.ignore_errors) {
-							gstate.current_doc = XMLDocRAII();
-							gstate.file_index++;
+							lstate.ResetFileResources();
+							lstate.have_file = false;
 							continue;
 						}
 						throw InvalidInputException("File %s has no root element", filename);
 					}
 
 					// Find record elements in the DOM
-					gstate.record_elements =
-					    XMLSchemaInference::IdentifyRecordElements(gstate.current_doc, root, schema_options);
+					lstate.record_elements =
+					    XMLSchemaInference::IdentifyRecordElements(lstate.current_doc, root, schema_options);
 
 					// Calculate remaining depth for inferred schema extraction
 					int effective_depth = schema_options.max_depth;
 					if (effective_depth > 20 || effective_depth < 0) {
 						effective_depth = 20;
 					}
-					gstate.remaining_depth = effective_depth - 2;
+					lstate.remaining_depth = effective_depth - 2;
 
-					gstate.current_record_index = 0;
-					gstate.file_loaded = true;
+					lstate.current_record_index = 0;
+					lstate.file_loaded = true;
 				}
 			}
 
-			if (gstate.use_sax) {
+			if (lstate.use_sax) {
 				// SAX streaming: feed chunks until we have enough records or EOF
 				constexpr idx_t SAX_CHUNK_SIZE = 65536;
 				char sax_buffer[SAX_CHUNK_SIZE];
@@ -932,8 +1004,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 				while (output_idx < STANDARD_VECTOR_SIZE) {
 					// First, emit any pending completed records
-					while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
-						auto &record = gstate.sax_pending_records.front();
+					while (!lstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+						auto &record = lstate.sax_pending_records.front();
 
 						auto row = SAXStreamReader::AccumulatorToRow(
 						    record, bind_data.column_names, bind_data.column_types, schema_options,
@@ -942,7 +1014,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 
 						output_idx++;
-						gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
+						lstate.sax_pending_records.erase(lstate.sax_pending_records.begin());
 					}
 
 					// If we've filled the output, stop
@@ -951,50 +1023,42 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					}
 
 					// Feed another chunk to the parser
-					auto bytes_read = gstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
+					auto bytes_read = lstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
 					if (bytes_read == 0) {
 						// EOF — finalize parser
-						xmlParseChunk(gstate.sax_parser_ctx, nullptr, 0, 1);
+						xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
 						file_exhausted = true;
 						break;
 					}
 
 					int parse_result =
-					    xmlParseChunk(gstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
+					    xmlParseChunk(lstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
 					if (parse_result != 0 && !bind_data.ignore_errors) {
 						throw IOException("SAX parsing error in file '%s'", filename);
 					}
 				}
 
 				// Emit any remaining pending records after EOF
-				while (!gstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
-					auto &record = gstate.sax_pending_records.front();
+				while (!lstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
+					auto &record = lstate.sax_pending_records.front();
 					auto row = SAXStreamReader::AccumulatorToRow(record, bind_data.column_names, bind_data.column_types,
 					                                             schema_options, bind_data.column_datetime_formats,
 					                                             bind_data.inferred_schema);
 
 					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 					output_idx++;
-					gstate.sax_pending_records.erase(gstate.sax_pending_records.begin());
+					lstate.sax_pending_records.erase(lstate.sax_pending_records.begin());
 				}
 
 				// Check if file is done and all records emitted
-				if (file_exhausted && gstate.sax_pending_records.empty()) {
-					if (gstate.sax_parser_ctx) {
-						xmlFreeParserCtxt(gstate.sax_parser_ctx);
-						gstate.sax_parser_ctx = nullptr;
-					}
-					gstate.sax_accumulator.reset();
-					gstate.sax_ctx.reset();
-					gstate.sax_file_handle.reset();
-					gstate.file_loaded = false;
-					gstate.file_index++;
+				if (file_exhausted && lstate.sax_pending_records.empty()) {
+					file_done = true;
 				}
 			} else {
 				// DOM extraction: extract records one at a time
-				while (gstate.current_record_index < gstate.record_elements.size() &&
+				while (lstate.current_record_index < lstate.record_elements.size() &&
 				       output_idx < STANDARD_VECTOR_SIZE) {
-					xmlNodePtr record = gstate.record_elements[gstate.current_record_index];
+					xmlNodePtr record = lstate.record_elements[lstate.current_record_index];
 
 					std::vector<Value> row;
 					if (bind_data.has_explicit_schema) {
@@ -1003,21 +1067,18 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						                                                        bind_data.column_datetime_formats);
 					} else {
 						row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
-						                                              gstate.remaining_depth, schema_options);
+						                                              lstate.remaining_depth, schema_options);
 					}
 
 					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 
 					output_idx++;
-					gstate.current_record_index++;
+					lstate.current_record_index++;
 				}
 
 				// Check if we've finished all records from this file
-				if (gstate.current_record_index >= gstate.record_elements.size()) {
-					gstate.current_doc = XMLDocRAII();
-					gstate.record_elements.clear();
-					gstate.file_loaded = false;
-					gstate.file_index++;
+				if (lstate.current_record_index >= lstate.record_elements.size()) {
+					file_done = true;
 				}
 			}
 
@@ -1027,22 +1088,32 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			if (!bind_data.ignore_errors) {
 				throw;
 			}
-			// Skip this file and continue
-			gstate.current_doc = XMLDocRAII();
-			gstate.record_elements.clear();
-			if (gstate.sax_parser_ctx) {
-				xmlFreeParserCtxt(gstate.sax_parser_ctx);
-				gstate.sax_parser_ctx = nullptr;
-			}
-			gstate.sax_accumulator.reset();
-			gstate.sax_ctx.reset();
-			gstate.sax_file_handle.reset();
-			gstate.sax_pending_records.clear();
-			gstate.file_loaded = false;
-			gstate.file_index++;
+			// Skip the rest of this file and claim the next one.
+			lstate.ResetFileResources();
+			lstate.have_file = false;
+			continue;
 		}
 
+		if (file_done) {
+			// File fully consumed. One file (with rows) per output chunk keeps batch indices
+			// ordered, so if we produced rows we tag and return this chunk now; an empty file
+			// produced nothing, so keep claiming rather than returning a spurious 0-row chunk
+			// (which DuckDB reads as end-of-data for this worker).
+			lstate.ResetFileResources();
+			lstate.have_file = false;
+			if (output_idx > 0) {
+				lstate.last_batch_index = (lstate.file_index << XMLReadLocalState::FILE_SHIFT) | lstate.chunk_counter;
+				lstate.chunk_counter++;
+				break;
+			}
+			continue;
+		}
+
+		// File not finished but the output chunk is full: return it; the same file resumes on
+		// the next call (its next chunk gets the following within-file batch index).
 		if (output_idx >= STANDARD_VECTOR_SIZE) {
+			lstate.last_batch_index = (lstate.file_index << XMLReadLocalState::FILE_SHIFT) | lstate.chunk_counter;
+			lstate.chunk_counter++;
 			break;
 		}
 	}
@@ -1093,8 +1164,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 	for (const auto &pattern : file_patterns) {
 		auto glob_result = fs.Glob(pattern, nullptr);
 		// Extract file paths from OpenFileInfo results
+		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
+		// order (matching read_csv). This is the order preserved across threads under multi-file
+		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
+		// keep the user-provided order.
+		vector<string> matched;
 		for (const auto &file_info : glob_result) {
-			result->files.push_back(file_info.path);
+			matched.push_back(file_info.path);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &matched_path : matched) {
+			result->files.push_back(std::move(matched_path));
 		}
 	}
 
@@ -1131,8 +1211,8 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadXMLObjectsInit(Clie
 	auto result = make_uniq<XMLReadGlobalState>();
 	auto &bind_data = input.bind_data->Cast<XMLReadFunctionData>();
 
+	// Shared work list only; per-file cursor state lives in each worker's local state.
 	result->files = bind_data.files;
-	result->file_index = 0;
 
 	return std::move(result);
 }
@@ -1140,17 +1220,27 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::ReadXMLObjectsInit(Clie
 void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
-
-	if (gstate.file_index >= gstate.files.size()) {
-		// No more files to process
-		return;
-	}
+	auto &lstate = data_p.local_state->Cast<XMLReadLocalState>();
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 
-	while (output_idx < STANDARD_VECTOR_SIZE && gstate.file_index < gstate.files.size()) {
-		const auto &filename = gstate.files[gstate.file_index++];
+	// One row (the whole document) per file. Under multi-file parallelism each worker claims
+	// one file, emits its single row as one chunk, and tags it with the file's batch index so
+	// output stays in glob order.
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		if (!lstate.have_file) {
+			idx_t claimed = gstate.ClaimNextFile();
+			if (claimed == DConstants::INVALID_INDEX) {
+				break; // no more work for this worker
+			}
+			lstate.file_index = claimed;
+			lstate.current_filename = gstate.files[claimed];
+			lstate.chunk_counter = 0;
+			lstate.have_file = true;
+		}
+		const auto &filename = lstate.current_filename;
+		bool emitted = false;
 
 		try {
 			// Check file size
@@ -1162,39 +1252,38 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
 				}
-				continue; // Skip this file
-			}
+				// Skip this file (fall through to claim the next)
+			} else {
+				// Read file content
+				string content;
+				content.resize(file_size);
+				ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
-			// Read file content
-			string content;
-			content.resize(file_size);
-			ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
-			// Validate XML
-			auto validity = XMLUtils::CheckXML(content);
-			if (validity == XMLValidity::ResourceError) {
-				ThrowLibxmlOutOfMemory(filename);
-			}
-			if (validity != XMLValidity::Valid) {
-				if (bind_data.ignore_errors) {
-					continue; // Skip this invalid file
+				// Validate XML
+				auto validity = XMLUtils::CheckXML(content);
+				if (validity == XMLValidity::ResourceError) {
+					ThrowLibxmlOutOfMemory(filename);
+				}
+				if (validity != XMLValidity::Valid) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s contains invalid XML", filename);
+					}
+					// Skip this invalid file
 				} else {
-					throw InvalidInputException("File %s contains invalid XML", filename);
+					// Set output values based on schema
+					idx_t col_idx = 0;
+					if (output.data.size() == 2) {
+						// Both filename and xml columns
+						output.data[col_idx++].SetValue(output_idx, Value(filename));
+						output.data[col_idx++].SetValue(output_idx, Value(content));
+					} else {
+						// Only xml column
+						output.data[col_idx++].SetValue(output_idx, Value(content));
+					}
+					output_idx++;
+					emitted = true;
 				}
 			}
-
-			// Set output values based on schema
-			idx_t col_idx = 0;
-			if (output.data.size() == 2) {
-				// Both filename and xml columns
-				output.data[col_idx++].SetValue(output_idx, Value(filename));
-				output.data[col_idx++].SetValue(output_idx, Value(content));
-			} else {
-				// Only xml column
-				output.data[col_idx++].SetValue(output_idx, Value(content));
-			}
-			output_idx++;
-
 		} catch (const OutOfMemoryException &) {
 			throw;
 		} catch (const Exception &e) {
@@ -1203,6 +1292,14 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 			}
 			// Skip this file and continue
 		}
+
+		lstate.have_file = false;
+		if (emitted) {
+			lstate.last_batch_index = (lstate.file_index << XMLReadLocalState::FILE_SHIFT) | lstate.chunk_counter;
+			lstate.chunk_counter++;
+			break; // one file (one row) per chunk keeps batch indices ordered
+		}
+		// Skipped file produced no row: keep claiming without returning an empty chunk.
 	}
 
 	CompatSetOutputCardinality(output, output_idx);
@@ -1246,8 +1343,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	for (const auto &pattern : file_patterns) {
 		auto glob_result = fs.Glob(pattern, nullptr);
 		// Extract file paths from OpenFileInfo results
+		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
+		// order (matching read_csv). This is the order preserved across threads under multi-file
+		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
+		// keep the user-provided order.
+		vector<string> matched;
 		for (const auto &file_info : glob_result) {
-			result->files.push_back(file_info.path);
+			matched.push_back(file_info.path);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &matched_path : matched) {
+			result->files.push_back(std::move(matched_path));
 		}
 	}
 
@@ -2056,6 +2162,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_xml_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_xml_objects_single.init_local = ReadDocumentInitLocal;
+	read_xml_objects_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_objects_set.AddFunction(read_xml_objects_single);
 
 	// Variant 2: Array of strings parameter
@@ -2064,6 +2172,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_xml_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_xml_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_xml_objects_array.init_local = ReadDocumentInitLocal;
+	read_xml_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_objects_set.AddFunction(read_xml_objects_array);
 
 	loader.RegisterFunction(read_xml_objects_set);
@@ -2100,6 +2210,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_single.named_parameters["streaming"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	read_xml_single.init_local = ReadDocumentInitLocal;
+	read_xml_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_set.AddFunction(read_xml_single);
 
 	// Variant 2: Array of strings parameter
@@ -2132,6 +2244,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_xml_array.named_parameters["streaming"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	read_xml_array.init_local = ReadDocumentInitLocal;
+	read_xml_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_set.AddFunction(read_xml_array);
 
 	loader.RegisterFunction(read_xml_set);
@@ -2167,6 +2281,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_html_single.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_single.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	read_html_single.init_local = ReadDocumentInitLocal;
+	read_html_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_set.AddFunction(read_html_single);
 
 	// Variant 2: Array of strings parameter
@@ -2198,6 +2314,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	read_html_array.named_parameters["nullstr"] = LogicalType::ANY;
 	read_html_array.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	read_html_array.init_local = ReadDocumentInitLocal;
+	read_html_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_set.AddFunction(read_html_array);
 
 	loader.RegisterFunction(read_html_set);
@@ -2211,6 +2329,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_objects_single.init_local = ReadDocumentInitLocal;
+	read_html_objects_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_objects_set.AddFunction(read_html_objects_single);
 
 	// Variant 2: Array of strings parameter
@@ -2219,6 +2339,8 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
 	read_html_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_objects_array.init_local = ReadDocumentInitLocal;
+	read_html_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_objects_set.AddFunction(read_html_objects_array);
 
 	loader.RegisterFunction(read_html_objects_set);

@@ -26,6 +26,15 @@ A comprehensive XML and HTML processing extension for DuckDB that enables SQL-na
 - Automatic fallback: DOM for small files, SAX for large files
 - Controlled by ``streaming`` parameter (default: true)
 
+### ⚡ **Multi-File Parallelism**
+- ``read_xml`` / ``read_html`` (and the ``_objects`` variants) process a glob or list of
+  files across threads — one worker per file
+- **Order-preserving**: output stays in file order regardless of thread count (DuckDB
+  batch-index reassembly), so results are deterministic
+- Glob matches are sorted lexicographically for stable, filesystem-independent order;
+  an explicit list of paths keeps the order you provide
+- Single-file reads are unchanged (one file → one worker → the existing serial path)
+
 ### 🛠 **Production Ready**
 - Built on libxml2 for robust parsing
 - Comprehensive error handling
