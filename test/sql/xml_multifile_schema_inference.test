@@ -43,3 +43,75 @@ FROM read_xml('__TEST_DIR__/doc_*.xml');
 statement error
 SELECT extra FROM read_xml('__TEST_DIR__/doc_*.xml', sample_files := 1);
 ----
+
+# ---------------------------------------------------------------------------
+# read_html goes through a SEPARATE bind path from read_xml — verify multi-file sampling
+# works there too. hdoc_0 has only <val>; hdoc_1 adds <extra>.
+# ---------------------------------------------------------------------------
+statement ok
+COPY (SELECT '<html><body><rec><val>1</val></rec></body></html>' AS c) TO '__TEST_DIR__/hdoc_0.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><rec><val>2</val><extra>hi</extra></rec></body></html>' AS c) TO '__TEST_DIR__/hdoc_1.html' (FORMAT csv, HEADER false, QUOTE '');
+
+query I
+SELECT list_contains(cols, 'val') AND list_contains(cols, 'extra') AS has_both
+FROM (SELECT list(column_name) AS cols FROM (DESCRIBE SELECT * FROM read_html('__TEST_DIR__/hdoc_*.html', record_element := 'rec')));
+----
+true
+
+# read_html with sample_files := 1 restores first-file-only inference (no 'extra').
+query I
+SELECT list_contains(list(column_name), 'extra') AS has_extra
+FROM (DESCRIBE SELECT * FROM read_html('__TEST_DIR__/hdoc_*.html', record_element := 'rec', sample_files := 1));
+----
+false
+
+# ---------------------------------------------------------------------------
+# Bound vs sample_files := -1. Ten files (esf_00..esf_09); the 'extra' column first appears in
+# the 10th file — beyond the default sample bound of 8. The default MISSES it; -1 samples all
+# and finds it. Pins both the default bound and the "all files" mode.
+# ---------------------------------------------------------------------------
+statement ok
+COPY (SELECT '<data><row><val>0</val></row></data>' AS c) TO '__TEST_DIR__/esf_00.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>1</val></row></data>' AS c) TO '__TEST_DIR__/esf_01.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>2</val></row></data>' AS c) TO '__TEST_DIR__/esf_02.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>3</val></row></data>' AS c) TO '__TEST_DIR__/esf_03.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>4</val></row></data>' AS c) TO '__TEST_DIR__/esf_04.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>5</val></row></data>' AS c) TO '__TEST_DIR__/esf_05.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>6</val></row></data>' AS c) TO '__TEST_DIR__/esf_06.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>7</val></row></data>' AS c) TO '__TEST_DIR__/esf_07.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>8</val></row></data>' AS c) TO '__TEST_DIR__/esf_08.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>9</val><extra>late</extra></row></data>' AS c) TO '__TEST_DIR__/esf_09.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+# Default (samples the first 8 of 10 sorted files) does NOT see esf_09's 'extra'.
+query I
+SELECT list_contains(list(column_name), 'extra') AS has_extra
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/esf_*.xml'));
+----
+false
+
+# sample_files := -1 samples every file and picks up esf_09's 'extra'.
+query I
+SELECT list_contains(list(column_name), 'extra') AS has_extra
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/esf_*.xml', sample_files := -1));
+----
+true
