@@ -121,3 +121,108 @@ SELECT file, seq FROM read_xml('__TEST_DIR__/part_03.xml') ORDER BY seq;
 3	0
 3	1
 3	2
+
+# ---------------------------------------------------------------------------
+# (Glob sorting is already proven by the `file, seq` ordering above: file value K lives in
+#  part_0K.xml, so a 0..7 ordered result only happens when the glob is sorted.)
+#
+# An explicit list of paths keeps the caller's order (NOT sorted) — here reversed. Each file's
+# three rows stay contiguous (one file per chunk), so the file column runs 5,5,5,1,1,1,3,3,3.
+# (nosort compares in returned order; no DISTINCT, which would hash-reorder.)
+# ---------------------------------------------------------------------------
+query I nosort
+SELECT file FROM read_xml(['__TEST_DIR__/part_05.xml', '__TEST_DIR__/part_01.xml', '__TEST_DIR__/part_03.xml']);
+----
+5
+5
+5
+1
+1
+1
+3
+3
+3
+
+# ===========================================================================
+# read_html / read_html_objects parallelize the same way (separate _objects code path).
+# 8 HTML files, each with three <data-item> records tagged file (0..7) and seq (0..2).
+# ===========================================================================
+statement ok
+COPY (SELECT '<html><body><data-item><file>0</file><seq>0</seq></data-item><data-item><file>0</file><seq>1</seq></data-item><data-item><file>0</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_00.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>1</file><seq>0</seq></data-item><data-item><file>1</file><seq>1</seq></data-item><data-item><file>1</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_01.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>2</file><seq>0</seq></data-item><data-item><file>2</file><seq>1</seq></data-item><data-item><file>2</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_02.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>3</file><seq>0</seq></data-item><data-item><file>3</file><seq>1</seq></data-item><data-item><file>3</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_03.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>4</file><seq>0</seq></data-item><data-item><file>4</file><seq>1</seq></data-item><data-item><file>4</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_04.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>5</file><seq>0</seq></data-item><data-item><file>5</file><seq>1</seq></data-item><data-item><file>5</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_05.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>6</file><seq>0</seq></data-item><data-item><file>6</file><seq>1</seq></data-item><data-item><file>6</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_06.html' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<html><body><data-item><file>7</file><seq>0</seq></data-item><data-item><file>7</file><seq>1</seq></data-item><data-item><file>7</file><seq>2</seq></data-item></body></html>' AS c) TO '__TEST_DIR__/h_07.html' (FORMAT csv, HEADER false, QUOTE '');
+
+# Multiset parity for read_html.
+query III
+SELECT count(*), sum(file), sum(seq) FROM read_html('__TEST_DIR__/h_*.html', record_element := 'data-item');
+----
+24	84	24
+
+# Order preservation for read_html: exact glob order under the forced parallel executor.
+query II nosort
+SELECT file, seq FROM read_html('__TEST_DIR__/h_*.html', record_element := 'data-item');
+----
+0	0
+0	1
+0	2
+1	0
+1	1
+1	2
+2	0
+2	1
+2	2
+3	0
+3	1
+3	2
+4	0
+4	1
+4	2
+5	0
+5	1
+5	2
+6	0
+6	1
+6	2
+7	0
+7	1
+7	2
+
+# read_html filename attribution is per-row-correct.
+query I
+SELECT bool_and(filename LIKE '%h_0' || file || '.html')
+FROM read_html('__TEST_DIR__/h_*.html', record_element := 'data-item', filename := true);
+----
+true
+
+# read_html_objects: one row per file, filenames in glob order.
+query I nosort
+SELECT regexp_extract(filename, 'h_0(\d)\.html', 1)
+FROM read_html_objects('__TEST_DIR__/h_*.html', filename := true);
+----
+0
+1
+2
+3
+4
+5
+6
+7
