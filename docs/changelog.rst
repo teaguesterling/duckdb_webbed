@@ -1,8 +1,55 @@
 Changelog
 =========
 
-v2.5.0 (Current)
+v2.6.0 (Current)
 ----------------
+
+A multi-file release. ``read_xml`` / ``read_html`` now process a glob or list of files
+**across threads** (order-preserving), and schema inference samples **multiple files** by
+default instead of only the first — so a column or wider type that appears only in a later
+file is no longer missed. Shippable artifacts still build against the **DuckDB v1.5.4**
+release tag.
+
+**Behavior changes (review before upgrading)**
+
+- **Multi-file schema inference samples several files by default.** ``read_xml`` / ``read_html``
+  over a glob or list previously inferred the schema from the *first file only*; they now
+  sample up to ``sample_files`` files (**default 8**) and merge the result, using the same
+  machinery as ``union_by_name``. Consequences: the inferred schema may now include columns /
+  wider types that only appear in files 2–8; and reading ``[invalid, valid]`` with
+  ``ignore_errors`` now recovers a real schema from the valid file rather than falling back to
+  the raw ``xml`` / ``html`` column. ``sample_files := 1`` restores the exact first-file-only
+  behavior; ``sample_files := -1`` samples every file. For file sets at or below the sample
+  bound, the default now matches ``union_by_name`` — the latter remains the unbounded
+  "scan every file" form (it still differs for globs larger than the bound). (Issue #124)
+- **Glob matches are sorted lexicographically.** A glob (e.g. ``read_xml('*.xml')``) now yields
+  files in deterministic, filesystem-independent order. This is the order preserved across
+  threads *and* the order in which the first ``sample_files`` files are chosen for inference. An
+  explicit list of paths keeps the order you provide. (Issue #72)
+
+**New Features**
+
+- **Multi-file parallelism.** ``read_xml`` / ``read_xml_objects`` / ``read_html`` /
+  ``read_html_objects`` process a glob or list of files across threads — one worker per file —
+  instead of single-threaded (``MaxThreads()`` was hardcoded to 1). Output stays in file order
+  regardless of thread count via DuckDB's batch-index reassembly. Per-file cursor state moved
+  from the global state into a new per-thread ``XMLReadLocalState``; single-file reads are
+  unchanged (one file → one worker → the existing serial path, incl. the 2–4 GiB whole-document
+  path). (Issue #72)
+- **Bounded multi-file schema sampling** via the new ``sample_files`` parameter (default 8),
+  making inference robust to columns/types beyond the first file without opening an entire glob.
+  (Issue #124)
+
+**Internal**
+
+- ``vcpkg.json`` manifest version → 2.6.0.
+- New tests: ``test/sql/xml_multifile_parallelism.test`` (forced-parallel order/parity/filename
+  attribution) and ``test/sql/xml_multifile_schema_inference.test`` (multi-file column/type
+  pickup; written test-first to pin the prior bug). Three existing tests updated to assert the
+  improved default and use ``sample_files := 1`` as the narrow baseline.
+
+v2.5.0
+------
 
 A security-hardening release. XML/HTML parsing is now XXE-safe and non-networked
 by default; the >2 GiB whole-document fix is completed for the remaining HTML
