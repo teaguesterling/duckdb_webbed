@@ -114,13 +114,23 @@ inf	nan
 
 # -----------------------------------------------------------------------------
 # Fallback schema must NULL-fill output columns instead of leaving them
-# uninitialized (invalid first file with ignore_errors yields the simple
-# 'xml' fallback schema, then rows from the valid file carry no values)
+# uninitialized. sample_files:=1 samples only the invalid first file, so inference
+# fails and yields the simple 'xml' fallback schema; rows from the valid file then
+# carry no values. (With the multi-file-sampling default the schema is instead
+# recovered from the valid second file — asserted below.)
 # -----------------------------------------------------------------------------
 
 query I
 SELECT xml IS NULL
-FROM read_xml(['test/invalid/invalid.xml', 'test/xml/schema_inference/attr_prefixed.xml'], ignore_errors := true);
+FROM read_xml(['test/invalid/invalid.xml', 'test/xml/schema_inference/attr_prefixed.xml'], ignore_errors := true, sample_files := 1);
 ----
 true
 true
+
+# Multi-file sampling (the default) skips the invalid first file and recovers a real schema
+# from the valid second file — so 'id' is a proper column, not the 'xml' fallback.
+query I
+SELECT COUNT(*) FILTER (WHERE column_name = 'id')
+FROM (DESCRIBE SELECT * FROM read_xml(['test/invalid/invalid.xml', 'test/xml/schema_inference/attr_prefixed.xml'], ignore_errors := true));
+----
+1

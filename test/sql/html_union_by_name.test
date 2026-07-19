@@ -4,10 +4,10 @@
 
 require webbed
 
-# Test 1: Without union_by_name - should get only common columns (intersection)
-# Note: Column order is non-deterministic, so we order by column name
+# Test 1: sample_files:=1 samples only the first file, so the schema is file 1's columns
+# (the pre-sampling default). The multi-file default and union_by_name both see field-c too.
 query TTTTTT
-SELECT * FROM (DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item')) ORDER BY column_name;
+SELECT * FROM (DESCRIBE SELECT * FROM read_html(['test/html/union_file1.html', 'test/html/union_file2.html'], record_element:='data-item', sample_files:=1)) ORDER BY column_name;
 ----
 field-a	VARCHAR	YES	NULL	NULL	NULL
 field-b	INTEGER	YES	NULL	NULL	NULL

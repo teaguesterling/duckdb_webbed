@@ -1,0 +1,45 @@
+# name: test/sql/xml_multifile_schema_inference.test
+# description: read_xml/read_html default schema inference should sample multiple files, not just the first
+# group: [sql]
+
+require webbed
+
+# Two files, sorted so doc_0.xml is inferred first. The FIRST file lacks the 'extra' column and
+# types 'val' as an integer; the SECOND introduces 'extra' and a fractional 'val'. With
+# first-file-only inference (the bug) the default read misses 'extra' and mis-types 'val'.
+statement ok
+COPY (SELECT '<data><row><val>1</val></row></data>' AS c) TO '__TEST_DIR__/doc_0.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><val>2.5</val><extra>hi</extra></row></data>' AS c) TO '__TEST_DIR__/doc_1.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+# EXPECTED: the default (non-union_by_name) read samples multiple files, so the inferred schema
+# contains BOTH 'val' and 'extra'. (Currently BUGGED: only doc_0.xml is sampled → no 'extra'.)
+query I
+SELECT list_contains(cols, 'val') AND list_contains(cols, 'extra') AS has_both_columns
+FROM (SELECT list(column_name) AS cols FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/doc_*.xml')));
+----
+true
+
+# EXPECTED: 'val' widens to a fractional type because doc_1 has 2.5 — not integer from doc_0's 1.
+# (Currently BUGGED: 'val' is inferred as an integer type from doc_0 alone.)
+query I
+SELECT typeof(val) NOT IN ('BIGINT', 'INTEGER', 'HUGEINT', 'SMALLINT', 'TINYINT') AS val_is_fractional
+FROM read_xml('__TEST_DIR__/doc_*.xml')
+LIMIT 1;
+----
+true
+
+# EXPECTED: the 'extra' value from doc_1 is readable; doc_0's row is NULL for it.
+# (Currently BUGGED: 'extra' is not a column at all → this query fails to bind.)
+query I
+SELECT count(*) FILTER (WHERE extra = 'hi') AS extra_rows
+FROM read_xml('__TEST_DIR__/doc_*.xml');
+----
+1
+
+# Control: an explicit sample_files := 1 must reproduce the old first-file-only behavior
+# (schema from doc_0 only → no 'extra' column, so the reference to it is unknown).
+statement error
+SELECT extra FROM read_xml('__TEST_DIR__/doc_*.xml', sample_files := 1);
+----

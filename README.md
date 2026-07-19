@@ -650,7 +650,8 @@ read_xml('pattern',
 - **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)
 - **`empty_elements`**: How to handle empty elements: `'object'` (default) returns empty struct, `'null'` returns NULL, `'string'` returns empty string
 - **`namespaces`**: Namespace handling mode: `'strip'` (default) removes namespace prefixes, `'expand'` replaces prefixes with full URIs, `'keep'` preserves prefixes as-is
-- **`union_by_name`**: When reading multiple files, combine columns by name (like DuckDB's `union_by_name` for other formats). Useful when XML files have different schemas (default: false)
+- **`union_by_name`**: When reading multiple files, combine columns by name (like DuckDB's `union_by_name` for other formats). Scans **all** files to build the schema. Useful when files have different schemas and you want every column regardless of how many files there are (default: false)
+- **`sample_files`**: Number of files sampled for schema inference on a multi-file read (default: 8). Sampling a bounded handful — rather than only the first file — makes the inferred schema robust to columns/types that a leading file happens not to exhibit, without opening an entire glob. `sample_files := 1` restores first-file-only inference; `sample_files := -1` samples every file (like `union_by_name`). Ignored when `union_by_name = true` (which always scans all files) or when `columns` is given
 - **`streaming`**: Enable SAX-based streaming for files exceeding `maximum_file_size`. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. Set to false to error on oversized files (original behavior). Only supports simple tag names for `record_element`. Not available for HTML (default: true)
 
 ### 🔍 **XPath Support**
