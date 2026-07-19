@@ -1,0 +1,123 @@
+# name: test/sql/xml_multifile_parallelism.test
+# description: Multi-file read_xml/read_html run across threads, order-preserving (issue #72)
+# group: [sql]
+
+require webbed
+
+# Force the parallel executor so the multi-file path is actually exercised on small inputs,
+# and give it several threads to distribute the files across.
+statement ok
+PRAGMA threads=8;
+
+statement ok
+PRAGMA verify_parallelism;
+
+# preserve_insertion_order is on by default; be explicit — this is the ordering guarantee under test.
+statement ok
+SET preserve_insertion_order=true;
+
+# ---------------------------------------------------------------------------
+# Generate 8 single-line XML files: part_00.xml .. part_07.xml. Each holds three
+# <row> records tagged with its file number (0..7) and a within-file seq (0..2).
+# Glob results are sorted, so the deterministic order is part_00, part_01, ...
+# ---------------------------------------------------------------------------
+statement ok
+COPY (SELECT '<data><row><file>0</file><seq>0</seq></row><row><file>0</file><seq>1</seq></row><row><file>0</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_00.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>1</file><seq>0</seq></row><row><file>1</file><seq>1</seq></row><row><file>1</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_01.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>2</file><seq>0</seq></row><row><file>2</file><seq>1</seq></row><row><file>2</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_02.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>3</file><seq>0</seq></row><row><file>3</file><seq>1</seq></row><row><file>3</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_03.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>4</file><seq>0</seq></row><row><file>4</file><seq>1</seq></row><row><file>4</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_04.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>5</file><seq>0</seq></row><row><file>5</file><seq>1</seq></row><row><file>5</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_05.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>6</file><seq>0</seq></row><row><file>6</file><seq>1</seq></row><row><file>6</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_06.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<data><row><file>7</file><seq>0</seq></row><row><file>7</file><seq>1</seq></row><row><file>7</file><seq>2</seq></row></data>' AS c) TO '__TEST_DIR__/part_07.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+# ---------------------------------------------------------------------------
+# Multiset parity: the parallel scan returns exactly the rows expected (24 rows;
+# order-independent checksums). Catches dropped/duplicated rows.
+# ---------------------------------------------------------------------------
+query III
+SELECT count(*), sum(file), sum(seq) FROM read_xml('__TEST_DIR__/part_*.xml');
+----
+24	84	24
+
+# ---------------------------------------------------------------------------
+# Order preservation (the #72 guarantee): with the parallel executor forced, the physical
+# result order must still be exact glob order — file 0 rows, then file 1, ... each seq 0,1,2.
+# `nosort` compares rows in returned order (no window operator to muddy it).
+# ---------------------------------------------------------------------------
+query II nosort
+SELECT file, seq FROM read_xml('__TEST_DIR__/part_*.xml');
+----
+0	0
+0	1
+0	2
+1	0
+1	1
+1	2
+2	0
+2	1
+2	2
+3	0
+3	1
+3	2
+4	0
+4	1
+4	2
+5	0
+5	1
+5	2
+6	0
+6	1
+6	2
+7	0
+7	1
+7	2
+
+# The filename pseudo-column must name the file each row actually came from (not the global
+# cursor). Order-independent per-row check — this is the silent-corruption guard.
+query I
+SELECT bool_and(filename LIKE '%part_0' || file || '.xml')
+FROM read_xml('__TEST_DIR__/part_*.xml', filename := true);
+----
+true
+
+# ---------------------------------------------------------------------------
+# read_xml_objects (raw passthrough) also parallelizes order-preserving: one row per file,
+# filenames in glob order.
+# ---------------------------------------------------------------------------
+query I nosort
+SELECT regexp_extract(filename, 'part_0(\d)\.xml', 1)
+FROM read_xml_objects('__TEST_DIR__/part_*.xml', filename := true);
+----
+0
+1
+2
+3
+4
+5
+6
+7
+
+# ---------------------------------------------------------------------------
+# Single-file read is unchanged (one file => one worker => the existing serial path).
+# ---------------------------------------------------------------------------
+query II
+SELECT file, seq FROM read_xml('__TEST_DIR__/part_03.xml') ORDER BY seq;
+----
+3	0
+3	1
+3	2
