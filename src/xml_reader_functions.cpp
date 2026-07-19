@@ -408,6 +408,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			result->include_filename = kv.second.GetValue<bool>();
 		} else if (kv.first == "union_by_name") {
 			result->union_by_name = kv.second.GetValue<bool>();
+		} else if (kv.first == "sample_files") {
+			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
@@ -581,12 +583,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		try {
 			// Determine which files to scan for schema inference
 			std::vector<std::string> files_to_scan;
-			if (result->union_by_name) {
-				// Scan all files to build union schema
+			if (result->union_by_name || result->schema_sample_files < 0) {
+				// union_by_name (or sample_files := -1): sample every file for a full union schema
 				files_to_scan = result->files;
 			} else {
-				// Scan only first file
-				files_to_scan.push_back(result->files[0]);
+				// Sample a bounded number of files (default schema_sample_files) so the inferred
+				// schema reflects columns/types beyond the first file, without opening the whole glob.
+				idx_t limit = result->schema_sample_files < 1 ? 1 : static_cast<idx_t>(result->schema_sample_files);
+				idx_t n = MinValue<idx_t>(result->files.size(), limit);
+				for (idx_t i = 0; i < n; i++) {
+					files_to_scan.push_back(result->files[i]);
+				}
 			}
 
 			// Map to track all unique columns and their types across files
@@ -1376,6 +1383,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			result->include_filename = kv.second.GetValue<bool>();
 		} else if (kv.first == "union_by_name") {
 			result->union_by_name = kv.second.GetValue<bool>();
+		} else if (kv.first == "sample_files") {
+			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
@@ -1547,12 +1556,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		try {
 			// Determine which files to scan for schema inference
 			std::vector<std::string> files_to_scan;
-			if (result->union_by_name) {
-				// Scan all files to build union schema
+			if (result->union_by_name || result->schema_sample_files < 0) {
+				// union_by_name (or sample_files := -1): sample every file for a full union schema
 				files_to_scan = result->files;
 			} else {
-				// Scan only first file
-				files_to_scan.push_back(result->files[0]);
+				// Sample a bounded number of files (default schema_sample_files) so the inferred
+				// schema reflects columns/types beyond the first file, without opening the whole glob.
+				idx_t limit = result->schema_sample_files < 1 ? 1 : static_cast<idx_t>(result->schema_sample_files);
+				idx_t n = MinValue<idx_t>(result->files.size(), limit);
+				for (idx_t i = 0; i < n; i++) {
+					files_to_scan.push_back(result->files[i]);
+				}
 			}
 
 			// Map to track all unique columns and their types across files
@@ -2198,6 +2212,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_single.named_parameters["sample_size"] = LogicalType::INTEGER;
+	read_xml_single.named_parameters["sample_files"] = LogicalType::BIGINT;
 	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_xml_single.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2232,6 +2247,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_xml_array.named_parameters["sample_size"] = LogicalType::INTEGER;
+	read_xml_array.named_parameters["sample_files"] = LogicalType::BIGINT;
 	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_xml_array.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2270,6 +2286,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_single.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_html_single.named_parameters["sample_size"] = LogicalType::INTEGER;
+	read_html_single.named_parameters["sample_files"] = LogicalType::BIGINT;
 	read_html_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_html_single.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
@@ -2303,6 +2320,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
 	read_html_array.named_parameters["max_depth"] = LogicalType::INTEGER;
 	read_html_array.named_parameters["sample_size"] = LogicalType::INTEGER;
+	read_html_array.named_parameters["sample_files"] = LogicalType::BIGINT;
 	read_html_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
 	read_html_array.named_parameters["record_element"] =
 	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows

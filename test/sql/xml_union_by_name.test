@@ -93,10 +93,13 @@ WHERE name IN ('title', 'link', 'company', 'description', 'location');
 ----
 5
 
-# Test 10: Verify that union_by_name=false gives different column count than union_by_name=true
+# Test 10: multi-file schema sampling. The default now samples several files, so it already
+# picks up columns from both files — matching union_by_name for this small set. The narrow
+# baseline is sample_files := 1 (first file only, the pre-sampling behavior), which sees fewer
+# columns. So union_by_name (all files) has MORE columns than a single-file sample.
 statement ok
 CREATE TEMP TABLE without_union AS
-  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml']);
+  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml'], sample_files := 1);
 
 statement ok
 CREATE TEMP TABLE with_union AS
@@ -104,6 +107,17 @@ CREATE TEMP TABLE with_union AS
 
 query I
 SELECT (SELECT COUNT(*) FROM pragma_table_info('with_union')) > (SELECT COUNT(*) FROM pragma_table_info('without_union'));
+----
+true
+
+# And the default (multi-file sampling) now matches union_by_name for this 2-file set —
+# it no longer misses file 2's columns.
+statement ok
+CREATE TEMP TABLE default_sample AS
+  SELECT * FROM read_xml(['test/xml/union_test_file1.xml', 'test/xml/union_test_file2.xml']);
+
+query I
+SELECT (SELECT COUNT(*) FROM pragma_table_info('default_sample')) = (SELECT COUNT(*) FROM pragma_table_info('with_union'));
 ----
 true
 

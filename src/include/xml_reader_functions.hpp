@@ -127,6 +127,12 @@ struct XMLReadFunctionData : public TableFunctionData {
 
 	// Union by name - combine files with different schemas
 	bool union_by_name = false;
+
+	// Number of files sampled for schema inference on the default (non-union_by_name) multi-file
+	// path. Sampling a bounded handful — rather than only the first file — makes the inferred
+	// schema robust to columns/types a leading file happens not to exhibit, without the cost of
+	// opening an entire glob. `sample_files := -1` samples every file; values < 1 are treated as 1.
+	int64_t schema_sample_files = 8;
 };
 
 // Shared, read-only-after-init state plus a mutex-guarded file dispatcher. All per-file
