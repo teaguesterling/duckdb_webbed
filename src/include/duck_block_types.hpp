@@ -131,7 +131,9 @@ public:
 		child_list_t<Value> struct_values;
 		struct_values.push_back(make_pair("kind", Value(KIND_BLOCK)));
 		struct_values.push_back(make_pair("element_type", Value(element_type)));
-		struct_values.push_back(make_pair("content", Value(content)));
+		// Empty content => NULL (spec convention for containers whose text lives
+		// in structured inline children).
+		struct_values.push_back(make_pair("content", content.empty() ? Value(LogicalType::VARCHAR) : Value(content)));
 		struct_values.push_back(make_pair("level", level));
 		struct_values.push_back(make_pair("encoding", Value(encoding)));
 		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));
@@ -153,7 +155,9 @@ public:
 		child_list_t<Value> struct_values;
 		struct_values.push_back(make_pair("kind", Value(KIND_INLINE)));
 		struct_values.push_back(make_pair("element_type", Value(element_type)));
-		struct_values.push_back(make_pair("content", Value(content)));
+		// Empty content => NULL (a formatting container that recurses into
+		// structured child inlines carries no literal content of its own).
+		struct_values.push_back(make_pair("content", content.empty() ? Value(LogicalType::VARCHAR) : Value(content)));
 		struct_values.push_back(make_pair("level", level));
 		struct_values.push_back(make_pair("encoding", Value(encoding)));
 		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));

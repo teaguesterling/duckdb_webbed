@@ -131,105 +131,133 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	return XMLUtils::HTMLEscape(content);
 }
 
-// Extract inline elements from an HTML node's children
-// Returns a vector of inline element Values and updates element_order
+// True if `node` has at least one child that is an element (not just text).
+static bool HasElementChildren(xmlNodePtr node) {
+	for (xmlNodePtr c = node->children; c; c = c->next) {
+		if (c->type == XML_ELEMENT_NODE) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Map an HTML inline tag to a duck_block inline element_type. Returns "" for
+// tags that are not a known formatting wrapper.
+static std::string InlineTypeForTag(const std::string &tag) {
+	if (tag == "strong" || tag == "b")
+		return DuckBlockTypes::INLINE_BOLD;
+	if (tag == "em" || tag == "i")
+		return DuckBlockTypes::INLINE_ITALIC;
+	if (tag == "code")
+		return DuckBlockTypes::INLINE_CODE;
+	if (tag == "del" || tag == "s" || tag == "strike")
+		return DuckBlockTypes::INLINE_STRIKETHROUGH;
+	if (tag == "sup")
+		return DuckBlockTypes::INLINE_SUPERSCRIPT;
+	if (tag == "sub")
+		return DuckBlockTypes::INLINE_SUBSCRIPT;
+	if (tag == "u")
+		return DuckBlockTypes::INLINE_UNDERLINE;
+	if (tag == "a")
+		return DuckBlockTypes::INLINE_LINK;
+	if (tag == "span")
+		return DuckBlockTypes::INLINE_SPAN;
+	return "";
+}
+
+// Extract inline elements from an HTML node's children as structured
+// kind='inline' duck_blocks. Nested formatting (e.g. <b>x <i>y</i></b>) is
+// preserved: a wrapper containing further elements is emitted with empty
+// content (=> NULL) followed by its children at level+1; a wrapper containing
+// only text becomes a leaf carrying that text. Returns the inline Values and
+// advances element_order.
 static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
 	std::vector<Value> inlines;
 
 	for (xmlNodePtr child = parent_node->children; child; child = child->next) {
 		if (child->type == XML_TEXT_NODE) {
 			std::string text = reinterpret_cast<const char *>(child->content);
-			// Skip empty text nodes or whitespace-only between elements
 			if (!text.empty()) {
 				std::map<std::string, std::string> attrs;
 				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, text,
 				                                               Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			}
-		} else if (child->type == XML_ELEMENT_NODE) {
-			std::string tag = reinterpret_cast<const char *>(child->name);
-			std::string content = GetNodeTextContent(child);
-			std::map<std::string, std::string> attrs;
+			continue;
+		}
+		if (child->type != XML_ELEMENT_NODE) {
+			continue;
+		}
 
-			if (tag == "strong" || tag == "b") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_BOLD, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "em" || tag == "i") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_ITALIC, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "code") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_CODE, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "a") {
+		std::string tag = reinterpret_cast<const char *>(child->name);
+		std::map<std::string, std::string> attrs;
+
+		// Void inline elements (no children to recurse).
+		if (tag == "img") {
+			std::string src = GetNodeAttribute(child, "src");
+			std::string alt = GetNodeAttribute(child, "alt");
+			std::string title = GetNodeAttribute(child, "title");
+			if (!src.empty())
+				attrs["src"] = src;
+			if (!alt.empty())
+				attrs["alt"] = alt;
+			if (!title.empty())
+				attrs["title"] = title;
+			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
+			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
+			                                               attrs, element_order++));
+			continue;
+		}
+		if (tag == "br") {
+			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_LINEBREAK, "",
+			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
+			                                               attrs, element_order++));
+			continue;
+		}
+
+		std::string etype = InlineTypeForTag(tag);
+		if (!etype.empty()) {
+			if (tag == "a") {
 				std::string href = GetNodeAttribute(child, "href");
-				if (!href.empty()) {
+				if (!href.empty())
 					attrs["href"] = href;
-				}
 				std::string title = GetNodeAttribute(child, "title");
-				if (!title.empty()) {
+				if (!title.empty())
 					attrs["title"] = title;
-				}
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_LINK, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "img") {
-				std::string src = GetNodeAttribute(child, "src");
-				std::string alt = GetNodeAttribute(child, "alt");
-				std::string title = GetNodeAttribute(child, "title");
-				if (!src.empty()) {
-					attrs["src"] = src;
-				}
-				if (!alt.empty()) {
-					attrs["alt"] = alt;
-				}
-				if (!title.empty()) {
-					attrs["title"] = title;
-				}
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "br") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_LINEBREAK, "",
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "del" || tag == "s" || tag == "strike") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_STRIKETHROUGH, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "sup") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SUPERSCRIPT, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "sub") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SUBSCRIPT, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else if (tag == "u") {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_UNDERLINE, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			} else if (tag == "span") {
 				std::string id = GetNodeAttribute(child, "id");
 				std::string cls = GetNodeAttribute(child, "class");
-				if (!id.empty()) {
+				if (!id.empty())
 					attrs["id"] = id;
-				}
-				if (!cls.empty()) {
+				if (!cls.empty())
 					attrs["class"] = cls;
-				}
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SPAN, content,
+			}
+			if (HasElementChildren(child)) {
+				// Container: empty content, then recurse children one level deeper.
+				inlines.push_back(DuckBlockTypes::CreateInline(etype, "", Value::INTEGER(base_level),
+				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				auto nested = ExtractInlineElements(child, base_level + 1, element_order);
+				inlines.insert(inlines.end(), nested.begin(), nested.end());
+			} else {
+				// Leaf: carries its text content.
+				inlines.push_back(DuckBlockTypes::CreateInline(etype, GetNodeTextContent(child),
 				                                               Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			} else {
-				// Unknown inline element - treat as text
-				if (!content.empty()) {
-					inlines.push_back(
-					    DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content, Value::INTEGER(base_level),
-					                                 DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-				}
+			}
+			continue;
+		}
+
+		// Unknown inline element: preserve any nested formatting by recursing at
+		// the same level (the unknown wrapper is dropped); text-only becomes text.
+		if (HasElementChildren(child)) {
+			auto nested = ExtractInlineElements(child, base_level, element_order);
+			inlines.insert(inlines.end(), nested.begin(), nested.end());
+		} else {
+			std::string content = GetNodeTextContent(child);
+			if (!content.empty()) {
+				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content,
+				                                               Value::INTEGER(base_level),
+				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			}
 		}
 	}
@@ -314,7 +342,9 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 
 				std::string tag(reinterpret_cast<const char *>(node->name));
 				std::string content;
-				Value level_value;
+				// Top-level blocks are structural depth 1 (matches duckdb_markdown /
+				// duck_block_utils); blockquote overrides with its nesting depth below.
+				Value level_value = Value::INTEGER(1);
 				std::string block_type;
 				std::string encoding = DuckBlockTypes::ENCODING_TEXT;
 				std::map<std::string, std::string> attrs;
@@ -332,10 +362,11 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 					std::string inner_html = GetNodeInnerHTML(node, doc);
 					if (ContentContainsTags(inner_html)) {
 						// Extract structured inline elements instead of storing raw HTML
-						blocks.push_back(DuckBlockTypes::CreateBlock(
-						    DuckBlockTypes::TYPE_HEADING, "", DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-						// Extract inline children at level 1
-						auto inline_elements = ExtractInlineElements(node, 1, block_order);
+						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "",
+						                                             Value::INTEGER(1), DuckBlockTypes::ENCODING_TEXT,
+						                                             attrs, block_order++));
+						// Extract inline children at level 2 (parent block is level 1)
+						auto inline_elements = ExtractInlineElements(node, 2, block_order);
 						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
 						continue; // Skip default block creation
 					} else {
@@ -350,10 +381,11 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 					if (ContentContainsTags(inner_html)) {
 						// Extract structured inline elements instead of storing raw HTML
 						// Create paragraph block with empty content
-						blocks.push_back(DuckBlockTypes::CreateBlock(
-						    DuckBlockTypes::TYPE_PARAGRAPH, "", DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-						// Extract inline children at level 1
-						auto inline_elements = ExtractInlineElements(node, 1, block_order);
+						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "",
+						                                             Value::INTEGER(1), DuckBlockTypes::ENCODING_TEXT,
+						                                             attrs, block_order++));
+						// Extract inline children at level 2 (parent block is level 1)
+						auto inline_elements = ExtractInlineElements(node, 2, block_order);
 						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
 						continue; // Skip default block creation
 					} else {
