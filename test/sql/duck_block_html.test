@@ -306,26 +306,27 @@ SELECT (html_to_duck_blocks('<h2 id="section">Section</h2>'))[1].attributes['id'
 section
 
 # -----------------------------------------------------------------------------
-# level field tests - NULL for headings, used for nesting depth
+# level field tests - top-level blocks are depth 1 (matches markdown/duck_block_utils);
+# blockquote uses level for nesting depth
 # -----------------------------------------------------------------------------
 
-# Heading level field is NULL (heading level is in attributes)
+# Heading level field is 1 (semantic heading level is in attributes)
 query I
-SELECT (html_to_duck_blocks('<h1>Heading</h1>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<h1>Heading</h1>'))[1].level;
 ----
-true
+1
 
-# Paragraph level field is NULL
+# Paragraph level field is 1
 query I
-SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level;
 ----
-true
+1
 
-# Code block level field is NULL
+# Code block level field is 1
 query I
-SELECT (html_to_duck_blocks('<pre><code>code</code></pre>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<pre><code>code</code></pre>'))[1].level;
 ----
-true
+1
 
 # Blockquote level field contains nesting depth
 query I
@@ -339,29 +340,29 @@ SELECT (html_to_duck_blocks('<blockquote><blockquote>Nested</blockquote></blockq
 ----
 2
 
-# List level field is NULL
+# List level field is 1
 query I
-SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].level;
 ----
-true
+1
 
-# Table level field is NULL
+# Table level field is 1
 query I
-SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].level;
 ----
-true
+1
 
-# HR level field is NULL
+# HR level field is 1
 query I
-SELECT (html_to_duck_blocks('<hr>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<hr>'))[1].level;
 ----
-true
+1
 
-# Image level field is NULL
+# Image level field is 1
 query I
-SELECT (html_to_duck_blocks('<img src="test.jpg">'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<img src="test.jpg">'))[1].level;
 ----
-true
+1
 
 # -----------------------------------------------------------------------------
 # Heading round-trip tests - verify heading levels are preserved
@@ -528,11 +529,11 @@ SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[1].encodi
 ----
 text
 
-# Paragraph with inline content has empty content (inlines are extracted as children)
+# Paragraph with inline content has NULL content (inlines are extracted as children)
 query I
-SELECT length((html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[1].content);
+SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[1].content IS NULL;
 ----
-0
+true
 
 # Paragraph with inline content has inline children following it
 query I
@@ -572,11 +573,11 @@ SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[3].conten
 ----
 bold
 
-# Inline children have level=1
+# Inline children have level=2 (parent block is level 1)
 query I
 SELECT (html_to_duck_blocks('<p>Text with <strong>bold</strong></p>'))[2].level;
 ----
-1
+2
 
 # =============================================================================
 # Frontmatter/Metadata Block Tests (Issue #56)
@@ -1513,23 +1514,23 @@ true
 # Note: Top-level blocks have NULL level. Inline children have level 1.
 # -----------------------------------------------------------------------------
 
-# Paragraph is top-level (NULL level)
+# Paragraph is top-level (level 1)
 query I
-SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<p>Text</p>'))[1].level;
 ----
-true
+1
 
-# Heading is top-level (NULL level)
+# Heading is top-level (level 1)
 query I
-SELECT (html_to_duck_blocks('<h1>Title</h1>'))[1].level IS NULL;
+SELECT (html_to_duck_blocks('<h1>Title</h1>'))[1].level;
 ----
-true
+1
 
-# Inline children of paragraph have level 1
+# Inline children of paragraph have level 2 (parent block is level 1)
 query I
 SELECT (html_to_duck_blocks('<p><strong>Bold</strong></p>'))[2].level;
 ----
-1
+2
 
 # Element order is sequential within a document
 query I
