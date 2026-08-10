@@ -214,6 +214,8 @@ struct HTMLImage {
 struct HTMLTable {
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
+	// <tfoot> rows, kept apart from body rows so summary rows stay identifiable.
+	std::vector<std::vector<std::string>> footers;
 	int64_t line_number;
 	int64_t num_columns;
 	int64_t num_rows;
@@ -265,6 +267,10 @@ public:
 
 	// Conversion functions
 	static std::string XMLToJSON(const std::string &xml_str);
+
+	// JSON string escaping, shared so every producer emits the same thing.
+	// Handles the full C0 range: unescaped bytes below 0x20 are invalid JSON.
+	static std::string EscapeJSONText(const std::string &str);
 	static std::string XMLToJSON(const std::string &xml_str, const XMLToJSONOptions &options);
 	static std::string JSONToXML(const std::string &json_str);
 	static std::string ScalarToXML(const std::string &value, const std::string &node_name);

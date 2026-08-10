@@ -827,31 +827,9 @@ static int CountBlockquoteAncestors(xmlNodePtr node) {
 	return count;
 }
 
+// Delegates so webbed has exactly one JSON escaper; see XMLUtils::EscapeJSONText.
 static std::string EscapeJsonString(const std::string &str) {
-	std::string result;
-	for (char c : str) {
-		switch (c) {
-		case '"':
-			result += "\\\"";
-			break;
-		case '\\':
-			result += "\\\\";
-			break;
-		case '\n':
-			result += "\\n";
-			break;
-		case '\r':
-			result += "\\r";
-			break;
-		case '\t':
-			result += "\\t";
-			break;
-		default:
-			result += c;
-			break;
-		}
-	}
-	return result;
+	return XMLUtils::EscapeJSONText(str);
 }
 
 static std::string UnescapeJsonString(const std::string &str) {
@@ -874,6 +852,28 @@ static std::string UnescapeJsonString(const std::string &str) {
 				break;
 			case '\\':
 				result += '\\';
+				break;
+			case 'b':
+				result += '\b';
+				break;
+			case 'f':
+				result += '\f';
+				break;
+			case 'u':
+				// \uXXXX. The escaper only emits these for C0 controls, so decoding the
+				// BMP range as-is and taking the low byte round-trips what it produces;
+				// anything above 0xFF is left verbatim rather than mangled.
+				if (i + 5 < str.size()) {
+					char hex[5] = {str[i + 2], str[i + 3], str[i + 4], str[i + 5], '\0'};
+					char *end = nullptr;
+					unsigned long cp = strtoul(hex, &end, 16);
+					if (end == hex + 4 && cp <= 0xFF) {
+						result += static_cast<char>(cp);
+						i += 5;
+						continue;
+					}
+				}
+				result += next;
 				break;
 			default:
 				result += next;
@@ -985,6 +985,68 @@ static std::string TableJsonToHtml(const std::string &json) {
 				}
 			}
 			html << "</tbody>";
+		}
+	}
+
+	// Render footers when the block carries them; absent key means no <tfoot>
+	size_t foot_start = json.find("\"footers\":");
+	if (foot_start != std::string::npos) {
+		size_t arr_start = json.find('[', foot_start);
+		if (arr_start != std::string::npos) {
+			html << "<tfoot>";
+			// Find each row array [...]
+			size_t pos = arr_start + 1;
+			while (pos < json.size()) {
+				// Skip whitespace
+				while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == ',')) {
+					pos++;
+				}
+				if (pos >= json.size() || json[pos] == ']') {
+					break;
+				}
+				if (json[pos] == '[') {
+					// Found row start
+					size_t row_end = pos + 1;
+					int bracket_depth = 1;
+					while (row_end < json.size() && bracket_depth > 0) {
+						if (json[row_end] == '[') {
+							bracket_depth++;
+						} else if (json[row_end] == ']') {
+							bracket_depth--;
+						} else if (json[row_end] == '"') {
+							// Skip string content
+							row_end++;
+							while (row_end < json.size()) {
+								if (json[row_end] == '\\' && row_end + 1 < json.size()) {
+									row_end += 2;
+								} else if (json[row_end] == '"') {
+									break;
+								} else {
+									row_end++;
+								}
+							}
+						}
+						row_end++;
+					}
+					std::string row_str = json.substr(pos + 1, row_end - pos - 2);
+
+					// Extract cells from this row
+					std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
+					std::sregex_iterator iter(row_str.begin(), row_str.end(), item_regex);
+					std::sregex_iterator end;
+					html << "<tr>";
+					while (iter != end) {
+						std::string cell = UnescapeJsonString((*iter)[1].str());
+						html << "<td>" << XMLUtils::HTMLEscape(cell) << "</td>";
+						++iter;
+					}
+					html << "</tr>";
+					pos = row_end;
+				} else {
+					pos++;
+				}
+			}
+			html << "</tfoot>";
 		}
 	}
 
@@ -1568,8 +1630,9 @@ static std::string TableToJson(xmlNodePtr node) {
 
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
+	std::vector<std::vector<std::string>> footers;
 
-	// Look for thead/tbody or direct tr children
+	// Look for thead/tbody/tfoot or direct tr children
 	xmlNodePtr child = node->children;
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE && child->name) {
@@ -1606,6 +1669,27 @@ static std::string TableToJson(xmlNodePtr node) {
 						}
 						if (!row.empty()) {
 							rows.push_back(row);
+						}
+					}
+					tr = tr->next;
+				}
+			} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
+				// Extract rows from tfoot. Kept apart from body rows so a summary row
+				// ("total", "subtotal") stays identifiable downstream.
+				xmlNodePtr tr = child->children;
+				while (tr) {
+					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
+						std::vector<std::string> row;
+						xmlNodePtr td = tr->children;
+						while (td) {
+							if (td->type == XML_ELEMENT_NODE && td->name &&
+							    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
+								row.push_back(GetNodeTextContent(td));
+							}
+							td = td->next;
+						}
+						if (!row.empty()) {
+							footers.push_back(row);
 						}
 					}
 					tr = tr->next;
@@ -1653,7 +1737,23 @@ static std::string TableToJson(xmlNodePtr node) {
 		}
 		ss << "]";
 	}
-	ss << "]}";
+	ss << "]";
+	if (!footers.empty()) {
+		ss << ",\"footers\":[";
+		for (size_t i = 0; i < footers.size(); i++) {
+			if (i > 0)
+				ss << ",";
+			ss << "[";
+			for (size_t j = 0; j < footers[i].size(); j++) {
+				if (j > 0)
+					ss << ",";
+				ss << "\"" << EscapeJsonString(footers[i][j]) << "\"";
+			}
+			ss << "]";
+		}
+		ss << "]";
+	}
+	ss << "}";
 
 	return ss.str();
 }

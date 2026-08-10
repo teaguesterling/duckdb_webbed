@@ -1242,9 +1242,9 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_text_functions("xml_extract_text");
 
 	// XML + VARCHAR -> LIST(VARCHAR)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            XMLExtractTextListFunction));
 	// XML + STRING_LITERAL -> LIST(VARCHAR)
 	// (no varargs on STRING_LITERAL overloads: varargs + a literal parameter makes DuckDB resolve a
 	//  literal return type and trip an internal error. The named-arg case routes through the VARCHAR
@@ -1253,17 +1253,17 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + VARCHAR -> LIST(VARCHAR)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            XMLExtractTextListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1305,34 +1305,34 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
 
 	// XML + VARCHAR -> LIST(XMLFragment)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XML + STRING_LITERAL -> LIST(XMLFragment)
 	// (STRING_LITERAL overloads stay varargs-free; see note on xml_extract_text above.)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + VARCHAR -> LIST(XMLFragment)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1394,15 +1394,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("line_number", LogicalType::BIGINT)});
 	// Register xml_extract_attributes function as a function set
 	ScalarFunctionSet xml_extract_attributes_functions("xml_extract_attributes");
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
 	// Add 3-argument variants with namespace map
 	xml_extract_attributes_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
@@ -1484,8 +1484,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Internal regression self-test for the libxml2 out-of-memory path (see OOMSelfTestFunction).
 	// Returns 'OK' (or 'OK (oom check skipped...)' where the allocator can't be injected); any other
 	// value indicates a regression. Result is deterministic, so default stability is fine.
-	loader.RegisterFunction(
-	    ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
+	loader.RegisterFunction(ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
@@ -1558,16 +1557,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                       {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
 	                                                       {"num_rows", LogicalType(LogicalTypeId::BIGINT)}});
 
-	auto html_table_json_struct_type = LogicalType::STRUCT({
-	    {"table_index", LogicalType(LogicalTypeId::BIGINT)},
-	    {"line_number", LogicalType(LogicalTypeId::BIGINT)},
-	    {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
-	    {"num_rows", LogicalType(LogicalTypeId::BIGINT)},
-	    {"headers", LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR))},
-	    {"table_data", LogicalType::LIST(LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR)))},
-	    {"table_json", LogicalType::STRUCT({})},    // Complex nested struct
-	    {"json_structure", LogicalType::STRUCT({})} // Complex nested struct
-	});
+	auto html_table_json_struct_type =
+	    LogicalType::STRUCT({{"table_index", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"line_number", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"num_rows", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"headers", LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR))},
+	                         {"table_data", LogicalType::LIST(LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR)))},
+	                         {"table_json", LogicalType::JSON()}, // shape follows the document
+	                         {"json_structure", LogicalType::JSON()}});
 
 	// Register html_extract_text function with XPath support
 	// With XPath: returns LIST(VARCHAR) (PostgreSQL-compatible) - use list[1] to get single value
@@ -1830,6 +1828,26 @@ void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, Expressio
 					row_values.emplace_back(Value::STRUCT(row_children));
 				}
 			}
+
+			// Output footer rows. Previously <tfoot> rows arrived here indistinguishable
+			// from body rows; they now carry row_type='footer' and continue the row_index
+			// sequence after the body.
+			for (size_t f_idx = 0; f_idx < table.footers.size(); f_idx++) {
+				const auto &row = table.footers[f_idx];
+				for (size_t col_idx = 0; col_idx < row.size(); col_idx++) {
+					child_list_t<Value> row_children;
+					row_children.emplace_back("table_index", Value::BIGINT(static_cast<int64_t>(table_idx)));
+					row_children.emplace_back("row_type", Value("footer"));
+					row_children.emplace_back("row_index",
+					                          Value::BIGINT(static_cast<int64_t>(table.rows.size() + f_idx + 1)));
+					row_children.emplace_back("column_index", Value::BIGINT(static_cast<int64_t>(col_idx)));
+					row_children.emplace_back("cell_value", Value(row[col_idx]));
+					row_children.emplace_back("line_number", Value::BIGINT(table.line_number));
+					row_children.emplace_back("num_columns", Value::BIGINT(table.num_columns));
+					row_children.emplace_back("num_rows", Value::BIGINT(table.num_rows));
+					row_values.emplace_back(Value::STRUCT(row_children));
+				}
+			}
 		}
 
 		auto table_row_struct_type = LogicalType::STRUCT(
@@ -1864,62 +1882,74 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 				header_values.push_back(Value(header));
 			}
 
-			// Create data rows as list of lists
+			// Create data rows as list of lists. Value::LIST(values) asserts on an empty
+			// vector, and a table with no cells in a row is ordinary input, so every list
+			// here is built with the typed overload.
 			vector<Value> row_values;
 			for (const auto &row : rows) {
 				vector<Value> cell_values;
 				for (const auto &cell : row) {
 					cell_values.push_back(Value(cell));
 				}
-				row_values.push_back(Value::LIST(cell_values));
+				row_values.push_back(Value::LIST(LogicalType::VARCHAR, cell_values));
 			}
 
-			// Build JSON using DuckDB's native JSON construction
-			child_list_t<Value> json_children;
-
-			// Headers array
-			json_children.push_back({"headers", Value::LIST(header_values)});
-
-			// Data array (2D)
-			json_children.push_back({"data", Value::LIST(row_values)});
-
-			// Rows as objects
-			vector<Value> object_rows;
-			for (const auto &row : rows) {
-				child_list_t<Value> row_obj;
-				for (size_t j = 0; j < headers.size() && j < row.size(); j++) {
-					row_obj.push_back({CompatMakeIdentifier(headers[j]), Value(row[j])});
+			// table_json's shape follows the table's own headers, so it cannot be a fixed
+			// STRUCT type. Serialize it as JSON text, which is what the function name says.
+			//
+			// Key names follow duck_block_utils' table encoding — {"headers": [...],
+			// "rows": [[...]]} with rows as positional cells — so this value drops straight
+			// into a duck_block table's content and into db_render_table_json, which ignores
+			// the extra keys. The header-keyed objects live under "records" rather than
+			// "rows"; naming those "rows" would collide with that convention and silently
+			// render wrong.
+			std::string tj = "{\"headers\":[";
+			for (size_t j = 0; j < headers.size(); j++) {
+				tj += (j ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(headers[j]) + "\"";
+			}
+			tj += "],\"rows\":[";
+			for (size_t r = 0; r < rows.size(); r++) {
+				tj += (r ? ",[" : "[");
+				for (size_t c = 0; c < rows[r].size(); c++) {
+					tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(rows[r][c]) + "\"";
 				}
-				object_rows.push_back(Value::STRUCT(row_obj));
+				tj += "]";
 			}
-			json_children.push_back({"rows", Value::LIST(object_rows)});
-
-			// Metadata
-			child_list_t<Value> metadata_children;
-			metadata_children.push_back({"line_number", Value::BIGINT(table.line_number)});
-			metadata_children.push_back({"num_columns", Value::BIGINT(table.num_columns)});
-			metadata_children.push_back({"num_rows", Value::BIGINT(table.num_rows)});
-			json_children.push_back({"metadata", Value::STRUCT(metadata_children)});
-
-			Value json_value = Value::STRUCT(json_children);
-
-			// Build structure description
-			child_list_t<Value> structure_children;
-			structure_children.push_back({"table_name", Value("table_" + std::to_string(table_idx))});
-
-			vector<Value> column_info;
-			for (size_t col_idx = 0; col_idx < headers.size(); col_idx++) {
-				child_list_t<Value> col_children;
-				col_children.push_back({"name", Value(headers[col_idx])});
-				col_children.push_back({"index", Value::BIGINT(static_cast<int64_t>(col_idx))});
-				col_children.push_back({"type", Value("string")});
-				column_info.push_back(Value::STRUCT(col_children));
+			tj += "],\"records\":[";
+			for (size_t r = 0; r < rows.size(); r++) {
+				tj += (r ? ",{" : "{");
+				for (size_t c = 0; c < headers.size() && c < rows[r].size(); c++) {
+					tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(headers[c]) + "\":\"" +
+					      XMLUtils::EscapeJSONText(rows[r][c]) + "\"";
+				}
+				tj += "}";
 			}
-			structure_children.push_back({"columns", Value::LIST(column_info)});
-			structure_children.push_back({"row_count", Value::BIGINT(static_cast<int64_t>(rows.size()))});
-			structure_children.push_back({"source_line", Value::BIGINT(table.line_number)});
+			tj += "]";
+			if (!table.footers.empty()) {
+				tj += ",\"footers\":[";
+				for (size_t r = 0; r < table.footers.size(); r++) {
+					tj += (r ? ",[" : "[");
+					for (size_t c = 0; c < table.footers[r].size(); c++) {
+						tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(table.footers[r][c]) + "\"";
+					}
+					tj += "]";
+				}
+				tj += "]";
+			}
+			tj += ",\"metadata\":{\"line_number\":" + std::to_string(table.line_number) +
+			      ",\"num_columns\":" + std::to_string(table.num_columns) +
+			      ",\"num_rows\":" + std::to_string(table.num_rows) + "}}";
+			Value json_value(tj);
 
-			Value structure_value = Value::STRUCT(structure_children);
+			// Same for the structure description.
+			std::string js = "{\"table_name\":\"table_" + std::to_string(table_idx) + "\",\"columns\":[";
+			for (size_t c = 0; c < headers.size(); c++) {
+				js += (c ? "," : "") + std::string("{\"name\":\"") + XMLUtils::EscapeJSONText(headers[c]) +
+				      "\",\"index\":" + std::to_string(c) + ",\"type\":\"string\"}";
+			}
+			js += "],\"row_count\":" + std::to_string(rows.size()) +
+			      ",\"source_line\":" + std::to_string(table.line_number) + "}";
+			Value structure_value(js);
 
 			// Create struct for this table
 			child_list_t<Value> table_struct_children;
@@ -1927,22 +1957,22 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 			table_struct_children.push_back({"line_number", Value::BIGINT(table.line_number)});
 			table_struct_children.push_back({"num_columns", Value::BIGINT(static_cast<int64_t>(headers.size()))});
 			table_struct_children.push_back({"num_rows", Value::BIGINT(static_cast<int64_t>(rows.size()))});
-			table_struct_children.push_back({"headers", Value::LIST(header_values)});
-			table_struct_children.push_back({"table_data", Value::LIST(row_values)});
+			table_struct_children.push_back({"headers", Value::LIST(LogicalType::VARCHAR, header_values)});
+			table_struct_children.push_back(
+			    {"table_data", Value::LIST(LogicalType::LIST(LogicalType::VARCHAR), row_values)});
 			table_struct_children.push_back({"table_json", json_value});
 			table_struct_children.push_back({"json_structure", structure_value});
 
 			table_values.push_back(Value::STRUCT(table_struct_children));
 		}
 
-		auto table_json_struct_type = LogicalType::STRUCT({
-		    make_pair("table_index", LogicalType::BIGINT), make_pair("line_number", LogicalType::BIGINT),
-		    make_pair("num_columns", LogicalType::BIGINT), make_pair("num_rows", LogicalType::BIGINT),
-		    make_pair("headers", LogicalType::LIST(LogicalType::VARCHAR)),
-		    make_pair("table_data", LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR))),
-		    make_pair("table_json", LogicalType::STRUCT({})),    // Complex nested struct
-		    make_pair("json_structure", LogicalType::STRUCT({})) // Complex nested struct
-		});
+		auto table_json_struct_type = LogicalType::STRUCT(
+		    {make_pair("table_index", LogicalType::BIGINT), make_pair("line_number", LogicalType::BIGINT),
+		     make_pair("num_columns", LogicalType::BIGINT), make_pair("num_rows", LogicalType::BIGINT),
+		     make_pair("headers", LogicalType::LIST(LogicalType::VARCHAR)),
+		     make_pair("table_data", LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR))),
+		     make_pair("table_json", LogicalType::JSON()), // shape follows the document
+		     make_pair("json_structure", LogicalType::JSON())});
 
 		Value list_value = Value::LIST(table_json_struct_type, table_values);
 		result.SetValue(i, list_value);
@@ -1956,8 +1986,8 @@ static bool IsWhitespacePreservingElement(const xmlChar *name) {
 		return false;
 	}
 	std::string n(reinterpret_cast<const char *>(name));
-	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") ||
-	       StringUtil::CIEquals(n, "script") || StringUtil::CIEquals(n, "style");
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") || StringUtil::CIEquals(n, "script") ||
+	       StringUtil::CIEquals(n, "style");
 }
 
 // Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
@@ -2084,33 +2114,33 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_content_vector = args.data[0];
 
-	UnaryExecutor::Execute<string_t, string_t>(
-	    html_content_vector, result, args.size(), [&](string_t html_content_str) {
-		    std::string html_content = html_content_str.GetString();
+	UnaryExecutor::Execute<string_t, string_t>(html_content_vector, result, args.size(),
+	                                           [&](string_t html_content_str) {
+		                                           std::string html_content = html_content_str.GetString();
 
-		    // Handle empty HTML content gracefully
-		    if (html_content.empty()) {
-			    return string_t("<html></html>");
-		    }
+		                                           // Handle empty HTML content gracefully
+		                                           if (html_content.empty()) {
+			                                           return string_t("<html></html>");
+		                                           }
 
-		    try {
-			    // Parse the HTML using the HTML parser to normalize it
-			    XMLDocRAII html_doc(html_content, true); // Use HTML parser
-			    if (html_doc.IsValid()) {
-				    std::string minified_html;
-				    if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
-					    return StringVector::AddString(result, minified_html);
-				    }
-			    }
+		                                           try {
+			                                           // Parse the HTML using the HTML parser to normalize it
+			                                           XMLDocRAII html_doc(html_content, true); // Use HTML parser
+			                                           if (html_doc.IsValid()) {
+				                                           std::string minified_html;
+				                                           if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
+					                                           return StringVector::AddString(result, minified_html);
+				                                           }
+			                                           }
 
-			    // Fallback to original content if parsing fails
-			    return StringVector::AddString(result, html_content);
+			                                           // Fallback to original content if parsing fails
+			                                           return StringVector::AddString(result, html_content);
 
-		    } catch (const std::exception &e) {
-			    // Return original content if there's an error parsing
-			    return StringVector::AddString(result, html_content);
-		    }
-	    });
+		                                           } catch (const std::exception &e) {
+			                                           // Return original content if there's an error parsing
+			                                           return StringVector::AddString(result, html_content);
+		                                           }
+	                                           });
 }
 
 void XMLScalarFunctions::HTMLUnescapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
