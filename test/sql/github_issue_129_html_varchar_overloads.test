@@ -1,0 +1,155 @@
+# name: test/sql/github_issue_129_html_varchar_overloads.test
+# description: html_* functions accept plain VARCHAR without an explicit ::HTML cast
+# group: [sql]
+
+#
+# GitHub Issue #129: html_extract_* functions reject VARCHAR input
+# https://github.com/teaguesterling/duckdb_webbed/issues/129
+#
+# The natural sources of HTML content (read_text(), httpfs, zim:// entries, plain
+# table columns) are all typed VARCHAR, but the html_* functions were registered
+# only on the HTML type, and VARCHAR -> HTML is an explicit-only cast. String
+# literals bound anyway because DuckDB special-cases STRING_LITERAL to reach any
+# type, which hid the gap in every doc example.
+#
+# Fix: register VARCHAR overloads alongside the HTML ones, matching what
+# xml_extract_text and html_to_duck_blocks already do.
+#
+
+require webbed
+
+# ============================================================================
+# PART 1: The reported failure - VARCHAR values bind without a cast
+# ============================================================================
+
+# 1.1: explicitly-typed VARCHAR, with XPath (the exact repro from the issue)
+query I
+SELECT html_extract_text('<h1>Hi</h1>'::VARCHAR, '//h1');
+----
+[Hi]
+
+# 1.2: explicitly-typed VARCHAR, no XPath
+query I
+SELECT html_extract_text('<html><body><h1>Title</h1><p>Body</p></body></html>'::VARCHAR);
+----
+TitleBody
+
+# 1.3: a real VARCHAR column, which is what read_text() and friends produce
+statement ok
+CREATE TABLE pages AS SELECT '<html><body><h1>Title</h1><p>Body</p></body></html>'::VARCHAR AS content;
+
+query I
+SELECT html_extract_text(content, '//h1')[1] FROM pages;
+----
+Title
+
+query I
+SELECT html_extract_text(content) FROM pages;
+----
+TitleBody
+
+# 1.4: XPath supplied as a VARCHAR column too (not a STRING_LITERAL)
+statement ok
+CREATE TABLE q AS SELECT '<h1>Hi</h1>'::VARCHAR AS doc, '//h1'::VARCHAR AS xpath;
+
+query I
+SELECT html_extract_text(doc, xpath) FROM q;
+----
+[Hi]
+
+# ============================================================================
+# PART 2: The other html_extract_* functions
+# ============================================================================
+
+query I
+SELECT html_extract_links('<a href="/x" title="T">L</a>'::VARCHAR)[1].href;
+----
+/x
+
+query I
+SELECT html_extract_links('<a href="/x" title="T">L</a>'::VARCHAR)[1].text;
+----
+L
+
+query I
+SELECT html_extract_images('<img src="/i.png" alt="A">'::VARCHAR)[1].src;
+----
+/i.png
+
+query I
+SELECT html_extract_images('<img src="/i.png" alt="A">'::VARCHAR)[1].alt;
+----
+A
+
+query I
+SELECT html_extract_table_rows('<table><tr><td>a</td></tr></table>'::VARCHAR)[1].cell_value;
+----
+a
+
+query I
+SELECT html_extract_tables_json('<table><tr><td>a</td></tr></table>'::VARCHAR)[1].num_rows;
+----
+1
+
+# html_to_duck_blocks already had a VARCHAR overload - guard against regression
+query I
+SELECT html_to_duck_blocks('<h1>Title</h1>'::VARCHAR)[1].element_type;
+----
+heading
+
+# ============================================================================
+# PART 3: The HTML-typed path is unchanged
+# ============================================================================
+
+# 3.1: explicit ::HTML casts still work
+query I
+SELECT html_extract_text('<h1>Hi</h1>'::HTML, '//h1');
+----
+[Hi]
+
+query I
+SELECT html_extract_text('<html><body><h1>Title</h1><p>Body</p></body></html>'::HTML);
+----
+TitleBody
+
+query I
+SELECT html_extract_links('<a href="/x">L</a>'::HTML)[1].href;
+----
+/x
+
+# 3.2: parse_html() still returns the HTML type, and the HTML overload binds
+query I
+SELECT html_extract_text(parse_html('<h1>Hi</h1>'), '//h1');
+----
+[Hi]
+
+# 3.3: bare string literals still bind (they always did, via STRING_LITERAL)
+query I
+SELECT html_extract_text('<h1>Hi</h1>', '//h1');
+----
+[Hi]
+
+query I
+SELECT html_extract_text('<html><body><h1>Title</h1></body></html>');
+----
+Title
+
+# 3.4: both overloads are registered and neither is ambiguous
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name = 'html_extract_text' AND parameter_types = ['HTML'];
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_functions()
+WHERE function_name = 'html_extract_text' AND parameter_types = ['VARCHAR'];
+----
+1
+
+# 3.5: the VARCHAR -> HTML cast remains explicit-only (this fix does not change
+# cast policy, it only widens the function signatures)
+query I
+SELECT '<h1>Hi</h1>'::VARCHAR::HTML IS NOT NULL;
+----
+true

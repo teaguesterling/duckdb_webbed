@@ -1591,35 +1591,61 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// prefixed elements like "svg:circle" are treated as literal names with colons.
 	// Users should use name()="prefix:element" XPath predicates for HTML content.
 
+	// VARCHAR overloads (compatibility): the natural sources of HTML content - read_text(),
+	// httpfs, zim:// entries, ordinary table columns - are all typed VARCHAR, and
+	// VARCHAR -> HTML is registered as an explicit-only cast (see XMLTypes::Register).
+	// Without these, every such pipeline needs a manual ::HTML cast. String literals bind
+	// today only because DuckDB special-cases STRING_LITERAL to reach any type, which hides
+	// the gap in doc examples. Mirrors the VARCHAR overloads xml_extract_text already has.
+	// VARCHAR only (no XPath) -> VARCHAR
+	html_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextFunction));
+	// VARCHAR + VARCHAR XPath -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                       LogicalType::LIST(LogicalType::VARCHAR),
+	                                                       HTMLExtractTextListFunction));
+	// VARCHAR + STRING_LITERAL XPath -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction));
+
 	loader.RegisterFunction(html_extract_text_functions);
 
-	// Register html_extract_links function
-	auto html_extract_links_function =
-	    ScalarFunction("html_extract_links", {XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type),
-	                   HTMLExtractLinksFunction);
-	PreventStructConstantFolding(html_extract_links_function);
-	loader.RegisterFunction(html_extract_links_function);
+	// Register html_extract_links function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_links_functions("html_extract_links");
+	html_extract_links_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
+	html_extract_links_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
+	PreventStructConstantFolding(html_extract_links_functions);
+	loader.RegisterFunction(html_extract_links_functions);
 
-	// Register html_extract_images function
-	auto html_extract_images_function =
-	    ScalarFunction("html_extract_images", {XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type),
-	                   HTMLExtractImagesFunction);
-	PreventStructConstantFolding(html_extract_images_function);
-	loader.RegisterFunction(html_extract_images_function);
+	// Register html_extract_images function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_images_functions("html_extract_images");
+	html_extract_images_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
+	html_extract_images_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
+	PreventStructConstantFolding(html_extract_images_functions);
+	loader.RegisterFunction(html_extract_images_functions);
 
-	// Register html_extract_table_rows function
-	auto html_extract_table_rows_function =
-	    ScalarFunction("html_extract_table_rows", {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type),
-	                   HTMLExtractTableRowsFunction);
-	PreventStructConstantFolding(html_extract_table_rows_function);
-	loader.RegisterFunction(html_extract_table_rows_function);
+	// Register html_extract_table_rows function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_table_rows_functions("html_extract_table_rows");
+	html_extract_table_rows_functions.AddFunction(ScalarFunction(
+	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
+	html_extract_table_rows_functions.AddFunction(ScalarFunction(
+	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
+	PreventStructConstantFolding(html_extract_table_rows_functions);
+	loader.RegisterFunction(html_extract_table_rows_functions);
 
-	// Register html_extract_tables_json function
-	auto html_extract_tables_json_function =
-	    ScalarFunction("html_extract_tables_json", {XMLTypes::HTMLType()},
-	                   LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
-	PreventStructConstantFolding(html_extract_tables_json_function);
-	loader.RegisterFunction(html_extract_tables_json_function);
+	// Register html_extract_tables_json function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_tables_json_functions("html_extract_tables_json");
+	html_extract_tables_json_functions.AddFunction(ScalarFunction(
+	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
+	html_extract_tables_json_functions.AddFunction(ScalarFunction(
+	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
+	PreventStructConstantFolding(html_extract_tables_json_functions);
+	loader.RegisterFunction(html_extract_tables_json_functions);
 
 	// Register parse_html scalar function for parsing HTML content directly
 	auto parse_html_function =
