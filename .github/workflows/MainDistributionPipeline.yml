@@ -100,11 +100,18 @@ jobs:
           timeout 240 node load_test.cjs --repo repo --name webbed --platform eh \
             --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
-#  code-quality-check:
-#    name: Code Quality Check
-#    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
-#    with:
-#      duckdb_version: v1.3.2
-#      ci_tools_version: main
-#      extension_name: webbed
-#      format_checks: 'format;tidy'
+  # Re-enabled: the repo now passes format-check (the drift it would have failed on
+  # was applied separately). Pinned to the same duckdb_version as the stable build --
+  # the commented-out version said v1.3.2, long superseded.
+  #
+  # format only, no tidy: tidy configures CMake without vcpkg, so this extension's
+  # libxml2 dependency is not found and the check cannot even configure. Same reason
+  # the sibling zim extension runs format only.
+  code-quality-check:
+    name: Code Quality Check
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
+    with:
+      duckdb_version: v1.5.4
+      ci_tools_version: main
+      extension_name: webbed
+      format_checks: 'format'
