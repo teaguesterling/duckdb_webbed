@@ -1,6 +1,5 @@
 # name: test/sql/xml_sax_accumulator_parity.test
-# description: The SAX streaming path produces the same values as DOM for text-only STRUCT
-#             fields and for list-shaped columns that union_by_name widens to VARCHAR.
+# description: The SAX streaming path produces the same values as DOM for text-only STRUCT fields and for list-shaped columns that union_by_name widens to VARCHAR.
 # group: [sql]
 
 require webbed

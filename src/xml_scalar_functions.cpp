@@ -1242,9 +1242,9 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_text_functions("xml_extract_text");
 
 	// XML + VARCHAR -> LIST(VARCHAR)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            XMLExtractTextListFunction));
 	// XML + STRING_LITERAL -> LIST(VARCHAR)
 	// (no varargs on STRING_LITERAL overloads: varargs + a literal parameter makes DuckDB resolve a
 	//  literal return type and trip an internal error. The named-arg case routes through the VARCHAR
@@ -1253,17 +1253,17 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + VARCHAR -> LIST(VARCHAR)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction));
 	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
-	add_ns_aware(xml_extract_text_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                        LogicalType::LIST(LogicalType::VARCHAR),
-	                                                        XMLExtractTextListFunction));
+	add_ns_aware(xml_extract_text_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            XMLExtractTextListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
 	xml_extract_text_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1305,34 +1305,34 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_extract_elements_functions("xml_extract_elements");
 
 	// XML + VARCHAR -> LIST(XMLFragment)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XML + STRING_LITERAL -> LIST(XMLFragment)
 	// (STRING_LITERAL overloads stay varargs-free; see note on xml_extract_text above.)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + VARCHAR -> LIST(XMLFragment)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// HTML + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
-	add_ns_aware(xml_extract_elements_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                            LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                            XMLExtractElementsListFunction));
+	add_ns_aware(xml_extract_elements_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction));
 	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
@@ -1394,15 +1394,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("line_number", LogicalType::BIGINT)});
 	// Register xml_extract_attributes function as a function set
 	ScalarFunctionSet xml_extract_attributes_functions("xml_extract_attributes");
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions, ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                              LogicalType::LIST(attr_struct_type),
-	                                                              XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
+	add_ns_aware(xml_extract_attributes_functions,
+	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
+	                            XMLExtractAttributesFunction));
 	// Add 3-argument variants with namespace map
 	xml_extract_attributes_functions.AddFunction(
 	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
@@ -1484,8 +1484,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// Internal regression self-test for the libxml2 out-of-memory path (see OOMSelfTestFunction).
 	// Returns 'OK' (or 'OK (oom check skipped...)' where the allocator can't be injected); any other
 	// value indicates a regression. Result is deterministic, so default stability is fine.
-	loader.RegisterFunction(
-	    ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
+	loader.RegisterFunction(ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
@@ -1930,8 +1929,8 @@ static bool IsWhitespacePreservingElement(const xmlChar *name) {
 		return false;
 	}
 	std::string n(reinterpret_cast<const char *>(name));
-	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") ||
-	       StringUtil::CIEquals(n, "script") || StringUtil::CIEquals(n, "style");
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") || StringUtil::CIEquals(n, "script") ||
+	       StringUtil::CIEquals(n, "style");
 }
 
 // Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
@@ -2058,33 +2057,33 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_content_vector = args.data[0];
 
-	UnaryExecutor::Execute<string_t, string_t>(
-	    html_content_vector, result, args.size(), [&](string_t html_content_str) {
-		    std::string html_content = html_content_str.GetString();
+	UnaryExecutor::Execute<string_t, string_t>(html_content_vector, result, args.size(),
+	                                           [&](string_t html_content_str) {
+		                                           std::string html_content = html_content_str.GetString();
 
-		    // Handle empty HTML content gracefully
-		    if (html_content.empty()) {
-			    return string_t("<html></html>");
-		    }
+		                                           // Handle empty HTML content gracefully
+		                                           if (html_content.empty()) {
+			                                           return string_t("<html></html>");
+		                                           }
 
-		    try {
-			    // Parse the HTML using the HTML parser to normalize it
-			    XMLDocRAII html_doc(html_content, true); // Use HTML parser
-			    if (html_doc.IsValid()) {
-				    std::string minified_html;
-				    if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
-					    return StringVector::AddString(result, minified_html);
-				    }
-			    }
+		                                           try {
+			                                           // Parse the HTML using the HTML parser to normalize it
+			                                           XMLDocRAII html_doc(html_content, true); // Use HTML parser
+			                                           if (html_doc.IsValid()) {
+				                                           std::string minified_html;
+				                                           if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
+					                                           return StringVector::AddString(result, minified_html);
+				                                           }
+			                                           }
 
-			    // Fallback to original content if parsing fails
-			    return StringVector::AddString(result, html_content);
+			                                           // Fallback to original content if parsing fails
+			                                           return StringVector::AddString(result, html_content);
 
-		    } catch (const std::exception &e) {
-			    // Return original content if there's an error parsing
-			    return StringVector::AddString(result, html_content);
-		    }
-	    });
+		                                           } catch (const std::exception &e) {
+			                                           // Return original content if there's an error parsing
+			                                           return StringVector::AddString(result, html_content);
+		                                           }
+	                                           });
 }
 
 void XMLScalarFunctions::HTMLUnescapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
