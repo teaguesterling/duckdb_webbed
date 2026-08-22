@@ -580,8 +580,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			if (occs.empty()) {
 				value = Value(col_type); // typed NULL
 			} else if (occs.front().is_xml) {
-				value = XMLSchemaInference::ExtractValueFromXmlFragment(
-				    col_name, occs.front().payload, col_type, options, ns_decls, occs.front().own_attrs);
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, occs.front().payload, col_type,
+				                                                        options, ns_decls, occs.front().own_attrs);
 			} else {
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
 				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
@@ -621,8 +621,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			};
 			auto append_xml = [&](const std::string &frag, const std::string &own_attrs) {
 				if (child_is_complex) {
-					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
-					    col_name, frag, child_type, options, ns_decls, own_attrs));
+					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(col_name, frag, child_type,
+					                                                                    options, ns_decls, own_attrs));
 				} else if (child_type.id() == LogicalTypeId::VARCHAR) {
 					// Scalar-typed list with an XML item: surface the serialized fragment.
 					list_vals.push_back(Value(frag));

@@ -1,6 +1,5 @@
 # name: test/sql/duck_block_robustness.test
-# description: Malformed-input tests for duck_blocks_to_html: invalid heading_level values,
-#              NULL struct fields, and truncated Pandoc table JSON
+# description: Malformed-input tests for duck_blocks_to_html: invalid heading_level values, NULL struct fields, and truncated Pandoc table JSON
 # group: [sql]
 
 require webbed

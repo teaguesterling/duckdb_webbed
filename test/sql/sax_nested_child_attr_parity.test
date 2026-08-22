@@ -1,8 +1,5 @@
 # name: test/sql/sax_nested_child_attr_parity.test
-# description: SAX streaming must keep the OWN attributes of repeated nested child elements,
-#             which webbed exposes as LIST<STRUCT(@attrs...)>. Regression for: under streaming
-#             the per-item attributes were dropped, so each list STRUCT came back NULL
-#             ([NULL, NULL]) while the DOM path returned the attribute values.
+# description: SAX streaming must keep the OWN attributes of repeated nested child elements, which webbed exposes as LIST<STRUCT(@attrs...)>. Regression for: under streaming the per-item attributes were dropped, so each list STRUCT came back NULL ([NULL, NULL]) while the DOM path returned the attribute values.
 # group: [sql]
 
 require webbed

@@ -12,8 +12,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Forward-compatibility canary: builds against DuckDB main to give advance warning
+  # of upstream API changes. It is EXPECTED to go red whenever main breaks an API this
+  # extension uses -- the shippable build is the stable job below.
+  #
+  # It runs ONLY on pushes to main. Skipping pull_request alone is not enough: pushing
+  # to a branch fires a push run AND a pull_request run against the same commit, and a
+  # PR's check rollup includes both, so the canary would still show red on every PR.
+  #
+  # `if` rather than `continue-on-error`: a job calling a REUSABLE WORKFLOW accepts only
+  # name/needs/if/permissions/uses/with/secrets/strategy/concurrency, and adding
+  # continue-on-error makes the whole workflow fail to PARSE.
+  #
+  # Currently red on the DuckDB main bind-signature change
+  # (unique_ptr<FunctionData> conversions in xml_reader_functions.cpp).
   duckdb-next-build:
-    name: Build extension binaries
+    name: Canary — build against DuckDB main (advisory)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       duckdb_version: main
@@ -85,11 +100,18 @@ jobs:
           timeout 240 node load_test.cjs --repo repo --name webbed --platform eh \
             --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
-#  code-quality-check:
-#    name: Code Quality Check
-#    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
-#    with:
-#      duckdb_version: v1.3.2
-#      ci_tools_version: main
-#      extension_name: webbed
-#      format_checks: 'format;tidy'
+  # Re-enabled: the repo now passes format-check (the drift it would have failed on
+  # was applied separately). Pinned to the same duckdb_version as the stable build --
+  # the commented-out version said v1.3.2, long superseded.
+  #
+  # format only, no tidy: tidy configures CMake without vcpkg, so this extension's
+  # libxml2 dependency is not found and the check cannot even configure. Same reason
+  # the sibling zim extension runs format only.
+  code-quality-check:
+    name: Code Quality Check
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
+    with:
+      duckdb_version: v1.5.4
+      ci_tools_version: main
+      extension_name: webbed
+      format_checks: 'format'

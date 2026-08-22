@@ -1,7 +1,5 @@
 # name: test/sql/xml_schema_inference_fixes.test
-# description: Regression tests for schema inference fixes: integer widening, prefixed
-#              attributes, deterministic column order, inf/nan handling, and NULL-filling
-#              of fallback schema columns
+# description: Regression tests for schema inference fixes: integer widening, prefixed attributes, deterministic column order, inf/nan handling, and NULL-filling of fallback schema columns
 # group: [sql]
 
 require webbed
