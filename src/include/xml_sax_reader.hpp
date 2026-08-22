@@ -21,12 +21,12 @@ enum class SAXAccumulatorState {
 // A single occurrence of a record field, tagged by payload kind. Occurrences are stored in
 // document order so a field mixing bare-text and nested-XML siblings keeps its original sequence.
 struct FieldOccurrence {
-	bool is_xml;          // true = nested-XML fragment, false = text payload
-	std::string payload;  // serialized XML fragment (is_xml) or cleaned text (!is_xml)
+	bool is_xml;           // true = nested-XML fragment, false = text payload
+	std::string payload;   // serialized XML fragment (is_xml) or cleaned text (!is_xml)
 	std::string own_attrs; // the field element's OWN attributes, pre-serialized and escaped as
-	                        // ` name="value"...` (empty if none), spliced into the reconstructed
-	                        // open tag so a direct child like <CustomFunctionReference id=".."/>
-	                        // keeps its attributes under streaming (DOM parity).
+	                       // ` name="value"...` (empty if none), spliced into the reconstructed
+	                       // open tag so a direct child like <CustomFunctionReference id=".."/>
+	                       // keeps its attributes under streaming (DOM parity).
 };
 
 // Accumulates field data from SAX events for a single XML record

@@ -1,8 +1,5 @@
 # name: test/sql/xml_union_struct_list_cardinality.test
-# description: union_by_name must reconcile an element that infers as a scalar STRUCT in one
-#             file (single occurrence) with LIST<STRUCT> in another (2+ occurrences) by
-#             promoting the singleton to a one-element list and widening, NOT collapsing to
-#             VARCHAR and dropping data.
+# description: union_by_name must reconcile an element that infers as a scalar STRUCT in one file (single occurrence) with LIST<STRUCT> in another (2+ occurrences) by promoting the singleton to a one-element list and widening, NOT collapsing to VARCHAR and dropping data.
 # group: [sql]
 
 require webbed

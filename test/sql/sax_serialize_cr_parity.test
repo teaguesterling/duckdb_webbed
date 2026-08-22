@@ -1,7 +1,5 @@
 # name: test/sql/sax_serialize_cr_parity.test
-# description: SAX streaming must serialize carriage returns in captured raw XML the same
-#             way DOM does (&#13;), so a captured-subtree VARCHAR is byte-identical across
-#             reader modes. Regression for: SAX emitted a raw CR byte where DOM emits &#13;.
+# description: SAX streaming must serialize carriage returns in captured raw XML the same way DOM does (&#13;), so a captured-subtree VARCHAR is byte-identical across reader modes. Regression for: SAX emitted a raw CR byte where DOM emits &#13;.
 # group: [sql]
 
 require webbed

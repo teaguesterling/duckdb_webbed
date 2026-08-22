@@ -1,6 +1,5 @@
 # name: test/sql/oom_resource_error.test
-# description: libxml2 out-of-memory path (#84/#94) — CheckXML must report ResourceError (not
-#              Malformed) under allocation failure, and resource_error must survive XMLDocRAII moves
+# description: libxml2 out-of-memory path (#84/#94) — CheckXML must report ResourceError (not Malformed) under allocation failure, and resource_error must survive XMLDocRAII moves
 # group: [sql]
 
 require webbed

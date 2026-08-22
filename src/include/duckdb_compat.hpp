@@ -54,7 +54,6 @@ inline string CompatMakeIdentifier(string name) {
 }
 #endif
 
-
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
 
 // --- Bind function signature ---
