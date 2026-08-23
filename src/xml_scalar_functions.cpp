@@ -1557,16 +1557,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                                                       {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
 	                                                       {"num_rows", LogicalType(LogicalTypeId::BIGINT)}});
 
-	auto html_table_json_struct_type = LogicalType::STRUCT({
-	    {"table_index", LogicalType(LogicalTypeId::BIGINT)},
-	    {"line_number", LogicalType(LogicalTypeId::BIGINT)},
-	    {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
-	    {"num_rows", LogicalType(LogicalTypeId::BIGINT)},
-	    {"headers", LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR))},
-	    {"table_data", LogicalType::LIST(LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR)))},
-	    {"table_json", LogicalType::STRUCT({})},    // Complex nested struct
-	    {"json_structure", LogicalType::STRUCT({})} // Complex nested struct
-	});
+	auto html_table_json_struct_type =
+	    LogicalType::STRUCT({{"table_index", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"line_number", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"num_columns", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"num_rows", LogicalType(LogicalTypeId::BIGINT)},
+	                         {"headers", LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR))},
+	                         {"table_data", LogicalType::LIST(LogicalType::LIST(LogicalType(LogicalTypeId::VARCHAR)))},
+	                         {"table_json", LogicalType::JSON()}, // shape follows the document
+	                         {"json_structure", LogicalType::JSON()}});
 
 	// Register html_extract_text function with XPath support
 	// With XPath: returns LIST(VARCHAR) (PostgreSQL-compatible) - use list[1] to get single value
@@ -1590,35 +1589,61 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// prefixed elements like "svg:circle" are treated as literal names with colons.
 	// Users should use name()="prefix:element" XPath predicates for HTML content.
 
+	// VARCHAR overloads (compatibility): the natural sources of HTML content - read_text(),
+	// httpfs, zim:// entries, ordinary table columns - are all typed VARCHAR, and
+	// VARCHAR -> HTML is registered as an explicit-only cast (see XMLTypes::Register).
+	// Without these, every such pipeline needs a manual ::HTML cast. String literals bind
+	// today only because DuckDB special-cases STRING_LITERAL to reach any type, which hides
+	// the gap in doc examples. Mirrors the VARCHAR overloads xml_extract_text already has.
+	// VARCHAR only (no XPath) -> VARCHAR
+	html_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextFunction));
+	// VARCHAR + VARCHAR XPath -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                       LogicalType::LIST(LogicalType::VARCHAR),
+	                                                       HTMLExtractTextListFunction));
+	// VARCHAR + STRING_LITERAL XPath -> LIST(VARCHAR)
+	html_extract_text_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
+	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction));
+
 	loader.RegisterFunction(html_extract_text_functions);
 
-	// Register html_extract_links function
-	auto html_extract_links_function =
-	    ScalarFunction("html_extract_links", {XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type),
-	                   HTMLExtractLinksFunction);
-	PreventStructConstantFolding(html_extract_links_function);
-	loader.RegisterFunction(html_extract_links_function);
+	// Register html_extract_links function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_links_functions("html_extract_links");
+	html_extract_links_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
+	html_extract_links_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
+	PreventStructConstantFolding(html_extract_links_functions);
+	loader.RegisterFunction(html_extract_links_functions);
 
-	// Register html_extract_images function
-	auto html_extract_images_function =
-	    ScalarFunction("html_extract_images", {XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type),
-	                   HTMLExtractImagesFunction);
-	PreventStructConstantFolding(html_extract_images_function);
-	loader.RegisterFunction(html_extract_images_function);
+	// Register html_extract_images function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_images_functions("html_extract_images");
+	html_extract_images_functions.AddFunction(
+	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
+	html_extract_images_functions.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
+	PreventStructConstantFolding(html_extract_images_functions);
+	loader.RegisterFunction(html_extract_images_functions);
 
-	// Register html_extract_table_rows function
-	auto html_extract_table_rows_function =
-	    ScalarFunction("html_extract_table_rows", {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type),
-	                   HTMLExtractTableRowsFunction);
-	PreventStructConstantFolding(html_extract_table_rows_function);
-	loader.RegisterFunction(html_extract_table_rows_function);
+	// Register html_extract_table_rows function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_table_rows_functions("html_extract_table_rows");
+	html_extract_table_rows_functions.AddFunction(ScalarFunction(
+	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
+	html_extract_table_rows_functions.AddFunction(ScalarFunction(
+	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
+	PreventStructConstantFolding(html_extract_table_rows_functions);
+	loader.RegisterFunction(html_extract_table_rows_functions);
 
-	// Register html_extract_tables_json function
-	auto html_extract_tables_json_function =
-	    ScalarFunction("html_extract_tables_json", {XMLTypes::HTMLType()},
-	                   LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction);
-	PreventStructConstantFolding(html_extract_tables_json_function);
-	loader.RegisterFunction(html_extract_tables_json_function);
+	// Register html_extract_tables_json function (HTML + VARCHAR compatibility overload)
+	ScalarFunctionSet html_extract_tables_json_functions("html_extract_tables_json");
+	html_extract_tables_json_functions.AddFunction(ScalarFunction(
+	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
+	html_extract_tables_json_functions.AddFunction(ScalarFunction(
+	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
+	PreventStructConstantFolding(html_extract_tables_json_functions);
+	loader.RegisterFunction(html_extract_tables_json_functions);
 
 	// Register parse_html scalar function for parsing HTML content directly
 	auto parse_html_function =
@@ -1803,6 +1828,26 @@ void XMLScalarFunctions::HTMLExtractTableRowsFunction(DataChunk &args, Expressio
 					row_values.emplace_back(Value::STRUCT(row_children));
 				}
 			}
+
+			// Output footer rows. Previously <tfoot> rows arrived here indistinguishable
+			// from body rows; they now carry row_type='footer' and continue the row_index
+			// sequence after the body.
+			for (size_t f_idx = 0; f_idx < table.footers.size(); f_idx++) {
+				const auto &row = table.footers[f_idx];
+				for (size_t col_idx = 0; col_idx < row.size(); col_idx++) {
+					child_list_t<Value> row_children;
+					row_children.emplace_back("table_index", Value::BIGINT(static_cast<int64_t>(table_idx)));
+					row_children.emplace_back("row_type", Value("footer"));
+					row_children.emplace_back("row_index",
+					                          Value::BIGINT(static_cast<int64_t>(table.rows.size() + f_idx + 1)));
+					row_children.emplace_back("column_index", Value::BIGINT(static_cast<int64_t>(col_idx)));
+					row_children.emplace_back("cell_value", Value(row[col_idx]));
+					row_children.emplace_back("line_number", Value::BIGINT(table.line_number));
+					row_children.emplace_back("num_columns", Value::BIGINT(table.num_columns));
+					row_children.emplace_back("num_rows", Value::BIGINT(table.num_rows));
+					row_values.emplace_back(Value::STRUCT(row_children));
+				}
+			}
 		}
 
 		auto table_row_struct_type = LogicalType::STRUCT(
@@ -1837,62 +1882,74 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 				header_values.push_back(Value(header));
 			}
 
-			// Create data rows as list of lists
+			// Create data rows as list of lists. Value::LIST(values) asserts on an empty
+			// vector, and a table with no cells in a row is ordinary input, so every list
+			// here is built with the typed overload.
 			vector<Value> row_values;
 			for (const auto &row : rows) {
 				vector<Value> cell_values;
 				for (const auto &cell : row) {
 					cell_values.push_back(Value(cell));
 				}
-				row_values.push_back(Value::LIST(cell_values));
+				row_values.push_back(Value::LIST(LogicalType::VARCHAR, cell_values));
 			}
 
-			// Build JSON using DuckDB's native JSON construction
-			child_list_t<Value> json_children;
-
-			// Headers array
-			json_children.push_back({"headers", Value::LIST(header_values)});
-
-			// Data array (2D)
-			json_children.push_back({"data", Value::LIST(row_values)});
-
-			// Rows as objects
-			vector<Value> object_rows;
-			for (const auto &row : rows) {
-				child_list_t<Value> row_obj;
-				for (size_t j = 0; j < headers.size() && j < row.size(); j++) {
-					row_obj.push_back({CompatMakeIdentifier(headers[j]), Value(row[j])});
+			// table_json's shape follows the table's own headers, so it cannot be a fixed
+			// STRUCT type. Serialize it as JSON text, which is what the function name says.
+			//
+			// Key names follow duck_block_utils' table encoding — {"headers": [...],
+			// "rows": [[...]]} with rows as positional cells — so this value drops straight
+			// into a duck_block table's content and into db_render_table_json, which ignores
+			// the extra keys. The header-keyed objects live under "records" rather than
+			// "rows"; naming those "rows" would collide with that convention and silently
+			// render wrong.
+			std::string tj = "{\"headers\":[";
+			for (size_t j = 0; j < headers.size(); j++) {
+				tj += (j ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(headers[j]) + "\"";
+			}
+			tj += "],\"rows\":[";
+			for (size_t r = 0; r < rows.size(); r++) {
+				tj += (r ? ",[" : "[");
+				for (size_t c = 0; c < rows[r].size(); c++) {
+					tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(rows[r][c]) + "\"";
 				}
-				object_rows.push_back(Value::STRUCT(row_obj));
+				tj += "]";
 			}
-			json_children.push_back({"rows", Value::LIST(object_rows)});
-
-			// Metadata
-			child_list_t<Value> metadata_children;
-			metadata_children.push_back({"line_number", Value::BIGINT(table.line_number)});
-			metadata_children.push_back({"num_columns", Value::BIGINT(table.num_columns)});
-			metadata_children.push_back({"num_rows", Value::BIGINT(table.num_rows)});
-			json_children.push_back({"metadata", Value::STRUCT(metadata_children)});
-
-			Value json_value = Value::STRUCT(json_children);
-
-			// Build structure description
-			child_list_t<Value> structure_children;
-			structure_children.push_back({"table_name", Value("table_" + std::to_string(table_idx))});
-
-			vector<Value> column_info;
-			for (size_t col_idx = 0; col_idx < headers.size(); col_idx++) {
-				child_list_t<Value> col_children;
-				col_children.push_back({"name", Value(headers[col_idx])});
-				col_children.push_back({"index", Value::BIGINT(static_cast<int64_t>(col_idx))});
-				col_children.push_back({"type", Value("string")});
-				column_info.push_back(Value::STRUCT(col_children));
+			tj += "],\"records\":[";
+			for (size_t r = 0; r < rows.size(); r++) {
+				tj += (r ? ",{" : "{");
+				for (size_t c = 0; c < headers.size() && c < rows[r].size(); c++) {
+					tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(headers[c]) + "\":\"" +
+					      XMLUtils::EscapeJSONText(rows[r][c]) + "\"";
+				}
+				tj += "}";
 			}
-			structure_children.push_back({"columns", Value::LIST(column_info)});
-			structure_children.push_back({"row_count", Value::BIGINT(static_cast<int64_t>(rows.size()))});
-			structure_children.push_back({"source_line", Value::BIGINT(table.line_number)});
+			tj += "]";
+			if (!table.footers.empty()) {
+				tj += ",\"footers\":[";
+				for (size_t r = 0; r < table.footers.size(); r++) {
+					tj += (r ? ",[" : "[");
+					for (size_t c = 0; c < table.footers[r].size(); c++) {
+						tj += (c ? "," : "") + std::string("\"") + XMLUtils::EscapeJSONText(table.footers[r][c]) + "\"";
+					}
+					tj += "]";
+				}
+				tj += "]";
+			}
+			tj += ",\"metadata\":{\"line_number\":" + std::to_string(table.line_number) +
+			      ",\"num_columns\":" + std::to_string(table.num_columns) +
+			      ",\"num_rows\":" + std::to_string(table.num_rows) + "}}";
+			Value json_value(tj);
 
-			Value structure_value = Value::STRUCT(structure_children);
+			// Same for the structure description.
+			std::string js = "{\"table_name\":\"table_" + std::to_string(table_idx) + "\",\"columns\":[";
+			for (size_t c = 0; c < headers.size(); c++) {
+				js += (c ? "," : "") + std::string("{\"name\":\"") + XMLUtils::EscapeJSONText(headers[c]) +
+				      "\",\"index\":" + std::to_string(c) + ",\"type\":\"string\"}";
+			}
+			js += "],\"row_count\":" + std::to_string(rows.size()) +
+			      ",\"source_line\":" + std::to_string(table.line_number) + "}";
+			Value structure_value(js);
 
 			// Create struct for this table
 			child_list_t<Value> table_struct_children;
@@ -1900,22 +1957,22 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 			table_struct_children.push_back({"line_number", Value::BIGINT(table.line_number)});
 			table_struct_children.push_back({"num_columns", Value::BIGINT(static_cast<int64_t>(headers.size()))});
 			table_struct_children.push_back({"num_rows", Value::BIGINT(static_cast<int64_t>(rows.size()))});
-			table_struct_children.push_back({"headers", Value::LIST(header_values)});
-			table_struct_children.push_back({"table_data", Value::LIST(row_values)});
+			table_struct_children.push_back({"headers", Value::LIST(LogicalType::VARCHAR, header_values)});
+			table_struct_children.push_back(
+			    {"table_data", Value::LIST(LogicalType::LIST(LogicalType::VARCHAR), row_values)});
 			table_struct_children.push_back({"table_json", json_value});
 			table_struct_children.push_back({"json_structure", structure_value});
 
 			table_values.push_back(Value::STRUCT(table_struct_children));
 		}
 
-		auto table_json_struct_type = LogicalType::STRUCT({
-		    make_pair("table_index", LogicalType::BIGINT), make_pair("line_number", LogicalType::BIGINT),
-		    make_pair("num_columns", LogicalType::BIGINT), make_pair("num_rows", LogicalType::BIGINT),
-		    make_pair("headers", LogicalType::LIST(LogicalType::VARCHAR)),
-		    make_pair("table_data", LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR))),
-		    make_pair("table_json", LogicalType::STRUCT({})),    // Complex nested struct
-		    make_pair("json_structure", LogicalType::STRUCT({})) // Complex nested struct
-		});
+		auto table_json_struct_type = LogicalType::STRUCT(
+		    {make_pair("table_index", LogicalType::BIGINT), make_pair("line_number", LogicalType::BIGINT),
+		     make_pair("num_columns", LogicalType::BIGINT), make_pair("num_rows", LogicalType::BIGINT),
+		     make_pair("headers", LogicalType::LIST(LogicalType::VARCHAR)),
+		     make_pair("table_data", LogicalType::LIST(LogicalType::LIST(LogicalType::VARCHAR))),
+		     make_pair("table_json", LogicalType::JSON()), // shape follows the document
+		     make_pair("json_structure", LogicalType::JSON())});
 
 		Value list_value = Value::LIST(table_json_struct_type, table_values);
 		result.SetValue(i, list_value);

@@ -1,0 +1,167 @@
+# name: test/sql/github_issue_130_table_json_and_footers.test
+# description: html_extract_tables_json returns readable JSON; <tfoot> survives; JSON escaping is valid
+# group: [sql]
+
+#
+# GitHub Issue #130: html_extract_tables_json was unusable in either direction
+# https://github.com/teaguesterling/duckdb_webbed/issues/130
+#
+# Its table_json / json_structure fields were declared LogicalType::STRUCT({}) — an
+# empty placeholder — while the runtime value was a populated struct whose `rows`
+# element type came from the document's own headers. A scalar function's return type
+# is fixed at bind time, so a per-document struct type is not expressible: every call
+# failed with "Cannot cast STRUCTs of different size". Separately, a table with no
+# <th> built Value::LIST() from an empty vector, which is a DuckDB assertion.
+#
+# Fix: those two fields carry JSON text, whose keys follow duck_block_utils' table
+# encoding, and every list is built with the typed Value::LIST(type, values) overload.
+#
+# GitHub Issue #131: <tfoot> rows were dropped or relabelled as data
+# https://github.com/teaguesterling/duckdb_webbed/issues/131
+#
+# GitHub Issue #132: EscapeJsonString emitted invalid JSON for control characters
+# https://github.com/teaguesterling/duckdb_webbed/issues/132
+#
+
+require webbed
+
+require json
+
+# ==============================================================================
+# #130: a table with no <th> must not raise an INTERNAL error
+# ==============================================================================
+
+query I
+SELECT html_extract_tables_json('<table><tr><td>a</td></tr></table>'::HTML)[1].num_rows;
+----
+1
+
+# the same through the VARCHAR overload
+query I
+SELECT html_extract_tables_json('<table><tr><td>a</td></tr></table>'::VARCHAR)[1].num_rows;
+----
+1
+
+# a table with neither headers nor body rows is still not a crash
+query I
+SELECT len(html_extract_tables_json('<table><tfoot><tr><td>only</td></tr></tfoot></table>'::HTML));
+----
+1
+
+# ==============================================================================
+# #130: the returned value is readable, and is valid JSON
+# ==============================================================================
+
+query I
+SELECT json_valid(html_extract_tables_json(
+    '<table><tr><th>h</th></tr><tr><td>a</td></tr></table>'::HTML)[1].table_json);
+----
+true
+
+query I
+SELECT json_valid(html_extract_tables_json(
+    '<table><tr><th>h</th></tr><tr><td>a</td></tr></table>'::HTML)[1].json_structure);
+----
+true
+
+# ==============================================================================
+# #130: key names match duck_block_utils' table encoding, so the value drops
+# straight into a duck_block table's content. "rows" must be positional arrays;
+# the header-keyed objects live under "records". Swapping those two would render
+# wrong rather than error.
+# ==============================================================================
+
+query I
+SELECT html_extract_tables_json(
+    '<table><tr><th>item</th><th>qty</th></tr><tr><td>apples</td><td>3</td></tr></table>'::HTML
+)[1].table_json ->> '$.rows[0][0]';
+----
+apples
+
+query I
+SELECT html_extract_tables_json(
+    '<table><tr><th>item</th><th>qty</th></tr><tr><td>apples</td><td>3</td></tr></table>'::HTML
+)[1].table_json ->> '$.records[0].item';
+----
+apples
+
+# ==============================================================================
+# #131: <tfoot> rows are kept, and kept distinct from body rows
+# ==============================================================================
+
+# the duck_blocks table encoding carries them under "footers"
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><thead><tr><th>item</th><th>qty</th></tr></thead>'
+  '<tbody><tr><td>apples</td><td>3</td></tr></tbody>'
+  '<tfoot><tr><td>total</td><td>3</td></tr></tfoot></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":["item","qty"],"rows":[["apples","3"]],"footers":[["total","3"]]}
+
+# a footer row must not appear among the body rows
+query I
+SELECT b.content ->> '$.rows[0][0]' FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><thead><tr><th>item</th></tr></thead><tbody><tr><td>apples</td></tr></tbody>'
+  '<tfoot><tr><td>total</td></tr></tfoot></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+apples
+
+# no <tfoot> means no "footers" key at all, so existing readers are unaffected
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><tr><th>h</th></tr><tr><td>a</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":["h"],"rows":[["a"]]}
+
+# html_extract_table_rows labels them rather than calling them data
+query I
+SELECT string_agg(r.row_type || ':' || r.cell_value, ' ') FROM (SELECT unnest(html_extract_table_rows(
+  '<table><thead><tr><th>item</th></tr></thead><tbody><tr><td>apples</td></tr></tbody>'
+  '<tfoot><tr><td>total</td></tr></tfoot></table>'::HTML)) AS r);
+----
+header:item data:apples footer:total
+
+# footers reach html_extract_tables_json too
+query I
+SELECT html_extract_tables_json(
+  '<table><thead><tr><th>item</th></tr></thead><tbody><tr><td>apples</td></tr></tbody>'
+  '<tfoot><tr><td>total</td></tr></tfoot></table>'::HTML)[1].table_json ->> '$.footers[0][0]';
+----
+total
+
+# and survive a round trip back to HTML
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks(
+  '<table><thead><tr><th>item</th></tr></thead><tbody><tr><td>apples</td></tr></tbody>'
+  '<tfoot><tr><td>total</td></tr></tfoot></table>'));
+----
+<table><thead><tr><th>item</th></tr></thead><tbody><tr><td>apples</td></tr></tbody><tfoot><tr><td>total</td></tr></tfoot></table>
+
+# ==============================================================================
+# #132: control characters below 0x20 must be escaped, or the content is not JSON
+# ==============================================================================
+
+query I
+SELECT json_valid(b.content) FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><tr><th>a' || chr(11) || 'b</th></tr><tr><td>x</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+true
+
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><tr><th>a' || chr(11) || 'b</th></tr><tr><td>x</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":["a\u000bb"],"rows":[["x"]]}
+
+# the characters that already worked must keep working
+query I
+SELECT json_valid(b.content) FROM (SELECT unnest(html_to_duck_blocks(
+  '<table><tr><th>q"' || chr(9) || chr(10) || 'z</th></tr><tr><td>x</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+true

@@ -1011,6 +1011,47 @@ XMLStats XMLUtils::GetXMLStats(const std::string &xml_str) {
 	return stats;
 }
 
+std::string XMLUtils::EscapeJSONText(const std::string &str) {
+	std::string out;
+	out.reserve(str.size() + 8);
+	// Iterate as unsigned char: with a signed char, bytes above 0x7F compare as negative
+	// and the < 0x20 test below would be implementation-defined.
+	for (unsigned char c : str) {
+		switch (c) {
+		case '"':
+			out += "\\\"";
+			break;
+		case '\\':
+			out += "\\\\";
+			break;
+		case '\n':
+			out += "\\n";
+			break;
+		case '\r':
+			out += "\\r";
+			break;
+		case '\t':
+			out += "\\t";
+			break;
+		case '\b':
+			out += "\\b";
+			break;
+		case '\f':
+			out += "\\f";
+			break;
+		default:
+			if (c < 0x20) {
+				char buf[7];
+				snprintf(buf, sizeof(buf), "\\u%04x", c);
+				out += buf;
+			} else {
+				out += static_cast<char>(c);
+			}
+		}
+	}
+	return out;
+}
+
 std::string XMLUtils::XMLToJSON(const std::string &xml_str) {
 	XMLDocRAII xml_doc(xml_str);
 	if (!xml_doc.IsValid()) {
@@ -2751,7 +2792,12 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 
 				// Extract data rows (all rows for tables without th headers)
 				bool has_th_headers = !table.headers.empty();
-				std::string data_xpath = has_th_headers ? ".//tbody//tr | .//tr[not(th)]" : ".//tbody//tr | .//tr";
+				// tfoot rows are excluded here and collected separately below; without the
+				// filter they land in the body as ordinary data rows.
+				std::string data_xpath = has_th_headers ? ".//tbody//tr[not(ancestor::tfoot)] | "
+				                                          ".//tr[not(th)][not(ancestor::tfoot)]"
+				                                        : ".//tbody//tr[not(ancestor::tfoot)] | "
+				                                          ".//tr[not(ancestor::tfoot)]";
 
 				xmlXPathObjectPtr rows_obj = xmlXPathEvalExpression(BAD_CAST data_xpath.c_str(), local_ctx);
 
@@ -2791,6 +2837,36 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 
 				if (rows_obj)
 					xmlXPathFreeObject(rows_obj);
+
+				// <tfoot> rows, gathered the same way as body rows
+				xmlXPathObjectPtr foot_obj = xmlXPathEvalExpression(BAD_CAST ".//tfoot//tr", local_ctx);
+				if (foot_obj && foot_obj->nodesetval) {
+					for (int j = 0; j < foot_obj->nodesetval->nodeNr; j++) {
+						xmlNodePtr row_node = foot_obj->nodesetval->nodeTab[j];
+						std::vector<std::string> row_data;
+						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
+						if (row_ctx) {
+							row_ctx->node = row_node;
+							xmlXPathObjectPtr cells_obj = xmlXPathEvalExpression(BAD_CAST ".//td | .//th", row_ctx);
+							if (cells_obj && cells_obj->nodesetval) {
+								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
+									XMLCharPtr text(xmlNodeGetContent(cells_obj->nodesetval->nodeTab[k]));
+									row_data.push_back(text ? std::string(reinterpret_cast<const char *>(text.get()))
+									                        : "");
+								}
+							}
+							if (cells_obj)
+								xmlXPathFreeObject(cells_obj);
+							xmlXPathFreeContext(row_ctx);
+						}
+						if (!row_data.empty()) {
+							table.footers.push_back(row_data);
+						}
+					}
+				}
+				if (foot_obj)
+					xmlXPathFreeObject(foot_obj);
+
 				xmlXPathFreeContext(local_ctx);
 			}
 
@@ -2799,7 +2875,7 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 			table.num_rows = static_cast<int64_t>(table.rows.size());
 
 			// Only add table if it has content
-			if (table.num_columns > 0 || table.num_rows > 0) {
+			if (table.num_columns > 0 || table.num_rows > 0 || !table.footers.empty()) {
 				tables.push_back(table);
 			}
 		}
