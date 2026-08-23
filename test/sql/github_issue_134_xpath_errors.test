@@ -1,0 +1,94 @@
+# name: test/sql/github_issue_134_xpath_errors.test
+# description: Issue 134 - a syntactically invalid XPath raises instead of silently returning empty, while valid-but-unmatched expressions keep returning empty
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# A malformed expression must raise, not return empty.
+# Before this fix every one of these returned [] -- indistinguishable from a
+# valid expression that legitimately matched nothing.
+# ============================================================================
+
+statement error
+SELECT xml_extract_text('<r><a>x</a></r>', '//a[');
+----
+Invalid XPath expression
+
+statement error
+SELECT xml_extract_text('<r><a>x</a></r>', 'this is not xpath');
+----
+Invalid XPath expression
+
+statement error
+SELECT xml_extract_elements('<r><a>x</a></r>', '//a[');
+----
+Invalid XPath expression
+
+statement error
+SELECT xml_extract_attributes('<r><a id="1"/></r>', '//a[');
+----
+Invalid XPath expression
+
+statement error
+SELECT html_extract_text('<html><body><h2>Two</h2></body></html>'::HTML, '//h2[');
+----
+Invalid XPath expression
+
+# The error names the offending expression so the user can see what was rejected.
+statement error
+SELECT xml_extract_text('<r><a>x</a></r>', '//a[');
+----
+//a[
+
+# ============================================================================
+# Valid expressions that match nothing must still return empty, unchanged.
+# ============================================================================
+
+# 'h2' is a valid relative path from the document node; it matches nothing here.
+query I
+SELECT html_extract_text('<html><body><h2>Two</h2></body></html>'::HTML, 'h2') = [];
+----
+true
+
+query I
+SELECT xml_extract_text('<r><a>x</a></r>', '//nonexistent') = [];
+----
+true
+
+# A valid expression that does match is untouched.
+query I
+SELECT xml_extract_text('<r><a>x</a></r>', '//a');
+----
+[x]
+
+# ============================================================================
+# Regression guard for github_issue_4_namespace_extraction.test 10.1.
+# An undeclared namespace prefix is a *runtime* resolution failure, not a parse
+# failure: it compiles fine and fails at evaluation. That case keeps returning
+# empty, so this fix does not change it.
+# ============================================================================
+
+query I
+SELECT xml_extract_text('<root>
+  <gml:posList>1 2 3</gml:posList>
+</root>', '//gml:posList') = [];
+----
+true
+
+# The local-name() workaround for the same document still works.
+query I
+SELECT xml_extract_text('<root>
+  <gml:posList>1 2 3</gml:posList>
+</root>', '//*[local-name()="gml:posList"]');
+----
+[1 2 3]
+
+# ============================================================================
+# NULL handling is unaffected -- a NULL xpath is not an invalid xpath.
+# ============================================================================
+
+query I
+SELECT xml_extract_text('<r><a>x</a></r>', NULL) IS NULL;
+----
+true

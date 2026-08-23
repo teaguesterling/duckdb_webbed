@@ -188,6 +188,21 @@ std::string TransformXPathForUndeclaredPrefixes(const std::string &xpath,
 std::string InjectNamespaceDeclarations(const std::string &xml_str,
                                         const case_insensitive_map_t<string> &namespaces_to_inject);
 
+// Evaluate an XPath expression, raising on a syntactically invalid one (issue #134).
+//
+// xmlXPathEvalExpression returns NULL for two very different reasons: the expression
+// failed to parse, and the expression parsed but could not be evaluated (most commonly
+// an undefined namespace prefix). Collapsing both into an empty result makes a typo
+// indistinguishable from a query that legitimately matched nothing.
+//
+// Compiling first separates them. A compile failure is a malformed expression and
+// throws InvalidInputException naming the expression. An expression that compiles but
+// evaluates to NULL returns nullptr, which callers continue to treat as "no matches" --
+// so an undeclared namespace prefix keeps its existing empty result.
+//
+// Returns a node-set object the caller owns and must xmlXPathFreeObject, or nullptr.
+xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::string &xpath);
+
 // Detect namespace prefixes used in an XML document (scans for prefix:name patterns)
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);
 
