@@ -305,7 +305,7 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 		int32_t block_order = 0;
 
 		// First, extract frontmatter script blocks
-		xmlXPathObjectPtr frontmatter_obj = xmlXPathEvalExpression(BAD_CAST FRONTMATTER_XPATH, xpath_ctx);
+		xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
 		if (frontmatter_obj && frontmatter_obj->nodesetval) {
 			for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
 				xmlNodePtr node = frontmatter_obj->nodesetval->nodeTab[j];
@@ -331,7 +331,7 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 		}
 
 		// Execute XPath query for block-level elements
-		xmlXPathObjectPtr xpath_obj = xmlXPathEvalExpression(BAD_CAST BLOCK_XPATH, xpath_ctx);
+		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xpath_ctx, BLOCK_XPATH);
 
 		if (xpath_obj && xpath_obj->nodesetval) {
 			for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
