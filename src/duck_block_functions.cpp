@@ -7,6 +7,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "yyjson.hpp"
 
 #include <libxml/HTMLparser.h>
 #include <libxml/xpath.h>
@@ -15,6 +16,8 @@
 #include <set>
 
 namespace duckdb {
+
+using namespace duckdb_yyjson;
 
 // Forward declarations for helper functions
 static std::string GetNodeTextContent(xmlNodePtr node);
@@ -25,11 +28,7 @@ static std::string ListItemsToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
-static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &pos);
-static std::string RenderPandocCellToHtml(const std::string &json, size_t &pos);
 static bool ContentContainsTags(const std::string &content);
-static std::string EscapeJsonString(const std::string &str);
-static std::string UnescapeJsonString(const std::string &str);
 
 // XPath query for block-level elements
 static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 "
@@ -827,512 +826,76 @@ static int CountBlockquoteAncestors(xmlNodePtr node) {
 	return count;
 }
 
-// Delegates so webbed has exactly one JSON escaper; see XMLUtils::EscapeJSONText.
-static std::string EscapeJsonString(const std::string &str) {
-	return XMLUtils::EscapeJSONText(str);
-}
-
-static std::string UnescapeJsonString(const std::string &str) {
-	std::string result;
-	for (size_t i = 0; i < str.size(); i++) {
-		if (str[i] == '\\' && i + 1 < str.size()) {
-			char next = str[i + 1];
-			switch (next) {
-			case 'n':
-				result += '\n';
-				break;
-			case 'r':
-				result += '\r';
-				break;
-			case 't':
-				result += '\t';
-				break;
-			case '"':
-				result += '"';
-				break;
-			case '\\':
-				result += '\\';
-				break;
-			case 'b':
-				result += '\b';
-				break;
-			case 'f':
-				result += '\f';
-				break;
-			case 'u':
-				// \uXXXX. The escaper only emits these for C0 controls, so decoding the
-				// BMP range as-is and taking the low byte round-trips what it produces;
-				// anything above 0xFF is left verbatim rather than mangled.
-				if (i + 5 < str.size()) {
-					char hex[5] = {str[i + 2], str[i + 3], str[i + 4], str[i + 5], '\0'};
-					char *end = nullptr;
-					unsigned long cp = strtoul(hex, &end, 16);
-					if (end == hex + 4 && cp <= 0xFF) {
-						result += static_cast<char>(cp);
-						i += 5;
-						continue;
-					}
-				}
-				result += next;
-				break;
-			default:
-				result += next;
-				break;
-			}
-			i++;
-		} else {
-			result += str[i];
-		}
-	}
-	return result;
-}
-
-static std::string TableJsonToHtml(const std::string &json) {
-	// Detect format: Pandoc tables start with '[', our internal format starts with '{'
-	size_t first_char = json.find_first_not_of(" \t\n\r");
-	if (first_char != std::string::npos && json[first_char] == '[') {
-		// Pandoc table format
-		return PandocTableToHtml(json);
-	}
-
-	// Parse JSON format: {"headers":["col1","col2"],"rows":[["cell1","cell2"],...]}
-	std::stringstream html;
-	html << "<table>";
-
-	// Extract headers array
-	std::vector<std::string> headers;
-	size_t headers_start = json.find("\"headers\":");
-	if (headers_start != std::string::npos) {
-		size_t arr_start = json.find('[', headers_start);
-		size_t arr_end = json.find(']', arr_start);
-		if (arr_start != std::string::npos && arr_end != std::string::npos) {
-			std::string headers_arr = json.substr(arr_start + 1, arr_end - arr_start - 1);
-			std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
-			std::sregex_iterator iter(headers_arr.begin(), headers_arr.end(), item_regex);
-			std::sregex_iterator end;
-			while (iter != end) {
-				headers.push_back(UnescapeJsonString((*iter)[1].str()));
-				++iter;
-			}
-		}
-	}
-
-	// Render headers
-	if (!headers.empty()) {
-		html << "<thead><tr>";
-		for (const auto &h : headers) {
-			html << "<th>" << XMLUtils::HTMLEscape(h) << "</th>";
-		}
-		html << "</tr></thead>";
-	}
-
-	// Extract rows array
-	size_t rows_start = json.find("\"rows\":");
-	if (rows_start != std::string::npos) {
-		size_t arr_start = json.find('[', rows_start);
-		if (arr_start != std::string::npos) {
-			html << "<tbody>";
-			// Find each row array [...]
-			size_t pos = arr_start + 1;
-			while (pos < json.size()) {
-				// Skip whitespace
-				while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == ',')) {
-					pos++;
-				}
-				if (pos >= json.size() || json[pos] == ']') {
-					break;
-				}
-				if (json[pos] == '[') {
-					// Found row start
-					size_t row_end = pos + 1;
-					int bracket_depth = 1;
-					while (row_end < json.size() && bracket_depth > 0) {
-						if (json[row_end] == '[') {
-							bracket_depth++;
-						} else if (json[row_end] == ']') {
-							bracket_depth--;
-						} else if (json[row_end] == '"') {
-							// Skip string content
-							row_end++;
-							while (row_end < json.size()) {
-								if (json[row_end] == '\\' && row_end + 1 < json.size()) {
-									row_end += 2;
-								} else if (json[row_end] == '"') {
-									break;
-								} else {
-									row_end++;
-								}
-							}
-						}
-						row_end++;
-					}
-					std::string row_str = json.substr(pos + 1, row_end - pos - 2);
-
-					// Extract cells from this row
-					std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
-					std::sregex_iterator iter(row_str.begin(), row_str.end(), item_regex);
-					std::sregex_iterator end;
-					html << "<tr>";
-					while (iter != end) {
-						std::string cell = UnescapeJsonString((*iter)[1].str());
-						html << "<td>" << XMLUtils::HTMLEscape(cell) << "</td>";
-						++iter;
-					}
-					html << "</tr>";
-					pos = row_end;
-				} else {
-					pos++;
-				}
-			}
-			html << "</tbody>";
-		}
-	}
-
-	// Render footers when the block carries them; absent key means no <tfoot>
-	size_t foot_start = json.find("\"footers\":");
-	if (foot_start != std::string::npos) {
-		size_t arr_start = json.find('[', foot_start);
-		if (arr_start != std::string::npos) {
-			html << "<tfoot>";
-			// Find each row array [...]
-			size_t pos = arr_start + 1;
-			while (pos < json.size()) {
-				// Skip whitespace
-				while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == ',')) {
-					pos++;
-				}
-				if (pos >= json.size() || json[pos] == ']') {
-					break;
-				}
-				if (json[pos] == '[') {
-					// Found row start
-					size_t row_end = pos + 1;
-					int bracket_depth = 1;
-					while (row_end < json.size() && bracket_depth > 0) {
-						if (json[row_end] == '[') {
-							bracket_depth++;
-						} else if (json[row_end] == ']') {
-							bracket_depth--;
-						} else if (json[row_end] == '"') {
-							// Skip string content
-							row_end++;
-							while (row_end < json.size()) {
-								if (json[row_end] == '\\' && row_end + 1 < json.size()) {
-									row_end += 2;
-								} else if (json[row_end] == '"') {
-									break;
-								} else {
-									row_end++;
-								}
-							}
-						}
-						row_end++;
-					}
-					std::string row_str = json.substr(pos + 1, row_end - pos - 2);
-
-					// Extract cells from this row
-					std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
-					std::sregex_iterator iter(row_str.begin(), row_str.end(), item_regex);
-					std::sregex_iterator end;
-					html << "<tr>";
-					while (iter != end) {
-						std::string cell = UnescapeJsonString((*iter)[1].str());
-						html << "<td>" << XMLUtils::HTMLEscape(cell) << "</td>";
-						++iter;
-					}
-					html << "</tr>";
-					pos = row_end;
-				} else {
-					pos++;
-				}
-			}
-			html << "</tfoot>";
-		}
-	}
-
-	html << "</table>";
-	return html.str();
-}
-
-// ============================================================================
-// Pandoc Table JSON to HTML conversion
-// Pandoc table format: [caption, alignments, widths, headers, rows]
-// ============================================================================
-
-// Helper to skip whitespace in JSON
-static void SkipWhitespace(const std::string &json, size_t &pos) {
-	while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
-		pos++;
-	}
-}
-
-// Helper to extract a JSON string value (after the opening quote)
-static std::string ExtractJsonString(const std::string &json, size_t &pos) {
-	std::string result;
-	while (pos < json.size() && json[pos] != '"') {
-		if (json[pos] == '\\' && pos + 1 < json.size()) {
-			pos++;
-			switch (json[pos]) {
-			case 'n':
-				result += '\n';
-				break;
-			case 't':
-				result += '\t';
-				break;
-			case 'r':
-				result += '\r';
-				break;
-			case '"':
-				result += '"';
-				break;
-			case '\\':
-				result += '\\';
-				break;
-			default:
-				result += json[pos];
-				break;
-			}
-		} else {
-			result += json[pos];
-		}
-		pos++;
-	}
-	if (pos < json.size()) {
-		pos++; // Skip closing quote
-	}
-	return result;
-}
-
-// Skip a JSON value (string, number, array, object, or keyword)
-static void SkipJsonValue(const std::string &json, size_t &pos) {
-	SkipWhitespace(json, pos);
-	if (pos >= json.size())
-		return;
-
-	char c = json[pos];
-	if (c == '"') {
-		// String
-		pos++;
-		while (pos < json.size() && json[pos] != '"') {
-			if (json[pos] == '\\' && pos + 1 < json.size()) {
-				pos += 2;
-			} else {
-				pos++;
-			}
-		}
-		if (pos < json.size())
-			pos++;
-	} else if (c == '[') {
-		// Array
-		pos++;
-		int depth = 1;
-		while (pos < json.size() && depth > 0) {
-			if (json[pos] == '[')
-				depth++;
-			else if (json[pos] == ']')
-				depth--;
-			else if (json[pos] == '"') {
-				pos++;
-				while (pos < json.size() && json[pos] != '"') {
-					if (json[pos] == '\\' && pos + 1 < json.size())
-						pos += 2;
-					else
-						pos++;
-				}
-				if (pos >= json.size()) {
-					// Unterminated string: stop without stepping past the end
-					return;
-				}
-			}
-			pos++;
-		}
-	} else if (c == '{') {
-		// Object
-		pos++;
-		int depth = 1;
-		while (pos < json.size() && depth > 0) {
-			if (json[pos] == '{')
-				depth++;
-			else if (json[pos] == '}')
-				depth--;
-			else if (json[pos] == '"') {
-				pos++;
-				while (pos < json.size() && json[pos] != '"') {
-					if (json[pos] == '\\' && pos + 1 < json.size())
-						pos += 2;
-					else
-						pos++;
-				}
-				if (pos >= json.size()) {
-					// Unterminated string: stop without stepping past the end
-					return;
-				}
-			}
-			pos++;
-		}
-	} else {
-		// Number, true, false, null
-		while (pos < json.size() && json[pos] != ',' && json[pos] != ']' && json[pos] != '}' && json[pos] != ' ' &&
-		       json[pos] != '\n' && json[pos] != '\r' && json[pos] != '\t') {
-			pos++;
-		}
-	}
-}
-
-// Skip a JSON value, always consuming at least one character so malformed
-// input cannot stall caller loops
-static void SkipJsonValueWithProgress(const std::string &json, size_t &pos) {
-	size_t before = pos;
-	SkipJsonValue(json, pos);
-	if (pos == before && pos < json.size()) {
-		pos++;
-	}
-}
-
-// Between fields of a JSON object, consume ',' or any unexpected character so
-// malformed input cannot stall caller loops scanning for '"' or '}'
-static void ConsumeObjectFieldSeparator(const std::string &json, size_t &pos) {
-	SkipWhitespace(json, pos);
-	if (pos < json.size() && json[pos] != '}' && json[pos] != '"') {
-		pos++;
-	}
-}
-
-// Render Pandoc inlines array to HTML
-// pos should point to the start of the inlines array '['
-static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &pos) {
-	std::stringstream result;
-
-	SkipWhitespace(json, pos);
-	if (pos >= json.size() || json[pos] != '[')
+static std::string RenderPandocInlinesToHtml(yyjson_val *inlines_val, int depth = 0) {
+	if (!inlines_val || depth > 100) {
 		return "";
-	pos++; // Skip '['
+	}
+	if (yyjson_is_str(inlines_val)) {
+		return XMLUtils::HTMLEscape(std::string(yyjson_get_str(inlines_val), yyjson_get_len(inlines_val)));
+	}
+	if (!yyjson_is_arr(inlines_val)) {
+		return "";
+	}
 
-	while (pos < json.size()) {
-		SkipWhitespace(json, pos);
-		if (pos >= json.size()) {
-			break;
-		}
-		if (json[pos] == ']') {
-			pos++;
-			break;
-		}
-		if (json[pos] == ',') {
-			pos++;
+	std::stringstream result;
+	size_t idx, max;
+	yyjson_val *item;
+	yyjson_arr_foreach(inlines_val, idx, max, item) {
+		if (!yyjson_is_obj(item)) {
 			continue;
 		}
-
-		// Each inline is an object like {"t":"Str","c":"text"}
-		if (json[pos] != '{') {
-			pos++;
+		yyjson_val *t_val = yyjson_obj_get(item, "t");
+		if (!t_val || !yyjson_is_str(t_val)) {
 			continue;
 		}
-		pos++; // Skip '{'
+		const char *type = yyjson_get_str(t_val);
+		yyjson_val *c_val = yyjson_obj_get(item, "c");
 
-		std::string type;
-		size_t content_start = std::string::npos;
-
-		// Parse the inline object
-		while (pos < json.size() && json[pos] != '}') {
-			SkipWhitespace(json, pos);
-			if (json[pos] == '"') {
-				pos++;
-				std::string key = ExtractJsonString(json, pos);
-				SkipWhitespace(json, pos);
-				if (pos < json.size() && json[pos] == ':') {
-					pos++;
-					SkipWhitespace(json, pos);
-					if (key == "t" && json[pos] == '"') {
-						pos++;
-						type = ExtractJsonString(json, pos);
-					} else if (key == "c") {
-						content_start = pos;
-						SkipJsonValue(json, pos);
-					} else {
-						SkipJsonValue(json, pos);
-					}
-				}
+		if (strcmp(type, "Str") == 0) {
+			if (c_val && yyjson_is_str(c_val)) {
+				result << XMLUtils::HTMLEscape(std::string(yyjson_get_str(c_val), yyjson_get_len(c_val)));
 			}
-			ConsumeObjectFieldSeparator(json, pos);
-		}
-		if (pos < json.size())
-			pos++; // Skip '}'
-
-		// Render based on type
-		if (type == "Str" && content_start != std::string::npos) {
-			size_t str_pos = content_start + 1; // Skip opening quote
-			result << XMLUtils::HTMLEscape(ExtractJsonString(json, str_pos));
-		} else if (type == "Space") {
+		} else if (strcmp(type, "Space") == 0) {
 			result << " ";
-		} else if (type == "SoftBreak") {
+		} else if (strcmp(type, "SoftBreak") == 0) {
 			result << "\n";
-		} else if (type == "LineBreak") {
+		} else if (strcmp(type, "LineBreak") == 0) {
 			result << "<br>";
-		} else if (type == "Strong" && content_start != std::string::npos) {
-			size_t nested_pos = content_start;
-			result << "<strong>" << RenderPandocInlinesToHtml(json, nested_pos) << "</strong>";
-		} else if (type == "Emph" && content_start != std::string::npos) {
-			size_t nested_pos = content_start;
-			result << "<em>" << RenderPandocInlinesToHtml(json, nested_pos) << "</em>";
-		} else if (type == "Strikeout" && content_start != std::string::npos) {
-			size_t nested_pos = content_start;
-			result << "<del>" << RenderPandocInlinesToHtml(json, nested_pos) << "</del>";
-		} else if (type == "Superscript" && content_start != std::string::npos) {
-			size_t nested_pos = content_start;
-			result << "<sup>" << RenderPandocInlinesToHtml(json, nested_pos) << "</sup>";
-		} else if (type == "Subscript" && content_start != std::string::npos) {
-			size_t nested_pos = content_start;
-			result << "<sub>" << RenderPandocInlinesToHtml(json, nested_pos) << "</sub>";
-		} else if (type == "Code" && content_start != std::string::npos) {
-			// Code: {"t":"Code","c":[["",[],""],"code text"]}
-			// The code text is the second element of the array
-			size_t code_pos = content_start;
-			SkipWhitespace(json, code_pos);
-			if (json[code_pos] == '[') {
-				code_pos++;
-				SkipJsonValue(json, code_pos); // Skip attr array
-				SkipWhitespace(json, code_pos);
-				if (json[code_pos] == ',')
-					code_pos++;
-				SkipWhitespace(json, code_pos);
-				if (json[code_pos] == '"') {
-					code_pos++;
-					result << "<code>" << XMLUtils::HTMLEscape(ExtractJsonString(json, code_pos)) << "</code>";
+		} else if (strcmp(type, "Strong") == 0) {
+			result << "<strong>" << RenderPandocInlinesToHtml(c_val, depth + 1) << "</strong>";
+		} else if (strcmp(type, "Emph") == 0) {
+			result << "<em>" << RenderPandocInlinesToHtml(c_val, depth + 1) << "</em>";
+		} else if (strcmp(type, "Strikeout") == 0) {
+			result << "<del>" << RenderPandocInlinesToHtml(c_val, depth + 1) << "</del>";
+		} else if (strcmp(type, "Superscript") == 0) {
+			result << "<sup>" << RenderPandocInlinesToHtml(c_val, depth + 1) << "</sup>";
+		} else if (strcmp(type, "Subscript") == 0) {
+			result << "<sub>" << RenderPandocInlinesToHtml(c_val, depth + 1) << "</sub>";
+		} else if (strcmp(type, "Code") == 0) {
+			if (c_val && yyjson_is_arr(c_val) && yyjson_arr_size(c_val) >= 2) {
+				yyjson_val *code_val = yyjson_arr_get(c_val, 1);
+				if (code_val && yyjson_is_str(code_val)) {
+					result << "<code>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(code_val), yyjson_get_len(code_val))) << "</code>";
 				}
 			}
-		} else if (type == "Link" && content_start != std::string::npos) {
-			// Link: {"t":"Link","c":[["",[]],[...inlines...],["url","title"]]}
-			size_t link_pos = content_start;
-			SkipWhitespace(json, link_pos);
-			if (json[link_pos] == '[') {
-				link_pos++;
-				SkipJsonValue(json, link_pos); // Skip attr array
-				SkipWhitespace(json, link_pos);
-				if (json[link_pos] == ',')
-					link_pos++;
-				SkipWhitespace(json, link_pos);
-				// Parse link text inlines
-				std::string link_text = RenderPandocInlinesToHtml(json, link_pos);
-				SkipWhitespace(json, link_pos);
-				if (json[link_pos] == ',')
-					link_pos++;
-				SkipWhitespace(json, link_pos);
-				// Parse target ["url","title"]
+		} else if (strcmp(type, "Link") == 0) {
+			if (c_val && yyjson_is_arr(c_val) && yyjson_arr_size(c_val) >= 3) {
+				yyjson_val *inlines = yyjson_arr_get(c_val, 1);
+				yyjson_val *target = yyjson_arr_get(c_val, 2);
+				std::string link_text = RenderPandocInlinesToHtml(inlines, depth + 1);
 				std::string url, title;
-				if (json[link_pos] == '[') {
-					link_pos++;
-					SkipWhitespace(json, link_pos);
-					if (json[link_pos] == '"') {
-						link_pos++;
-						url = ExtractJsonString(json, link_pos);
+				if (target && yyjson_is_arr(target)) {
+					if (yyjson_arr_size(target) >= 1) {
+						yyjson_val *u = yyjson_arr_get(target, 0);
+						if (u && yyjson_is_str(u)) {
+							url = std::string(yyjson_get_str(u), yyjson_get_len(u));
+						}
 					}
-					SkipWhitespace(json, link_pos);
-					if (json[link_pos] == ',')
-						link_pos++;
-					SkipWhitespace(json, link_pos);
-					if (json[link_pos] == '"') {
-						link_pos++;
-						title = ExtractJsonString(json, link_pos);
+					if (yyjson_arr_size(target) >= 2) {
+						yyjson_val *t = yyjson_arr_get(target, 1);
+						if (t && yyjson_is_str(t)) {
+							title = std::string(yyjson_get_str(t), yyjson_get_len(t));
+						}
 					}
 				}
 				result << "<a href=\"" << XMLUtils::HTMLEscape(url) << "\"";
@@ -1343,301 +906,233 @@ static std::string RenderPandocInlinesToHtml(const std::string &json, size_t &po
 			}
 		}
 	}
-
 	return result.str();
 }
 
-// Render a Pandoc cell (array of blocks) to HTML
-// pos should point to the cell array '['
-static std::string RenderPandocCellToHtml(const std::string &json, size_t &pos) {
-	std::stringstream result;
-
-	SkipWhitespace(json, pos);
-	if (pos >= json.size() || json[pos] != '[')
+static std::string RenderPandocCellToHtml(yyjson_val *cell_val, int depth = 0) {
+	if (!cell_val || depth > 100) {
 		return "";
-	pos++; // Skip '['
-
-	while (pos < json.size()) {
-		SkipWhitespace(json, pos);
-		if (pos >= json.size()) {
-			break;
-		}
-		if (json[pos] == ']') {
-			pos++;
-			break;
-		}
-		if (json[pos] == ',') {
-			pos++;
-			continue;
-		}
-
-		// Each block is like {"t":"Plain","c":[...inlines...]}
-		if (json[pos] != '{') {
-			pos++;
-			continue;
-		}
-		pos++; // Skip '{'
-
-		std::string type;
-		size_t content_start = std::string::npos;
-
-		while (pos < json.size() && json[pos] != '}') {
-			SkipWhitespace(json, pos);
-			if (json[pos] == '"') {
-				pos++;
-				std::string key = ExtractJsonString(json, pos);
-				SkipWhitespace(json, pos);
-				if (pos < json.size() && json[pos] == ':') {
-					pos++;
-					SkipWhitespace(json, pos);
-					if (key == "t" && json[pos] == '"') {
-						pos++;
-						type = ExtractJsonString(json, pos);
-					} else if (key == "c") {
-						content_start = pos;
-						SkipJsonValue(json, pos);
-					} else {
-						SkipJsonValue(json, pos);
+	}
+	if (yyjson_is_arr(cell_val)) {
+		std::stringstream result;
+		size_t idx, max;
+		yyjson_val *block;
+		yyjson_arr_foreach(cell_val, idx, max, block) {
+			if (yyjson_is_obj(block)) {
+				yyjson_val *t_val = yyjson_obj_get(block, "t");
+				if (t_val && yyjson_is_str(t_val)) {
+					const char *t = yyjson_get_str(t_val);
+					if (strcmp(t, "Plain") == 0 || strcmp(t, "Para") == 0) {
+						yyjson_val *c = yyjson_obj_get(block, "c");
+						result << RenderPandocInlinesToHtml(c, depth + 1);
 					}
 				}
 			}
-			ConsumeObjectFieldSeparator(json, pos);
 		}
-		if (pos < json.size())
-			pos++; // Skip '}'
-
-		// For Plain and Para blocks, render the inlines
-		if ((type == "Plain" || type == "Para") && content_start != std::string::npos) {
-			size_t inlines_pos = content_start;
-			result << RenderPandocInlinesToHtml(json, inlines_pos);
-		}
+		return result.str();
 	}
-
-	return result.str();
+	return RenderPandocInlinesToHtml(cell_val, depth);
 }
 
-// Main function to convert Pandoc table JSON to HTML
-// Format: [caption, alignments, widths, headers, rows]
 static std::string PandocTableToHtml(const std::string &json) {
 	std::stringstream html;
 	html << "<table>";
 
-	size_t pos = 0;
-	SkipWhitespace(json, pos);
-	if (pos >= json.size() || json[pos] != '[') {
+	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+	if (!doc) {
 		html << "</table>";
 		return html.str();
 	}
-	pos++; // Skip opening '['
 
-	// Skip caption (element 0)
-	SkipWhitespace(json, pos);
-	SkipJsonValue(json, pos);
-	SkipWhitespace(json, pos);
-	if (json[pos] == ',')
-		pos++;
+	yyjson_val *root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_arr(root) || yyjson_arr_size(root) < 5) {
+		yyjson_doc_free(doc);
+		html << "</table>";
+		return html.str();
+	}
 
-	// Parse alignments (element 1) - array of {"t":"AlignDefault|AlignLeft|AlignCenter|AlignRight"}
 	std::vector<std::string> alignments;
-	SkipWhitespace(json, pos);
-	if (json[pos] == '[') {
-		pos++;
-		while (pos < json.size() && json[pos] != ']') {
-			SkipWhitespace(json, pos);
-			if (pos >= json.size() || json[pos] == ']') {
-				break;
-			}
-			if (json[pos] == ',') {
-				pos++;
-				continue;
-			}
-			if (json[pos] == '{') {
-				// Parse alignment object
-				pos++;
-				while (pos < json.size() && json[pos] != '}') {
-					SkipWhitespace(json, pos);
-					if (json[pos] == '"') {
-						pos++;
-						std::string key = ExtractJsonString(json, pos);
-						SkipWhitespace(json, pos);
-						if (json[pos] == ':') {
-							pos++;
-							SkipWhitespace(json, pos);
-							if (key == "t" && json[pos] == '"') {
-								pos++;
-								alignments.push_back(ExtractJsonString(json, pos));
-							} else {
-								SkipJsonValue(json, pos);
-							}
-						}
-					}
-					ConsumeObjectFieldSeparator(json, pos);
+	yyjson_val *aligns_val = yyjson_arr_get(root, 1);
+	if (aligns_val && yyjson_is_arr(aligns_val)) {
+		size_t idx, max;
+		yyjson_val *a;
+		yyjson_arr_foreach(aligns_val, idx, max, a) {
+			if (yyjson_is_obj(a)) {
+				yyjson_val *t = yyjson_obj_get(a, "t");
+				if (t && yyjson_is_str(t)) {
+					alignments.emplace_back(yyjson_get_str(t), yyjson_get_len(t));
 				}
-				if (pos < json.size())
-					pos++; // Skip '}'
-			} else {
-				pos++; // Skip unexpected character so malformed input cannot stall the loop
 			}
 		}
-		if (pos < json.size())
-			pos++; // Skip ']'
 	}
-	SkipWhitespace(json, pos);
-	if (json[pos] == ',')
-		pos++;
 
-	// Skip widths (element 2)
-	SkipWhitespace(json, pos);
-	SkipJsonValue(json, pos);
-	SkipWhitespace(json, pos);
-	if (json[pos] == ',')
-		pos++;
-
-	// Parse headers (element 3) - array of cells
-	SkipWhitespace(json, pos);
-	bool has_headers = false;
-	if (json[pos] == '[') {
-		size_t headers_start = pos;
-		pos++;
-		SkipWhitespace(json, pos);
-		// Check if headers array is non-empty
-		if (json[pos] != ']') {
-			has_headers = true;
-			html << "<thead><tr>";
-			size_t col_idx = 0;
-			while (pos < json.size() && json[pos] != ']') {
-				SkipWhitespace(json, pos);
-				if (pos >= json.size() || json[pos] == ']') {
-					break;
-				}
-				if (json[pos] == ',') {
-					pos++;
-					continue;
-				}
-				if (json[pos] == '[') {
-					// This is a header cell
-					std::string align_style;
-					if (col_idx < alignments.size()) {
-						if (alignments[col_idx] == "AlignLeft")
-							align_style = " style=\"text-align: left;\"";
-						else if (alignments[col_idx] == "AlignRight")
-							align_style = " style=\"text-align: right;\"";
-						else if (alignments[col_idx] == "AlignCenter")
-							align_style = " style=\"text-align: center;\"";
-					}
-					html << "<th" << align_style << ">" << RenderPandocCellToHtml(json, pos) << "</th>";
-					col_idx++;
-				} else {
-					SkipJsonValueWithProgress(json, pos);
-				}
+	auto get_align_style = [&](size_t col_idx) -> std::string {
+		if (col_idx < alignments.size()) {
+			if (alignments[col_idx] == "AlignLeft") {
+				return " style=\"text-align: left;\"";
 			}
-			html << "</tr></thead>";
+			if (alignments[col_idx] == "AlignRight") {
+				return " style=\"text-align: right;\"";
+			}
+			if (alignments[col_idx] == "AlignCenter") {
+				return " style=\"text-align: center;\"";
+			}
 		}
-		// Skip to end of headers array
-		while (pos < json.size() && json[pos] != ']') {
-			pos++;
-		}
-		if (pos < json.size())
-			pos++;
-	}
-	SkipWhitespace(json, pos);
-	if (json[pos] == ',')
-		pos++;
+		return "";
+	};
 
-	// Parse rows (element 4) - array of rows, each row is array of cells
-	SkipWhitespace(json, pos);
-	if (json[pos] == '[') {
-		pos++;
+	yyjson_val *headers_val = yyjson_arr_get(root, 3);
+	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {
+		html << "<thead><tr>";
+		size_t col_idx = 0;
+		size_t idx, max;
+		yyjson_val *cell;
+		yyjson_arr_foreach(headers_val, idx, max, cell) {
+			html << "<th" << get_align_style(col_idx) << ">" << RenderPandocCellToHtml(cell) << "</th>";
+			col_idx++;
+		}
+		html << "</tr></thead>";
+	}
+
+	yyjson_val *rows_val = yyjson_arr_get(root, 4);
+	if (rows_val && yyjson_is_arr(rows_val)) {
 		html << "<tbody>";
-		while (pos < json.size() && json[pos] != ']') {
-			SkipWhitespace(json, pos);
-			if (pos >= json.size() || json[pos] == ']') {
-				break;
-			}
-			if (json[pos] == ',') {
-				pos++;
-				continue;
-			}
-			if (json[pos] == '[') {
-				// This is a row
-				pos++;
+		size_t r_idx, r_max;
+		yyjson_val *row;
+		yyjson_arr_foreach(rows_val, r_idx, r_max, row) {
+			if (yyjson_is_arr(row)) {
 				html << "<tr>";
 				size_t col_idx = 0;
-				while (pos < json.size() && json[pos] != ']') {
-					SkipWhitespace(json, pos);
-					if (pos >= json.size() || json[pos] == ']') {
-						break;
-					}
-					if (json[pos] == ',') {
-						pos++;
-						continue;
-					}
-					if (json[pos] == '[') {
-						// This is a cell
-						std::string align_style;
-						if (col_idx < alignments.size()) {
-							if (alignments[col_idx] == "AlignLeft")
-								align_style = " style=\"text-align: left;\"";
-							else if (alignments[col_idx] == "AlignRight")
-								align_style = " style=\"text-align: right;\"";
-							else if (alignments[col_idx] == "AlignCenter")
-								align_style = " style=\"text-align: center;\"";
-						}
-						html << "<td" << align_style << ">" << RenderPandocCellToHtml(json, pos) << "</td>";
-						col_idx++;
-					} else {
-						SkipJsonValueWithProgress(json, pos);
-					}
+				size_t c_idx, c_max;
+				yyjson_val *cell;
+				yyjson_arr_foreach(row, c_idx, c_max, cell) {
+					html << "<td" << get_align_style(col_idx) << ">" << RenderPandocCellToHtml(cell) << "</td>";
+					col_idx++;
 				}
 				html << "</tr>";
-				if (pos < json.size())
-					pos++; // Skip row's closing ']'
-			} else {
-				SkipJsonValueWithProgress(json, pos);
 			}
 		}
 		html << "</tbody>";
 	}
 
 	html << "</table>";
+	yyjson_doc_free(doc);
+	return html.str();
+}
+
+static std::string TableJsonToHtml(const std::string &json) {
+	size_t first_char = json.find_first_not_of(" \t\n\r");
+	if (first_char != std::string::npos && json[first_char] == '[') {
+		return PandocTableToHtml(json);
+	}
+
+	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
+	if (!doc) {
+		return "<table></table>";
+	}
+
+	yyjson_val *root = yyjson_doc_get_root(doc);
+	if (!yyjson_is_obj(root)) {
+		yyjson_doc_free(doc);
+		return "<table></table>";
+	}
+
+	std::stringstream html;
+	html << "<table>";
+
+	yyjson_val *headers_val = yyjson_obj_get(root, "headers");
+	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {
+		html << "<thead><tr>";
+		size_t idx, max;
+		yyjson_val *h;
+		yyjson_arr_foreach(headers_val, idx, max, h) {
+			if (yyjson_is_str(h)) {
+				html << "<th>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(h), yyjson_get_len(h))) << "</th>";
+			}
+		}
+		html << "</tr></thead>";
+	}
+
+	yyjson_val *rows_val = yyjson_obj_get(root, "rows");
+	if (rows_val && yyjson_is_arr(rows_val)) {
+		html << "<tbody>";
+		size_t r_idx, r_max;
+		yyjson_val *row;
+		yyjson_arr_foreach(rows_val, r_idx, r_max, row) {
+			if (yyjson_is_arr(row)) {
+				html << "<tr>";
+				size_t c_idx, c_max;
+				yyjson_val *cell;
+				yyjson_arr_foreach(row, c_idx, c_max, cell) {
+					if (yyjson_is_str(cell)) {
+						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell))) << "</td>";
+					}
+				}
+				html << "</tr>";
+			}
+		}
+		html << "</tbody>";
+	}
+
+	yyjson_val *footers_val = yyjson_obj_get(root, "footers");
+	if (footers_val && yyjson_is_arr(footers_val) && yyjson_arr_size(footers_val) > 0) {
+		html << "<tfoot>";
+		size_t r_idx, r_max;
+		yyjson_val *row;
+		yyjson_arr_foreach(footers_val, r_idx, r_max, row) {
+			if (yyjson_is_arr(row)) {
+				html << "<tr>";
+				size_t c_idx, c_max;
+				yyjson_val *cell;
+				yyjson_arr_foreach(row, c_idx, c_max, cell) {
+					if (yyjson_is_str(cell)) {
+						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell))) << "</td>";
+					}
+				}
+				html << "</tr>";
+			}
+		}
+		html << "</tfoot>";
+	}
+
+	html << "</table>";
+	yyjson_doc_free(doc);
 	return html.str();
 }
 
 static std::string ListItemsToJson(xmlNodePtr node) {
-	std::string json = "[";
-	bool first = true;
+	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
+	yyjson_mut_val *arr = yyjson_mut_arr(doc);
+	yyjson_mut_doc_set_root(doc, arr);
 
 	xmlNodePtr child = node->children;
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE && child->name && xmlStrcmp(child->name, BAD_CAST "li") == 0) {
-			if (!first) {
-				json += ",";
-			}
-			first = false;
 			std::string item_text = GetNodeTextContent(child);
-			json += "\"" + EscapeJsonString(item_text) + "\"";
+			yyjson_mut_arr_add_strn(doc, arr, item_text.data(), item_text.size());
 		}
 		child = child->next;
 	}
 
-	json += "]";
-	return json;
+	size_t len = 0;
+	char *json = yyjson_mut_write(doc, 0, &len);
+	std::string res(json ? json : "[]", len);
+	if (json) {
+		free(json);
+	}
+	yyjson_mut_doc_free(doc);
+	return res;
 }
 
 static std::string TableToJson(xmlNodePtr node) {
-	// Extract table as JSON with headers and rows
-	std::string json = "{\"headers\":[],\"rows\":[]}";
-
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
 	std::vector<std::vector<std::string>> footers;
 
-	// Look for thead/tbody/tfoot or direct tr children
 	xmlNodePtr child = node->children;
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE && child->name) {
 			if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
-				// Extract headers from thead
 				xmlNodePtr tr = child->children;
 				while (tr) {
 					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
@@ -1649,12 +1144,11 @@ static std::string TableToJson(xmlNodePtr node) {
 							}
 							th = th->next;
 						}
-						break; // Only first row of headers
+						break;
 					}
 					tr = tr->next;
 				}
 			} else if (xmlStrcmp(child->name, BAD_CAST "tbody") == 0) {
-				// Extract rows from tbody
 				xmlNodePtr tr = child->children;
 				while (tr) {
 					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
@@ -1668,14 +1162,12 @@ static std::string TableToJson(xmlNodePtr node) {
 							td = td->next;
 						}
 						if (!row.empty()) {
-							rows.push_back(row);
+							rows.push_back(std::move(row));
 						}
 					}
 					tr = tr->next;
 				}
 			} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
-				// Extract rows from tfoot. Kept apart from body rows so a summary row
-				// ("total", "subtotal") stays identifiable downstream.
 				xmlNodePtr tr = child->children;
 				while (tr) {
 					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
@@ -1689,13 +1181,12 @@ static std::string TableToJson(xmlNodePtr node) {
 							td = td->next;
 						}
 						if (!row.empty()) {
-							footers.push_back(row);
+							footers.push_back(std::move(row));
 						}
 					}
 					tr = tr->next;
 				}
 			} else if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
-				// Direct tr child (no thead/tbody)
 				std::vector<std::string> row;
 				xmlNodePtr td = child->children;
 				while (td) {
@@ -1709,7 +1200,7 @@ static std::string TableToJson(xmlNodePtr node) {
 					if (headers.empty()) {
 						headers = row;
 					} else {
-						rows.push_back(row);
+						rows.push_back(std::move(row));
 					}
 				}
 			}
@@ -1717,45 +1208,46 @@ static std::string TableToJson(xmlNodePtr node) {
 		child = child->next;
 	}
 
-	// Build JSON
-	std::stringstream ss;
-	ss << "{\"headers\":[";
-	for (size_t i = 0; i < headers.size(); i++) {
-		if (i > 0)
-			ss << ",";
-		ss << "\"" << EscapeJsonString(headers[i]) << "\"";
-	}
-	ss << "],\"rows\":[";
-	for (size_t i = 0; i < rows.size(); i++) {
-		if (i > 0)
-			ss << ",";
-		ss << "[";
-		for (size_t j = 0; j < rows[i].size(); j++) {
-			if (j > 0)
-				ss << ",";
-			ss << "\"" << EscapeJsonString(rows[i][j]) << "\"";
-		}
-		ss << "]";
-	}
-	ss << "]";
-	if (!footers.empty()) {
-		ss << ",\"footers\":[";
-		for (size_t i = 0; i < footers.size(); i++) {
-			if (i > 0)
-				ss << ",";
-			ss << "[";
-			for (size_t j = 0; j < footers[i].size(); j++) {
-				if (j > 0)
-					ss << ",";
-				ss << "\"" << EscapeJsonString(footers[i][j]) << "\"";
-			}
-			ss << "]";
-		}
-		ss << "]";
-	}
-	ss << "}";
+	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
+	yyjson_mut_val *root = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root);
 
-	return ss.str();
+	yyjson_mut_val *h_arr = yyjson_mut_arr(doc);
+	for (const auto &h : headers) {
+		yyjson_mut_arr_add_strn(doc, h_arr, h.data(), h.size());
+	}
+	yyjson_mut_obj_add_val(doc, root, "headers", h_arr);
+
+	yyjson_mut_val *r_arr = yyjson_mut_arr(doc);
+	for (const auto &r : rows) {
+		yyjson_mut_val *row_val = yyjson_mut_arr(doc);
+		for (const auto &cell : r) {
+			yyjson_mut_arr_add_strn(doc, row_val, cell.data(), cell.size());
+		}
+		yyjson_mut_arr_add_val(r_arr, row_val);
+	}
+	yyjson_mut_obj_add_val(doc, root, "rows", r_arr);
+
+	if (!footers.empty()) {
+		yyjson_mut_val *f_arr = yyjson_mut_arr(doc);
+		for (const auto &f : footers) {
+			yyjson_mut_val *row_val = yyjson_mut_arr(doc);
+			for (const auto &cell : f) {
+				yyjson_mut_arr_add_strn(doc, row_val, cell.data(), cell.size());
+			}
+			yyjson_mut_arr_add_val(f_arr, row_val);
+		}
+		yyjson_mut_obj_add_val(doc, root, "footers", f_arr);
+	}
+
+	size_t len = 0;
+	char *json = yyjson_mut_write(doc, 0, &len);
+	std::string res(json ? json : "{\"headers\":[],\"rows\":[]}", len);
+	if (json) {
+		free(json);
+	}
+	yyjson_mut_doc_free(doc);
+	return res;
 }
 
 static bool ContentContainsTags(const std::string &content) {

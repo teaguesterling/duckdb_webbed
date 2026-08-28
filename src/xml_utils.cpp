@@ -3,6 +3,7 @@
 #include "xml_in_memory_reader.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
+#include "yyjson.hpp"
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
@@ -21,6 +22,8 @@
 #include <unordered_set>
 
 namespace duckdb {
+
+using namespace duckdb_yyjson;
 
 // Error suppression is configured per libxml2 context / per parse operation (see the
 // XML_PARSE_NOERROR options and the per-context handlers below), never via global state, so
@@ -1354,33 +1357,30 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 		return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root></root>";
 	}
 
-	// Create a new XML document
+	yyjson_doc *json_doc = yyjson_read(json_str.c_str(), json_str.size(), 0);
+	if (!json_doc) {
+		return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root></root>";
+	}
+
 	XMLDocPtr doc(xmlNewDoc(BAD_CAST "1.0"));
 	if (!doc) {
+		yyjson_doc_free(json_doc);
 		return "<?xml version=\"1.0\"?>\n<root></root>\n";
 	}
 
-	// Simple JSON parser implementation
-	// This handles basic JSON structures: objects, arrays, strings, numbers, booleans, null
-	std::function<xmlNodePtr(const std::string &, const std::string &, xmlDocPtr)> json_to_node =
-	    [&](const std::string &json_value, const std::string &node_name, xmlDocPtr document) -> xmlNodePtr {
-		std::string trimmed = json_value;
-		// Trim whitespace
-		trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
-		trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
-
+	std::function<xmlNodePtr(yyjson_val *, const std::string &, xmlDocPtr)> json_to_node =
+	    [&](yyjson_val *val, const std::string &node_name, xmlDocPtr document) -> xmlNodePtr {
 		xmlNodePtr node = xmlNewNode(nullptr, BAD_CAST node_name.c_str());
-		if (!node)
+		if (!node) {
 			return nullptr;
+		}
 
-		if (trimmed.empty() || trimmed == "null") {
-			// Empty node for null values
+		if (!val || yyjson_is_null(val)) {
 			return node;
 		}
 
-		if (trimmed[0] == '"' && trimmed[trimmed.length() - 1] == '"') {
-			// String value - remove quotes and set as text content
-			std::string str_content = trimmed.substr(1, trimmed.length() - 2);
+		if (yyjson_is_str(val)) {
+			std::string str_content(yyjson_get_str(val), yyjson_get_len(val));
 			xmlNodePtr text_node = xmlNewText(BAD_CAST str_content.c_str());
 			if (text_node) {
 				xmlAddChild(node, text_node);
@@ -1388,168 +1388,57 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 			return node;
 		}
 
-		if (trimmed[0] == '[' && trimmed[trimmed.length() - 1] == ']') {
-			// Array - each element becomes a child with same name
-			std::string array_content = trimmed.substr(1, trimmed.length() - 2);
-
-			// Simple array parsing
-			std::vector<std::string> elements;
-			int brace_depth = 0;
-			int bracket_depth = 0;
-			bool in_string = false;
-			size_t element_start = 0;
-
-			for (size_t i = 0; i < array_content.length(); i++) {
-				char c = array_content[i];
-
-				if (!in_string) {
-					if (c == '"')
-						in_string = true;
-					else if (c == '{')
-						brace_depth++;
-					else if (c == '}')
-						brace_depth--;
-					else if (c == '[')
-						bracket_depth++;
-					else if (c == ']')
-						bracket_depth--;
-					else if (c == ',' && brace_depth == 0 && bracket_depth == 0) {
-						elements.push_back(array_content.substr(element_start, i - element_start));
-						element_start = i + 1;
-					}
-				} else {
-					if (c == '"' && (i == 0 || array_content[i - 1] != '\\')) {
-						in_string = false;
-					}
-				}
-			}
-
-			// Add the last element
-			if (element_start < array_content.length()) {
-				elements.push_back(array_content.substr(element_start));
-			}
-
-			// Convert each array element to a child node
-			for (const auto &element : elements) {
-				xmlNodePtr child = json_to_node(element, node_name, document);
+		if (yyjson_is_arr(val)) {
+			size_t idx, max;
+			yyjson_val *elem;
+			yyjson_arr_foreach(val, idx, max, elem) {
+				xmlNodePtr child = json_to_node(elem, node_name, document);
 				if (child) {
 					xmlAddChild(node, child);
 				}
 			}
-
-			// Change parent node name to indicate it's a list
 			xmlNodeSetName(node, BAD_CAST(node_name + "_list").c_str());
 			return node;
 		}
 
-		if (trimmed[0] == '{' && trimmed[trimmed.length() - 1] == '}') {
-			// Object - each property becomes a child element
-			std::string object_content = trimmed.substr(1, trimmed.length() - 2);
-
-			// Simple object parsing
-			std::map<std::string, std::string> properties;
-			int brace_depth = 0;
-			int bracket_depth = 0;
-			bool in_string = false;
-			size_t prop_start = 0;
-
-			for (size_t i = 0; i < object_content.length(); i++) {
-				char c = object_content[i];
-
-				if (!in_string) {
-					if (c == '"')
-						in_string = true;
-					else if (c == '{')
-						brace_depth++;
-					else if (c == '}')
-						brace_depth--;
-					else if (c == '[')
-						bracket_depth++;
-					else if (c == ']')
-						bracket_depth--;
-					else if (c == ',' && brace_depth == 0 && bracket_depth == 0) {
-						std::string prop = object_content.substr(prop_start, i - prop_start);
-
-						// Parse key:value pair
-						size_t colon_pos = prop.find(':');
-						if (colon_pos != std::string::npos) {
-							std::string key = prop.substr(0, colon_pos);
-							std::string value = prop.substr(colon_pos + 1);
-
-							// Trim and remove quotes from key
-							key.erase(0, key.find_first_not_of(" \t\n\r"));
-							key.erase(key.find_last_not_of(" \t\n\r") + 1);
-							if (key.length() >= 2 && key[0] == '"' && key[key.length() - 1] == '"') {
-								key = key.substr(1, key.length() - 2);
-							}
-
-							// Trim value
-							value.erase(0, value.find_first_not_of(" \t\n\r"));
-							value.erase(value.find_last_not_of(" \t\n\r") + 1);
-
-							properties[key] = value;
-						}
-
-						prop_start = i + 1;
-					}
-				} else {
-					if (c == '"' && (i == 0 || object_content[i - 1] != '\\')) {
-						in_string = false;
-					}
+		if (yyjson_is_obj(val)) {
+			std::map<std::string, yyjson_val *> properties;
+			size_t idx, max;
+			yyjson_val *k, *v;
+			yyjson_obj_foreach(val, idx, max, k, v) {
+				if (yyjson_is_str(k)) {
+					properties[std::string(yyjson_get_str(k), yyjson_get_len(k))] = v;
 				}
 			}
 
-			// Add the last property
-			if (prop_start < object_content.length()) {
-				std::string prop = object_content.substr(prop_start);
-
-				size_t colon_pos = prop.find(':');
-				if (colon_pos != std::string::npos) {
-					std::string key = prop.substr(0, colon_pos);
-					std::string value = prop.substr(colon_pos + 1);
-
-					// Trim and remove quotes from key
-					key.erase(0, key.find_first_not_of(" \t\n\r"));
-					key.erase(key.find_last_not_of(" \t\n\r") + 1);
-					if (key.length() >= 2 && key[0] == '"' && key[key.length() - 1] == '"') {
-						key = key.substr(1, key.length() - 2);
-					}
-
-					// Trim value
-					value.erase(0, value.find_first_not_of(" \t\n\r"));
-					value.erase(value.find_last_not_of(" \t\n\r") + 1);
-
-					properties[key] = value;
-				}
-			}
-
-			// Handle properties - separate attributes from elements
 			std::string text_content;
-
 			for (const auto &prop : properties) {
-				if (prop.first.length() > 0 && prop.first[0] == '@') {
-					// This is an attribute (starts with @)
-					std::string attr_name = prop.first.substr(1); // Remove @ prefix
-					std::string attr_value = prop.second;
-
-					// Remove quotes from attribute value if present
-					if (attr_value.length() >= 2 && attr_value[0] == '"' &&
-					    attr_value[attr_value.length() - 1] == '"') {
-						attr_value = attr_value.substr(1, attr_value.length() - 2);
+				if (!prop.first.empty() && prop.first[0] == '@') {
+					std::string attr_name = prop.first.substr(1);
+					std::string attr_value;
+					if (yyjson_is_str(prop.second)) {
+						attr_value = std::string(yyjson_get_str(prop.second), yyjson_get_len(prop.second));
+					} else {
+						size_t len = 0;
+						char *s = yyjson_val_write(prop.second, 0, &len);
+						if (s) {
+							attr_value = std::string(s, len);
+							free(s);
+						}
 					}
-
 					xmlSetProp(node, BAD_CAST attr_name.c_str(), BAD_CAST attr_value.c_str());
 				} else if (prop.first == "#text") {
-					// This is text content
-					text_content = prop.second;
-
-					// Remove quotes from text content if present
-					if (text_content.length() >= 2 && text_content[0] == '"' &&
-					    text_content[text_content.length() - 1] == '"') {
-						text_content = text_content.substr(1, text_content.length() - 2);
+					if (yyjson_is_str(prop.second)) {
+						text_content = std::string(yyjson_get_str(prop.second), yyjson_get_len(prop.second));
+					} else {
+						size_t len = 0;
+						char *s = yyjson_val_write(prop.second, 0, &len);
+						if (s) {
+							text_content = std::string(s, len);
+							free(s);
+						}
 					}
 				} else {
-					// This is a child element
 					xmlNodePtr child = json_to_node(prop.second, prop.first, document);
 					if (child) {
 						xmlAddChild(node, child);
@@ -1557,7 +1446,6 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 				}
 			}
 
-			// Add text content if present
 			if (!text_content.empty()) {
 				xmlNodePtr text_node = xmlNewText(BAD_CAST text_content.c_str());
 				if (text_node) {
@@ -1568,89 +1456,49 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 			return node;
 		}
 
-		// Primitive value (number, boolean) - set as text content
-		xmlNodePtr text_node = xmlNewText(BAD_CAST trimmed.c_str());
-		if (text_node) {
-			xmlAddChild(node, text_node);
+		if (yyjson_is_bool(val)) {
+			xmlNodePtr text_node = xmlNewText(BAD_CAST(yyjson_get_bool(val) ? "true" : "false"));
+			if (text_node) {
+				xmlAddChild(node, text_node);
+			}
+		} else if (yyjson_is_num(val)) {
+			size_t len = 0;
+			char *num_str = yyjson_val_write(val, 0, &len);
+			if (num_str) {
+				xmlNodePtr text_node = xmlNewText(BAD_CAST num_str);
+				if (text_node) {
+					xmlAddChild(node, text_node);
+				}
+				free(num_str);
+			}
 		}
 
 		return node;
 	};
 
-	// Check if JSON is an object with a single key that could be the root element name
-	std::string trimmed = json_str;
-	trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
-	trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
-
+	yyjson_val *root = yyjson_doc_get_root(json_doc);
 	std::string root_element_name = "root";
-	std::string actual_json_content = json_str;
+	yyjson_val *actual_content = root;
 
-	// Check if JSON has the pattern {"root_name": {...}} and extract it
-	if (trimmed.length() > 4 && trimmed[0] == '{' && trimmed[trimmed.length() - 1] == '}') {
-		// Simple parsing to find first key
-		size_t first_quote = trimmed.find('"', 1);
-		if (first_quote != std::string::npos) {
-			size_t second_quote = trimmed.find('"', first_quote + 1);
-			if (second_quote != std::string::npos) {
-				size_t colon = trimmed.find(':', second_quote);
-				if (colon != std::string::npos) {
-					std::string potential_root = trimmed.substr(first_quote + 1, second_quote - first_quote - 1);
-
-					// Check if the value is an object (indicating this should be the root element)
-					size_t value_start = colon + 1;
-					while (value_start < trimmed.length() &&
-					       (trimmed[value_start] == ' ' || trimmed[value_start] == '\t')) {
-						value_start++;
-					}
-
-					if (value_start < trimmed.length() && trimmed[value_start] == '{') {
-						// Find the matching closing brace
-						int brace_count = 1;
-						size_t value_end = value_start + 1;
-						bool in_string = false;
-
-						while (value_end < trimmed.length() && brace_count > 0) {
-							char c = trimmed[value_end];
-							if (!in_string) {
-								if (c == '"')
-									in_string = true;
-								else if (c == '{')
-									brace_count++;
-								else if (c == '}')
-									brace_count--;
-							} else {
-								if (c == '"' && (value_end == 0 || trimmed[value_end - 1] != '\\')) {
-									in_string = false;
-								}
-							}
-							value_end++;
-						}
-
-						// Check if this is the only key-value pair in the object
-						size_t remaining_start = value_end;
-						while (remaining_start < trimmed.length() &&
-						       (trimmed[remaining_start] == ' ' || trimmed[remaining_start] == '\t')) {
-							remaining_start++;
-						}
-
-						if (remaining_start < trimmed.length() && trimmed[remaining_start] == '}') {
-							// This is the only key, use it as root element and extract its value
-							root_element_name = potential_root;
-							actual_json_content = trimmed.substr(value_start, value_end - value_start);
-						}
-					}
-				}
+	if (yyjson_is_obj(root) && yyjson_obj_size(root) == 1) {
+		size_t idx, max;
+		yyjson_val *k, *v;
+		yyjson_obj_foreach(root, idx, max, k, v) {
+			if (yyjson_is_str(k) && (yyjson_is_obj(v) || yyjson_is_arr(v))) {
+				root_element_name = std::string(yyjson_get_str(k), yyjson_get_len(k));
+				actual_content = v;
 			}
+			break;
 		}
 	}
 
-	// Convert JSON to XML node
-	xmlNodePtr root_node = json_to_node(actual_json_content, root_element_name, doc.get());
+	xmlNodePtr root_node = json_to_node(actual_content, root_element_name, doc.get());
 	if (root_node) {
 		xmlDocSetRootElement(doc.get(), root_node);
 	}
 
-	// Convert to string with encoding="UTF-8"
+	yyjson_doc_free(json_doc);
+
 	xmlChar *xml_string = nullptr;
 	int size = 0;
 	xmlDocDumpFormatMemoryEnc(doc.get(), &xml_string, &size, "UTF-8", 0);
@@ -1659,7 +1507,6 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 	std::string result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 	                             : "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root></root>";
 
-	// Remove trailing newline to match expected test format
 	if (!result.empty() && result.back() == '\n') {
 		result.pop_back();
 	}
