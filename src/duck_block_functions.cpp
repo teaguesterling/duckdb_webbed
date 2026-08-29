@@ -875,7 +875,9 @@ static std::string RenderPandocInlinesToHtml(yyjson_val *inlines_val, int depth 
 			if (c_val && yyjson_is_arr(c_val) && yyjson_arr_size(c_val) >= 2) {
 				yyjson_val *code_val = yyjson_arr_get(c_val, 1);
 				if (code_val && yyjson_is_str(code_val)) {
-					result << "<code>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(code_val), yyjson_get_len(code_val))) << "</code>";
+					result << "<code>"
+					       << XMLUtils::HTMLEscape(std::string(yyjson_get_str(code_val), yyjson_get_len(code_val)))
+					       << "</code>";
 				}
 			}
 		} else if (strcmp(type, "Link") == 0) {
@@ -1065,7 +1067,8 @@ static std::string TableJsonToHtml(const std::string &json) {
 				yyjson_val *cell;
 				yyjson_arr_foreach(row, c_idx, c_max, cell) {
 					if (yyjson_is_str(cell)) {
-						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell))) << "</td>";
+						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell)))
+						     << "</td>";
 					}
 				}
 				html << "</tr>";
@@ -1086,7 +1089,8 @@ static std::string TableJsonToHtml(const std::string &json) {
 				yyjson_val *cell;
 				yyjson_arr_foreach(row, c_idx, c_max, cell) {
 					if (yyjson_is_str(cell)) {
-						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell))) << "</td>";
+						html << "<td>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(cell), yyjson_get_len(cell)))
+						     << "</td>";
 					}
 				}
 				html << "</tr>";
