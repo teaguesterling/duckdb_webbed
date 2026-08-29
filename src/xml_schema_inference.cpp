@@ -1870,9 +1870,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			// #102: empty datetime_format (e.g. an explicit TIME column) — parse via DuckDB's default
 			// cast and route failures through the chokepoint instead of returning a VARCHAR Value that
 			// would abort at the typed output column.
-			Value parsed_time;
-			if (Value(text).DefaultTryCastAs(target_type, parsed_time, nullptr)) {
-				return parsed_time;
+			dtime_t time_result;
+			if (TryCast::Operation(string_t(text), time_result, false)) {
+				return Value::TIME(time_result);
 			}
 			return XmlUncastableValue(text, target_type, options);
 		}
@@ -1892,9 +1892,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			// #102: empty datetime_format — parse via DuckDB's default cast and route failures through
 			// the chokepoint instead of returning a VARCHAR Value.
-			Value parsed_timetz;
-			if (Value(text).DefaultTryCastAs(target_type, parsed_timetz, nullptr)) {
-				return parsed_timetz;
+			dtime_tz_t timetz_result;
+			if (TryCast::Operation(string_t(text), timetz_result, false)) {
+				return Value::TIMETZ(timetz_result);
 			}
 			return XmlUncastableValue(text, target_type, options);
 		}

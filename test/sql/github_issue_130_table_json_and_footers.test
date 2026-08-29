@@ -156,7 +156,7 @@ SELECT b.content FROM (SELECT unnest(html_to_duck_blocks(
   '<table><tr><th>a' || chr(11) || 'b</th></tr><tr><td>x</td></tr></table>')) AS b)
 WHERE b.element_type = 'table';
 ----
-{"headers":["a\u000bb"],"rows":[["x"]]}
+{"headers":["a\u000Bb"],"rows":[["x"]]}
 
 # the characters that already worked must keep working
 query I

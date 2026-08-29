@@ -680,38 +680,23 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				bool ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				std::string tag = ordered ? "ol" : "ul";
 				html << "<" << tag << ">";
-				// Parse JSON content as array
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
-					// Simple JSON array parsing for list items
-					std::regex item_regex("\"([^\"\\\\]*(\\\\.[^\"\\\\]*)*)\"");
-					std::sregex_iterator iter(content.begin(), content.end(), item_regex);
-					std::sregex_iterator end;
-					while (iter != end) {
-						std::string item = (*iter)[1].str();
-						// Unescape JSON string
-						std::string unescaped;
-						for (size_t k = 0; k < item.size(); k++) {
-							if (item[k] == '\\' && k + 1 < item.size()) {
-								char next = item[k + 1];
-								if (next == 'n')
-									unescaped += '\n';
-								else if (next == 'r')
-									unescaped += '\r';
-								else if (next == 't')
-									unescaped += '\t';
-								else if (next == '"')
-									unescaped += '"';
-								else if (next == '\\')
-									unescaped += '\\';
-								else
-									unescaped += next;
-								k++;
-							} else {
-								unescaped += item[k];
+					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
+					if (doc) {
+						yyjson_val *root = yyjson_doc_get_root(doc);
+						if (yyjson_is_arr(root)) {
+							size_t idx, max;
+							yyjson_val *item;
+							yyjson_arr_foreach(root, idx, max, item) {
+								if (yyjson_is_str(item)) {
+									html << "<li>"
+									     << XMLUtils::HTMLEscape(
+									            std::string(yyjson_get_str(item), yyjson_get_len(item)))
+									     << "</li>";
+								}
 							}
 						}
-						html << "<li>" << XMLUtils::HTMLEscape(unescaped) << "</li>";
-						++iter;
+						yyjson_doc_free(doc);
 					}
 				}
 				html << "</" << tag << ">";
@@ -1113,7 +1098,7 @@ static std::string ListItemsToJson(xmlNodePtr node) {
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE && child->name && xmlStrcmp(child->name, BAD_CAST "li") == 0) {
 			std::string item_text = GetNodeTextContent(child);
-			yyjson_mut_arr_add_strn(doc, arr, item_text.data(), item_text.size());
+			yyjson_mut_arr_add_strncpy(doc, arr, item_text.data(), item_text.size());
 		}
 		child = child->next;
 	}
@@ -1218,7 +1203,7 @@ static std::string TableToJson(xmlNodePtr node) {
 
 	yyjson_mut_val *h_arr = yyjson_mut_arr(doc);
 	for (const auto &h : headers) {
-		yyjson_mut_arr_add_strn(doc, h_arr, h.data(), h.size());
+		yyjson_mut_arr_add_strncpy(doc, h_arr, h.data(), h.size());
 	}
 	yyjson_mut_obj_add_val(doc, root, "headers", h_arr);
 
@@ -1226,7 +1211,7 @@ static std::string TableToJson(xmlNodePtr node) {
 	for (const auto &r : rows) {
 		yyjson_mut_val *row_val = yyjson_mut_arr(doc);
 		for (const auto &cell : r) {
-			yyjson_mut_arr_add_strn(doc, row_val, cell.data(), cell.size());
+			yyjson_mut_arr_add_strncpy(doc, row_val, cell.data(), cell.size());
 		}
 		yyjson_mut_arr_add_val(r_arr, row_val);
 	}
@@ -1237,7 +1222,7 @@ static std::string TableToJson(xmlNodePtr node) {
 		for (const auto &f : footers) {
 			yyjson_mut_val *row_val = yyjson_mut_arr(doc);
 			for (const auto &cell : f) {
-				yyjson_mut_arr_add_strn(doc, row_val, cell.data(), cell.size());
+				yyjson_mut_arr_add_strncpy(doc, row_val, cell.data(), cell.size());
 			}
 			yyjson_mut_arr_add_val(f_arr, row_val);
 		}
