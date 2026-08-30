@@ -204,3 +204,87 @@ ORDER BY element_order;
 block	heading	Title 
 block	blockquote	Quote text
 
+# =============================================================================
+# Test 12: SVG tag filtering
+# =============================================================================
+
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<p>Click here <svg width="16" height="16"><path d="M0 0h16v16H0z"/></svg> for help</p>')
+ORDER BY element_order;
+----
+block	paragraph	Click here  for help
+
+# =============================================================================
+# Test 13: Noscript and template tag filtering
+# =============================================================================
+
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<p>Standard text<noscript><style>.hide{display:none}</style>Please enable JS</noscript><template><div>Modal HTML</div></template></p>')
+ORDER BY element_order;
+----
+block	paragraph	Standard text
+
+# =============================================================================
+# Test 14: Mixed inline formatting with styles and scripts
+# =============================================================================
+
+query IIII
+SELECT kind, element_type, content, level
+FROM parse_html_blocks('<p>Read the <strong>documentation</strong> <style>.btn{color:blue}</style> at <a href="https://example.com">our website</a>.<script>track();</script></p>')
+ORDER BY element_order;
+----
+block	paragraph	NULL	1
+inline	text	Read the 	2
+inline	bold	documentation	2
+inline	text	 	2
+inline	text	 at 	2
+inline	link	our website	2
+inline	text	.	2
+
+# =============================================================================
+# Test 15: Nested list items and tables with embedded styles/scripts
+# =============================================================================
+
+query III
+SELECT element_type, encoding, content
+FROM parse_html_blocks('<ul><li>First<style>.item{margin:0}</style></li><li>Second<script>log();</script></li></ul>');
+----
+list	json	["First","Second"]
+
+query III
+SELECT element_type, encoding, content
+FROM parse_html_blocks('<table><tr><th>Header<style>th{color:red}</style></th></tr><tr><td>Data<script>doWork()</script></td></tr></table>');
+----
+table	json	{"headers":["Header"],"rows":[["Data"]]}
+
+# =============================================================================
+# Test 16: Real-world SDLC playbook HTML snippet reading
+# =============================================================================
+
+# Verify frontmatter metadata extraction from snippet
+query III
+SELECT element_type, encoding, replace(content, chr(10), ' ')
+FROM read_html_blocks('test/data/sdlc_playbook_snippet.html')
+WHERE element_type = 'metadata';
+----
+metadata	yaml	title: The AI-Native SDLC playbook author: Anthropic date: 2026-08-27 tags: [ai, sdlc, engineering]
+
+# Verify heading text without script tag
+query II
+SELECT element_type, trim(content)
+FROM read_html_blocks('test/data/sdlc_playbook_snippet.html')
+WHERE element_type = 'heading';
+----
+heading	The AI-Native SDLC playbook
+
+# Verify inline code extraction without style tag
+query III
+SELECT kind, element_type, content
+FROM read_html_blocks('test/data/sdlc_playbook_snippet.html')
+WHERE kind = 'inline' AND element_type = 'code';
+----
+inline	code	intent.md
+
+
