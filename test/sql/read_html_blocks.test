@@ -126,7 +126,7 @@ block	paragraph	Content
 query II
 SELECT element_type, content
 FROM parse_html_blocks(['<h1>Doc 1</h1>', '<h2>Doc 2</h2>'])
-ORDER BY element_order;
+ORDER BY element_order, content;
 ----
 heading	Doc 1
 heading	Doc 2
