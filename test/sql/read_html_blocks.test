@@ -1,0 +1,184 @@
+# name: test/sql/read_html_blocks.test
+# description: Test read_html_blocks and parse_html_blocks table functions
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Test 1: Basic read_html_blocks on simple HTML file
+# =============================================================================
+
+query III
+SELECT kind, element_type, content FROM read_html_blocks('test/html/simple.html') ORDER BY element_order;
+----
+block	heading	Welcome
+block	paragraph	This is a test page.
+
+# Test count of blocks in simple.html
+query I
+SELECT count(*) FROM read_html_blocks('test/html/simple.html');
+----
+2
+
+# =============================================================================
+# Test 2: Attributes and level from simple.html
+# =============================================================================
+
+query IIII
+SELECT element_type, level, encoding, attributes['heading_level']
+FROM read_html_blocks('test/html/simple.html')
+ORDER BY element_order;
+----
+heading	1	text	1
+paragraph	1	text	NULL
+
+# =============================================================================
+# Test 3: read_html_blocks on complex HTML file
+# =============================================================================
+
+query II
+SELECT kind, element_type FROM read_html_blocks('test/html/complex.html') WHERE kind = 'block';
+----
+block	heading
+block	list
+block	heading
+block	paragraph
+block	image
+block	table
+
+# Test structured inlines in complex.html paragraph
+query IIII
+SELECT kind, element_type, content, level
+FROM read_html_blocks('test/html/complex.html')
+WHERE element_order >= 3 AND element_order <= 7
+ORDER BY element_order;
+----
+block	paragraph	NULL	1
+inline	text	This is some content with 	2
+inline	bold	bold	2
+inline	text	 and 	2
+inline	italic	italic	2
+
+# =============================================================================
+# Test 4: read_html_blocks with filename parameter
+# =============================================================================
+
+query IIII
+SELECT filename, kind, element_type, content
+FROM read_html_blocks('test/html/simple.html', filename := true)
+ORDER BY element_order;
+----
+test/html/simple.html	block	heading	Welcome
+test/html/simple.html	block	paragraph	This is a test page.
+
+# Test filename aliases: file_path and include_filepath
+query I
+SELECT count(*) FROM read_html_blocks('test/html/simple.html', file_path := true);
+----
+2
+
+query I
+SELECT count(*) FROM read_html_blocks('test/html/simple.html', include_filepath := true);
+----
+2
+
+# =============================================================================
+# Test 5: Multi-file reading (glob & list of files)
+# =============================================================================
+
+query II
+SELECT filename, count(*)
+FROM read_html_blocks(['test/html/simple.html', 'test/html/complex.html'], filename := true)
+GROUP BY filename
+ORDER BY filename;
+----
+test/html/complex.html	11
+test/html/simple.html	2
+
+# Glob pattern reading
+query I
+SELECT count(*) > 0 FROM read_html_blocks('test/html/s*.html');
+----
+true
+
+# =============================================================================
+# Test 6: parse_html_blocks (in-memory string table function)
+# =============================================================================
+
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<h1>Hello World</h1><p>Test paragraph</p>')
+ORDER BY element_order;
+----
+block	heading	Hello World
+block	paragraph	Test paragraph
+
+# Test parse_html_blocks with HTML-typed input
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<h1>HTML Type</h1><p>Content</p>'::HTML)
+ORDER BY element_order;
+----
+block	heading	HTML Type
+block	paragraph	Content
+
+# Test parse_html_blocks with array of strings
+query II
+SELECT element_type, content
+FROM parse_html_blocks(['<h1>Doc 1</h1>', '<h2>Doc 2</h2>'])
+ORDER BY element_order;
+----
+heading	Doc 1
+heading	Doc 2
+
+# =============================================================================
+# Test 7: Code blocks and attributes
+# =============================================================================
+
+query III
+SELECT element_type, content, attributes['language']
+FROM parse_html_blocks('<pre><code class="language-python">print("hello")</code></pre>');
+----
+code	print("hello")	python
+
+# =============================================================================
+# Test 8: Frontmatter metadata script extraction
+# =============================================================================
+
+query III
+SELECT element_type, encoding, content
+FROM parse_html_blocks('<script type="application/vnd.frontmatter+yaml">title: Test Document</script><h1>Title</h1>');
+----
+metadata	yaml	title: Test Document
+heading	text	Title
+
+# =============================================================================
+# Test 9: Lists and Tables JSON encoding
+# =============================================================================
+
+query III
+SELECT element_type, encoding, attributes['ordered']
+FROM parse_html_blocks('<ul><li>Item 1</li><li>Item 2</li></ul><ol><li>First</li></ol>');
+----
+list	json	false
+list	json	true
+
+query II
+SELECT element_type, encoding
+FROM parse_html_blocks('<table><tr><th>Col1</th><th>Col2</th></tr><tr><td>A</td><td>B</td></tr></table>');
+----
+table	json
+
+# =============================================================================
+# Test 10: Error handling and ignore_errors
+# =============================================================================
+
+statement error
+SELECT * FROM read_html_blocks('non_existent_file_pattern_xyz_123.html');
+----
+No files found matching pattern
+
+query I
+SELECT count(*) FROM parse_html_blocks('', ignore_errors := true);
+----
+0

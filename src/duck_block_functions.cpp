@@ -5,6 +5,8 @@
 #include "xml_utils.hpp"
 #include "xml_in_memory_reader.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "yyjson.hpp"
@@ -14,6 +16,7 @@
 #include <sstream>
 #include <regex>
 #include <set>
+#include <mutex>
 
 namespace duckdb {
 
@@ -263,11 +266,240 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 	return inlines;
 }
 
+vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) {
+	if (html_str.empty()) {
+		return vector<Value>();
+	}
+
+	// Parse HTML via the IO reader so an html value larger than 2 GiB doesn't overflow
+	// htmlReadMemory's int length argument (#115), with the fail-closed entity loader and no
+	// network (EnsureSecureParsing + HTML_PARSE_NONET, #118).
+	XMLUtils::EnsureSecureParsing();
+	XMLInMemoryReader reader {html_str.data(), html_str.size(), 0};
+	htmlDocPtr doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+	                            HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+
+	if (!doc) {
+		return vector<Value>();
+	}
+
+	// Create XPath context
+	xmlXPathContextPtr xpath_ctx = xmlXPathNewContext(doc);
+	if (!xpath_ctx) {
+		xmlFreeDoc(doc);
+		return vector<Value>();
+	}
+
+	vector<Value> blocks;
+	int32_t block_order = 0;
+
+	// First, extract frontmatter script blocks
+	xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
+	if (frontmatter_obj && frontmatter_obj->nodesetval) {
+		for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = frontmatter_obj->nodesetval->nodeTab[j];
+			if (!node) {
+				continue;
+			}
+			// Extract text content - preserve exactly for lossless round-trip
+			std::string content = GetNodeTextContent(node);
+			// Trim leading/trailing newlines that we add in doc_blocks_to_html
+			if (!content.empty() && content.front() == '\n') {
+				content.erase(0, 1);
+			}
+			if (!content.empty() && content.back() == '\n') {
+				content.pop_back();
+			}
+			std::map<std::string, std::string> attrs;
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content,
+			                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+		}
+	}
+	if (frontmatter_obj) {
+		xmlXPathFreeObject(frontmatter_obj);
+	}
+
+	// Execute XPath query for block-level elements
+	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xpath_ctx, BLOCK_XPATH);
+
+	if (xpath_obj && xpath_obj->nodesetval) {
+		for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[j];
+			if (!node || !node->name) {
+				continue;
+			}
+
+			std::string tag(reinterpret_cast<const char *>(node->name));
+			std::string content;
+			// Top-level blocks are structural depth 1 (matches duckdb_markdown /
+			// duck_block_utils); blockquote overrides with its nesting depth below.
+			Value level_value = Value::INTEGER(1);
+			std::string block_type;
+			std::string encoding = DuckBlockTypes::ENCODING_TEXT;
+			std::map<std::string, std::string> attrs;
+
+			// Heading: h1-h6
+			if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+				block_type = DuckBlockTypes::TYPE_HEADING;
+				// Store heading level in attributes, not in the level field
+				attrs[DuckBlockTypes::ATTR_HEADING_LEVEL] = std::string(1, tag[1]);
+				std::string id = GetNodeAttribute(node, "id");
+				if (!id.empty()) {
+					attrs["id"] = id;
+				}
+				// Check for inline HTML content
+				std::string inner_html = GetNodeInnerHTML(node, doc);
+				if (ContentContainsTags(inner_html)) {
+					// Extract structured inline elements instead of storing raw HTML
+					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(1),
+					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
+					// Extract inline children at level 2 (parent block is level 1)
+					auto inline_elements = ExtractInlineElements(node, 2, block_order);
+					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
+					continue; // Skip default block creation
+				} else {
+					content = GetNodeTextContent(node);
+				}
+			}
+			// Paragraph
+			else if (tag == "p") {
+				block_type = DuckBlockTypes::TYPE_PARAGRAPH;
+				// Check for inline HTML content
+				std::string inner_html = GetNodeInnerHTML(node, doc);
+				if (ContentContainsTags(inner_html)) {
+					// Extract structured inline elements instead of storing raw HTML
+					// Create paragraph block with empty content
+					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(1),
+					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
+					// Extract inline children at level 2 (parent block is level 1)
+					auto inline_elements = ExtractInlineElements(node, 2, block_order);
+					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
+					continue; // Skip default block creation
+				} else {
+					content = GetNodeTextContent(node);
+				}
+			}
+			// Code block (pre with optional code child)
+			else if (tag == "pre") {
+				block_type = DuckBlockTypes::TYPE_CODE;
+				content = GetNodeTextContent(node);
+
+				// Look for language class on <code> child
+				xmlNodePtr code_child = node->children;
+				while (code_child) {
+					if (code_child->type == XML_ELEMENT_NODE && xmlStrcmp(code_child->name, BAD_CAST "code") == 0) {
+						std::string cls = GetNodeAttribute(code_child, "class");
+						// Extract language from "language-xxx" or "lang-xxx"
+						std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
+						std::smatch match;
+						if (std::regex_search(cls, match, lang_regex)) {
+							attrs["language"] = match[1].str();
+						}
+						break;
+					}
+					code_child = code_child->next;
+				}
+			}
+			// Blockquote
+			else if (tag == "blockquote") {
+				block_type = DuckBlockTypes::TYPE_BLOCKQUOTE;
+				int depth = CountBlockquoteAncestors(node) + 1;
+				level_value = Value::INTEGER(depth);
+				content = GetNodeTextContent(node);
+			}
+			// Unordered list
+			else if (tag == "ul") {
+				block_type = DuckBlockTypes::TYPE_LIST;
+				content = ListItemsToJson(node);
+				encoding = DuckBlockTypes::ENCODING_JSON;
+				attrs["ordered"] = "false";
+			}
+			// Ordered list
+			else if (tag == "ol") {
+				block_type = DuckBlockTypes::TYPE_LIST;
+				content = ListItemsToJson(node);
+				encoding = DuckBlockTypes::ENCODING_JSON;
+				attrs["ordered"] = "true";
+			}
+			// Table
+			else if (tag == "table") {
+				block_type = DuckBlockTypes::TYPE_TABLE;
+				content = TableToJson(node);
+				encoding = DuckBlockTypes::ENCODING_JSON;
+			}
+			// Horizontal rule
+			else if (tag == "hr") {
+				block_type = DuckBlockTypes::TYPE_HR;
+				content = "";
+			}
+			// Image
+			else if (tag == "img") {
+				block_type = DuckBlockTypes::TYPE_IMAGE;
+				std::string src = GetNodeAttribute(node, "src");
+				std::string alt = GetNodeAttribute(node, "alt");
+				std::string title = GetNodeAttribute(node, "title");
+				attrs["src"] = src;
+				if (!alt.empty()) {
+					attrs["alt"] = alt;
+					content = alt;
+				}
+				if (!title.empty()) {
+					attrs["title"] = title;
+				}
+			}
+			// Figure (contains img)
+			else if (tag == "figure") {
+				block_type = DuckBlockTypes::TYPE_IMAGE;
+				// Look for img child
+				xmlNodePtr img_child = node->children;
+				while (img_child) {
+					if (img_child->type == XML_ELEMENT_NODE && xmlStrcmp(img_child->name, BAD_CAST "img") == 0) {
+						std::string src = GetNodeAttribute(img_child, "src");
+						std::string alt = GetNodeAttribute(img_child, "alt");
+						attrs["src"] = src;
+						if (!alt.empty()) {
+							attrs["alt"] = alt;
+							content = alt;
+						}
+						break;
+					}
+					img_child = img_child->next;
+				}
+				// Look for figcaption
+				xmlNodePtr caption_child = node->children;
+				while (caption_child) {
+					if (caption_child->type == XML_ELEMENT_NODE &&
+					    xmlStrcmp(caption_child->name, BAD_CAST "figcaption") == 0) {
+						std::string caption = GetNodeTextContent(caption_child);
+						if (!caption.empty()) {
+							attrs["title"] = caption;
+						}
+						break;
+					}
+					caption_child = caption_child->next;
+				}
+			} else {
+				// Skip unknown elements
+				continue;
+			}
+
+			blocks.push_back(
+			    DuckBlockTypes::CreateBlock(block_type, content, level_value, encoding, attrs, block_order++));
+		}
+	}
+
+	if (xpath_obj) {
+		xmlXPathFreeObject(xpath_obj);
+	}
+	xmlXPathFreeContext(xpath_ctx);
+	xmlFreeDoc(doc);
+
+	return blocks;
+}
+
 void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_vector = args.data[0];
 	auto count = args.size();
-
-	auto duck_block_list_type = DuckBlockTypes::DuckBlockListType();
 
 	for (idx_t i = 0; i < count; i++) {
 		auto html_value = html_vector.GetValue(i);
@@ -278,234 +510,7 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 		}
 
 		std::string html_str = html_value.GetValue<string>();
-
-		// Parse HTML via the IO reader so an html value larger than 2 GiB doesn't overflow
-		// htmlReadMemory's int length argument (#115), with the fail-closed entity loader and no
-		// network (EnsureSecureParsing + HTML_PARSE_NONET, #118).
-		XMLUtils::EnsureSecureParsing();
-		XMLInMemoryReader reader {html_str.data(), html_str.size(), 0};
-		htmlDocPtr doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
-		                            HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
-
-		if (!doc) {
-			result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), vector<Value>()));
-			continue;
-		}
-
-		// Create XPath context
-		xmlXPathContextPtr xpath_ctx = xmlXPathNewContext(doc);
-		if (!xpath_ctx) {
-			xmlFreeDoc(doc);
-			result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), vector<Value>()));
-			continue;
-		}
-
-		vector<Value> blocks;
-		int32_t block_order = 0;
-
-		// First, extract frontmatter script blocks
-		xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
-		if (frontmatter_obj && frontmatter_obj->nodesetval) {
-			for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
-				xmlNodePtr node = frontmatter_obj->nodesetval->nodeTab[j];
-				if (!node) {
-					continue;
-				}
-				// Extract text content - preserve exactly for lossless round-trip
-				std::string content = GetNodeTextContent(node);
-				// Trim leading/trailing newlines that we add in doc_blocks_to_html
-				if (!content.empty() && content.front() == '\n') {
-					content.erase(0, 1);
-				}
-				if (!content.empty() && content.back() == '\n') {
-					content.pop_back();
-				}
-				std::map<std::string, std::string> attrs;
-				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content,
-				                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
-			}
-		}
-		if (frontmatter_obj) {
-			xmlXPathFreeObject(frontmatter_obj);
-		}
-
-		// Execute XPath query for block-level elements
-		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xpath_ctx, BLOCK_XPATH);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
-				xmlNodePtr node = xpath_obj->nodesetval->nodeTab[j];
-				if (!node || !node->name) {
-					continue;
-				}
-
-				std::string tag(reinterpret_cast<const char *>(node->name));
-				std::string content;
-				// Top-level blocks are structural depth 1 (matches duckdb_markdown /
-				// duck_block_utils); blockquote overrides with its nesting depth below.
-				Value level_value = Value::INTEGER(1);
-				std::string block_type;
-				std::string encoding = DuckBlockTypes::ENCODING_TEXT;
-				std::map<std::string, std::string> attrs;
-
-				// Heading: h1-h6
-				if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
-					block_type = DuckBlockTypes::TYPE_HEADING;
-					// Store heading level in attributes, not in the level field
-					attrs[DuckBlockTypes::ATTR_HEADING_LEVEL] = std::string(1, tag[1]);
-					std::string id = GetNodeAttribute(node, "id");
-					if (!id.empty()) {
-						attrs["id"] = id;
-					}
-					// Check for inline HTML content
-					std::string inner_html = GetNodeInnerHTML(node, doc);
-					if (ContentContainsTags(inner_html)) {
-						// Extract structured inline elements instead of storing raw HTML
-						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "",
-						                                             Value::INTEGER(1), DuckBlockTypes::ENCODING_TEXT,
-						                                             attrs, block_order++));
-						// Extract inline children at level 2 (parent block is level 1)
-						auto inline_elements = ExtractInlineElements(node, 2, block_order);
-						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-						continue; // Skip default block creation
-					} else {
-						content = GetNodeTextContent(node);
-					}
-				}
-				// Paragraph
-				else if (tag == "p") {
-					block_type = DuckBlockTypes::TYPE_PARAGRAPH;
-					// Check for inline HTML content
-					std::string inner_html = GetNodeInnerHTML(node, doc);
-					if (ContentContainsTags(inner_html)) {
-						// Extract structured inline elements instead of storing raw HTML
-						// Create paragraph block with empty content
-						blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "",
-						                                             Value::INTEGER(1), DuckBlockTypes::ENCODING_TEXT,
-						                                             attrs, block_order++));
-						// Extract inline children at level 2 (parent block is level 1)
-						auto inline_elements = ExtractInlineElements(node, 2, block_order);
-						blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-						continue; // Skip default block creation
-					} else {
-						content = GetNodeTextContent(node);
-					}
-				}
-				// Code block (pre with optional code child)
-				else if (tag == "pre") {
-					block_type = DuckBlockTypes::TYPE_CODE;
-					content = GetNodeTextContent(node);
-
-					// Look for language class on <code> child
-					xmlNodePtr code_child = node->children;
-					while (code_child) {
-						if (code_child->type == XML_ELEMENT_NODE && xmlStrcmp(code_child->name, BAD_CAST "code") == 0) {
-							std::string cls = GetNodeAttribute(code_child, "class");
-							// Extract language from "language-xxx" or "lang-xxx"
-							std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
-							std::smatch match;
-							if (std::regex_search(cls, match, lang_regex)) {
-								attrs["language"] = match[1].str();
-							}
-							break;
-						}
-						code_child = code_child->next;
-					}
-				}
-				// Blockquote
-				else if (tag == "blockquote") {
-					block_type = DuckBlockTypes::TYPE_BLOCKQUOTE;
-					int depth = CountBlockquoteAncestors(node) + 1;
-					level_value = Value::INTEGER(depth);
-					content = GetNodeTextContent(node);
-				}
-				// Unordered list
-				else if (tag == "ul") {
-					block_type = DuckBlockTypes::TYPE_LIST;
-					content = ListItemsToJson(node);
-					encoding = DuckBlockTypes::ENCODING_JSON;
-					attrs["ordered"] = "false";
-				}
-				// Ordered list
-				else if (tag == "ol") {
-					block_type = DuckBlockTypes::TYPE_LIST;
-					content = ListItemsToJson(node);
-					encoding = DuckBlockTypes::ENCODING_JSON;
-					attrs["ordered"] = "true";
-				}
-				// Table
-				else if (tag == "table") {
-					block_type = DuckBlockTypes::TYPE_TABLE;
-					content = TableToJson(node);
-					encoding = DuckBlockTypes::ENCODING_JSON;
-				}
-				// Horizontal rule
-				else if (tag == "hr") {
-					block_type = DuckBlockTypes::TYPE_HR;
-					content = "";
-				}
-				// Image
-				else if (tag == "img") {
-					block_type = DuckBlockTypes::TYPE_IMAGE;
-					std::string src = GetNodeAttribute(node, "src");
-					std::string alt = GetNodeAttribute(node, "alt");
-					std::string title = GetNodeAttribute(node, "title");
-					attrs["src"] = src;
-					if (!alt.empty()) {
-						attrs["alt"] = alt;
-						content = alt;
-					}
-					if (!title.empty()) {
-						attrs["title"] = title;
-					}
-				}
-				// Figure (contains img)
-				else if (tag == "figure") {
-					block_type = DuckBlockTypes::TYPE_IMAGE;
-					// Look for img child
-					xmlNodePtr img_child = node->children;
-					while (img_child) {
-						if (img_child->type == XML_ELEMENT_NODE && xmlStrcmp(img_child->name, BAD_CAST "img") == 0) {
-							std::string src = GetNodeAttribute(img_child, "src");
-							std::string alt = GetNodeAttribute(img_child, "alt");
-							attrs["src"] = src;
-							if (!alt.empty()) {
-								attrs["alt"] = alt;
-								content = alt;
-							}
-							break;
-						}
-						img_child = img_child->next;
-					}
-					// Look for figcaption
-					xmlNodePtr caption_child = node->children;
-					while (caption_child) {
-						if (caption_child->type == XML_ELEMENT_NODE &&
-						    xmlStrcmp(caption_child->name, BAD_CAST "figcaption") == 0) {
-							std::string caption = GetNodeTextContent(caption_child);
-							if (!caption.empty()) {
-								attrs["title"] = caption;
-							}
-							break;
-						}
-						caption_child = caption_child->next;
-					}
-				} else {
-					// Skip unknown elements
-					continue;
-				}
-
-				blocks.push_back(
-				    DuckBlockTypes::CreateBlock(block_type, content, level_value, encoding, attrs, block_order++));
-			}
-		}
-
-		if (xpath_obj) {
-			xmlXPathFreeObject(xpath_obj);
-		}
-		xmlXPathFreeContext(xpath_ctx);
-		xmlFreeDoc(doc);
-
+		auto blocks = HtmlToDuckBlocks(html_str);
 		result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), blocks));
 	}
 }
@@ -735,6 +740,386 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 	}
 }
 
+// ============================================================================
+// read_html_blocks & parse_html_blocks Table Functions
+// ============================================================================
+
+static void ReadFileFully(duckdb::FileHandle &handle, char *data, duckdb::idx_t size) {
+	duckdb::idx_t total_read = 0;
+	while (total_read < size) {
+		auto read_bytes = handle.Read(data + total_read, size - total_read);
+		if (read_bytes <= 0) {
+			throw duckdb::IOException("Unexpected end of file while reading %s (read %llu of %llu bytes)", handle.path,
+			                          total_read, size);
+		}
+		total_read += read_bytes;
+	}
+}
+
+struct HTMLBlocksReadFunctionData : public TableFunctionData {
+	vector<string> files;
+	bool include_filename = false;
+	bool ignore_errors = false;
+	idx_t max_file_size = 2147483648ULL; // 2GB default
+};
+
+struct HTMLBlocksReadGlobalState : public GlobalTableFunctionState {
+	vector<string> files;
+	std::mutex file_lock;
+	idx_t next_file_index = 0;
+
+	idx_t MaxThreads() const override {
+		return files.empty() ? 1 : files.size();
+	}
+
+	idx_t ClaimNextFile() {
+		std::lock_guard<std::mutex> guard(file_lock);
+		if (next_file_index >= files.size()) {
+			return DConstants::INVALID_INDEX;
+		}
+		return next_file_index++;
+	}
+};
+
+struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
+	static constexpr idx_t FILE_SHIFT = 32;
+
+	idx_t file_index = DConstants::INVALID_INDEX;
+	string current_filename;
+	idx_t chunk_counter = 0;
+	idx_t last_batch_index = 0;
+	bool have_file = false;
+
+	vector<Value> current_blocks;
+	idx_t current_block_index = 0;
+};
+
+unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                vector<LogicalType> &return_types,
+                                                                vector<string> &names) {
+	auto result = make_uniq<HTMLBlocksReadFunctionData>();
+
+	if (input.inputs.empty()) {
+		throw InvalidInputException(
+		    "read_html_blocks requires at least one argument (file pattern or array of file patterns)");
+	}
+
+	vector<string> file_patterns;
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR) {
+		file_patterns.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				throw InvalidInputException("read_html_blocks cannot process NULL file patterns");
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw InvalidInputException("read_html_blocks array parameter must contain only strings");
+			}
+			file_patterns.push_back(child.ToString());
+		}
+	} else {
+		throw InvalidInputException("read_html_blocks first argument must be a string or array of strings");
+	}
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (const auto &pattern : file_patterns) {
+		auto glob_result = fs.Glob(pattern, nullptr);
+		vector<string> matched;
+		for (const auto &file_info : glob_result) {
+			matched.push_back(file_info.path);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &matched_path : matched) {
+			result->files.push_back(std::move(matched_path));
+		}
+	}
+
+	if (result->files.empty()) {
+		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
+		throw InvalidInputException("No files found matching pattern: %s", pattern_str);
+	}
+
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "filename" || kv.first == "file_path" || kv.first == "include_filepath") {
+			result->include_filename = kv.second.GetValue<bool>();
+		} else if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+		} else if (kv.first == "maximum_file_size") {
+			result->max_file_size = kv.second.GetValue<idx_t>();
+		}
+	}
+
+	if (result->include_filename) {
+		names.push_back("filename");
+		return_types.push_back(LogicalType::VARCHAR);
+	}
+
+	names.push_back("kind");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("element_type");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("content");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("level");
+	return_types.push_back(LogicalType::INTEGER);
+
+	names.push_back("encoding");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("attributes");
+	return_types.push_back(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
+
+	names.push_back("element_order");
+	return_types.push_back(LogicalType::INTEGER);
+
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(ClientContext &context,
+                                                                            TableFunctionInitInput &input) {
+	auto result = make_uniq<HTMLBlocksReadGlobalState>();
+	auto &bind_data = input.bind_data->Cast<HTMLBlocksReadFunctionData>();
+	result->files = bind_data.files;
+	return std::move(result);
+}
+
+unique_ptr<LocalTableFunctionState>
+DuckBlockFunctions::ReadHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                            GlobalTableFunctionState *global_state) {
+	return make_uniq<HTMLBlocksReadLocalState>();
+}
+
+OperatorPartitionData DuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientContext &context,
+                                                                         TableFunctionGetPartitionInput &input) {
+	auto &lstate = input.local_state->Cast<HTMLBlocksReadLocalState>();
+	return OperatorPartitionData(lstate.last_batch_index);
+}
+
+void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<HTMLBlocksReadFunctionData>();
+	auto &gstate = data_p.global_state->Cast<HTMLBlocksReadGlobalState>();
+	auto &lstate = data_p.local_state->Cast<HTMLBlocksReadLocalState>();
+
+	auto &fs = FileSystem::GetFileSystem(context);
+	idx_t output_idx = 0;
+
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		if (!lstate.have_file) {
+			idx_t claimed = gstate.ClaimNextFile();
+			if (claimed == DConstants::INVALID_INDEX) {
+				break;
+			}
+			lstate.file_index = claimed;
+			lstate.current_filename = gstate.files[claimed];
+			lstate.chunk_counter = 0;
+			lstate.have_file = true;
+			lstate.current_blocks.clear();
+			lstate.current_block_index = 0;
+
+			try {
+				auto file_handle = fs.OpenFile(lstate.current_filename, FileFlags::FILE_FLAGS_READ);
+				auto file_size = fs.GetFileSize(*file_handle);
+				if (file_size > bind_data.max_file_size) {
+					if (!bind_data.ignore_errors) {
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+						                            lstate.current_filename, bind_data.max_file_size);
+					}
+					lstate.have_file = false;
+					continue;
+				}
+				string content;
+				content.resize(file_size);
+				ReadFileFully(*file_handle, (char *)content.data(), file_size);
+				lstate.current_blocks = HtmlToDuckBlocks(content);
+			} catch (const std::exception &e) {
+				if (!bind_data.ignore_errors) {
+					throw;
+				}
+				lstate.have_file = false;
+				continue;
+			}
+		}
+
+		// Emit blocks from current file
+		while (output_idx < STANDARD_VECTOR_SIZE && lstate.current_block_index < lstate.current_blocks.size()) {
+			const auto &block = lstate.current_blocks[lstate.current_block_index];
+			auto &children = StructValue::GetChildren(block);
+
+			idx_t col_idx = 0;
+			if (bind_data.include_filename) {
+				output.data[col_idx++].SetValue(output_idx, Value(lstate.current_filename));
+			}
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::KIND_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::CONTENT_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::LEVEL_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ENCODING_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ATTRIBUTES_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_ORDER_IDX]);
+
+			output_idx++;
+			lstate.current_block_index++;
+		}
+
+		if (lstate.current_block_index >= lstate.current_blocks.size()) {
+			lstate.last_batch_index =
+			    (lstate.file_index << HTMLBlocksReadLocalState::FILE_SHIFT) | lstate.chunk_counter++;
+			lstate.have_file = false;
+			lstate.current_blocks.clear();
+			lstate.current_block_index = 0;
+		}
+	}
+
+	CompatSetOutputCardinality(output, output_idx);
+}
+
+struct HTMLBlocksParseFunctionData : public TableFunctionData {
+	vector<string> html_contents;
+	bool ignore_errors = false;
+};
+
+struct HTMLBlocksParseGlobalState : public GlobalTableFunctionState {
+	vector<string> html_contents;
+	std::mutex content_lock;
+	idx_t next_index = 0;
+
+	idx_t MaxThreads() const override {
+		return html_contents.empty() ? 1 : html_contents.size();
+	}
+
+	idx_t ClaimNext() {
+		std::lock_guard<std::mutex> guard(content_lock);
+		if (next_index >= html_contents.size()) {
+			return DConstants::INVALID_INDEX;
+		}
+		return next_index++;
+	}
+};
+
+struct HTMLBlocksParseLocalState : public LocalTableFunctionState {
+	bool have_item = false;
+	vector<Value> current_blocks;
+	idx_t current_block_index = 0;
+};
+
+unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                 vector<LogicalType> &return_types,
+                                                                 vector<string> &names) {
+	auto result = make_uniq<HTMLBlocksParseFunctionData>();
+
+	if (input.inputs.empty()) {
+		throw InvalidInputException("parse_html_blocks requires HTML content as first argument");
+	}
+
+	const auto &first_input = input.inputs[0];
+	if (first_input.type().id() == LogicalTypeId::VARCHAR || first_input.type() == XMLTypes::HTMLType()) {
+		result->html_contents.push_back(first_input.ToString());
+	} else if (first_input.type().id() == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(first_input);
+		for (const auto &child : list_children) {
+			if (!child.IsNull()) {
+				result->html_contents.push_back(child.ToString());
+			}
+		}
+	} else {
+		throw InvalidInputException("parse_html_blocks first argument must be a string or array of strings");
+	}
+
+	for (auto &kv : input.named_parameters) {
+		if (kv.first == "ignore_errors") {
+			result->ignore_errors = kv.second.GetValue<bool>();
+		}
+	}
+
+	names.push_back("kind");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("element_type");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("content");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("level");
+	return_types.push_back(LogicalType::INTEGER);
+
+	names.push_back("encoding");
+	return_types.push_back(LogicalType::VARCHAR);
+
+	names.push_back("attributes");
+	return_types.push_back(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
+
+	names.push_back("element_order");
+	return_types.push_back(LogicalType::INTEGER);
+
+	return std::move(result);
+}
+
+unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ParseHTMLBlocksInit(ClientContext &context,
+                                                                             TableFunctionInitInput &input) {
+	auto result = make_uniq<HTMLBlocksParseGlobalState>();
+	auto &bind_data = input.bind_data->Cast<HTMLBlocksParseFunctionData>();
+	result->html_contents = bind_data.html_contents;
+	return std::move(result);
+}
+
+unique_ptr<LocalTableFunctionState>
+DuckBlockFunctions::ParseHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                             GlobalTableFunctionState *global_state) {
+	return make_uniq<HTMLBlocksParseLocalState>();
+}
+
+void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                 DataChunk &output) {
+	auto &bind_data = data_p.bind_data->Cast<HTMLBlocksParseFunctionData>();
+	auto &gstate = data_p.global_state->Cast<HTMLBlocksParseGlobalState>();
+	auto &lstate = data_p.local_state->Cast<HTMLBlocksParseLocalState>();
+
+	idx_t output_idx = 0;
+
+	while (output_idx < STANDARD_VECTOR_SIZE) {
+		if (!lstate.have_item) {
+			idx_t claimed = gstate.ClaimNext();
+			if (claimed == DConstants::INVALID_INDEX) {
+				break;
+			}
+			lstate.have_item = true;
+			lstate.current_blocks = HtmlToDuckBlocks(gstate.html_contents[claimed]);
+			lstate.current_block_index = 0;
+		}
+
+		while (output_idx < STANDARD_VECTOR_SIZE && lstate.current_block_index < lstate.current_blocks.size()) {
+			const auto &block = lstate.current_blocks[lstate.current_block_index];
+			auto &children = StructValue::GetChildren(block);
+
+			idx_t col_idx = 0;
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::KIND_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::CONTENT_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::LEVEL_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ENCODING_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ATTRIBUTES_IDX]);
+			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_ORDER_IDX]);
+
+			output_idx++;
+			lstate.current_block_index++;
+		}
+
+		if (lstate.current_block_index >= lstate.current_blocks.size()) {
+			lstate.have_item = false;
+			lstate.current_blocks.clear();
+			lstate.current_block_index = 0;
+		}
+	}
+
+	CompatSetOutputCardinality(output, output_idx);
+}
+
 void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)
 	ScalarFunctionSet html_to_duck_blocks_set("html_to_duck_blocks");
@@ -749,6 +1134,62 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	auto duck_blocks_to_html_func = ScalarFunction("duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()},
 	                                               XMLTypes::HTMLType(), DuckBlocksToHtmlFunction);
 	loader.RegisterFunction(duck_blocks_to_html_func);
+
+	// read_html_blocks table function
+	TableFunctionSet read_html_blocks_set("read_html_blocks");
+
+	TableFunction read_html_blocks_single("read_html_blocks", {LogicalType::VARCHAR}, ReadHTMLBlocksFunction,
+	                                      ReadHTMLBlocksBind, ReadHTMLBlocksInit);
+	read_html_blocks_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_blocks_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_blocks_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_blocks_single.named_parameters["file_path"] = LogicalType::BOOLEAN;
+	read_html_blocks_single.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
+	read_html_blocks_single.init_local = ReadHTMLBlocksInitLocal;
+	read_html_blocks_single.get_partition_data = ReadHTMLBlocksGetPartitionData;
+	read_html_blocks_set.AddFunction(read_html_blocks_single);
+
+	TableFunction read_html_blocks_array("read_html_blocks", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                                     ReadHTMLBlocksFunction, ReadHTMLBlocksBind, ReadHTMLBlocksInit);
+	read_html_blocks_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	read_html_blocks_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
+	read_html_blocks_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_blocks_array.named_parameters["file_path"] = LogicalType::BOOLEAN;
+	read_html_blocks_array.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
+	read_html_blocks_array.init_local = ReadHTMLBlocksInitLocal;
+	read_html_blocks_array.get_partition_data = ReadHTMLBlocksGetPartitionData;
+	read_html_blocks_set.AddFunction(read_html_blocks_array);
+
+	loader.RegisterFunction(read_html_blocks_set);
+
+	// parse_html_blocks table function
+	TableFunctionSet parse_html_blocks_set("parse_html_blocks");
+
+	TableFunction parse_html_blocks_varchar("parse_html_blocks", {LogicalType::VARCHAR}, ParseHTMLBlocksFunction,
+	                                        ParseHTMLBlocksBind, ParseHTMLBlocksInit);
+	parse_html_blocks_varchar.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_varchar.init_local = ParseHTMLBlocksInitLocal;
+	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar);
+
+	TableFunction parse_html_blocks_html("parse_html_blocks", {XMLTypes::HTMLType()}, ParseHTMLBlocksFunction,
+	                                     ParseHTMLBlocksBind, ParseHTMLBlocksInit);
+	parse_html_blocks_html.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_html.init_local = ParseHTMLBlocksInitLocal;
+	parse_html_blocks_set.AddFunction(parse_html_blocks_html);
+
+	TableFunction parse_html_blocks_varchar_list("parse_html_blocks", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                                             ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
+	parse_html_blocks_varchar_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_varchar_list.init_local = ParseHTMLBlocksInitLocal;
+	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar_list);
+
+	TableFunction parse_html_blocks_html_list("parse_html_blocks", {LogicalType::LIST(XMLTypes::HTMLType())},
+	                                          ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
+	parse_html_blocks_html_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_html_list.init_local = ParseHTMLBlocksInitLocal;
+	parse_html_blocks_set.AddFunction(parse_html_blocks_html_list);
+
+	loader.RegisterFunction(parse_html_blocks_set);
 }
 
 // ============================================================================
