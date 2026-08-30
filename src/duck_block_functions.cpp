@@ -133,11 +133,15 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	return XMLUtils::HTMLEscape(content);
 }
 
-// True if `node` has at least one child that is an element (not just text).
+// True if `node` has at least one child that is an element (not just text),
+// excluding non-content script/style/svg/template elements.
 static bool HasElementChildren(xmlNodePtr node) {
 	for (xmlNodePtr c = node->children; c; c = c->next) {
 		if (c->type == XML_ELEMENT_NODE) {
-			return true;
+			std::string tag = reinterpret_cast<const char *>(c->name);
+			if (tag != "script" && tag != "style" && tag != "noscript" && tag != "template" && tag != "svg") {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -192,6 +196,11 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 		}
 
 		std::string tag = reinterpret_cast<const char *>(child->name);
+		// Ignore non-content elements that should not leak into text
+		if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg") {
+			continue;
+		}
+
 		std::map<std::string, std::string> attrs;
 
 		// Void inline elements (no children to recurse).
@@ -347,9 +356,8 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 				if (!id.empty()) {
 					attrs["id"] = id;
 				}
-				// Check for inline HTML content
-				std::string inner_html = GetNodeInnerHTML(node, doc);
-				if (ContentContainsTags(inner_html)) {
+				// Check for inline formatting elements
+				if (HasElementChildren(node)) {
 					// Extract structured inline elements instead of storing raw HTML
 					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(1),
 					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
@@ -364,9 +372,8 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 			// Paragraph
 			else if (tag == "p") {
 				block_type = DuckBlockTypes::TYPE_PARAGRAPH;
-				// Check for inline HTML content
-				std::string inner_html = GetNodeInnerHTML(node, doc);
-				if (ContentContainsTags(inner_html)) {
+				// Check for inline formatting elements
+				if (HasElementChildren(node)) {
 					// Extract structured inline elements instead of storing raw HTML
 					// Create paragraph block with empty content
 					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(1),
@@ -1196,16 +1203,44 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 // Helper functions
 // ============================================================================
 
+static void AccumulateTextContent(xmlNodePtr node, std::string &result) {
+	if (!node) {
+		return;
+	}
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) {
+			if (child->content) {
+				result += reinterpret_cast<const char *>(child->content);
+			}
+		} else if (child->type == XML_ELEMENT_NODE) {
+			std::string tag = reinterpret_cast<const char *>(child->name);
+			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg") {
+				continue;
+			}
+			AccumulateTextContent(child, result);
+		}
+	}
+}
+
 static std::string GetNodeTextContent(xmlNodePtr node) {
 	if (!node) {
 		return "";
 	}
-	xmlChar *content = xmlNodeGetContent(node);
-	if (!content) {
-		return "";
+	if (node->type == XML_TEXT_NODE || node->type == XML_CDATA_SECTION_NODE) {
+		return node->content ? std::string(reinterpret_cast<const char *>(node->content)) : "";
 	}
-	std::string result(reinterpret_cast<const char *>(content));
-	xmlFree(content);
+	std::string tag = node->name ? reinterpret_cast<const char *>(node->name) : "";
+	if (tag == "script" || tag == "style") {
+		xmlChar *content = xmlNodeGetContent(node);
+		if (!content) {
+			return "";
+		}
+		std::string result(reinterpret_cast<const char *>(content));
+		xmlFree(content);
+		return result;
+	}
+	std::string result;
+	AccumulateTextContent(node, result);
 	return result;
 }
 

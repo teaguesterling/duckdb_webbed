@@ -182,3 +182,25 @@ query I
 SELECT count(*) FROM parse_html_blocks('', ignore_errors := true);
 ----
 0
+
+# =============================================================================
+# Test 11: Script, style, noscript, and template filtering
+# =============================================================================
+
+# Style tag inside paragraph is filtered out, preserving text
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<p>Hello <style>.cls { color: red; }</style>world</p>')
+ORDER BY element_order;
+----
+block	paragraph	Hello world
+
+# Scripts and styles inside headings and blockquotes are filtered out
+query III
+SELECT kind, element_type, content
+FROM parse_html_blocks('<h1>Title <script>alert(1);</script></h1><blockquote>Quote <style>p { margin: 0; }</style>text</blockquote>')
+ORDER BY element_order;
+----
+block	heading	Title 
+block	blockquote	Quote text
+
