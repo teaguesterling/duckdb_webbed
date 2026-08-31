@@ -348,7 +348,7 @@ It is a pure subset — nothing in webbed contradicts the canonical header, so t
 not divergence. Five of the fifteen (`caption`, `deflist`, `figure`, `generic`, `section`) are
 exactly what this design needs, so the header must be extended before any of it compiles.
 
-### Copy or submodule — open, and Teague's call
+### Copy now, submodule when it lands on main — decided
 
 `duck_block_utils@628dcd7` publishes `src/include/duck_block_vocabulary.hpp`, a link-free
 header intended for exactly this: sibling extensions taking the vocabulary as a submodule
@@ -371,9 +371,13 @@ Two facts bearing on the decision, neither disqualifying:
   different and larger commitment than decision 1's "emit type names that track a branch" —
   a wrong name is a data mismatch, a missing submodule commit is a broken build.
 
-This spec does not decide it. Either path satisfies the prerequisite; the copy path means
-extending the local mirror with the fifteen missing names, the submodule path means the mirror
-goes away. The conformance assertion below is required **either way**.
+**Decision:** extend the local mirror now with the fifteen missing names; switch to the
+submodule once `628dcd7` reaches `duck_block_utils` `main`. This keeps webbed's build
+self-contained and off an unmerged branch, at the cost of one more manual sync of a copy that
+has already drifted twice — a cost the conformance assertion below is specifically there to
+make loud rather than silent.
+
+The conformance assertion is required **either way**, and remains required after the switch.
 
 **And a conformance assertion, so the next drift is loud.** A copied header does not error when
 it falls behind; code comparing `element_type` strings against a stale local copy silently
