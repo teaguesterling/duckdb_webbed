@@ -75,21 +75,28 @@ vocabulary and inverts for an open one.
 So: elements with document semantics emit `generic` when unmapped; bare `<div>`/`<span>`
 carrying no `id` or `class` stay transparent.
 
-**3. Sectioning elements map to `generic`, not `div`.**
+**3. Sectioning elements map to a first-class `section` type carrying a `role`.**
 The initial proposal was `div` + `attributes['tag']='section'`, because that is what pandoc
 emits. That is precisely the floor-not-ceiling reasoning the source report warns against:
 `div` + `tag=section` is a type pretending to be correct while stashing the truth in an
-attribute.
+attribute. HTML's own spec calls `div` "an element of last resort".
 
-`generic` + `attributes['source_type']='section'` is what the sibling's own header defines
-`generic` for — *"a structurally-valid element whose type is not in the standard
-vocabulary."* It is honest, forward-compatible (promoting `section` to a real type changes
-one mapping and leaves `source_type` readers working), and it registers as a promotion
-candidate in the sibling's ratchet rather than quietly settling.
+A first-class type was requested from `duck_block_utils` and landed at `0abe363` as
+`TYPE_SECTION` — verified present in that commit, not taken on report.
 
-A request for first-class `section`/`article` types has been sent to the `duck_block_utils`
-session. If they land before this ships, the mapping is swapped. This change does not block
-on that answer.
+Its shape is better than what was asked for. Rather than separate `section` and `article`
+types, it is **one `section` type with `attributes['role']`** drawn from
+`{section, article, aside, nav, header, footer, main}`. The justification is that the
+vocabulary had already answered this question three times — `heading` + `heading_level` not
+`h1..h6`; `list` + `list_type` not `bullet_list`/`ordered_list`; `quoted` + `quote_type` not
+`single_quoted`/`double_quoted`. One structural type plus a variant attribute is the house
+convention. And unlike `tag='section'` on a `div`, `role` is not truth-stashing: the type
+asserts "semantic sectioning container", which is true, and the role says which kind. It also
+gives `<aside>` and `<nav>` an honest target immediately.
+
+The interim `generic` + `source_type` mapping this spec previously proposed is therefore
+**withdrawn** for the sectioning family. `generic` remains the backstop for semantic elements
+outside that family, such as `<details>`.
 
 ## Design
 
@@ -129,7 +136,7 @@ concept is required on either side.
 | `<figcaption>` | `caption` container, inlines recursed | `<b>` survives as a real inline instead of flattening into a `title` attribute |
 | `<details>` | `generic` + `source_type='details'` | |
 | `<summary>` | `caption` | same role as `figcaption` — the container's label |
-| `<section> <article> <aside> <nav> <header> <footer> <main>` | `generic` + `source_type=<tag>`, plus `id`/`class` | per decision 3 |
+| `<section> <article> <aside> <nav> <header> <footer> <main>` | `section` + `role=<tag>`, plus `id`/`class` | per decision 3; one type, variant in `role` |
 | unmapped **semantic** element | `generic` + `source_type=<tag>` | per decision 2 |
 | bare `<div>`/`<span>`, no `id`/`class` | — | transparent; walk through without emitting |
 
@@ -138,7 +145,7 @@ concept is required on either side.
 `level` increments **only when a container block is actually emitted**. Transparent wrappers
 do not nest, so layout-div-heavy pages keep today's levels.
 
-The visible change: `<section id="methods"><p>x</p></section>` now yields `generic` at level 1
+The visible change: `<section id="methods"><p>x</p></section>` now yields `section` at level 1
 and `paragraph` at level 2, where today it yields `paragraph` at level 1. This is unavoidable
 — preserving the section requires containment to be recoverable — but it is a behavioural
 change for any consumer filtering on `level`, and is called out in the changelog.
@@ -152,15 +159,19 @@ implemented: browsers never adopted it and it was removed from the spec.
 
 ### Export direction
 
-`duck_blocks_to_html()` gains renderers for `deflist`, `figure`, `caption` and `generic`, plus
-a real terminal `else`.
+`duck_blocks_to_html()` gains renderers for `deflist`, `figure`, `caption`, `section` and
+`generic`, plus a real terminal `else`.
 
-**`generic` rendering.** If `attributes['source_type']` is on a conservative allowlist of known
-HTML sectioning and semantic tags (`section`, `article`, `aside`, `nav`, `header`, `footer`,
-`main`, `details`, `figure`, `address`), emit that tag, restoring `id` and `class` from the
-attributes — so `<section id="s1" class="intro">` round-trips intact. Any other `source_type`
-falls through to the terminal fallback below rather than being interpolated into a tag name,
-which would be an injection vector.
+**`section` rendering.** Emit `attributes['role']` as the tag name, restoring `id` and `class`
+— so `<section id="s1" class="intro">` round-trips intact. `role` is validated against the
+fixed enum `{section, article, aside, nav, header, footer, main}` and falls back to `div` if
+absent or unrecognised. The enum check is not decoration: `role` derives from parsed HTML, and
+interpolating it into an output tag name unchecked would let a crafted document emit a tag it
+never contained.
+
+**`generic` rendering.** Same discipline, narrower allowlist now that the sectioning family has
+its own type: `source_type` in `{details, address}` emits that tag; anything else falls through
+to the terminal fallback rather than reaching a tag name.
 
 **Terminal fallback.** The `else` emits
 `<div data-duck-block-type="<escaped element_type>">` + HTML-escaped content + `</div>`. Text
