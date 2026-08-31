@@ -17,6 +17,11 @@ re-reproduced here against `build/release/duckdb` before this design was written
 | 4 | `<section>`, `<main>` | container flattened, `id` and `class` discarded |
 | 5 | `<details>/<summary>` | summary text lost entirely |
 | 6 | `<nav>`, `<header>`, `<footer>`, `<aside>`, `<article>` | flattened, attributes discarded |
+| 7 | `<img>` inside `<p>`/`<h1>`-`<h6>` | image emitted **twice** — once inline, once as a block |
+| 8 | block content inside `<td>`/`<li>` | text emitted **twice** — once in the container's JSON, once as a block |
+
+Findings 7 and 8 were not in the source report. They were found by an adversarial review of this
+spec and confirmed against the binary.
 
 Findings 2 and 3 **corrupt** rather than lose. A consumer can detect a missing block; it
 cannot detect a spurious one, because a duplicate is indistinguishable from a document that
@@ -41,15 +46,56 @@ A **descendant** axis over a flat tag list. Two consequences:
 A flat node-set query is standing in for a tree walk. Finding 1 is separate: `<dl>` is in
 neither the list nor the vocabulary.
 
-### A seventh gap, found while designing
+Findings 7 and 8 are the same mechanism reaching further than the report noticed:
 
-`duck_blocks_to_html()` ends its `else if` chain with **no terminal `else`**
-(`src/duck_block_functions.cpp:743`). An unrecognized `element_type` emits nothing, silently.
+- **7** is the block query racing the *inline* extraction path. `<p>Text <img> more</p>` emits
+  the image as an inline child of the paragraph (correct) and again as a top-level block,
+  because `//body//*` selects `img` at any depth. Confirmed.
+- **8** is the block query racing the *JSON* encoders. `<table><td><p>cellpara</p></td></table>`
+  emits `{"headers":["cellpara"]}` **and** a `paragraph` carrying the same text; `<ul><li><p>x`
+  likewise. Confirmed. This is duplication, not richness — the same text twice.
 
-This is the same defect class the sibling extension just fixed in its own converters. It
-matters here for a specific reason: fixing only the reader would make round-trip strictly
-*worse* than today, because every newly-emitted `deflist`/`figure`/`caption` would evaporate
-on export. The exporter therefore ships in the same change.
+Both are fixed by the same tree walk, which is evidence for the one-cause claim rather than
+against it.
+
+### The exporter cannot represent containment — the central constraint
+
+`duck_blocks_to_html()` (`src/duck_block_functions.cpp:525-745`) has **two** defects, and the
+second was missed in the first revision of this spec. It was found by adversarial review and
+confirmed against the binary.
+
+**(a) No terminal `else`** (`:743`). An unrecognized `element_type` emits nothing, silently —
+the same defect class the sibling extension just fixed in its own converters.
+
+**(b) No containment mechanism at all.** The function is a flat loop. There is no stack, no
+level tracking, no close-on-depth-drop. Every branch writes its open tag, its content and its
+close tag in one pass. The only look-ahead is inline-specific, stops at the first
+`kind != 'inline'`, and is copy-pasted into exactly two branches (heading `:600-624`,
+paragraph `:637-661`).
+
+So a container block whose children are *blocks* renders as an empty tag pair with its children
+spilled outside it. Measured:
+
+```
+blockquote(content=NULL, level=1) + paragraph("Q.", level=2)
+  ->  <blockquote></blockquote><p>Q.</p>
+```
+
+The first revision of this spec argued the exporter must ship in the same change *precisely so
+round-trip does not get worse*, and then specified only new type branches plus a fallback. New
+branches in a flat loop do not produce nesting. Adding container blocks to this renderer without
+a scope mechanism would have made round-trip worse for every container the design introduces.
+
+**(c) `level` is already load-bearing, differently.** The blockquote branch (`:672-687`) reads
+`level` as a **repeat count** and emits that many nested tags:
+
+```
+blockquote(content='Q', level=2)  ->  <blockquote><blockquote>Q</blockquote></blockquote>
+```
+
+Redefining `level` as generic structural depth therefore double-wraps any blockquote nested
+inside a `section`, `figure` or `details`. That is a new corruption introduced by the corruption
+fix. The repeat-count path must be retired in the same change.
 
 ## Decisions taken
 
@@ -156,6 +202,51 @@ label below the content it labels.
 | unmapped **semantic** element | `generic` + `source_type=<tag>` | per decision 2 |
 | bare `<div>`/`<span>`, no `id`/`class` | — | transparent; walk through without emitting |
 
+### What the walk recurses into — the rule an implementer needs
+
+The previous revision gave no default, which left `<form>`, `<fieldset>`, `<label>`,
+`<button>`, `<center>` and custom elements such as `<my-widget>` undecided. All of them emit
+their inner blocks today; without an explicit rule they would silently regress to zero.
+
+**Default: recurse transparently.** An element that is neither mapped nor on the semantic
+allowlist is walked *through* — no block emitted, no level increment. This preserves today's
+behaviour for every unmapped container, including custom elements, and makes the semantic
+allowlist the only thing that needs maintaining.
+
+Three exceptions:
+
+- **Non-content subtrees** — `script`, `style`, `noscript`, `template`, `svg` — are not walked
+  at all. `HasElementChildren` and the text accumulator already filter these
+  (`src/duck_block_functions.cpp:142`, `:1216`) but the block query does not, so
+  `<template><p>x</p></template>` currently emits a paragraph. Settling that inconsistency
+  belongs to this redesign; it is a deliberate behaviour change and gets its own test.
+- **`<div>`/`<span>` carrying `id` or `class`** map to `div` with those attributes preserved.
+  Bare ones stay transparent. Decision 3 rejects `div` for *sectioning* elements; it remains
+  the right type for an actual `<div>`.
+- **JSON-encoded leaves** — see below.
+
+### JSON-encoded leaves: `table`, `ul`, `ol`, `dl`
+
+These serialise their contents to JSON, so the walk does **not** also emit their descendants as
+blocks. Today it does, and that is finding 8 — `<table><td><p>cellpara</p></td></table>` emits
+`{"headers":["cellpara"]}` *and* a `paragraph` carrying the same text. Not recursing removes a
+duplicate rather than losing content.
+
+**One genuine loss, recorded rather than hidden.** The JSON encoders capture *text*. Non-text
+block content inside a cell or list item is not represented in them. Measured:
+
+```
+<table><tr><td><img src="x.png" alt="IMG"><pre>code</pre></td></tr></table>
+  today  -> table {"headers":["code"]}  +  image "IMG"  +  code "code"
+  after  -> table {"headers":["code"]}
+```
+
+`code` is duplicated today and correctly de-duplicated. `IMG` appears **only** in the image
+block, so it is genuinely lost. This is a real regression for images inside table cells and list
+items, it is narrow, and it is the price of removing the duplication. It gets a test pinning the
+known behaviour and is listed under Future work; the fix is a richer cell encoding, which is out
+of scope here.
+
 ### Level semantics
 
 `level` increments **only when a container block is actually emitted**. Transparent wrappers
@@ -166,28 +257,75 @@ and `paragraph` at level 2, where today it yields `paragraph` at level 1. This i
 — preserving the section requires containment to be recoverable — but it is a behavioural
 change for any consumer filtering on `level`, and is called out in the changelog.
 
+**`level` currently means two different things, and this design collapses them.** The exporter's
+blockquote branch reads it as a repeat count (`:672-687`), so a `level=2` blockquote emits two
+nested tags. Under the new definition `level` is structural depth *only*, and nesting is carried
+by nested container blocks. Both readings cannot coexist: a blockquote inside a `section` would
+be double-wrapped. The repeat-count path is therefore removed as part of the export rewrite, not
+left as a second mechanism. This is the single riskiest edit in the change, because `level` is
+the field with the most existing assertions against it.
+
 **Heading semantics are unaffected.** `level` (structural depth) and
 `attributes['heading_level']` (semantic h1–h6) are separate fields by explicit design
-(`src/include/duck_block_types.hpp:26`). `<section><h1>Foo</h1></section>` yields a heading at
-`level=2` with `heading_level=1` — still an h1. Verified against the binary. The HTML5 outline
+(`src/include/duck_block_types.hpp:26`). `<section><h1>Foo</h1></section>` will yield a heading
+at `level=2` with `heading_level=1` — still an h1.
+
+*What was actually verified:* that `level` and `heading_level` are separate fields today, via
+`<blockquote><h2>` returning `level=1, heading_level=2`. The `level=2` result above is a
+**prediction** about the design, not a measurement — no section block exists today to produce
+it. The earlier revision of this spec attached "verified against the binary" to that sentence,
+which overstated it against this document's own standard. The separation is measured; the
+consequence is inferred, and is a thing the tests must prove rather than assume. The HTML5 outline
 algorithm, under which an `h1` inside a `section` would become an effective h2, is **not**
 implemented: browsers never adopted it and it was removed from the spec.
 
-### Export direction
+### Export direction: a scope stack replaces the flat loop
 
-`duck_blocks_to_html()` gains renderers for `deflist`, `figure`, `caption`, `section` and
-`generic`, plus a real terminal `else`.
+This is the largest part of the change and was underestimated in the first revision.
+
+**The walk.** Iterate blocks in `element_order`. Maintain a stack of open containers, each
+recorded with the `level` it was opened at.
+
+1. Before emitting a block at level *L*: while the stack top was opened at level >= *L*, pop it
+   and write its close tag.
+2. If the block is a **container** type (`blockquote`, `figure`, `caption`, `section`,
+   `generic`, `div`) — that is, `content IS NULL` and further blocks follow at level > *L* —
+   write its open tag and push it.
+3. If the block is a **leaf**, write it whole, consuming any immediately following
+   `kind='inline'` blocks at deeper levels as its inline children.
+4. At end of list, drain the stack.
+
+**Retire the blockquote repeat-count.** With real containment, nested quotes are expressed as
+nested `blockquote` container blocks, so `level` must no longer drive tag repetition
+(`:672-687`). `CountBlockquoteAncestors` (`:1278`) becomes redundant on the reader side too:
+depth falls out of the walk. Both are removed rather than left as a second, contradictory
+mechanism.
+
+**De-duplicate the inline look-ahead.** It currently exists twice by copy-paste and the design
+needs it in at least four more places (`caption`, `section`, `generic`, the fallback). It is
+extracted to a single helper before the new branches are written, not after.
+
+**Robustness.** The stack is driven by data a caller can construct arbitrarily — `level` may
+jump, go negative, or never return. Rules: a level jump opens no implicit containers; a level
+that never drops is closed by the end-of-list drain; the stack is depth-capped, and blocks past
+the cap render flat rather than throwing. Malformed input must not produce unbalanced tags.
 
 **`section` rendering.** Emit `attributes['role']` as the tag name, restoring `id` and `class`
 — so `<section id="s1" class="intro">` round-trips intact. `role` is validated against the
 fixed enum `{section, article, aside, nav, header, footer, main}` and falls back to `div` if
 absent or unrecognised. The enum check is not decoration: `role` derives from parsed HTML, and
 interpolating it into an output tag name unchecked would let a crafted document emit a tag it
-never contained.
+never contained. `id` and `class` are `HTMLEscape`d on the way out for the same reason.
 
-**`generic` rendering.** Same discipline, narrower allowlist now that the sectioning family has
-its own type: `source_type` in `{details, address}` emits that tag; anything else falls through
-to the terminal fallback rather than reaching a tag name.
+Note `XMLUtils::HTMLEscape` (`src/xml_utils.cpp:2898`) wraps `xmlEncodeSpecialChars`, which
+escapes `& < > "` but **not** `'`. All attribute emission here uses double quotes, so this is
+safe as written — but it is a standing trap for any future single-quoted attribute and is
+recorded here rather than left to be rediscovered.
+
+**`generic` rendering.** Same discipline: `source_type` in `{details}` emits that tag; anything
+else falls through to the terminal fallback rather than reaching a tag name. (`address` was in
+this allowlist in the previous revision and is removed — the reader never produces it, so it was
+a dead entry.)
 
 **Terminal fallback.** The `else` emits
 `<div data-duck-block-type="<escaped element_type>">` + HTML-escaped content + `</div>`. Text
@@ -195,16 +333,65 @@ is preserved, the unmapped type is named and greppable, and the block is impossi
 the opposite of today's silent drop. It is deliberately ugly: a fallback that renders cleanly
 is a fallback nobody fixes.
 
+## Prerequisite: the local vocabulary header is stale
+
+`src/include/duck_block_types.hpp` is a deliberate mirror of the sibling's `block_types.hpp`,
+kept so webbed needs no compile-time dependency. Measured against
+`duck_block_utils@0abe363`, it carries **29 of 44 names** and is missing:
+
+```
+caption cite deflist div figure generic latex lineblock list_item markdown math note quoted
+section value
+```
+
+It is a pure subset — nothing in webbed contradicts the canonical header, so this is staleness,
+not divergence. Five of the fifteen (`caption`, `deflist`, `figure`, `generic`, `section`) are
+exactly what this design needs, so the header must be extended before any of it compiles.
+
+**And a conformance assertion, so the next drift is loud.** A copied header does not error when
+it falls behind; code comparing `element_type` strings against a stale local copy silently
+disagrees instead of failing. The sibling exposes `db_block_types()`, `db_block_kinds()` and
+`db_block_spec_version()`. A test asserts webbed's constants against those when
+`duck_block_utils` is loadable, and skips cleanly when it is not — webbed must not gain a hard
+dependency on it. This is the same self-describe-and-assert shape the extension family has
+converged on, and it caught a real 10-vs-18 drift in the sibling's own docs.
+
 ## Testing
 
-Test-driven: the six reproductions from the report become failing tests before any
-implementation, in `test/sql/duck_block_html.test`.
+Test-driven: every reproduction becomes a failing test before implementation.
 
-- one test per finding, asserting the corrected block list
-- explicit **anti-duplication** assertions for findings 2 and 3 — `len(...)` equality, not just
-  element_type checks, since the bug was a spurious extra block
+**Both** test files are in scope. `read_html_blocks` and `parse_html_blocks` call
+`HtmlToDuckBlocks` (`src/duck_block_functions.cpp:945`), so every reader change propagates to
+`test/sql/read_html_blocks.test`, which the previous revision failed to mention.
+
+New coverage:
+
+- one test per finding, 1 through 8, asserting the corrected block list
+- explicit **anti-duplication** assertions for findings 2, 3, 7 and 8 — `len(...)` equality or
+  exact list comparison, since each bug was a spurious extra block
 - ordering assertions for `<details>` and `<figure>`, since caption position differs between
   them and a wrong order is invisible to a type-only check
+- round-trip assertions (`html -> blocks -> html`) for every new type
+- **exporter containment tests driven by hand-built block lists**, not just round-trip: nested
+  containers, a level that jumps, a level that never drops, an unbalanced tail. Round-trip alone
+  cannot reach these, because the reader never produces them — but a caller can.
+- a regression test that an unknown `element_type` no longer vanishes on export
+- a test pinning the known image-in-table-cell loss documented above
+
+### Existing assertions that will break
+
+Identified by review and confirmed against the binary. Each must be updated deliberately, with
+the new expectation justified — not re-baselined to whatever the new code emits.
+
+| Location | Why |
+|---|---|
+| `read_html_blocks.test:40-47` | exact 6-row block list; gains `section` rows from complex.html's `<nav>`/`<main>`/`<article>` |
+| `read_html_blocks.test:51-53` | position-indexed `element_order BETWEEN 3 AND 7`; every inserted `section` shifts it |
+| `read_html_blocks.test:90-96` | asserts complex.html yields 11 rows |
+| `duck_block_html.test:1508` | asserts `contains(..., 'Important quote')`, which today matches **only** inside the duplicated blockquote text |
+
+`duck_block_html.test:1508` deserves note: it passes today *because of the bug this change
+fixes*. It is the loose-substring antipattern described below, already in the tree.
 
 **Negative assertions must be adjacency-precise, not substring-loose.** A cautionary case from
 the sibling: the assertion `render(...) LIKE '%<dim>%BODY%'`, expected false, *matches on
@@ -215,8 +402,6 @@ only because it failed while the code was right; in the other direction it would
 as coverage. Any assertion here of the form "X is absent" must bind X to its own position —
 `len()` equality, exact list comparison, or adjacency — never a wildcard span that a correct
 document can satisfy by accident.
-- round-trip assertions (`html → blocks → html`) for every new type
-- a regression test that an unknown `element_type` no longer vanishes on export
 
 ### Deferred: the alignment harness
 
@@ -226,6 +411,27 @@ demanding promotion. The both-ways ratchet is the right idea and one-directional
 
 It is deferred, not dismissed: it is separate infrastructure with its own correctness
 requirement, and bundling it makes this diff hard to review. Follow-up work.
+
+## Known interop divergences, not fixed here
+
+Recorded because they are real and would otherwise be rediscovered:
+
+- **`deflist` JSON shape is unspecified.** The sibling emits raw Pandoc
+  `DefinitionList c = [([Inline],[[Block]])]`. webbed's `list` JSON is `["a","b"]` and its
+  `table` JSON is `{"headers":[...],"rows":[...]}`. Neither matches. This design must state
+  webbed's deflist shape explicitly at implementation time; whatever is chosen will differ from
+  the sibling's under the same `element_type` and `encoding`.
+- **`list` variant attribute disagrees today.** webbed emits `attributes['ordered']='true'|'false'`
+  (`duck_block_html.test:72,83`); the sibling emits `attributes['list_type']='bullet'|'ordered'`.
+  Same block type, different attribute, silently. Decision 3 cites `list`+`list_type` as the
+  house convention — which webbed does not currently follow. Aligning it is a breaking change to
+  existing assertions and belongs in its own change.
+
+## Future work
+
+- richer cell encoding for `table`/`list`, so non-text block content inside cells survives
+- the both-ways alignment harness
+- reconciling the `ordered` / `list_type` divergence
 
 ## Out of scope
 
