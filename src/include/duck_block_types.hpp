@@ -69,6 +69,7 @@ public:
 	// Kind values
 	static constexpr const char *KIND_BLOCK = "block";
 	static constexpr const char *KIND_INLINE = "inline";
+	static constexpr const char *KIND_VALUE = "value";
 
 	// Core block type names
 	static constexpr const char *TYPE_HEADING = "heading";
@@ -81,6 +82,28 @@ public:
 	static constexpr const char *TYPE_METADATA = "metadata";
 	static constexpr const char *TYPE_IMAGE = "image";
 	static constexpr const char *TYPE_RAW = "raw";
+	static constexpr const char *TYPE_DIV = "div";
+	// A SEMANTIC sectioning container, distinct from `div`. HTML's spec calls div
+	// "an element of last resort", so mapping <section>/<article>/<aside> onto it
+	// would make element_type say something false while the truth hid in an
+	// attribute. Which kind of section lives in attributes['role'] -- section,
+	// article, aside, nav, header, footer, main -- following the convention set by
+	// heading+heading_level and list+list_type rather than one type per variant.
+	static constexpr const char *TYPE_SECTION = "section";
+	static constexpr const char *TYPE_LINEBLOCK = "lineblock";
+	static constexpr const char *TYPE_DEFLIST = "deflist";
+	static constexpr const char *TYPE_FIGURE = "figure";
+	static constexpr const char *TYPE_LIST_ITEM = "list_item";
+	// A caption belonging to the container that precedes or follows it.
+	// Deliberately general rather than figure-specific. POSITION IS THE EMITTER'S
+	// CHOICE: a figure's caption follows its content, a <details> summary precedes
+	// its body. `caption` marks what a block is, not where it sits.
+	static constexpr const char *TYPE_CAPTION = "caption";
+	// A structurally-valid element whose type is not in the standard vocabulary.
+	// Distinct from TYPE_RAW, which is literal content in a *named* format. The
+	// originating type name is preserved in attributes['source_type'].
+	static constexpr const char *TYPE_GENERIC = "generic";
+	static constexpr const char *TYPE_VALUE = "value";
 
 	// Inline element type names
 	static constexpr const char *INLINE_TEXT = "text";
@@ -99,6 +122,11 @@ public:
 	static constexpr const char *INLINE_SMALLCAPS = "smallcaps";
 	static constexpr const char *INLINE_SPAN = "span";
 	static constexpr const char *INLINE_RAW = "raw";
+	static constexpr const char *INLINE_MATH = "math";
+	static constexpr const char *INLINE_QUOTED = "quoted";
+	static constexpr const char *INLINE_CITE = "cite";
+	static constexpr const char *INLINE_NOTE = "note";
+	static constexpr const char *INLINE_GENERIC = "generic";
 
 	// Valid encoding values
 	static constexpr const char *ENCODING_TEXT = "text";
@@ -106,12 +134,17 @@ public:
 	static constexpr const char *ENCODING_YAML = "yaml";
 	static constexpr const char *ENCODING_HTML = "html";
 	static constexpr const char *ENCODING_XML = "xml";
+	static constexpr const char *ENCODING_MARKDOWN = "markdown";
+	static constexpr const char *ENCODING_LATEX = "latex";
 
 	// MIME type for frontmatter in HTML (RFC 9512 compliant)
 	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
 
 	// Attribute keys
 	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
+	static constexpr const char *ATTR_ROLE = "role";
+	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
+	static constexpr const char *ATTR_LIST_TYPE = "list_type";
 
 	// Helper to create an attributes MAP from a std::map
 	static Value CreateAttributesMap(const std::map<std::string, std::string> &attrs) {
