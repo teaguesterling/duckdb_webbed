@@ -348,13 +348,56 @@ It is a pure subset — nothing in webbed contradicts the canonical header, so t
 not divergence. Five of the fifteen (`caption`, `deflist`, `figure`, `generic`, `section`) are
 exactly what this design needs, so the header must be extended before any of it compiles.
 
+### Copy or submodule — open, and Teague's call
+
+`duck_block_utils@628dcd7` publishes `src/include/duck_block_vocabulary.hpp`, a link-free
+header intended for exactly this: sibling extensions taking the vocabulary as a submodule
+instead of copying it. It fixes a real trap in vendoring the old `block_types.hpp` —
+`DuckBlockType()`, `DuckBlockListType()` and `Register()` are *declared* there but *defined* in
+`block_types.cpp`, so a consumer taking only the header gets undefined symbols at link time for
+functions it never called.
+
+Verified as a consumer, not read: a probe compiled against the header and **linked with zero
+`duck_block_utils` objects**, printing `caption deflist figure generic section`. That is the
+test the sibling repo cannot run on itself — it always links `block_types.cpp`, so the breakage
+would only ever appear at webbed's link step.
+
+Two facts bearing on the decision, neither disqualifying:
+
+- webbed already vendors submodules (`duckdb`, `extension-ci-tools`), so this is not a new
+  mechanism for the build.
+- `628dcd7` exists **only on `feat-doc-query-pipeline`**, not on `duck_block_utils` `main`. A
+  submodule would pin webbed's build to an unmerged branch of a sibling repo. That is a
+  different and larger commitment than decision 1's "emit type names that track a branch" —
+  a wrong name is a data mismatch, a missing submodule commit is a broken build.
+
+This spec does not decide it. Either path satisfies the prerequisite; the copy path means
+extending the local mirror with the fifteen missing names, the submodule path means the mirror
+goes away. The conformance assertion below is required **either way**.
+
 **And a conformance assertion, so the next drift is loud.** A copied header does not error when
 it falls behind; code comparing `element_type` strings against a stale local copy silently
 disagrees instead of failing. The sibling exposes `db_block_types()`, `db_block_kinds()` and
 `db_block_spec_version()`. A test asserts webbed's constants against those when
 `duck_block_utils` is loadable, and skips cleanly when it is not — webbed must not gain a hard
 dependency on it. This is the same self-describe-and-assert shape the extension family has
-converged on, and it caught a real 10-vs-18 drift in the sibling's own docs.
+converged on, and it caught a real 10-vs-18 drift in the sibling's own docs. A submodule does
+not remove the need for it: a compile cannot catch a submodule nobody synced.
+
+**What this assertion does not catch, and neither does anything else yet.** `db_block_types()`
+reports the *names* in the vocabulary, not what a field *means*. `level` is the live example —
+one documented field, read three ways by three implementations:
+
+| | reading of `level` |
+|---|---|
+| the `duck_block` spec (authoritative) | structural nesting depth |
+| `duck_block_utils` renderer | ignored — level 1 and level 2 render identically |
+| webbed exporter (`:672-687`) | repeat count — `level=2` emits two nested tags |
+
+The spec is authoritative, so the repeat-count reading is the one that goes, which this design
+already requires for its own reasons. Recorded here because it is the more general problem:
+documentation did not prevent the divergence and name-level conformance testing cannot detect
+it. Semantic conformance is an open hole across the extension family.
 
 ## Testing
 
