@@ -1,0 +1,34 @@
+# name: test/sql/duck_block_vocabulary_conformance.test
+# description: webbed's mirror of the duck_block vocabulary must not drift from canonical
+# group: [webbed]
+
+require webbed
+
+# duck_block_utils is optional. When absent this file must skip, not fail --
+# webbed deliberately has no hard dependency on it.
+require duck_block_utils
+
+statement ok
+CREATE TEMP TABLE canonical AS SELECT unnest(db_block_types()) AS name;
+
+# Every block type webbed can EMIT must exist in the canonical vocabulary.
+# This is the direction that matters: emitting a name the family does not know
+# is a silent interop break.
+query I
+SELECT count(*) FROM (
+  SELECT unnest([
+    'heading','paragraph','code','blockquote','list','table','hr','metadata',
+    'image','raw','div','section','lineblock','deflist','figure','list_item',
+    'caption','generic'
+  ]) AS name
+) w
+WHERE w.name NOT IN (SELECT name FROM canonical);
+----
+0
+
+# The three kinds must agree.
+query I
+SELECT count(*) FROM (SELECT unnest(['block','inline','value']) AS k) x
+WHERE x.k NOT IN (SELECT unnest(db_block_kinds()));
+----
+0
