@@ -132,10 +132,26 @@ concept is required on either side.
 |------|--------------|-------|
 | `<dl>/<dt>/<dd>` | `deflist`, `encoding=json` | JSON like `list`/`table`; the shape has no flat text rendering |
 | `<blockquote>` | `blockquote` container, children at `level+1` | no duplicate |
-| `<figure>` | `figure` → content blocks → `caption` | content-before-caption, matching the sibling |
+| `<figure>` | `figure` → content blocks → `caption` | content **then** caption — see below |
 | `<figcaption>` | `caption` container, inlines recursed | `<b>` survives as a real inline instead of flattening into a `title` attribute |
 | `<details>` | `generic` + `source_type='details'` | |
-| `<summary>` | `caption` | same role as `figcaption` — the container's label |
+| `<summary>` | `caption`, emitted **before** the body | same role as `figcaption` — the container's label |
+
+#### Caption position is the emitter's choice
+
+`caption` marks *what a block is* — the label belonging to its container — not *where it sits*.
+Position is decided per container by what the source format means:
+
+- `<figure>`: content first, then caption. An image's caption belongs below it.
+- `<details>`: caption first, then content. A summary labels the body and browsers render it
+  above.
+
+The sibling's spec originally documented content-then-caption as though it were a property of
+`caption` itself; it was figure-specific emission guidance, corrected at `be5add0` after this
+spec quoted it back as settled. Their renderer was already position-agnostic — the caption
+scope runs from the marker to the next block at the caption's own level — and that is now
+asserted rather than assumed. Emitting a `<summary>` after its body would have rendered the
+label below the content it labels.
 | `<section> <article> <aside> <nav> <header> <footer> <main>` | `section` + `role=<tag>`, plus `id`/`class` | per decision 3; one type, variant in `role` |
 | unmapped **semantic** element | `generic` + `source_type=<tag>` | per decision 2 |
 | bare `<div>`/`<span>`, no `id`/`class` | — | transparent; walk through without emitting |
@@ -187,6 +203,18 @@ implementation, in `test/sql/duck_block_html.test`.
 - one test per finding, asserting the corrected block list
 - explicit **anti-duplication** assertions for findings 2 and 3 — `len(...)` equality, not just
   element_type checks, since the bug was a spurious extra block
+- ordering assertions for `<details>` and `<figure>`, since caption position differs between
+  them and a wrong order is invisible to a type-only check
+
+**Negative assertions must be adjacency-precise, not substring-loose.** A cautionary case from
+the sibling: the assertion `render(...) LIKE '%<dim>%BODY%'`, expected false, *matches on
+correct output* — the dim code occurs earlier in the string, before a different word. It reads
+as "BODY is not dimmed" but actually tests "a dim code exists somewhere and BODY appears
+somewhere after it", which is true of exactly the output it was meant to bless. It was caught
+only because it failed while the code was right; in the other direction it would have shipped
+as coverage. Any assertion here of the form "X is absent" must bind X to its own position —
+`len()` equality, exact list comparison, or adjacency — never a wildcard span that a correct
+document can satisfy by accident.
 - round-trip assertions (`html → blocks → html`) for every new type
 - a regression test that an unknown `element_type` no longer vanishes on export
 
