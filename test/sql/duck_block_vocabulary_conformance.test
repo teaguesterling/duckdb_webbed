@@ -1,6 +1,6 @@
 # name: test/sql/duck_block_vocabulary_conformance.test
 # description: webbed's mirror of the duck_block vocabulary must not drift from canonical
-# group: [webbed]
+# group: [sql]
 
 require webbed
 

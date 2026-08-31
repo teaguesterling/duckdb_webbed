@@ -103,7 +103,6 @@ public:
 	// Distinct from TYPE_RAW, which is literal content in a *named* format. The
 	// originating type name is preserved in attributes['source_type'].
 	static constexpr const char *TYPE_GENERIC = "generic";
-	static constexpr const char *TYPE_VALUE = "value";
 
 	// Inline element type names
 	static constexpr const char *INLINE_TEXT = "text";
