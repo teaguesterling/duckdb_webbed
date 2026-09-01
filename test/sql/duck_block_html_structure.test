@@ -4,6 +4,36 @@
 
 require webbed
 
+# Conformance macro, needed only for the <head> metadata assertions further
+# down. Copied verbatim (blank lines removed, matching
+# test/sql/duck_block_conformance.test's own note about why) from the
+# CREATE OR REPLACE MACRO statements in test/sql/duck_block_conformance.sql --
+# see that file for the full upstream commentary. Only the two macros this
+# file actually calls (duck_block_is_valid needs duck_block_declared_kinds)
+# are reproduced; duck_block_conformance.test carries the complete set.
+statement ok
+CREATE OR REPLACE MACRO duck_block_declared_kinds() AS (['block', 'inline', 'value']);
+CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
+    list_contains(duck_block_declared_kinds(), elem.kind)
+    AND elem.element_type IS NOT NULL
+    AND elem.encoding IN ('text', 'json', 'yaml', 'html', 'xml', 'latex', 'markdown')
+    AND elem.level IS NOT NULL
+    AND elem.level >= 1
+    AND elem.element_order IS NOT NULL
+    AND elem.element_order >= 0
+);
+CREATE OR REPLACE MACRO duck_blocks_are_valid(blocks) AS (
+    NOT EXISTS (SELECT 1 FROM unnest(blocks) AS t(e) WHERE NOT duck_block_is_valid(e))
+    AND (SELECT count(DISTINCT e.element_order) = count(*) FROM unnest(blocks) AS t(e))
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT e.level AS lvl,
+                   lag(e.level) OVER (ORDER BY i) AS prev
+            FROM unnest(blocks) WITH ORDINALITY AS t(e, i)
+        ) WHERE prev IS NOT NULL AND lvl > prev + 1
+    )
+);
+
 # --- Finding 1: <dl> produced zero blocks -----------------------------------
 query III
 SELECT b.element_type, b.content, b.level
@@ -374,3 +404,80 @@ FROM (SELECT unnest(html_to_duck_blocks('<section id="s">' || chr(10) || '<h1>H<
 section	1
 heading	2
 paragraph	2
+
+# =============================================================================
+# <head> metadata: <title> and <meta name=...content=...> are dropped today.
+# webbed's reader walks <body>; <head> is never visited at all.
+#
+# Target shape (spec 6.2's ordering contract, the same one frontmatter
+# metadata follows): kind='value', element_type='string', level 1, one
+# element per field, appended AFTER the document's blocks.
+# attributes['key'] carries the field name; `content` carries the value.
+# =============================================================================
+
+# title and meta-author land after the body's one block, as kind='value'
+# element_type='string' at level 1, each carrying its field name in
+# attributes['key'].
+query IIIII
+SELECT b.kind, b.element_type, b.content, b.level, b.attributes['key']
+FROM (SELECT unnest(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body</p></body></html>'
+)) AS b) x;
+----
+block	paragraph	body	1	NULL
+value	string	Doc Title	1	title
+value	string	Ann	1	author
+
+# Scoped tightly: transport metadata (charset, http-equiv) and presentation
+# metadata (property, e.g. OpenGraph) produce NOTHING -- not an error, not a
+# best-effort mapping, just skipped. So does <link>, which isn't even a
+# candidate (no `content` to carry). Only the body's one paragraph survives.
+query I
+SELECT len(html_to_duck_blocks(
+  '<html><head>' ||
+  '<meta charset="utf-8">' ||
+  '<meta http-equiv="X-UA-Compatible" content="IE=edge">' ||
+  '<meta property="og:title" content="Doc Title">' ||
+  '<link rel="stylesheet" href="style.css">' ||
+  '</head><body><p>body</p></body></html>'
+));
+----
+1
+
+# A document carrying BOTH <head> metadata and body content must still
+# conform to the spec's own validity macro (level >= 1 on every element,
+# non-decreasing-by-more-than-one level nesting, declared kind).
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+));
+----
+true
+
+# --- Round-trip: metadata + blocks together must not corrupt the body ------
+#
+# A sibling extension found that a document carrying BOTH metadata and blocks
+# exported with its body REPLACED BY ITS TITLE -- an inline-collection loop
+# that stopped at kind='block' but walked past a kind='value' element,
+# mis-attributing the value as more inline content of the preceding run.
+# webbed's ConsumeInlineChildren breaks on ANY kind != 'inline' (see its
+# `if (next_kind != DuckBlockTypes::KIND_INLINE) break;`), so it should be
+# immune -- but that is a claim to TEST, not assert. This is exactly the
+# shape that would expose the failure mode if it existed here: a paragraph
+# whose OWN inline children (mixed text + <b>) are immediately followed, in
+# the flat block run, by the head-metadata value elements.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body <b>bold</b> text</p></body></html>'
+));
+----
+<p>body <strong>bold</strong> text</p>
+
+# Same round trip, stated as the negative the bug would produce: the
+# rendered body must not contain the title text anywhere.
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body <b>bold</b> text</p></body></html>'
+)), 'Doc Title');
+----
+false
