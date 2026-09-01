@@ -1,6 +1,6 @@
 # name: test/sql/duck_block_export_containment.test
 # description: duck_blocks_to_html must represent nested containers
-# group: [webbed]
+# group: [sql]
 
 require webbed
 
@@ -67,6 +67,34 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <aside></aside>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'article'},'element_order':0}
+]);
+----
+<article></article>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'header'},'element_order':0}
+]);
+----
+<header></header>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'footer'},'element_order':0}
+]);
+----
+<footer></footer>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'main'},'element_order':0}
+]);
+----
+<main></main>
 
 # An unrecognised role falls back to div and is NEVER interpolated as a tag.
 # role derives from parsed HTML; unchecked interpolation would let a crafted
