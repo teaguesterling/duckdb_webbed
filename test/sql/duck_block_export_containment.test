@@ -178,13 +178,43 @@ SELECT duck_blocks_to_html([
 ----
 <details><p>D.</p></details>
 
-# A non-allowlisted source_type falls to the fallback rather than becoming a tag.
+# A non-allowlisted source_type falls to the fallback rather than becoming a
+# tag. The fallback carries source_type (data-source-type), parallel to the
+# inline-side fallback -- it used to drop it, losing the element's identity.
 query I
 SELECT duck_blocks_to_html([
   {'kind':'block','element_type':'generic','content':'x','level':1,'encoding':'text','attributes':MAP{'source_type':'script'},'element_order':0}
 ]);
 ----
-<div data-duck-block-type="generic">x</div>
+<div data-duck-block-type="generic" data-source-type="script">x</div>
+
+# The not-allowlisted-generic fallback also consumes inline children, so they
+# render inside the wrapper instead of spilling out as later top-level siblings.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'aside'},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'inside','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div data-duck-block-type="generic" data-source-type="aside">inside</div>
+
+# The terminal (truly-unmapped element_type) fallback is parallel too: it
+# carries source_type when present...
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':'kept','level':1,'encoding':'text','attributes':MAP{'source_type':'widget'},'element_order':0}
+]);
+----
+<div data-duck-block-type="no_such_type" data-source-type="widget">kept</div>
+
+# ...and consumes inline children so they render inside it too.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'inside','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div data-duck-block-type="no_such_type">inside</div>
 
 # div carries id and class.
 query I

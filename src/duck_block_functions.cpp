@@ -1342,9 +1342,20 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					    attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE) ? attrs[DuckBlockTypes::ATTR_SOURCE_TYPE] : "";
 					tag = GenericTagForSourceType(st);
 					if (tag.empty()) {
-						// Not allowlisted: fall through to the terminal fallback shape.
-						html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\">"
-						     << XMLUtils::HTMLEscape(content) << "</div>";
+						// Not allowlisted: fall through to the terminal fallback shape --
+						// deliberately parallel to it (and to the inline-side fallback in
+						// RenderInlineElementToHtml): source_type is carried when present,
+						// and any inline children are consumed so they render inside the
+						// wrapper instead of spilling out as later siblings. This is a
+						// leaf, not a new open container -- no push onto open_containers.
+						html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\"";
+						if (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)) {
+							html << " data-source-type=\"" << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE])
+							     << "\"";
+						}
+						html << ">" << XMLUtils::HTMLEscape(content);
+						ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+						html << "</div>";
 						continue;
 					}
 				}
@@ -1384,9 +1395,21 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// be noise, not recovery. duck_block_robustness.test pins malformed
 				// blocks (NULL/empty element_type) as rendering nothing -- do not
 				// "fix" this guard back to unconditional.
+				//
+				// Parallel to the not-allowlisted-generic fallback above and to the
+				// inline-side fallback in RenderInlineElementToHtml: source_type is
+				// carried when present, and inline children are consumed so they
+				// render inside the wrapper rather than spilling out as later
+				// siblings. Still a leaf -- no push onto open_containers.
 				if (!element_type.empty()) {
-					html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\">"
-					     << XMLUtils::HTMLEscape(content) << "</div>";
+					html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\"";
+					if (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)) {
+						html << " data-source-type=\"" << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE])
+						     << "\"";
+					}
+					html << ">" << XMLUtils::HTMLEscape(content);
+					ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+					html << "</div>";
 				}
 			}
 		}
