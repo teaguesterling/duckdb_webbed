@@ -22,6 +22,11 @@ now structural. That vein is exhausted.
 
 ## The answers that change webbed's design
 
+> **SUPERSEDED IN PART — see "Teague's rulings" at the end of this document.**
+> He has ruled `plain` narrower than the answer recorded here, and that conflict
+> is back with the vocabulary owner. Do not build against this section until it
+> resolves.
+
 **1. `plain` is a general RULE, not a list of positions.** A bare block-level text
 run is a `plain`, whatever contains it. `<li>`, `<td>`, `<dd>` were examples.
 Evidence it is a rule: panduck implemented it in their walker's bare-text branch
@@ -93,3 +98,50 @@ Take the header from a git object at a pinned sha. Never from a `/main/` raw
 GitHub URL: it is CDN-cached and eventually consistent, and gave two sibling
 sessions wrong answers today in opposite directions. A stale read has no symptom
 from the inside.
+
+
+## Teague's rulings — these govern
+
+**`plain` scope.** Verbatim: *"plain should be used when there's a need for a
+container. but not in leaf nodes"*.
+
+Read as: a leaf carries its own text in `content`; `plain` exists for text that
+has nowhere else to live. That is the v1 content rule — content populated iff a
+single text child — applied to when text needs a wrapper.
+
+Worked against what 5.0 shipped:
+
+| HTML | Teague's rule | shipped 5.0 |
+|---|---|---|
+| `<p>text</p>` | `paragraph(content='text')` | same |
+| `<section>Lead<h2>H</h2></section>` | `section > plain('Lead') + heading` | same |
+| `<li>text</li>` | `list_item(content='text')` | `list_item > plain('text')` |
+| `<td>cell</td>` | leaf, carries content | `plain` |
+
+They agree wherever a container holds text ALONGSIDE block siblings — that text
+cannot live in `content`, so it needs `plain`. They diverge only where a
+container has a SINGLE text child.
+
+The argument for his reading: under 5.0 as shipped, a container with one text
+child sometimes carries it in `content` (paragraph) and sometimes gets a `plain`
+child (list_item, td) — two rules where the content rule says one. Tight-vs-loose
+still survives without `plain`: `<li>a</li>` gives content-populated,
+`<li><p>a</p></li>` gives a paragraph child.
+
+The argument against, recorded so it is not lost: `plain` was minted for Pandoc's
+Plain-vs-Para, and a Pandoc reader sees two constructors where HTML sees one
+shape. Mapping Plain onto content-populated may lose something on the export side
+that an HTML-shaped example does not reveal.
+
+**Status: back with `duck_block_utils`,** at Teague's direction, rather than
+webbed picking a side. webbed has built none of this, so the cost of a change
+falls on them, which is a reason for them to push back if his reading breaks the
+Pandoc path. Note also that extending his one-sentence rule to `<td>` is MY
+inference, not his statement.
+
+**Classed divs — SETTLED, agrees with the vocabulary owner.** Verbatim: *"i don't
+think so. css classes are attributes we can track but `<section>` and
+`<div class=section>` are not the same."* So the HTML reader must NOT read
+`<div class="section">` as a `section`. A class is an attribute to preserve, not
+a signal to interpret. This matches the Pandoc-path-only answer and closes the
+question about a style hook being read as document structure.
