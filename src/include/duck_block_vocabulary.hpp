@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: 4c9d4cf (SPEC_VERSION 6.0)
+// Vendored at upstream commit: 010f36f (SPEC_VERSION 6.1)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -259,8 +259,21 @@ struct DuckBlockVocabulary {
 	//               that already read the container's `content` -- which the rule has
 	//               required since v1 -- needs no change.
 	//
+	//   6.0 -> 6.1  ADDITIVE. `duck_blocks_normalize(blocks)` applies 6.0's content
+	//               rule to a finished block vector, so a producer can emit the naive
+	//               shape and fix it up afterwards instead of implementing the rule.
+	//
+	//               Needed because the rule is SIBLING-DEPENDENT: whether a text run
+	//               becomes its container's content or stays a `plain` depends on what
+	//               FOLLOWS it, which a streaming reader does not know when it reaches
+	//               the run. Raised by the panduck session, whose EPUB and LaTeX
+	//               readers both emit as they walk; it is true of any streaming reader
+	//               of any format, so the answer should not be four private lookaheads
+	//               that drift. Nothing is removed or renamed -- a consumer on 6.0 is
+	//               unaffected.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "6.0";
+	static constexpr const char *SPEC_VERSION = "6.1";
 
 	// ========================================================================
 	// Block type names
