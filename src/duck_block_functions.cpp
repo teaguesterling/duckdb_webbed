@@ -26,17 +26,14 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
-static int CountBlockquoteAncestors(xmlNodePtr node);
-static std::string ListItemsToJson(xmlNodePtr node);
+static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
 static bool ContentContainsTags(const std::string &content);
-
-// XPath query for block-level elements
-static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 "
-                                 "or self::p or self::pre or self::blockquote or self::ul or self::ol "
-                                 "or self::table or self::hr or self::img or self::figure]";
+static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
+                                  std::set<size_t> &consumed_indices, std::stringstream &html,
+                                  int32_t parent_level);
 
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
@@ -87,6 +84,14 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 		return result;
 	} else if (element_type == DuckBlockTypes::INLINE_IMAGE) {
 		std::string src = attrs.count("src") ? attrs.at("src") : "";
+		// content wins over attributes['alt'] when both are present and differ
+		// (content is only ignored when it's empty). This is the OPPOSITE
+		// precedence from the block-side TYPE_IMAGE branch below, which prefers
+		// the attribute. That is a known inconsistency, not a decision -- see
+		// the longer comment on TYPE_IMAGE for why it exists and why it is
+		// invisible through webbed's own reader (which double-writes alt into
+		// both fields, so the two can never disagree on a round trip). Pinned
+		// by test/sql/duck_block_writer_contract.test using distinct values.
 		std::string alt = content.empty() && attrs.count("alt") ? attrs.at("alt") : content;
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
 		std::string result = "<img src=\"" + XMLUtils::HTMLEscape(src) + "\"";
@@ -129,8 +134,223 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
 		return content; // Pass through raw HTML
 	}
-	// Default: return escaped content
-	return XMLUtils::HTMLEscape(content);
+	// Deliberately parallel to the block-side terminal fallback (see the
+	// !element_type.empty() guard there): the fallback exists to preserve an
+	// unmapped element's IDENTITY, because a NAMED type silently degrading to
+	// text is unrecoverable on a round trip. An absent type name has no
+	// identity to preserve -- wrapping it would emit data-duck-block-type="",
+	// which conveys nothing while changing output for no reason. This is the
+	// same rule already settled for the block side; duck_block_robustness.test
+	// pins it in both directions, so keep the two guards from drifting apart.
+	if (element_type.empty()) {
+		return XMLUtils::HTMLEscape(content);
+	}
+	// source_type is carried when present.
+	return "<span data-duck-block-type=\"" + XMLUtils::HTMLEscape(element_type) + "\"" +
+	       (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)
+	            ? " data-source-type=\"" + XMLUtils::HTMLEscape(attrs.at(DuckBlockTypes::ATTR_SOURCE_TYPE)) + "\""
+	            : "") +
+	       ">" + XMLUtils::HTMLEscape(content) + "</span>";
+}
+
+// Guard against unbounded nesting from caller-constructed block/inline lists.
+// Elements deeper than this render flat rather than pushing, so output stays
+// balanced. Shared between the block-level container stack and the
+// inline-level one below -- same mechanism, same limit.
+static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
+
+// An inline container currently open on the render stack, mirroring
+// OpenContainer at the block level (defined further down with the rest of
+// the block scope-stack machinery).
+struct OpenInline {
+	std::string close_tag;
+	int32_t level;
+};
+
+// True for inline types that legitimately carry empty content with no
+// children -- a <br>, a bare space/softbreak, or a void <img>. These must
+// never be mistaken for containers just because their content is empty.
+static bool IsVoidInlineType(const std::string &element_type) {
+	return element_type == DuckBlockTypes::INLINE_LINEBREAK || element_type == "br" ||
+	       element_type == DuckBlockTypes::INLINE_SPACE || element_type == DuckBlockTypes::INLINE_SOFTBREAK ||
+	       element_type == DuckBlockTypes::INLINE_IMAGE;
+}
+
+// Render just the opening tag for an inline element being treated as a
+// container. Kept in sync with RenderInlineElementToHtml's tag choices for
+// the same element_type -- see RenderInlineCloseTag for the matching close.
+static std::string RenderInlineOpenTag(const std::string &element_type,
+                                       const std::map<std::string, std::string> &attrs) {
+	if (element_type.empty()) {
+		return "";
+	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
+		return "<strong>";
+	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
+		return "<em>";
+	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
+		return "<code>";
+	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
+		std::string href = attrs.count("href") ? attrs.at("href") : "";
+		std::string title = attrs.count("title") ? attrs.at("title") : "";
+		std::string result = "<a href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		if (!title.empty()) {
+			result += " title=\"" + XMLUtils::HTMLEscape(title) + "\"";
+		}
+		result += ">";
+		return result;
+	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
+		return "<del>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
+		return "<sup>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
+		return "<sub>";
+	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
+		return "<u>";
+	} else if (element_type == DuckBlockTypes::INLINE_SMALLCAPS) {
+		return "<span style=\"font-variant: small-caps\">";
+	} else if (element_type == DuckBlockTypes::INLINE_SPAN) {
+		std::string id = attrs.count("id") ? attrs.at("id") : "";
+		std::string cls = attrs.count("class") ? attrs.at("class") : "";
+		std::string result = "<span";
+		if (!id.empty()) {
+			result += " id=\"" + XMLUtils::HTMLEscape(id) + "\"";
+		}
+		if (!cls.empty()) {
+			result += " class=\"" + XMLUtils::HTMLEscape(cls) + "\"";
+		}
+		result += ">";
+		return result;
+	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
+		return ""; // Raw HTML has no wrapper tag of its own.
+	}
+	// Unmapped/unknown type, mirroring RenderInlineElementToHtml's terminal
+	// fallback so a container of an unrecognized type still preserves identity.
+	return "<span data-duck-block-type=\"" + XMLUtils::HTMLEscape(element_type) + "\"" +
+	       (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)
+	            ? " data-source-type=\"" + XMLUtils::HTMLEscape(attrs.at(DuckBlockTypes::ATTR_SOURCE_TYPE)) + "\""
+	            : "") +
+	       ">";
+}
+
+// The closing counterpart to RenderInlineOpenTag -- must close whatever tag
+// the open side opened for the same element_type.
+static std::string RenderInlineCloseTag(const std::string &element_type) {
+	if (element_type.empty() || element_type == DuckBlockTypes::INLINE_RAW) {
+		return "";
+	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
+		return "</strong>";
+	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
+		return "</em>";
+	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
+		return "</code>";
+	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
+		return "</a>";
+	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
+		return "</del>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
+		return "</sup>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
+		return "</sub>";
+	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
+		return "</u>";
+	}
+	// Smallcaps, span, and the unmapped fallback all open a bare <span ...>.
+	return "</span>";
+}
+
+// Render the contiguous run of kind='inline' blocks following `parent_idx` as that
+// block's inline children, marking each consumed so the main loop skips it.
+// Stops at the first non-inline block, or an inline that is not strictly
+// deeper than `parent_level`.
+//
+// Mirrors the block-level scope stack in DuckBlocksToHtmlFunction: an inline
+// is a CONTAINER (its children are separate, deeper-level entries in the run)
+// rather than a LEAF (its own content is everything it holds) purely
+// structurally -- empty content plus a next-in-run inline at a strictly
+// deeper level. That is the same convention html_to_duck_blocks documents for
+// blocks, applied one level down. A container's open tag is emitted now, its
+// close pushed onto a level-keyed stack, and closed when a later inline in
+// the run arrives at or above that level (or the run ends) -- exactly the
+// close-before-render / drain-at-end shape used for blocks.
+//
+// `parent_level` is the level of the block this run is being consumed for
+// (its own `cur_level` in the caller). An inline must be STRICTLY deeper than
+// that to belong to it -- an inline at the same level is a sibling, not a
+// child, of the block it follows (e.g. loose trailing text after a
+// paragraph inside a blockquote). Consuming it anyway mis-attributes it: it
+// would render as if it were part of the preceding block's content instead
+// of standing on its own. This must agree with the block-level scope
+// stack's own pop rule (`open_containers.back().level >= cur_level`), or
+// containment and inline consumption disagree about which blocks are whose.
+static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
+                                  std::set<size_t> &consumed_indices, std::stringstream &html,
+                                  int32_t parent_level) {
+	vector<OpenInline> open_inlines;
+
+	for (size_t next_idx = parent_idx + 1; next_idx < blocks_list.size(); next_idx++) {
+		auto &next_block = blocks_list[next_idx];
+		if (next_block.IsNull()) {
+			continue;
+		}
+		auto &next_struct = StructValue::GetChildren(next_block);
+		std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
+		Value next_level_val = next_struct[DuckBlockTypes::LEVEL_IDX];
+
+		if (next_kind != DuckBlockTypes::KIND_INLINE) {
+			break;
+		}
+		if (next_level_val.IsNull() || next_level_val.GetValue<int32_t>() <= parent_level) {
+			break;
+		}
+		int32_t next_level = next_level_val.GetValue<int32_t>();
+
+		// Close every inline container whose scope this element has left.
+		while (!open_inlines.empty() && open_inlines.back().level >= next_level) {
+			html << open_inlines.back().close_tag;
+			open_inlines.pop_back();
+		}
+
+		std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+		std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
+		auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
+
+		consumed_indices.insert(next_idx);
+
+		// Structural container test: empty content AND the next inline in the
+		// run (skipping NULLs) is strictly deeper -- never for void leaves.
+		bool is_container = false;
+		if (next_content.empty() && !IsVoidInlineType(next_type)) {
+			size_t peek_idx = next_idx + 1;
+			while (peek_idx < blocks_list.size() && blocks_list[peek_idx].IsNull()) {
+				peek_idx++;
+			}
+			if (peek_idx < blocks_list.size()) {
+				auto &peek_struct = StructValue::GetChildren(blocks_list[peek_idx]);
+				std::string peek_kind = GetVarcharField(peek_struct[DuckBlockTypes::KIND_IDX]);
+				Value peek_level_val = peek_struct[DuckBlockTypes::LEVEL_IDX];
+				if (peek_kind == DuckBlockTypes::KIND_INLINE && !peek_level_val.IsNull()) {
+					is_container = peek_level_val.GetValue<int32_t>() > next_level;
+				}
+			}
+		}
+
+		if (is_container) {
+			html << RenderInlineOpenTag(next_type, next_attrs);
+			if (static_cast<int32_t>(open_inlines.size()) < MAX_CONTAINER_DEPTH) {
+				open_inlines.push_back({RenderInlineCloseTag(next_type), next_level});
+			} else {
+				html << RenderInlineCloseTag(next_type);
+			}
+		} else {
+			html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
+		}
+	}
+
+	// Close anything still open at the end of the run, so output is always balanced.
+	while (!open_inlines.empty()) {
+		html << open_inlines.back().close_tag;
+		open_inlines.pop_back();
+	}
 }
 
 // True if `node` has at least one child that is an element (not just text),
@@ -171,20 +391,105 @@ static std::string InlineTypeForTag(const std::string &tag) {
 	return "";
 }
 
-// Extract inline elements from an HTML node's children as structured
-// kind='inline' duck_blocks. Nested formatting (e.g. <b>x <i>y</i></b>) is
-// preserved: a wrapper containing further elements is emitted with empty
-// content (=> NULL) followed by its children at level+1; a wrapper containing
-// only text becomes a leaf carrying that text. Returns the inline Values and
-// advances element_order.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
+// Subtrees that carry no document content and must not be walked at all.
+// HasElementChildren and the text accumulator already filter these; the block
+// walk must agree with them.
+static bool IsNonContentTag(const std::string &tag) {
+	return tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg";
+}
+
+// Containers that serialise their own contents to JSON. The walk does NOT
+// recurse into these: their text is already in the JSON, so emitting the
+// descendants as blocks too would duplicate it.
+//
+// <ul>/<ol> are NOT here: spec 6.x reads them as structural `list` +
+// `list_item` blocks (see the "List" branch in WalkBlockNode below), not as
+// an opaque JSON leaf. <dl> stays on the JSON-leaf path deliberately --
+// migrating it is a separate, not-yet-made call (see DefListToJson).
+static bool IsJsonLeafTag(const std::string &tag) {
+	return tag == "table" || tag == "dl";
+}
+
+// Semantic sectioning containers. One block type, variant in attributes['role'],
+// following the heading+heading_level and list+list_type convention rather than
+// minting one type per variant. Returns "" for non-sectioning tags.
+static std::string SectionRoleForTag(const std::string &tag) {
+	if (tag == "section" || tag == "article" || tag == "aside" || tag == "nav" || tag == "header" ||
+	    tag == "footer" || tag == "main") {
+		return tag;
+	}
+	return "";
+}
+
+// Tags the walk emits a block for. Used to decide whether a container holds
+// BLOCK children (recurse with WalkBlockNode) or only INLINE children (extract
+// with ExtractInlineElements).
+static bool IsBlockLevelTag(const std::string &tag) {
+	if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+		return true;
+	}
+	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
+	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
+	       tag == "ul" || tag == "ol" || tag == "li" ||
+	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
+}
+
+// True when `node` has at least one BLOCK-level element child, ignoring
+// non-content subtrees. Distinct from HasElementChildren, which cannot tell a
+// block child from an inline one -- a container holding only inlines must route
+// to ExtractInlineElements or its formatting is dropped entirely.
+static bool HasBlockChildren(xmlNodePtr node) {
+	for (xmlNodePtr c = node->children; c; c = c->next) {
+		if (c->type != XML_ELEMENT_NODE || !c->name) {
+			continue;
+		}
+		std::string tag(reinterpret_cast<const char *>(c->name));
+		if (IsNonContentTag(tag)) {
+			continue;
+		}
+		if (IsBlockLevelTag(tag)) {
+			return true;
+		}
+		// A transparent wrapper is walked through, so a block inside it counts
+		// as a block child of this node.
+		if (HasBlockChildren(c)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Attribute list for a single walked/extracted node. A vector, not a
+// std::map: a few callers (section's role/id/class, div's id/class, and now
+// inline img/a/span attributes) are tested on exact MAP display order, and
+// std::map would silently re-sort those keys alphabetically. This preserves
+// the insertion order below.
+using OrderedAttrs = std::vector<std::pair<std::string, std::string>>;
+
+// Forward declaration: ExtractInlineElementsRange recurses into a parent's
+// full child list (e.g. a nested formatting wrapper) via this convenience
+// form, defined just after it below.
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order);
+
+// Extract inline elements from an explicit sibling range [start, stop) as
+// structured kind='inline' duck_blocks. Nested formatting (e.g. <b>x
+// <i>y</i></b>) is preserved: a wrapper containing further elements is
+// emitted with empty content (=> NULL) followed by its children at
+// level+1; a wrapper containing only text becomes a leaf carrying that
+// text. Returns the inline Values and advances element_order.
+//
+// Range-based rather than "all children of a parent" so WalkBlockNode can
+// hand it a run of loose inline nodes (text plus inline elements) that sit
+// among block siblings, not gathered under a dedicated inline parent.
+static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level,
+                                                      int32_t &element_order) {
 	std::vector<Value> inlines;
 
-	for (xmlNodePtr child = parent_node->children; child; child = child->next) {
+	for (xmlNodePtr child = start; child && child != stop; child = child->next) {
 		if (child->type == XML_TEXT_NODE) {
 			std::string text = reinterpret_cast<const char *>(child->content);
 			if (!text.empty()) {
-				std::map<std::string, std::string> attrs;
+				OrderedAttrs attrs;
 				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, text,
 				                                               Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
@@ -201,19 +506,22 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 			continue;
 		}
 
-		std::map<std::string, std::string> attrs;
+		OrderedAttrs attrs;
 
 		// Void inline elements (no children to recurse).
 		if (tag == "img") {
 			std::string src = GetNodeAttribute(child, "src");
 			std::string alt = GetNodeAttribute(child, "alt");
 			std::string title = GetNodeAttribute(child, "title");
+			// Insertion order (src, alt, title) mirrors the block-side <img>
+			// handling in WalkBlockNode, so attribute order is a property of the
+			// reader rather than of whether the image sits at block or inline level.
 			if (!src.empty())
-				attrs["src"] = src;
+				attrs.emplace_back("src", src);
 			if (!alt.empty())
-				attrs["alt"] = alt;
+				attrs.emplace_back("alt", alt);
 			if (!title.empty())
-				attrs["title"] = title;
+				attrs.emplace_back("title", title);
 			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
 			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
 			                                               attrs, element_order++));
@@ -231,17 +539,17 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 			if (tag == "a") {
 				std::string href = GetNodeAttribute(child, "href");
 				if (!href.empty())
-					attrs["href"] = href;
+					attrs.emplace_back("href", href);
 				std::string title = GetNodeAttribute(child, "title");
 				if (!title.empty())
-					attrs["title"] = title;
+					attrs.emplace_back("title", title);
 			} else if (tag == "span") {
 				std::string id = GetNodeAttribute(child, "id");
 				std::string cls = GetNodeAttribute(child, "class");
 				if (!id.empty())
-					attrs["id"] = id;
+					attrs.emplace_back("id", id);
 				if (!cls.empty())
-					attrs["class"] = cls;
+					attrs.emplace_back("class", cls);
 			}
 			if (HasElementChildren(child)) {
 				// Container: empty content, then recurse children one level deeper.
@@ -275,6 +583,426 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 	return inlines;
 }
 
+// Convenience form of ExtractInlineElementsRange over ALL of a parent's
+// children -- the common case; WalkBlockNode is the only caller that needs
+// the explicit-range form above.
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
+	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order);
+}
+
+// True when `node` is the start of a loose-inline run inside a container's
+// child list: a text node carrying real (non-whitespace) content, or an
+// element ExtractInlineElements already knows how to render as inline
+// formatting (img/br, or a tag InlineTypeForTag recognizes -- b/strong,
+// i/em, code, del/s/strike, sup, sub, u, a, span). WalkBlockNode uses this
+// to batch such a run and hand it to ExtractInlineElementsRange instead of
+// silently dropping it, as it did before this fix.
+//
+// Deliberately narrow: an element that is neither block-forming NOR a
+// recognized inline tag (e.g. <form>, <button>, <label>, a custom element)
+// does NOT start a run, even with no block descendants of its own. Such an
+// element already falls to WalkBlockNode's transparent-recursion branch
+// (see IsLooseInlineStart's non-use there below), which only ever searched
+// for nested BLOCKS -- widening this to also harvest arbitrary elements'
+// bare text would newly leak content like a <button>'s label into the
+// document body.
+static bool IsLooseInlineStart(xmlNodePtr node) {
+	if (!node) {
+		return false;
+	}
+	if (node->type == XML_TEXT_NODE) {
+		std::string text = reinterpret_cast<const char *>(node->content);
+		// Whitespace-only text between block siblings is pretty-printing, not
+		// content -- e.g. the indentation between </h1> and <p> in a
+		// hand-formatted file. Only a node carrying real text starts a run;
+		// once a run has started, ExtractInlineElementsRange (which uses the
+		// same emptiness check ExtractInlineElements always has) still emits
+		// any whitespace-only text nodes that fall inside it verbatim.
+		return text.find_first_not_of(" \t\n\r\f\v") != std::string::npos;
+	}
+	if (node->type != XML_ELEMENT_NODE || !node->name) {
+		return false;
+	}
+	std::string tag(reinterpret_cast<const char *>(node->name));
+	// A tag WalkBlockNode itself routes to a dedicated BLOCK below (headings,
+	// <img> standing alone, etc.) keeps that meaning regardless of context --
+	// this only widens what counts as loose INLINE content, it must never
+	// steal a tag away from its existing block handling (<img> is both
+	// IsBlockLevelTag and, via "br"/"img", something ExtractInlineElements
+	// separately knows how to render inline -- WalkBlockNode's own dispatch
+	// wins).
+	if (IsBlockLevelTag(tag)) {
+		return false;
+	}
+	bool recognized_inline = tag == "img" || tag == "br" || !InlineTypeForTag(tag).empty();
+	if (!recognized_inline) {
+		return false;
+	}
+	// A <span> carrying id/class is routed to the div/span-container branch
+	// below instead -- it must reach that per-child dispatch, not be
+	// intercepted here as plain inline formatting.
+	if (tag == "span" && (!GetNodeAttribute(node, "id").empty() || !GetNodeAttribute(node, "class").empty())) {
+		return false;
+	}
+	// A malformed document nesting a block inside an inline wrapper still
+	// needs that block found by a transparent walk, not swallowed as text.
+	return !HasBlockChildren(node);
+}
+
+// Emit a container block, then recurse into its children one level deeper.
+static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                    vector<Value> &blocks, OrderedAttrs &attrs);
+static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                vector<Value> &blocks, OrderedAttrs &attrs);
+
+// Walk `node`'s children depth-first, emitting blocks in document order.
+//
+// Traversal is OWNED here rather than delegated to an XPath node-set. That is
+// the whole fix: a container decides whether to recurse, so a container and its
+// descendants can never match independently (which produced duplicates) and an
+// unmapped container can never be invisible while its descendants match alone
+// (which produced losses).
+//
+// `detect_loose_inline` gates the loose-inline-run handling below. It is on
+// for every ordinary call (a container's own children, or the top-level
+// walk) but OFF for the recursive call the "Default: recurse transparently"
+// branch makes into an unmapped element (<form>, <button>, a custom tag,
+// ...). That branch exists solely to search for nested BLOCKS inside a
+// wrapper with no document meaning of its own; it must not also start
+// harvesting the wrapper's bare text as if it were prose -- e.g. a
+// <button>Submit</button> inside a <form> must not leak "Submit" into the
+// body. detect_loose_inline threads through recursive WalkBlockNode calls
+// unchanged so it stays off for the whole unmapped subtree, not just its
+// immediate children.
+static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector<Value> &blocks,
+                          bool detect_loose_inline = true) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		// Loose inline content interleaved with block siblings -- bare text, or
+		// an inline-only element -- has nowhere else to live (no container of
+		// its own to carry it in `content`), so it is emitted in document
+		// order at this level as its own `plain` block rather than dropped.
+		// It stands as a sibling of the surrounding blocks (not a child of
+		// one), which is why it is emitted here at `level` rather than
+		// `level + 1`.
+		//
+		// A run that is exactly one bare text node carries that text directly
+		// in `plain`'s own `content` -- the same single-text-child rule
+		// EmitContainerOrLeaf applies to a real container. A run that mixes
+		// in inline formatting (or is itself a formatting element) cannot: it
+		// gets a `plain` container (NULL content) with its own inline
+		// children at level + 1, exactly parallel to how `paragraph` and
+		// `blockquote` hold mixed inline content.
+		if (detect_loose_inline && IsLooseInlineStart(child)) {
+			xmlNodePtr run_end = child;
+			while (IsLooseInlineStart(run_end)) {
+				run_end = run_end->next;
+			}
+			bool single_text_node = child->type == XML_TEXT_NODE && child->next == run_end;
+			if (single_text_node) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             OrderedAttrs(), order++));
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
+				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			}
+			if (!run_end) {
+				break;
+			}
+			// Land back on the node just before run_end so the for-loop's own
+			// `child = child->next` advances to run_end next iteration.
+			child = run_end->prev;
+			continue;
+		}
+
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
+		}
+		std::string tag(reinterpret_cast<const char *>(child->name));
+
+		// Non-content subtrees are not walked at all.
+		if (IsNonContentTag(tag)) {
+			continue;
+		}
+
+		OrderedAttrs attrs;
+
+		// --- Headings ---------------------------------------------------
+		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
+			std::string id = GetNodeAttribute(child, "id");
+			if (!id.empty()) {
+				attrs.emplace_back("id", id);
+			}
+			if (HasElementChildren(child)) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				auto inlines = ExtractInlineElements(child, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             attrs, order++));
+			}
+			continue;
+		}
+
+		// --- Paragraph ---------------------------------------------------
+		if (tag == "p") {
+			if (HasElementChildren(child)) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				auto inlines = ExtractInlineElements(child, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             attrs, order++));
+			}
+			continue;
+		}
+
+		// --- Code --------------------------------------------------------
+		if (tag == "pre") {
+			for (xmlNodePtr c = child->children; c; c = c->next) {
+				if (c->type == XML_ELEMENT_NODE && xmlStrcmp(c->name, BAD_CAST "code") == 0) {
+					std::string cls = GetNodeAttribute(c, "class");
+					std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
+					std::smatch match;
+					if (std::regex_search(cls, match, lang_regex)) {
+						attrs.emplace_back("language", match[1].str());
+					}
+					break;
+				}
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_CODE, GetNodeTextContent(child),
+			                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
+			                                             order++));
+			continue;
+		}
+
+		// --- Blockquote: container when it holds blocks, leaf otherwise ---
+		if (tag == "blockquote") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_BLOCKQUOTE, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- JSON-encoded leaves: NOT recursed ---------------------------
+		// <dl> stays here deliberately -- LEAVE `<dl>` ALONE, per Teague's
+		// explicit call: one behaviour change (lists) at a time. `deflist` is
+		// still declared in spec 6.2; do not migrate it here.
+		if (IsJsonLeafTag(tag)) {
+			std::string content;
+			std::string block_type;
+			if (tag == "table") {
+				block_type = DuckBlockTypes::TYPE_TABLE;
+				content = TableToJson(child);
+			} else {
+				block_type = DuckBlockTypes::TYPE_DEFLIST;
+				content = DefListToJson(child);
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(block_type, content, Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
+			continue;
+		}
+
+		// --- List: structural `list` + `list_item`, not a JSON leaf --------
+		// spec 6.2 (see the 3.0 -> 4.0 changelog entry) makes list_type
+		// canonical; attributes['ordered'] is emitted too, as the legacy alias
+		// for consumers that predate list_type. <ol start="N"> carries that
+		// start in attributes['start'] -- omitted entirely when the source
+		// does not say, never defaulted.
+		//
+		// The list itself is always a container (never the single-text-child
+		// leaf case): its children are list_items, which are block-level, so
+		// EmitContainerAndRecurse is correct unconditionally here -- there is
+		// no "list holds bare text" shape to collapse into `content`.
+		if (tag == "ul" || tag == "ol") {
+			bool is_ordered = (tag == "ol");
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_LIST_TYPE),
+			                   is_ordered ? std::string(DuckBlockTypes::LIST_TYPE_ORDERED)
+			                              : std::string(DuckBlockTypes::LIST_TYPE_BULLET));
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ORDERED_LEGACY), is_ordered ? "true" : "false");
+			if (is_ordered) {
+				std::string start = GetNodeAttribute(child, "start");
+				if (!start.empty()) {
+					attrs.emplace_back("start", start);
+				}
+			}
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- List item: same content rule as every other container ---------
+		// A lone text child carries it in `content` (Pandoc's tight Plain);
+		// block children (e.g. a <p>, or a nested <ul>) are owned at level+1
+		// (Pandoc's loose Para, or a nested list). Reuses EmitContainerOrLeaf
+		// rather than writing a fourth copy of that decision.
+		if (tag == "li") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Horizontal rule ---------------------------------------------
+		if (tag == "hr") {
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HR, "", Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			continue;
+		}
+
+		// --- Image --------------------------------------------------------
+		if (tag == "img") {
+			std::string src = GetNodeAttribute(child, "src");
+			std::string alt = GetNodeAttribute(child, "alt");
+			std::string title = GetNodeAttribute(child, "title");
+			attrs.emplace_back("src", src);
+			std::string content;
+			if (!alt.empty()) {
+				attrs.emplace_back("alt", alt);
+				content = alt;
+			}
+			if (!title.empty()) {
+				attrs.emplace_back("title", title);
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_IMAGE, content, Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			continue;
+		}
+
+		// --- Figure and its caption ---------------------------------------
+		if (tag == "figure") {
+			// EmitContainerOrLeaf, not EmitContainerAndRecurse: a figure whose
+			// only child is a lone text run (e.g. <figure>Some text</figure>)
+			// must carry it in the figure's own `content` (single-text-child
+			// rule), same as section/div/blockquote. A figure holding an <img>
+			// still takes the container path because img is block-level, so
+			// HasBlockChildren is true and EmitContainerOrLeaf recurses exactly
+			// as EmitContainerAndRecurse always did.
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs);
+			continue;
+		}
+		if (tag == "figcaption") {
+			// An empty caption (no text, no element children) emits nothing: a
+			// consumer is entitled to assume a caption block means a caption
+			// exists.
+			if (!HasElementChildren(child) && GetNodeTextContent(child).empty()) {
+				continue;
+			}
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <summary>: the container's label, same role as <figcaption> ---
+		// Maps to `caption` WITH attributes['role'] = 'summary'. <figcaption> is
+		// not a permitted child of <details>, so the role is what lets the
+		// exporter (CaptionTagForRole) emit <summary> instead.
+		if (tag == "summary") {
+			if (!HasElementChildren(child) && GetNodeTextContent(child).empty()) {
+				continue;
+			}
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), "summary");
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Semantic sectioning ------------------------------------------
+		std::string role = SectionRoleForTag(tag);
+		if (!role.empty()) {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), role);
+			std::string id = GetNodeAttribute(child, "id");
+			std::string cls = GetNodeAttribute(child, "class");
+			if (!id.empty()) {
+				attrs.emplace_back("id", id);
+			}
+			if (!cls.empty()) {
+				attrs.emplace_back("class", cls);
+			}
+			// EmitContainerOrLeaf, not EmitContainerAndRecurse: a sectioning
+			// element whose only child is a lone text run must carry it in its
+			// own `content` (single-text-child rule) rather than always
+			// recursing into WalkBlockNode. HasBlockChildren containers still
+			// take the same recurse path EmitContainerAndRecurse always did.
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <details>: semantic, but not a sectioning container -----------
+		if (tag == "details") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_SOURCE_TYPE), tag);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <div>/<span> carrying id or class ------------------------------
+		if (tag == "div" || tag == "span") {
+			std::string id = GetNodeAttribute(child, "id");
+			std::string cls = GetNodeAttribute(child, "class");
+			if (!id.empty() || !cls.empty()) {
+				if (!id.empty()) {
+					attrs.emplace_back("id", id);
+				}
+				if (!cls.empty()) {
+					attrs.emplace_back("class", cls);
+				}
+				// EmitContainerOrLeaf: a lone text child (e.g. <div id="d">Bare
+				// text</div>) carries it in the div's own `content` instead of
+				// unconditionally opening a container and recursing into a
+				// same-level `plain` sibling.
+				EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs);
+				continue;
+			}
+			// A bare <div>/<span> (no id, no class) stays transparent -- no
+			// block of its own -- but unlike the wildcard unmapped-wrapper
+			// fallback below, it is a known prose container: its loose text is
+			// real document content, not UI chrome (contrast <button> inside
+			// <form>, which must stay suppressed). detect_loose_inline stays ON
+			// so that content surfaces as a `plain` at the parent's level
+			// (WalkBlockNode's loose-inline-run handling above) instead of
+			// being silently dropped.
+			WalkBlockNode(child, level, order, blocks, true);
+			continue;
+		}
+
+		// --- Default: recurse transparently ---------------------------------
+		// No block, no level increment. This preserves today's behaviour for
+		// every unmapped container -- <form>, <fieldset>, <label>, custom
+		// elements -- which would otherwise regress to zero blocks. Loose-inline
+		// detection is OFF for this call: it exists only to find nested BLOCKS,
+		// not to harvest the wrapper's own bare text (see WalkBlockNode's
+		// detect_loose_inline doc comment).
+		WalkBlockNode(child, level, order, blocks, false);
+	}
+}
+
+static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                    vector<Value> &blocks, OrderedAttrs &attrs) {
+	blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
+	                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+	WalkBlockNode(node, level + 1, order, blocks);
+}
+
+// Emit a container three ways, depending on what it actually holds:
+//   block children  -> container, then recurse for blocks
+//   inline children -> container, then extract inlines (NOT WalkBlockNode, which
+//                      would transparently recurse past a <b> and emit nothing)
+//   text only       -> a leaf carrying its text
+static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                vector<Value> &blocks, OrderedAttrs &attrs) {
+	if (HasBlockChildren(node)) {
+		EmitContainerAndRecurse(node, block_type, level, order, blocks, attrs);
+	} else if (HasElementChildren(node)) {
+		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
+		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+		auto inlines = ExtractInlineElements(node, level + 1, order);
+		blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+	} else {
+		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, GetNodeTextContent(node), Value::INTEGER(level),
+		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+	}
+}
+
 vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) {
 	if (html_str.empty()) {
 		return vector<Value>();
@@ -302,7 +1030,57 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	vector<Value> blocks;
 	int32_t block_order = 0;
 
-	// First, extract frontmatter script blocks
+	// Extract frontmatter script blocks' text now, but do NOT emit them yet: spec
+	// 6.2 makes it a contract that metadata is appended AFTER a document's blocks
+	// (so blocks[1] points at the first content block), and this reader's own
+	// output had been violating that by emitting metadata at element_order 0,
+	// before the body walk below. Collecting into a temporary and appending after
+	// the walk keeps the extraction where it already was while fixing the order.
+	vector<std::string> frontmatter_contents;
+
+	// Collect <head> document metadata now, for the same reason: emitted after
+	// the body walk, per the same ordering contract. Scoped tightly to <title>
+	// and <meta name=...content=...> -- <meta charset>, <meta http-equiv>, and
+	// <meta property> are transport/presentation metadata, not document
+	// metadata, and <link> carries no `content` to map at all; all are
+	// silently skipped, not an error and not a best-effort mapping.
+	//
+	// Each field becomes kind='value', element_type='string' (VALUE_STRING),
+	// level 1, attributes['key'] = field name, content = the value -- a
+	// <title> is plain text, so 'string' carries it directly; there is no
+	// duck_block_utils-side value/inlines construct for webbed to produce.
+	vector<std::pair<std::string, std::string>> head_metadata_fields; // key, value; document order
+	xmlXPathObjectPtr title_obj = EvalXPathChecked(xpath_ctx, "//head/title");
+	if (title_obj && title_obj->nodesetval) {
+		for (int j = 0; j < title_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = title_obj->nodesetval->nodeTab[j];
+			if (!node) {
+				continue;
+			}
+			head_metadata_fields.emplace_back("title", GetNodeTextContent(node));
+		}
+	}
+	if (title_obj) {
+		xmlXPathFreeObject(title_obj);
+	}
+	xmlXPathObjectPtr meta_obj = EvalXPathChecked(xpath_ctx, "//head/meta[@name and @content]");
+	if (meta_obj && meta_obj->nodesetval) {
+		for (int j = 0; j < meta_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = meta_obj->nodesetval->nodeTab[j];
+			if (!node) {
+				continue;
+			}
+			std::string name = GetNodeAttribute(node, "name");
+			if (name.empty()) {
+				continue;
+			}
+			head_metadata_fields.emplace_back(name, GetNodeAttribute(node, "content"));
+		}
+	}
+	if (meta_obj) {
+		xmlXPathFreeObject(meta_obj);
+	}
+
 	xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
 	if (frontmatter_obj && frontmatter_obj->nodesetval) {
 		for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
@@ -319,185 +1097,65 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 			if (!content.empty() && content.back() == '\n') {
 				content.pop_back();
 			}
-			std::map<std::string, std::string> attrs;
-			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content,
-			                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+			frontmatter_contents.push_back(std::move(content));
 		}
 	}
 	if (frontmatter_obj) {
 		xmlXPathFreeObject(frontmatter_obj);
 	}
 
-	// Execute XPath query for block-level elements
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xpath_ctx, BLOCK_XPATH);
-
-	if (xpath_obj && xpath_obj->nodesetval) {
-		for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
-			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[j];
-			if (!node || !node->name) {
-				continue;
-			}
-
-			std::string tag(reinterpret_cast<const char *>(node->name));
-			std::string content;
-			// Top-level blocks are structural depth 1 (matches duckdb_markdown /
-			// duck_block_utils); blockquote overrides with its nesting depth below.
-			Value level_value = Value::INTEGER(1);
-			std::string block_type;
-			std::string encoding = DuckBlockTypes::ENCODING_TEXT;
-			std::map<std::string, std::string> attrs;
-
-			// Heading: h1-h6
-			if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
-				block_type = DuckBlockTypes::TYPE_HEADING;
-				// Store heading level in attributes, not in the level field
-				attrs[DuckBlockTypes::ATTR_HEADING_LEVEL] = std::string(1, tag[1]);
-				std::string id = GetNodeAttribute(node, "id");
-				if (!id.empty()) {
-					attrs["id"] = id;
-				}
-				// Check for inline formatting elements
-				if (HasElementChildren(node)) {
-					// Extract structured inline elements instead of storing raw HTML
-					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(1),
-					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-					// Extract inline children at level 2 (parent block is level 1)
-					auto inline_elements = ExtractInlineElements(node, 2, block_order);
-					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-					continue; // Skip default block creation
-				} else {
-					content = GetNodeTextContent(node);
-				}
-			}
-			// Paragraph
-			else if (tag == "p") {
-				block_type = DuckBlockTypes::TYPE_PARAGRAPH;
-				// Check for inline formatting elements
-				if (HasElementChildren(node)) {
-					// Extract structured inline elements instead of storing raw HTML
-					// Create paragraph block with empty content
-					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(1),
-					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-					// Extract inline children at level 2 (parent block is level 1)
-					auto inline_elements = ExtractInlineElements(node, 2, block_order);
-					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-					continue; // Skip default block creation
-				} else {
-					content = GetNodeTextContent(node);
-				}
-			}
-			// Code block (pre with optional code child)
-			else if (tag == "pre") {
-				block_type = DuckBlockTypes::TYPE_CODE;
-				content = GetNodeTextContent(node);
-
-				// Look for language class on <code> child
-				xmlNodePtr code_child = node->children;
-				while (code_child) {
-					if (code_child->type == XML_ELEMENT_NODE && xmlStrcmp(code_child->name, BAD_CAST "code") == 0) {
-						std::string cls = GetNodeAttribute(code_child, "class");
-						// Extract language from "language-xxx" or "lang-xxx"
-						std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
-						std::smatch match;
-						if (std::regex_search(cls, match, lang_regex)) {
-							attrs["language"] = match[1].str();
-						}
-						break;
-					}
-					code_child = code_child->next;
-				}
-			}
-			// Blockquote
-			else if (tag == "blockquote") {
-				block_type = DuckBlockTypes::TYPE_BLOCKQUOTE;
-				int depth = CountBlockquoteAncestors(node) + 1;
-				level_value = Value::INTEGER(depth);
-				content = GetNodeTextContent(node);
-			}
-			// Unordered list
-			else if (tag == "ul") {
-				block_type = DuckBlockTypes::TYPE_LIST;
-				content = ListItemsToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-				attrs["ordered"] = "false";
-			}
-			// Ordered list
-			else if (tag == "ol") {
-				block_type = DuckBlockTypes::TYPE_LIST;
-				content = ListItemsToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-				attrs["ordered"] = "true";
-			}
-			// Table
-			else if (tag == "table") {
-				block_type = DuckBlockTypes::TYPE_TABLE;
-				content = TableToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-			}
-			// Horizontal rule
-			else if (tag == "hr") {
-				block_type = DuckBlockTypes::TYPE_HR;
-				content = "";
-			}
-			// Image
-			else if (tag == "img") {
-				block_type = DuckBlockTypes::TYPE_IMAGE;
-				std::string src = GetNodeAttribute(node, "src");
-				std::string alt = GetNodeAttribute(node, "alt");
-				std::string title = GetNodeAttribute(node, "title");
-				attrs["src"] = src;
-				if (!alt.empty()) {
-					attrs["alt"] = alt;
-					content = alt;
-				}
-				if (!title.empty()) {
-					attrs["title"] = title;
-				}
-			}
-			// Figure (contains img)
-			else if (tag == "figure") {
-				block_type = DuckBlockTypes::TYPE_IMAGE;
-				// Look for img child
-				xmlNodePtr img_child = node->children;
-				while (img_child) {
-					if (img_child->type == XML_ELEMENT_NODE && xmlStrcmp(img_child->name, BAD_CAST "img") == 0) {
-						std::string src = GetNodeAttribute(img_child, "src");
-						std::string alt = GetNodeAttribute(img_child, "alt");
-						attrs["src"] = src;
-						if (!alt.empty()) {
-							attrs["alt"] = alt;
-							content = alt;
-						}
-						break;
-					}
-					img_child = img_child->next;
-				}
-				// Look for figcaption
-				xmlNodePtr caption_child = node->children;
-				while (caption_child) {
-					if (caption_child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(caption_child->name, BAD_CAST "figcaption") == 0) {
-						std::string caption = GetNodeTextContent(caption_child);
-						if (!caption.empty()) {
-							attrs["title"] = caption;
-						}
-						break;
-					}
-					caption_child = caption_child->next;
-				}
-			} else {
-				// Skip unknown elements
-				continue;
-			}
-
-			blocks.push_back(
-			    DuckBlockTypes::CreateBlock(block_type, content, level_value, encoding, attrs, block_order++));
+	// Walk the document tree. The <body> is synthesised by libxml2's HTML parser
+	// even for bare fragments, so this reaches content in both cases.
+	xmlNodePtr root = xmlDocGetRootElement(doc);
+	xmlNodePtr body = nullptr;
+	for (xmlNodePtr n = root ? root->children : nullptr; n; n = n->next) {
+		if (n->type == XML_ELEMENT_NODE && n->name && xmlStrcmp(n->name, BAD_CAST "body") == 0) {
+			body = n;
+			break;
 		}
 	}
-
-	if (xpath_obj) {
-		xmlXPathFreeObject(xpath_obj);
+	if (body) {
+		WalkBlockNode(body, 1, block_order, blocks);
+	} else if (root) {
+		WalkBlockNode(root, 1, block_order, blocks);
 	}
+
+	// Now emit the metadata, AFTER the document's blocks, continuing
+	// element_order from wherever the walk above left off.
+	//
+	// head_metadata_fields BEFORE frontmatter_contents: <head> physically
+	// precedes <body> (where a frontmatter <script> lives) in the source
+	// document, so this keeps the metadata's own emission order matching the
+	// source's -- an arbitrary choice between two orderings the ordering
+	// contract does not itself distinguish (both are "after the blocks"),
+	// made for that reason rather than left to whichever loop happened to run
+	// first.
+	for (auto &field : head_metadata_fields) {
+		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_KEY] = field.first;
+		child_list_t<Value> struct_values;
+		struct_values.push_back(make_pair("kind", Value(DuckBlockTypes::KIND_VALUE)));
+		struct_values.push_back(make_pair("element_type", Value(DuckBlockTypes::VALUE_STRING)));
+		struct_values.push_back(make_pair(
+		    "content", field.second.empty() ? Value(LogicalType::VARCHAR) : Value(field.second)));
+		struct_values.push_back(make_pair("level", Value::INTEGER(1)));
+		struct_values.push_back(make_pair("encoding", Value(DuckBlockTypes::ENCODING_TEXT)));
+		struct_values.push_back(make_pair("attributes", DuckBlockTypes::CreateAttributesMap(attrs)));
+		struct_values.push_back(make_pair("element_order", Value(block_order++)));
+		blocks.push_back(Value::STRUCT(std::move(struct_values)));
+	}
+
+	for (auto &content : frontmatter_contents) {
+		// This metadata block is a <script type="application/vnd.frontmatter+yaml">
+		// element, which by definition sits in a document that also has body
+		// content -- so it is ROLE_FRONTMATTER, not ROLE_DOCUMENT (the blob IS the
+		// whole document).
+		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_FRONTMATTER;
+		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
+		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+	}
+
 	xmlXPathFreeContext(xpath_ctx);
 	xmlFreeDoc(doc);
 
@@ -522,6 +1180,57 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 	}
 }
 
+// A container currently open on the render stack.
+struct OpenContainer {
+	std::string close_tag;
+	int32_t level;
+};
+
+// Structural depth, normalised. NULL or anything < 1 is treated as top level,
+// matching the previous blockquote behaviour for NULL levels.
+static int32_t EffectiveLevel(const Value &level_val) {
+	if (level_val.IsNull()) {
+		return 1;
+	}
+	int32_t lvl = level_val.GetValue<int32_t>();
+	return lvl < 1 ? 1 : lvl;
+}
+
+// MAX_CONTAINER_DEPTH is defined earlier (with the inline scope-stack
+// machinery, which it is shared with) and reused here for the block stack.
+
+// Map a section block's role to an output tag. The role comes from parsed HTML,
+// so it is validated against a fixed enum rather than interpolated: an unchecked
+// value would let a crafted document emit a tag it never contained.
+static std::string SectionTagForRole(const std::string &role) {
+	if (role == "section" || role == "article" || role == "aside" || role == "nav" || role == "header" ||
+	    role == "footer" || role == "main") {
+		return role;
+	}
+	return "div";
+}
+
+// A caption's role selects its tag. Validated against a fixed enum for the same
+// reason as SectionTagForRole: role derives from parsed HTML, and interpolating
+// it unchecked into a tag name would let a crafted document emit a tag it never
+// contained. <figcaption> stays the default, so a caption with no role is
+// unchanged.
+static std::string CaptionTagForRole(const std::string &role) {
+	if (role == "summary") {
+		return "summary";
+	}
+	return "figcaption";
+}
+
+// Allowlist for generic's source_type, same discipline as SectionTagForRole.
+// Returns "" when the type is not allowlisted, meaning "use the terminal fallback".
+static std::string GenericTagForSourceType(const std::string &source_type) {
+	if (source_type == "details") {
+		return source_type;
+	}
+	return "";
+}
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -537,6 +1246,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 		std::stringstream html;
 		auto &blocks_list = ListValue::GetChildren(blocks_value);
 		std::set<size_t> consumed_indices; // Track consumed inline children
+		vector<OpenContainer> open_containers;
 
 		// Use index-based iteration for consuming look-ahead
 		for (size_t block_idx = 0; block_idx < blocks_list.size(); block_idx++) {
@@ -563,10 +1273,54 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			// Extract attributes from MAP using helper
 			std::map<std::string, std::string> attrs = ExtractAttributes(attrs_val);
 
+			// Close every container whose scope this block has left.
+			int32_t cur_level = EffectiveLevel(level_val);
+			while (!open_containers.empty() && open_containers.back().level >= cur_level) {
+				html << open_containers.back().close_tag;
+				open_containers.pop_back();
+			}
+
 			// Check if this is an inline element
 			if (kind == DuckBlockTypes::KIND_INLINE) {
 				// Render standalone inline element
 				html << RenderInlineElementToHtml(element_type, content, attrs);
+				continue;
+			}
+
+			// Allowlist, not a blocklist: only 'block', 'inline', or an empty/NULL
+			// kind render as body content (an existing robustness test pins NULL
+			// kind as a block). Anything else -- e.g. kind='value' -- is document
+			// metadata, not body prose. Its children follow at level+1 carrying
+			// ordinary kinds (an 'inlines' value's children are kind='inline', a
+			// 'blocks' value's children are kind='block'), so skipping the marker
+			// alone is not enough: skip its entire level scope -- the marker plus
+			// every following block whose level is strictly greater than the
+			// marker's, stopping at the first block back at or above the marker's
+			// own level.
+			//
+			// A non-body marker never OPENS a container: this skip is reached
+			// only for kind != 'block', and the block branches below -- the only
+			// place anything is pushed onto open_containers -- are never reached
+			// for it. But it DOES participate in CLOSING one: the close loop
+			// above runs for every block regardless of kind, using cur_level
+			// computed from THIS marker's own level, before this check is ever
+			// reached. So a marker whose level places it as a sibling of an open
+			// container closes that container, same as an ordinary block would --
+			// see the two discriminating tests below.
+			if (!kind.empty() && kind != DuckBlockTypes::KIND_BLOCK) {
+				for (size_t scope_idx = block_idx + 1; scope_idx < blocks_list.size(); scope_idx++) {
+					auto &scope_block = blocks_list[scope_idx];
+					if (scope_block.IsNull()) {
+						consumed_indices.insert(scope_idx);
+						continue;
+					}
+					auto &scope_struct = StructValue::GetChildren(scope_block);
+					int32_t scope_level = EffectiveLevel(scope_struct[DuckBlockTypes::LEVEL_IDX]);
+					if (scope_level <= cur_level) {
+						break;
+					}
+					consumed_indices.insert(scope_idx);
+				}
 				continue;
 			}
 
@@ -599,32 +1353,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				// Consuming look-ahead: collect and render inline children at level >= 1
-				for (size_t next_idx = block_idx + 1; next_idx < blocks_list.size(); next_idx++) {
-					auto &next_block = blocks_list[next_idx];
-					if (next_block.IsNull()) {
-						continue;
-					}
-					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
-					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
-
-					// Stop if we hit a block or an element back at base level (NULL)
-					if (next_kind != DuckBlockTypes::KIND_INLINE) {
-						break;
-					}
-					if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
-						break;
-					}
-
-					// Render this inline child
-					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
-					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
-					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
-					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
-
-					consumed_indices.insert(next_idx);
-				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 
 				html << "</h" << lvl << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_PARAGRAPH) {
@@ -639,32 +1368,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				// Consuming look-ahead: collect and render inline children at level >= 1
-				for (size_t next_idx = block_idx + 1; next_idx < blocks_list.size(); next_idx++) {
-					auto &next_block = blocks_list[next_idx];
-					if (next_block.IsNull()) {
-						continue;
-					}
-					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
-					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
-
-					// Stop if we hit a block or an element back at base level (NULL)
-					if (next_kind != DuckBlockTypes::KIND_INLINE) {
-						break;
-					}
-					if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
-						break;
-					}
-
-					// Render this inline child
-					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
-					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
-					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
-					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
-
-					consumed_indices.insert(next_idx);
-				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 
 				html << "</p>";
 			} else if (element_type == DuckBlockTypes::TYPE_CODE) {
@@ -674,24 +1378,37 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 				html << "<pre><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
-				int depth = level_val.IsNull() ? 1 : level_val.GetValue<int32_t>();
-				if (depth < 1)
-					depth = 1;
-				for (int d = 0; d < depth; d++) {
-					html << "<blockquote>";
+				html << "<blockquote>";
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
 				}
-				if (encoding == DuckBlockTypes::ENCODING_HTML) {
-					html << content;
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</blockquote>", cur_level});
 				} else {
-					html << XMLUtils::HTMLEscape(content);
-				}
-				for (int d = 0; d < depth; d++) {
 					html << "</blockquote>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_LIST) {
-				bool ordered = attrs.count("ordered") && attrs["ordered"] == "true";
+				// list_type is canonical (spec 6.x, see the 3.0 -> 4.0 changelog
+				// entry in duck_block_vocabulary.hpp); attributes['ordered'] is a
+				// legacy alias kept for producers that predate list_type. When both
+				// are present and disagree, list_type wins.
+				bool ordered;
+				if (attrs.count(DuckBlockTypes::ATTR_LIST_TYPE)) {
+					ordered = attrs[DuckBlockTypes::ATTR_LIST_TYPE] == "ordered";
+				} else {
+					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
+				}
 				std::string tag = ordered ? "ol" : "ul";
-				html << "<" << tag << ">";
+				html << "<" << tag;
+				if (ordered && attrs.count("start")) {
+					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
+				}
+				html << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
@@ -711,7 +1428,42 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						yyjson_doc_free(doc);
 					}
 				}
-				html << "</" << tag << ">";
+				// A structural list (NULL/empty content) leaves its close tag open:
+				// its list_item children are separate, deeper-level entries in the
+				// run, rendered by the loop's own list_item branch below, exactly
+				// like blockquote/section/div. The JSON-items shape above already
+				// wrote its own <li>s inline and has no such children, so deferring
+				// the close costs it nothing -- it is simply closed at the next
+				// sibling or at the end-of-run drain instead of immediately, with
+				// identical output either way.
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_LIST_ITEM) {
+				// A container by the established pattern (blockquote/section/div):
+				// open tag, own content if non-empty, ConsumeInlineChildren for any
+				// inline run directly beside it, then push the close tag. One
+				// branch keyed on whether content is empty -- not two cases keyed on
+				// which producer made it: a tight item carries its text directly in
+				// content (Pandoc's Plain), a loose item carries NULL content and a
+				// `paragraph` block child (Pandoc's Para) that the outer loop renders
+				// on its own next iteration, inside this list_item's still-open scope.
+				html << "<li>";
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</li>", cur_level});
+				} else {
+					html << "</li>";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					html << TableJsonToHtml(content);
@@ -723,6 +1475,29 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_IMAGE) {
 				std::string src = attrs.count("src") ? attrs["src"] : "";
 				std::string alt = attrs.count("alt") ? attrs["alt"] : "";
+				// The duck_block content rule allows a single text child to be
+				// carried in `content` rather than duplicated into an attribute,
+				// so a conforming producer may put alt text ONLY in `content`.
+				// Fall back to it when attributes['alt'] is absent or empty, but
+				// prefer the attribute when both are present -- that is today's
+				// behaviour and must not change. webbed's OWN reader happens to
+				// write alt into both content and attributes['alt'], which is why
+				// a round trip through webbed's reader can never surface this: two
+				// copies written by the same party can't disagree with each other.
+				// Whether the reader should stop double-writing is a duck_block
+				// schema question that belongs to duck_block_utils, not here.
+				//
+				// NOTE: INLINE_IMAGE's branch in RenderInlineElementToHtml (above,
+				// near the top of this file) implements the OPPOSITE precedence --
+				// content wins there. That is a known inconsistency between the
+				// block and inline paths, not a decision either one made
+				// deliberately; both are pinned as-is in
+				// test/sql/duck_block_writer_contract.test using distinct
+				// content/attribute values (the only way to make the divergence
+				// observable at all).
+				if (alt.empty() && !content.empty()) {
+					alt = content;
+				}
 				std::string title = attrs.count("title") ? attrs["title"] : "";
 				html << "<img src=\"" << XMLUtils::HTMLEscape(src) << "\"";
 				if (!alt.empty()) {
@@ -735,12 +1510,182 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_RAW) {
 				// Pass through raw content
 				html << content;
+			} else if (element_type == DuckBlockTypes::TYPE_SECTION) {
+				std::string role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string tag = SectionTagForRole(role);
+				html << "<" << tag;
+				if (attrs.count("id")) {
+					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
+				}
+				if (attrs.count("class")) {
+					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
+				}
+				html << ">";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_FIGURE) {
+				html << "<figure>";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</figure>", cur_level});
+				} else {
+					html << "</figure>";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
+				std::string caption_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string caption_tag = CaptionTagForRole(caption_role);
+				html << "<" << caption_tag << ">";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + caption_tag + ">", cur_level});
+				} else {
+					html << "</" << caption_tag << ">";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
+				html << "<dl>";
+				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
+					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
+					if (doc) {
+						yyjson_val *root = yyjson_doc_get_root(doc);
+						if (yyjson_is_arr(root)) {
+							size_t idx, max;
+							yyjson_val *entry;
+							yyjson_arr_foreach(root, idx, max, entry) {
+								if (!yyjson_is_obj(entry)) {
+									continue;
+								}
+								yyjson_val *term = yyjson_obj_get(entry, "term");
+								if (term && yyjson_is_str(term)) {
+									html << "<dt>" << XMLUtils::HTMLEscape(yyjson_get_str(term)) << "</dt>";
+								}
+								yyjson_val *defs = yyjson_obj_get(entry, "definitions");
+								if (defs && yyjson_is_arr(defs)) {
+									size_t d_idx, d_max;
+									yyjson_val *d;
+									yyjson_arr_foreach(defs, d_idx, d_max, d) {
+										if (yyjson_is_str(d)) {
+											html << "<dd>" << XMLUtils::HTMLEscape(yyjson_get_str(d)) << "</dd>";
+										}
+									}
+								}
+							}
+						}
+						yyjson_doc_free(doc);
+					}
+				}
+				html << "</dl>";
+			} else if (element_type == DuckBlockTypes::TYPE_DIV || element_type == DuckBlockTypes::TYPE_GENERIC) {
+				std::string tag = "div";
+				if (element_type == DuckBlockTypes::TYPE_GENERIC) {
+					std::string st =
+					    attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE) ? attrs[DuckBlockTypes::ATTR_SOURCE_TYPE] : "";
+					tag = GenericTagForSourceType(st);
+					if (tag.empty()) {
+						// Not allowlisted: fall through to the terminal fallback shape --
+						// deliberately parallel to it (and to the inline-side fallback in
+						// RenderInlineElementToHtml): source_type is carried when present,
+						// and any inline children are consumed so they render inside the
+						// wrapper instead of spilling out as later siblings. This is a
+						// leaf, not a new open container -- no push onto open_containers.
+						html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\"";
+						if (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)) {
+							html << " data-source-type=\"" << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE])
+							     << "\"";
+						}
+						html << ">" << XMLUtils::HTMLEscape(content);
+						ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+						html << "</div>";
+						continue;
+					}
+				}
+				html << "<" << tag;
+				if (attrs.count("id")) {
+					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
+				}
+				if (attrs.count("class")) {
+					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
+				}
+				html << ">";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
 				html << content; // No escaping - preserve YAML exactly
 				html << "\n</script>";
+			} else if (element_type == DuckBlockTypes::TYPE_PLAIN) {
+				// plain is bare escaped text with NO wrapper element -- that is what
+				// lets a lone text run that has nowhere else to live (beside a block
+				// sibling, or under a transparent wrapper) round-trip byte-exact back
+				// to the source text instead of gaining structure the source never
+				// had. Deliberately NOT <p>: a paragraph wrapper would assert
+				// paragraph semantics plain exists specifically to deny, and would
+				// break the round trip (see duck_block_html_structure.test).
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+			} else {
+				// Terminal fallback. Deliberately ugly: a fallback that renders
+				// cleanly is a fallback nobody fixes. Text is preserved and the
+				// unmapped type is named and greppable -- the opposite of the
+				// silent drop this replaces.
+				//
+				// Guarded on a NON-EMPTY element_type: the fallback exists to make
+				// an unmapped but *named* type visible (e.g. version skew between
+				// a producer and this renderer -- 'no_such_type' is real,
+				// recoverable information). An absent element_type carries no
+				// identity to make visible; emitting data-duck-block-type="" would
+				// be noise, not recovery. duck_block_robustness.test pins malformed
+				// blocks (NULL/empty element_type) as rendering nothing -- do not
+				// "fix" this guard back to unconditional.
+				//
+				// Parallel to the not-allowlisted-generic fallback above and to the
+				// inline-side fallback in RenderInlineElementToHtml: source_type is
+				// carried when present, and inline children are consumed so they
+				// render inside the wrapper rather than spilling out as later
+				// siblings. Still a leaf -- no push onto open_containers.
+				if (!element_type.empty()) {
+					html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\"";
+					if (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)) {
+						html << " data-source-type=\"" << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE])
+						     << "\"";
+					}
+					html << ">" << XMLUtils::HTMLEscape(content);
+					ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+					html << "</div>";
+				}
 			}
+		}
+
+		// Close anything still open at end of list, so output is always balanced.
+		while (!open_containers.empty()) {
+			html << open_containers.back().close_tag;
+			open_containers.pop_back();
 		}
 
 		result.SetValue(i, Value(html.str()));
@@ -1275,18 +2220,6 @@ static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name) {
 	return result;
 }
 
-static int CountBlockquoteAncestors(xmlNodePtr node) {
-	int count = 0;
-	xmlNodePtr parent = node->parent;
-	while (parent) {
-		if (parent->type == XML_ELEMENT_NODE && parent->name && xmlStrcmp(parent->name, BAD_CAST "blockquote") == 0) {
-			count++;
-		}
-		parent = parent->parent;
-	}
-	return count;
-}
-
 static std::string RenderPandocInlinesToHtml(yyjson_val *inlines_val, int depth = 0) {
 	if (!inlines_val || depth > 100) {
 		return "";
@@ -1565,28 +2498,49 @@ static std::string TableJsonToHtml(const std::string &json) {
 	return html.str();
 }
 
-static std::string ListItemsToJson(xmlNodePtr node) {
+// Serialise <dl> to [{"term": "...", "definitions": ["...", ...]}].
+// Consecutive <dd>s attach to the most recent <dt>. A <dd> with no preceding
+// <dt> is attached to an entry with an empty term rather than dropped.
+static std::string DefListToJson(xmlNodePtr node) {
 	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
 	yyjson_mut_val *arr = yyjson_mut_arr(doc);
 	yyjson_mut_doc_set_root(doc, arr);
 
-	xmlNodePtr child = node->children;
-	while (child) {
-		if (child->type == XML_ELEMENT_NODE && child->name && xmlStrcmp(child->name, BAD_CAST "li") == 0) {
-			std::string item_text = GetNodeTextContent(child);
-			yyjson_mut_arr_add_strncpy(doc, arr, item_text.data(), item_text.size());
+	yyjson_mut_val *cur_entry = nullptr;
+	yyjson_mut_val *cur_defs = nullptr;
+
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
 		}
-		child = child->next;
+		std::string tag(reinterpret_cast<const char *>(child->name));
+		if (tag == "dt") {
+			cur_entry = yyjson_mut_obj(doc);
+			cur_defs = yyjson_mut_arr(doc);
+			std::string term = GetNodeTextContent(child);
+			yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", term.c_str());
+			yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
+			yyjson_mut_arr_add_val(arr, cur_entry);
+		} else if (tag == "dd") {
+			if (!cur_entry) {
+				cur_entry = yyjson_mut_obj(doc);
+				cur_defs = yyjson_mut_arr(doc);
+				yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", "");
+				yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
+				yyjson_mut_arr_add_val(arr, cur_entry);
+			}
+			std::string def = GetNodeTextContent(child);
+			yyjson_mut_arr_add_strcpy(doc, cur_defs, def.c_str());
+		}
 	}
 
-	size_t len = 0;
-	char *json = yyjson_mut_write(doc, 0, &len);
-	std::string res(json ? json : "[]", len);
+	char *json = yyjson_mut_write(doc, 0, nullptr);
+	std::string result = json ? std::string(json) : std::string("[]");
 	if (json) {
 		free(json);
 	}
 	yyjson_mut_doc_free(doc);
-	return res;
+	return result;
 }
 
 static std::string TableToJson(xmlNodePtr node) {

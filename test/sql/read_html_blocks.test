@@ -8,22 +8,32 @@ require webbed
 # Test 1: Basic read_html_blocks on simple HTML file
 # =============================================================================
 
+# simple.html's <head><title>Simple Page</title></head> is now captured
+# (see test/sql/duck_block_html_structure.test): a third row, kind='value'
+# element_type='string', appended after the two body blocks, per the same
+# "metadata after blocks" ordering contract frontmatter already follows.
+# Checked against the vendored conformance macro before moving this
+# expectation, the same way the two other consequential breaks on this
+# branch were -- see that macro's use in duck_block_html_structure.test.
 query III
 SELECT kind, element_type, content FROM read_html_blocks('test/html/simple.html') ORDER BY element_order;
 ----
 block	heading	Welcome
 block	paragraph	This is a test page.
+value	string	Simple Page
 
-# Test count of blocks in simple.html
+# Test count of blocks in simple.html -- 2 -> 3 for the same reason.
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html');
 ----
-2
+3
 
 # =============================================================================
 # Test 2: Attributes and level from simple.html
 # =============================================================================
 
+# The title's `string` row also has level 1 (the metadata-is-level-1
+# contract) and no heading_level attribute, same as paragraph.
 query IIII
 SELECT element_type, level, encoding, attributes['heading_level']
 FROM read_html_blocks('test/html/simple.html')
@@ -31,33 +41,53 @@ ORDER BY element_order;
 ----
 heading	1	text	1
 paragraph	1	text	NULL
+string	1	text	NULL
 
 # =============================================================================
 # Test 3: read_html_blocks on complex HTML file
 # =============================================================================
 
+# complex.html wraps its content in <nav>/<main>/<article>, which are now
+# preserved as `section` blocks with their role rather than flattened away.
+# Content blocks therefore sit one level deeper than before.
+#
+# The <nav>'s <ul> now reads as a structural `list` with `list_item` children
+# (spec-6.2 migration, Commit 3) rather than an opaque JSON leaf, so its two
+# <li>s -- each holding only a link, an inline -- surface as two additional
+# `list_item` rows here. Checked against duck_blocks_are_valid() and
+# duck_blocks_warnings() (both pass, zero warnings) on this exact fixture
+# before updating this expectation, not just re-baselined to output.
 query II
 SELECT kind, element_type FROM read_html_blocks('test/html/complex.html') WHERE kind = 'block';
 ----
 block	heading
+block	section
 block	list
+block	list_item
+block	list_item
+block	section
+block	section
 block	heading
 block	paragraph
 block	image
 block	table
 
-# Test structured inlines in complex.html paragraph
+# Test structured inlines in complex.html paragraph. Keyed on content
+# (element_type = 'paragraph') rather than an element_order window: a
+# position-indexed filter breaks on every structural change upstream of the
+# target row and asserts nothing about what actually matters.
 query IIII
 SELECT kind, element_type, content, level
 FROM read_html_blocks('test/html/complex.html')
-WHERE element_order >= 3 AND element_order <= 7
+WHERE element_type IN ('paragraph', 'bold', 'italic', 'text')
 ORDER BY element_order;
 ----
-block	paragraph	NULL	1
-inline	text	This is some content with 	2
-inline	bold	bold	2
-inline	text	 and 	2
-inline	italic	italic	2
+block	paragraph	NULL	3
+inline	text	This is some content with 	4
+inline	bold	bold	4
+inline	text	 and 	4
+inline	italic	italic	4
+inline	text	 text.	4
 
 # =============================================================================
 # Test 4: read_html_blocks with filename parameter
@@ -70,30 +100,38 @@ ORDER BY element_order;
 ----
 test/html/simple.html	block	heading	Welcome
 test/html/simple.html	block	paragraph	This is a test page.
+test/html/simple.html	value	string	Simple Page
 
-# Test filename aliases: file_path and include_filepath
+# Test filename aliases: file_path and include_filepath -- 2 -> 3, same title.
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html', file_path := true);
 ----
-2
+3
 
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html', include_filepath := true);
 ----
-2
+3
 
 # =============================================================================
 # Test 5: Multi-file reading (glob & list of files)
 # =============================================================================
 
+# 11 -> 14: +3 section blocks for <nav>/<main>/<article>, now preserved
+# instead of flattened away. 14 -> 15 and 2 -> 3: both files carry their own
+# <head><title>, now captured as a trailing value/string row each (complex.html
+# is "Complex Page", simple.html is "Simple Page" -- see Test 1 above).
+# 15 -> 19: the <nav>'s <ul> is now structural (spec-6.2 migration, Commit 3)
+# -- its 2 <li>s each hold only a link (an inline), so each contributes a
+# `list_item` block row PLUS the `link` inline row it now carries, for +4.
 query II
 SELECT filename, count(*)
 FROM read_html_blocks(['test/html/simple.html', 'test/html/complex.html'], filename := true)
 GROUP BY filename
 ORDER BY filename;
 ----
-test/html/complex.html	11
-test/html/simple.html	2
+test/html/complex.html	19
+test/html/simple.html	3
 
 # Glob pattern reading
 query I
@@ -145,23 +183,35 @@ code	print("hello")	python
 # Test 8: Frontmatter metadata script extraction
 # =============================================================================
 
+# No ORDER BY: this relies on parse_html_blocks emitting rows in element_order.
+# Per spec 6.2's ordering contract, metadata is appended AFTER a document's
+# blocks (so blocks[1] is the first content block), so the heading comes
+# first here and the metadata block comes last.
 query III
 SELECT element_type, encoding, content
 FROM parse_html_blocks('<script type="application/vnd.frontmatter+yaml">title: Test Document</script><h1>Title</h1>');
 ----
-metadata	yaml	title: Test Document
 heading	text	Title
+metadata	yaml	title: Test Document
 
 # =============================================================================
-# Test 9: Lists and Tables JSON encoding
+# Test 9: Lists are structural (spec-6.2 migration, Commit 3), tables stay JSON
 # =============================================================================
 
-query III
-SELECT element_type, encoding, attributes['ordered']
+# <ul>/<ol> now read as structural `list` + `list_item` blocks, not an opaque
+# JSON leaf (encoding text, content NULL for the list itself; attributes
+# carry BOTH list_type -- canonical -- and the legacy `ordered` alias).
+# Verified against duck_blocks_are_valid()/duck_blocks_warnings() (valid,
+# zero warnings) on this exact fixture before updating this expectation.
+query IIIII
+SELECT element_type, encoding, attributes['ordered'], attributes['list_type'], content
 FROM parse_html_blocks('<ul><li>Item 1</li><li>Item 2</li></ul><ol><li>First</li></ol>');
 ----
-list	json	false
-list	json	true
+list	text	false	bullet	NULL
+list_item	text	NULL	NULL	Item 1
+list_item	text	NULL	NULL	Item 2
+list	text	true	ordered	NULL
+list_item	text	NULL	NULL	First
 
 query II
 SELECT element_type, encoding
@@ -247,11 +297,15 @@ inline	text	.	2
 # Test 15: Nested list items and tables with embedded styles/scripts
 # =============================================================================
 
+# Structural list_items now, not a JSON array -- style/script are still
+# filtered out of each item's text content the same as everywhere else.
 query III
 SELECT element_type, encoding, content
 FROM parse_html_blocks('<ul><li>First<style>.item{margin:0}</style></li><li>Second<script>log();</script></li></ul>');
 ----
-list	json	["First","Second"]
+list	text	NULL
+list_item	text	First
+list_item	text	Second
 
 query III
 SELECT element_type, encoding, content

@@ -275,6 +275,56 @@ Each block is a struct with the following fields:
    )) as block)
    WHERE block.block_type = 'code';
 
+**Structural Elements (reader tree walk):**
+
+``html_to_duck_blocks`` walks the HTML tree recursively rather than running a flat XPath
+query, so containers now nest instead of flattening. This affects several element types:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Element(s)
+     - Behavior
+   * - ``<section>``, ``<article>``, ``<nav>``, ``<header>``, ``<footer>``, ``<main>``
+     - Emit a ``section`` block. The originating tag name is recorded in
+       ``attributes['role']`` (e.g. ``attributes['role'] = 'nav'``), and ``id``/``class``
+       are preserved as attributes rather than discarded.
+   * - ``<dl>``
+     - Emits a ``deflist`` block (``<dt>``/``<dd>`` pairs), not zero blocks.
+   * - ``<figure>`` / ``<figcaption>``
+     - Emit ``figure`` / ``caption`` blocks. The caption keeps its inline formatting
+       (e.g. ``<b>``, ``<i>``) instead of being flattened into a plain-text ``title``
+       attribute.
+   * - ``<details>``
+     - Emits a ``generic`` block. ``attributes['source_type']`` records the original
+       tag name (``'details'``) so a consumer can still distinguish it. This is the
+       only tag that maps to ``generic`` -- it is not a catch-all for unmapped elements
+       in general (see the row below).
+   * - Any other element with no dedicated mapping (a custom element, ``<form>``,
+       ``<address>``, a presentational ``<div>``/``<span>`` wrapper with no
+       ``id``/``class``, etc.)
+     - Walked through transparently: no block is emitted for the element itself and
+       its level is not incremented, only its recognized descendants become blocks.
+       A catch-all ``generic`` block per unmapped element was considered and
+       deliberately rejected (Decision 2 in
+       ``docs/superpowers/specs/2026-08-31-html-block-structural-gaps-design.md``):
+       unlike a closed, fully-semantic vocabulary such as Pandoc's, HTML's tag set is
+       open-ended and most elements on a real page are presentational wrappers with
+       no document meaning, so a catch-all would flood real pages with a ``generic``
+       block for every layout wrapper.
+
+``level`` is now structural nesting depth: content emitted underneath an emitted
+container (``section``, ``blockquote``, ``figure``, etc.) is one level deeper than its
+container, and this composes — a ``<blockquote>`` inside a ``<section>`` inside a
+``<section>`` nests three deep. This is a change from the previous flat model, where
+``level`` was meaningful only for headings and blockquote depth.
+
+**Known limitation:** non-text block content inside ``<td>`` or ``<li>`` is not
+separately represented. Table cells and list items are encoded as JSON strings inside
+their parent's ``content``; the tree walk does not recurse into that JSON to emit
+child blocks. Plain text inside a cell/item is captured (it's part of the JSON string);
+a nested element such as an ``<img>`` inside a ``<td>`` is not emitted as its own block.
 
 duck_blocks_to_html
 ~~~~~~~~~~~~~~~~~~

@@ -73,10 +73,15 @@ SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].attrib
 ----
 false
 
+# <ul>/<ol> read as structural `list` (spec-6.2 migration, Commit 3), not a
+# JSON leaf, so the list block itself carries no serialised content -- its
+# items are separate list_item children instead. encoding is therefore
+# 'text', same as every other container block (blockquote, section, ...).
+# Checked against duck_blocks_are_valid() before updating this expectation.
 query I
 SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].encoding;
 ----
-json
+text
 
 # Test ordered list
 query I
@@ -501,16 +506,18 @@ SELECT (html_to_duck_blocks('<hr>'))[1].encoding;
 ----
 text
 
-# JSON encoding for complex structures
+# Lists are structural now (spec-6.2 migration, Commit 3): text encoding,
+# same as every other container -- see the encoding assertion near the top
+# of this file for the full rationale. Table stays JSON (unaffected).
 query I
 SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].encoding;
 ----
-json
+text
 
 query I
 SELECT (html_to_duck_blocks('<ol><li>Item</li></ol>'))[1].encoding;
 ----
-json
+text
 
 query I
 SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].encoding;
@@ -1000,13 +1007,18 @@ SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'text', content: '<sc
 # -----------------------------------------------------------------------------
 
 # Test paragraph with inline children
+# Inline children must be STRICTLY deeper than their parent (level: NULL here
+# is effective level 1, so children sit at 2) -- matching what the reader
+# actually emits (html_to_duck_blocks always puts inline children at
+# parent_level + 1). ConsumeInlineChildren stops at <= parent_level, so a
+# same-level inline is a sibling, not a child.
 query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Hello ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Hello ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'bold', content: 'world', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'world', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----
@@ -1017,13 +1029,13 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'This is ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'This is ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'italic', content: 'italic', level: 1,
+    {kind: 'inline', element_type: 'italic', content: 'italic', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2},
-    {kind: 'inline', element_type: 'text', content: ' and ', level: 1,
+    {kind: 'inline', element_type: 'text', content: ' and ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 3},
-    {kind: 'inline', element_type: 'bold', content: 'bold', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'bold', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 4}
 ]);
 ----
@@ -1034,9 +1046,9 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Visit ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Visit ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'link', content: 'example', level: 1,
+    {kind: 'inline', element_type: 'link', content: 'example', level: 2,
      encoding: 'text', attributes: MAP{'href': 'https://example.com'}, element_order: 2}
 ]);
 ----
@@ -1047,11 +1059,11 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'First para', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'First para', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 2},
-    {kind: 'inline', element_type: 'text', content: 'Second para', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Second para', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 3}
 ]);
 ----
@@ -1062,7 +1074,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: 'Prefix: ', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'bold', content: 'suffix', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'suffix', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1077,9 +1089,9 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '1'}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Chapter ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Chapter ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'italic', content: 'One', level: 1,
+    {kind: 'inline', element_type: 'italic', content: 'One', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----
@@ -1090,7 +1102,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '2'}, element_order: 0},
-    {kind: 'inline', element_type: 'code', content: 'Section', level: 1,
+    {kind: 'inline', element_type: 'code', content: 'Section', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1101,7 +1113,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '1', 'id': 'intro'}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Introduction', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Introduction', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1160,7 +1172,7 @@ SELECT duck_blocks_to_html([
      encoding: 'text', attributes: MAP{}, element_order: 0},
     {kind: 'block', element_type: 'hr', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'text', content: 'After HR', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'After HR', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----
@@ -1412,8 +1424,15 @@ true
 
 # -----------------------------------------------------------------------------
 # List Structure Tests
-# Note: Basic lists work, but inline formatting inside list items is currently
-# flattened to plain text.
+#
+# UPDATED for the spec-6.2 migration (Commit 3): lists are now structural
+# (`list` + `list_item`, read through the same content-rule helper as every
+# other container) rather than an opaque JSON leaf, so inline formatting
+# inside a list item is no longer flattened -- a <li> with element children
+# that are inline (bold, a link, code, ...) takes EmitContainerOrLeaf's
+# "inline children" branch and is exported back out via the same
+# ConsumeInlineChildren path a <p> uses. Measured byte-exact below, so the
+# `contains` checks are upgraded to full round-trips.
 # -----------------------------------------------------------------------------
 
 # Simple unordered list round-trip
@@ -1433,22 +1452,23 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<ol><li>First</li><li>Second</li
 ----
 <ol><li>First</li><li>Second</li></ol>
 
-# List items preserve text content (formatting is flattened)
+# List items now round-trip their inline formatting byte-exact, not just
+# preserve the text (formatting is NOT flattened, per the section note above).
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li><strong>Bold item</strong></li></ul>')), 'Bold item');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li><strong>Bold item</strong></li></ul>'));
 ----
-true
+<ul><li><strong>Bold item</strong></li></ul>
 
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item with <a href="https://example.com">link</a></li></ul>')), 'link');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item with <a href="https://example.com">link</a></li></ul>'));
 ----
-true
+<ul><li>Item with <a href="https://example.com">link</a></li></ul>
 
-# List items with code - text is preserved
+# List items with code round-trip byte-exact too.
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Use <code>SELECT</code> query</li></ul>')), 'SELECT');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>Use <code>SELECT</code> query</li></ul>'));
 ----
-true
+<ul><li>Use <code>SELECT</code> query</li></ul>
 
 # -----------------------------------------------------------------------------
 # Table Edge Cases
@@ -1481,8 +1501,8 @@ true
 
 # -----------------------------------------------------------------------------
 # Blockquote Handling Tests
-# Note: Blockquotes currently produce duplicated content (blockquote + paragraph).
-# This is a known limitation.
+# Content is no longer duplicated: the blockquote is a container and its
+# paragraph nests inside it.
 # -----------------------------------------------------------------------------
 
 # Blockquote element is present
@@ -1503,11 +1523,17 @@ SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>
 ----
 true
 
-# Content text is preserved
+# Content text round-trips exactly. Previously this only passed because a
+# <blockquote> matched BLOCK_XPATH directly and was flattened to a single
+# leaf whose content was plain-text concatenation ("Important quote"),
+# trivially containing the substring. Now the blockquote is a proper
+# container (blockquote -> paragraph -> [bold "Important", text " quote"]),
+# so the round trip faithfully reconstructs the source markup instead of
+# the loose substring check that blessed the old lossy flattening.
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>')), 'Important quote');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>'));
 ----
-true
+<blockquote><p><strong>Important</strong> quote</p></blockquote>
 
 # -----------------------------------------------------------------------------
 # Level Hierarchy Tests
@@ -1718,11 +1744,13 @@ true
 # Multiple Block Types in Document
 # -----------------------------------------------------------------------------
 
-# Document with heading, paragraph, list, and code
+# Document with heading, paragraph, list, and code. 4 -> 5: the <ul>'s <li>
+# is now a separate `list_item` element (spec-6.2 migration, Commit 3)
+# instead of being serialised inside the list's JSON content.
 query I
 SELECT len(html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'));
 ----
-4
+5
 
 # All element types are correct
 query I
@@ -1742,6 +1770,11 @@ list
 
 query I
 SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[4].element_type;
+----
+list_item
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[5].element_type;
 ----
 code
 
