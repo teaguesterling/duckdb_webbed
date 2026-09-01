@@ -233,9 +233,11 @@ reader never looks at `<head>` at all, so it had no metadata to mis-file. A
 reader that walked the whole document would have followed that MUST sentence
 straight into the body.
 
-**For the emission migration:** `<title>` and `<meta>` should emit `kind='value'`
-elements. webbed's writer already skips non-body kinds by level scope, so the
-export side needs nothing.
+**For the emission migration — CORRECTED, see the two-homes section at the end of
+this document.** The guidance first recorded here said `<title>`/`<meta>` emit
+`kind='value'` elements, which is right, but it was recorded alongside advice to
+put `metadata` at level 1 as though the two were one representation. They are
+not.
 
 Two related checks came back clean and are recorded so they are not re-run:
 webbed copies the spec's `duck_block_is_valid` macro nowhere, so it never
@@ -272,6 +274,64 @@ path is an afterthought, reached by a different code path from every other block
 type. One uses a different `CreateBlock` overload; the other never visits `<head>`
 at all.
 
-**For the emission migration:** `metadata` at level 1, and `kind='value'` for
-document metadata from `<head>`. The vocabulary owner has pinned the real emitted
-shape in their `vocabulary.test` if the exact structure is needed.
+**For the emission migration:** `metadata` at level 1. NOTE that this is a
+different representation from `<head>` metadata — see below.
+
+
+## Two metadata representations, and this document conflated them
+
+Corrected by the vocabulary owner after the guidance above was recorded. The
+original advice — "`metadata` at level 1, `kind='value'`" — put one name from each
+of two different representations into a single sentence. Building against it
+would have put a document's title in the wrong place.
+
+**1. Verbatim frontmatter blob**
+
+```
+kind='block'  element_type='metadata'  encoding='yaml'
+```
+
+An opaque YAML document. **This is what webbed already emits** for a
+`<script type="application/vnd.frontmatter+yaml">` block — measured, and the
+representation is correct as it stands. Its only defect is the level (NULL, must
+be 1; see above).
+
+**2. Structured metadata tree**
+
+```
+kind='value'  element_type ∈ {string, bool, list, map, inlines, blocks}
+```
+
+Discrete fields, one element per field, at level 1, appended after the blocks.
+Field name in `attributes['key']`; the value in `content` for a scalar, or in
+children for anything structured. Measured shape:
+
+```
+value  inlines  L1  key=title    content=''      <- inline text at L2 carries it
+value  string   L1  key=author   content=Ann
+value  bool     L1  key=draft    content=true
+```
+
+A `<meta>` with plain text content is `value/string`. Multiple values for one key
+is `value/list` at L1 with siblings at L2.
+
+**So `<title>` and `<meta>` want representation 2**, and webbed's existing
+frontmatter path stays representation 1. They coexist; they are not alternatives.
+
+### A defect this correction surfaced, which webbed would have hit immediately
+
+The vocabulary owner found and fixed (upstream `80257e6`) that a document with
+BOTH metadata and body content exported as:
+
+```
+meta title "TITLE" + body paragraph "BODY"   ->   Para["TITLE"]
+```
+
+The body was replaced by the title. Their inline-collection loop broke on
+`kind='block'` only and walked past a `value` element, harvesting the metadata's
+inlines as the paragraph's own. Every fixture had metadata or blocks, never both.
+
+webbed emitting `<head>` metadata alongside body content produces exactly that
+combination on the first document it touches. **Re-pull the vendored header at
+`80257e6` or later before the emission work**, and treat a document with both as
+the first test case rather than an edge case.
