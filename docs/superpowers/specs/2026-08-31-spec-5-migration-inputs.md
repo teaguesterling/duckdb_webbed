@@ -202,3 +202,43 @@ think so. css classes are attributes we can track but `<section>` and
 `<div class="section">` as a `section`. A class is an attribute to preserve, not
 a signal to interpret. This matches the Pandoc-path-only answer and closes the
 question about a style hook being read as document structure.
+
+
+## Gap found after the inputs were recorded: document metadata is dropped
+
+Measured @ a2034b2, prompted by the vocabulary owner correcting a normative
+sentence in their own spec that said producers MUST set `kind` to `'block'` or
+`'inline'` — which, since `value` has existed since spec 3.0, instructed a
+conforming producer to render a document's title into the body as prose.
+
+webbed does not have that defect, but it has the opposite one:
+
+```
+<html><head><title>Doc Title</title><meta name="author" content="Ann"></head>
+      <body><p>body</p></body></html>
+  ->  one block: paragraph 'body'
+```
+
+Title and author vanish. webbed's reader walks `<body>`, so `<head>` is never
+visited. Its only metadata path is a frontmatter
+`<script type="application/vnd.frontmatter+yaml">` block — a convention, not real
+HTML — and there is nothing for the head elements every HTML document has.
+
+This is the better of the two failures by the argument this work has used
+throughout: absence is detectable, corruption that reads as content is not. But
+it is still a loss, and `kind='value'` is where it belongs.
+
+Worth recording WHY webbed escaped the leak, because it was not virtue: the
+reader never looks at `<head>` at all, so it had no metadata to mis-file. A
+reader that walked the whole document would have followed that MUST sentence
+straight into the body.
+
+**For the emission migration:** `<title>` and `<meta>` should emit `kind='value'`
+elements. webbed's writer already skips non-body kinds by level scope, so the
+export side needs nothing.
+
+Two related checks came back clean and are recorded so they are not re-run:
+webbed copies the spec's `duck_block_is_valid` macro nowhere, so it never
+inherited that macro's rejection of valid `value`-kind elements; and webbed's own
+docs never restate the kind enumeration, so there is no competing definition here
+to supersede.
