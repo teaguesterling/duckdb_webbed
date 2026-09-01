@@ -37,7 +37,7 @@ blockquote	Quoted text
 query I
 SELECT len(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b>.</figcaption></figure>'));
 ----
-5
+6
 
 query IIII
 SELECT b.kind, b.element_type, b.content, b.level
@@ -48,6 +48,7 @@ block	image	a	2
 block	caption	NULL	2
 inline	text	Cap 	3
 inline	bold	bold	3
+inline	text	.	3
 
 # --- Finding 4: <section> flattened, id and class discarded ------------------
 query IIII
@@ -65,6 +66,20 @@ FROM (SELECT unnest(html_to_duck_blocks('<section><h1>Foo</h1></section>')) AS b
 section	1	NULL
 heading	2	1
 
+# A <div> carrying id/class becomes a `div` block; a bare one stays transparent.
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<div id="w" class="row"><p>x</p></div>')) AS b) x;
+----
+div	NULL	1	{id=w, class=row}
+paragraph	x	2	{}
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<div><p>bare</p></div>')) AS b) x;
+----
+paragraph	bare
+
 # --- Finding 5: <details> lost its <summary> --------------------------------
 # The summary is emitted BEFORE the body: it labels the body and browsers
 # render it above. Caption position is the emitter's choice.
@@ -72,13 +87,13 @@ heading	2	1
 # which is what lets the exporter emit <summary> rather than <figcaption>:
 # <figcaption> is not a permitted child of <details>, so without the role the
 # disclosure widget renders with no label at all.
-query IIII
-SELECT b.element_type, b.content, b.level, b.attributes['role']
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['role'], b.attributes['source_type']
 FROM (SELECT unnest(html_to_duck_blocks('<details><summary>Sum</summary><p>D.</p></details>')) AS b) x;
 ----
-generic	NULL	1	NULL
-caption	Sum	2	summary
-paragraph	D.	2	NULL
+generic	NULL	1	NULL	details
+caption	Sum	2	summary	NULL
+paragraph	D.	2	NULL	NULL
 
 # --- Finding 6: the sectioning family ---------------------------------------
 query III
