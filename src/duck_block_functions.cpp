@@ -832,7 +832,14 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 
 		// --- Figure and its caption ---------------------------------------
 		if (tag == "figure") {
-			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs);
+			// EmitContainerOrLeaf, not EmitContainerAndRecurse: a figure whose
+			// only child is a lone text run (e.g. <figure>Some text</figure>)
+			// must carry it in the figure's own `content` (single-text-child
+			// rule), same as section/div/blockquote. A figure holding an <img>
+			// still takes the container path because img is block-level, so
+			// HasBlockChildren is true and EmitContainerOrLeaf recurses exactly
+			// as EmitContainerAndRecurse always did.
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs);
 			continue;
 		}
 		if (tag == "figcaption") {

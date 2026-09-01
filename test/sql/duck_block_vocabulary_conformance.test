@@ -174,20 +174,30 @@ SELECT (html_to_duck_blocks(duck_blocks_to_html([
 plain
 
 # figure carrying its content DIRECTLY (no explicit child block) writes that
-# content as the <figure> element's own text, which the reader reads back as
-# TWO elements: the figure (now with content NULL) plus its text at level+1.
+# content as the <figure> element's own text: `<figure>Some text</figure>`.
 #
-# That text was an inline run until `plain` emission landed; it is now a `plain`
-# block, because loose block-level text inside a container is what `plain` is
-# for. Both this shape and the alternative -- figure carrying the text in its own
-# `content`, per "content iff a single text child" -- validate against the
-# vendored conformance macro, so webbed is conformant either way. Which is
-# CANONICAL for a container whose only child is text is an open question with
-# the vocabulary owner; this asserts what webbed actually emits rather than
-# guessing at a preference the macro does not express.
+# UPDATED for the figure fix (spec-6.2 migration, Commit 2): this used to read
+# back as TWO elements -- figure (content NULL) plus a `plain` child at
+# level+1 -- because `figure` alone called EmitContainerAndRecurse
+# unconditionally instead of routing through the same EmitContainerOrLeaf
+# helper section/div/blockquote already used. That [figure, plain] shape is
+# exactly what the newly-vendored `duck_blocks_warnings` macro's
+# `plain_should_be_content` rule now flags -- "plain is the only child of
+# figure; its text belongs in that element's content" -- so it was never
+# actually an open tie between two canonical shapes; the macro just had no
+# advisory arm to say so yet. Now that it does, figure carries the text
+# directly in its own `content`, same as every other single-text-child
+# container, and produces zero duck_blocks_warnings rows.
 query I
 SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'figure','content':'Some text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
 ])), x -> x.element_type);
 ----
-[figure, plain]
+[figure]
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':'Some text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].content;
+----
+Some text
