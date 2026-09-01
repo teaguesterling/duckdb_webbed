@@ -585,6 +585,15 @@ static std::string SectionTagForRole(const std::string &role) {
 	return "div";
 }
 
+// Allowlist for generic's source_type, same discipline as SectionTagForRole.
+// Returns "" when the type is not allowlisted, meaning "use the terminal fallback".
+static std::string GenericTagForSourceType(const std::string &source_type) {
+	if (source_type == "details") {
+		return source_type;
+	}
+	return "";
+}
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -831,11 +840,59 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 				html << "</dl>";
+			} else if (element_type == DuckBlockTypes::TYPE_DIV || element_type == DuckBlockTypes::TYPE_GENERIC) {
+				std::string tag = "div";
+				if (element_type == DuckBlockTypes::TYPE_GENERIC) {
+					std::string st =
+					    attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE) ? attrs[DuckBlockTypes::ATTR_SOURCE_TYPE] : "";
+					tag = GenericTagForSourceType(st);
+					if (tag.empty()) {
+						// Not allowlisted: fall through to the terminal fallback shape.
+						html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\">"
+						     << XMLUtils::HTMLEscape(content) << "</div>";
+						continue;
+					}
+				}
+				html << "<" << tag;
+				if (attrs.count("id")) {
+					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
+				}
+				if (attrs.count("class")) {
+					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
+				}
+				html << ">";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
 				html << content; // No escaping - preserve YAML exactly
 				html << "\n</script>";
+			} else {
+				// Terminal fallback. Deliberately ugly: a fallback that renders
+				// cleanly is a fallback nobody fixes. Text is preserved and the
+				// unmapped type is named and greppable -- the opposite of the
+				// silent drop this replaces.
+				//
+				// Guarded on a NON-EMPTY element_type: the fallback exists to make
+				// an unmapped but *named* type visible (e.g. version skew between
+				// a producer and this renderer -- 'no_such_type' is real,
+				// recoverable information). An absent element_type carries no
+				// identity to make visible; emitting data-duck-block-type="" would
+				// be noise, not recovery. duck_block_robustness.test pins malformed
+				// blocks (NULL/empty element_type) as rendering nothing -- do not
+				// "fix" this guard back to unconditional.
+				if (!element_type.empty()) {
+					html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\">"
+					     << XMLUtils::HTMLEscape(content) << "</div>";
+				}
 			}
 		}
 

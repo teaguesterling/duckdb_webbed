@@ -140,3 +140,59 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <dl></dl>
+
+# generic renders its allowlisted source_type as a tag.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'details'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<details><p>D.</p></details>
+
+# A non-allowlisted source_type falls to the fallback rather than becoming a tag.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':'x','level':1,'encoding':'text','attributes':MAP{'source_type':'script'},'element_order':0}
+]);
+----
+<div data-duck-block-type="generic">x</div>
+
+# div carries id and class.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'id':'w','class':'row'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'x','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div id="w" class="row"><p>x</p></div>
+
+# An UNKNOWN element_type no longer vanishes silently. This is the regression
+# test for the missing terminal else.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':'kept','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div data-duck-block-type="no_such_type">kept</div>
+
+# A NULL element_type is absent identity, not an unmapped-but-named type: it
+# renders nothing rather than a fallback with an empty data-duck-block-type
+# attribute. This pins the boundary against the assertion above -- a named
+# unknown type recovers as a fallback, an absent type name has nothing to
+# recover. See also test/sql/duck_block_robustness.test, which is untouched
+# by this task and pins the same rule for malformed blocks.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':NULL,'content':'kept','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+(empty)
+
+# The fallback escapes both the type name and the content.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'a"b','content':'<script>','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div data-duck-block-type="a&quot;b">&lt;script&gt;</div>
