@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: fca9fb0 (SPEC_VERSION 6.2)
+// Vendored at upstream commit: b917e77 (SPEC_VERSION 6.2)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -20,7 +20,6 @@
 // scripts/check_duck_block_vocabulary.py, which diffs this copy against a
 // fresh checkout of upstream to detect drift -- run it (or `make
 // check-vocabulary`) after bumping the vendored commit above.
-// ============================================================================
 
 // ============================================================================
 // The duck_block vocabulary -- PUBLISHED INTERFACE.
@@ -445,6 +444,43 @@ struct DuckBlockVocabulary {
 	// `metadata` -- which verbatim blob this is
 	static constexpr const char *ROLE_FRONTMATTER = "frontmatter"; // has a document body after it
 	static constexpr const char *ROLE_DOCUMENT = "document";       // the blob IS the whole document
+
+	// ========================================================================
+	// `list_type` values -- the attribute is ATTR_LIST_TYPE
+	//
+	// The KEY got a constant and the VALUES did not, which duckdb_markdown named as the
+	// shape that keeps recurring: "the key gets a constant, the value it is compared
+	// against does not." Their writer branches on `list_type == "definition"` to choose
+	// the definition-list rendering, so a value rename upstream turns every definition
+	// list into a bullet list, silently, with every check green.
+	//
+	// WHY `list_type` AND NOT THE OLDER `attributes['ordered']`. A boolean answers
+	// "ordered or not" and cannot answer "which KIND of list", so it had no way to say
+	// `definition` -- and definition lists arrived the same day the question was
+	// settled, needing zero new element_types because `list_type` could carry them.
+	// A `navlist`, or anything else with list semantics, lands the same way.
+	//
+	// That is the general rule and it is worth more than this instance: WHEN
+	// COLLAPSING TWO NAMES FOR ONE FACT, KEEP THE ONE THAT CAN STILL EXPRESS THE FACT
+	// WHEN IT GROWS. The v1-fidelity argument said keep `ordered`; it optimised for
+	// matching the past and never asked what the next value would need.
+	//
+	// `attributes['ordered']` = 'true'/'false' remains a LEGACY ALIAS. Producers may
+	// emit both -- this one does -- and CONSUMERS MUST TOLERATE IT, because data
+	// written before the rule exists and does not rewrite itself. Read `list_type`
+	// first and fall back.
+	//
+	// Recorded here rather than only in the spec because a consumer reading these
+	// constants is exactly the reader who needs it, and would otherwise not learn the
+	// alias exists at all. (duckeye's point: a reason like this belongs beside the
+	// constant, not only in the thread that produced it.)
+	// ========================================================================
+	static constexpr const char *LIST_TYPE_BULLET = "bullet";
+	static constexpr const char *LIST_TYPE_ORDERED = "ordered";
+	static constexpr const char *LIST_TYPE_DEFINITION = "definition";
+	// The legacy boolean. Declared so a consumer tolerating it names the attribute
+	// rather than spelling it, and so a drift check can see it at all.
+	static constexpr const char *ATTR_ORDERED_LEGACY = "ordered";
 
 	// `list_item` in a definition list
 	static constexpr const char *ROLE_TERM = "term";
