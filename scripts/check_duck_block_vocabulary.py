@@ -16,6 +16,21 @@ the readers silently stop emitting a type any consumer recognises. Nothing in
 C++ catches that. Only this check does, which is why it is not optional
 bookkeeping.
 
+KNOWN LIMITATION OF THE GAPS ARM -- it fails in the hiding direction.
+
+"Branched on" is decided by finding a `DuckBlockTypes::NAME` reference OR the
+constant's VALUE as a bare string literal. A short, generic value collides with
+unrelated code: webbed quotes "value" in xml_sax_reader.hpp and "string" in
+xml_utils.cpp for XML type names that have nothing to do with duck_block, so
+KIND_VALUE and VALUE_STRING read as handled when nothing branches on them.
+Measured, not supposed.
+
+So an empty GAPS line means "no gap the scan can see", not "no gap". The arm is
+still worth having -- it independently rediscovered lineblock, list_item and
+page_break, all three confirmed by a hand sweep of every type through the
+exporter -- but a value short enough to appear in unrelated source is outside
+what it can detect, and no allowlist entry should be written as though it were.
+
 WHAT IT REPORTS, and why the three arms are separate:
 
   DRIFT  a constant renamed, removed, or changed value upstream. BREAKING;
@@ -107,19 +122,14 @@ CONST_RE = re.compile(
 # two are inherent to webbed's design, not defects; anything else added here must
 # be something the check actually reported, with its own justification -- this
 # dict is not pre-populated to silence output that was never produced.
-INTENTIONAL_GAPS = {
-    "TYPE_RAW": "raw is literal pass-through by contract: webbed's writer emits "
-               "raw content as-is (see the TYPE_RAW branch in "
+INTENTIONAL_GAPS = {"raw content as-is (see the TYPE_RAW branch in "
                "duck_block_functions.cpp) but HTML has no marker to carry "
                "'this text was raw' through a round trip, so reading it back "
                "necessarily yields plain text. The type cannot survive by "
-               "construction, not because webbed fails to handle it",
-    "KIND_VALUE": "webbed skips any non-'block'/non-'inline' kind by LEVEL SCOPE "
-                  "(see the kind-scope skip in RenderDuckBlocksToHtml) rather than "
+               "construction, not because webbed fails to handle it","(see the kind-scope skip in RenderDuckBlocksToHtml) rather than "
                   "branching on each value type -- one scope-skip handles the "
                   "whole 'value' kind and everything nested under it uniformly, "
                   "so no individual VALUE_* constant is ever referenced by name",
-    "VALUE_STRING": "value kind unused by name -- see KIND_VALUE",
     "VALUE_BOOL": "value kind unused by name -- see KIND_VALUE",
     "VALUE_LIST": "value kind unused by name -- see KIND_VALUE",
     "VALUE_MAP": "value kind unused by name -- see KIND_VALUE",
