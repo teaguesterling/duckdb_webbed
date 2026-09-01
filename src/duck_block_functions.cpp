@@ -1115,8 +1115,17 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			// alone is not enough: skip its entire level scope -- the marker plus
 			// every following block whose level is strictly greater than the
 			// marker's, stopping at the first block back at or above the marker's
-			// own level. This never touches open_containers: a metadata marker is
-			// not body structure and must not open or close containers.
+			// own level.
+			//
+			// A non-body marker never OPENS a container: this skip is reached
+			// only for kind != 'block', and the block branches below -- the only
+			// place anything is pushed onto open_containers -- are never reached
+			// for it. But it DOES participate in CLOSING one: the close loop
+			// above runs for every block regardless of kind, using cur_level
+			// computed from THIS marker's own level, before this check is ever
+			// reached. So a marker whose level places it as a sibling of an open
+			// container closes that container, same as an ordinary block would --
+			// see the two discriminating tests below.
 			if (!kind.empty() && kind != DuckBlockTypes::KIND_BLOCK) {
 				for (size_t scope_idx = block_idx + 1; scope_idx < blocks_list.size(); scope_idx++) {
 					auto &scope_block = blocks_list[scope_idx];

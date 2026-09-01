@@ -334,7 +334,17 @@ SELECT duck_blocks_to_html([
 ----
 <p>Real body.</p>
 
-# A value marker inside an open container must not close it.
+# A value marker never OPENS a container (the block branches that push onto
+# open_containers are never reached for it), but the close loop runs for
+# EVERY block regardless of kind, before the kind check -- so a marker DOES
+# participate in closing, correctly, when its own level places it as a
+# sibling of an open container. Two cases, since a single level cannot tell
+# these apart: level:2 here is strictly deeper than the blockquote's level:1,
+# so the close loop can't fire either way -- it does not discriminate
+# between "markers never touch open_containers" and "markers close via the
+# ordinary level-based rule". The level:1 test below does.
+
+# A value marker STRICTLY DEEPER than the open container must not close it.
 query I
 SELECT duck_blocks_to_html([
   {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
@@ -343,6 +353,23 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <blockquote><p>in</p></blockquote>
+
+# A value marker AT the open container's own level closes it, same as an
+# ordinary sibling block would. The trailing paragraph is at the SAME level
+# as the marker (not deeper) so it is a sibling of the marker, not swallowed
+# by the marker's own metadata-scope skip (which only consumes blocks
+# strictly deeper than the marker). This is the discriminating case: if a
+# marker truly never touched open_containers, the blockquote would still be
+# open when the paragraph arrives, giving "<blockquote><p>x</p></blockquote>"
+# instead.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'value','element_type':'string','content':'meta','level':1,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote></blockquote><p>x</p>
 
 # An unmapped inline keeps its identity rather than degrading to bare text.
 query I
