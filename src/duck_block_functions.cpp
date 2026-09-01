@@ -28,6 +28,7 @@ static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 static int CountBlockquoteAncestors(xmlNodePtr node);
 static std::string ListItemsToJson(xmlNodePtr node);
+static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
@@ -1822,6 +1823,51 @@ static std::string ListItemsToJson(xmlNodePtr node) {
 	}
 	yyjson_mut_doc_free(doc);
 	return res;
+}
+
+// Serialise <dl> to [{"term": "...", "definitions": ["...", ...]}].
+// Consecutive <dd>s attach to the most recent <dt>. A <dd> with no preceding
+// <dt> is attached to an entry with an empty term rather than dropped.
+static std::string DefListToJson(xmlNodePtr node) {
+	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
+	yyjson_mut_val *arr = yyjson_mut_arr(doc);
+	yyjson_mut_doc_set_root(doc, arr);
+
+	yyjson_mut_val *cur_entry = nullptr;
+	yyjson_mut_val *cur_defs = nullptr;
+
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
+		}
+		std::string tag(reinterpret_cast<const char *>(child->name));
+		if (tag == "dt") {
+			cur_entry = yyjson_mut_obj(doc);
+			cur_defs = yyjson_mut_arr(doc);
+			std::string term = GetNodeTextContent(child);
+			yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", term.c_str());
+			yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
+			yyjson_mut_arr_add_val(arr, cur_entry);
+		} else if (tag == "dd") {
+			if (!cur_entry) {
+				cur_entry = yyjson_mut_obj(doc);
+				cur_defs = yyjson_mut_arr(doc);
+				yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", "");
+				yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
+				yyjson_mut_arr_add_val(arr, cur_entry);
+			}
+			std::string def = GetNodeTextContent(child);
+			yyjson_mut_arr_add_strcpy(doc, cur_defs, def.c_str());
+		}
+	}
+
+	char *json = yyjson_mut_write(doc, 0, nullptr);
+	std::string result = json ? std::string(json) : std::string("[]");
+	if (json) {
+		free(json);
+	}
+	yyjson_mut_doc_free(doc);
+	return result;
 }
 
 static std::string TableToJson(xmlNodePtr node) {
