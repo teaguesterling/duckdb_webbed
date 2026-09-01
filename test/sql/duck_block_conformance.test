@@ -134,6 +134,20 @@ author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
 ----
 heading
 
+# The metadata block for that same frontmatter script carries role='frontmatter'
+# (not 'document'): a <script type="application/vnd.frontmatter+yaml"> element by
+# definition sits in a document that also has body content, per the vendored
+# vocabulary's ROLE_FRONTMATTER / ROLE_DOCUMENT distinction. Metadata is the last
+# block emitted (after the h1/p body walk), so it lands at index 3.
+
+query I
+SELECT (html_to_duck_blocks(
+  '<script type="application/vnd.frontmatter+yaml">title: Test
+author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
+))[3].attributes['role'];
+----
+frontmatter
+
 # A document that is ENTIRELY frontmatter, no body blocks at all, is declared
 # conformant by spec 6.2 explicitly (see the 6.1 -> 6.2 changelog entry in
 # src/include/duck_block_vocabulary.hpp) -- there is nothing for the ordering

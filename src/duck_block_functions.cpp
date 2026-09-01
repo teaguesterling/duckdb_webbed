@@ -993,7 +993,12 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	// Now emit the metadata blocks, AFTER the document's blocks, continuing
 	// element_order from wherever the walk above left off.
 	for (auto &content : frontmatter_contents) {
+		// This metadata block is a <script type="application/vnd.frontmatter+yaml">
+		// element, which by definition sits in a document that also has body
+		// content -- so it is ROLE_FRONTMATTER, not ROLE_DOCUMENT (the blob IS the
+		// whole document).
 		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_FRONTMATTER;
 		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
 		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
