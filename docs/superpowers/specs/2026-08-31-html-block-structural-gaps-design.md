@@ -404,7 +404,7 @@ It is a pure subset — nothing in webbed contradicts the canonical header, so t
 not divergence. Five of the fifteen (`caption`, `deflist`, `figure`, `generic`, `section`) are
 exactly what this design needs, so the header must be extended before any of it compiles.
 
-### Copy now, submodule when it lands on main — decided
+### Submodule — done
 
 `duck_block_utils@628dcd7` publishes `src/include/duck_block_vocabulary.hpp`, a link-free
 header intended for exactly this: sibling extensions taking the vocabulary as a submodule
@@ -427,13 +427,41 @@ Two facts bearing on the decision, neither disqualifying:
   different and larger commitment than decision 1's "emit type names that track a branch" —
   a wrong name is a data mismatch, a missing submodule commit is a broken build.
 
-**Decision:** extend the local mirror now with the fifteen missing names; switch to the
-submodule once `628dcd7` reaches `duck_block_utils` `main`. This keeps webbed's build
-self-contained and off an unmerged branch, at the cost of one more manual sync of a copy that
-has already drifted twice — a cost the conformance assertion below is specifically there to
-make loud rather than silent.
+**Decision, superseded and then completed.** The mirror was first extended in place with the
+fifteen missing names, deliberately deferring the submodule while `628dcd7` existed only on
+`feat-doc-query-pipeline` — a submodule would have pinned webbed's *build* to an unmerged
+branch, where a rebase breaks the build rather than merely misnaming a type.
 
-The conformance assertion is required **either way**, and remains required after the switch.
+That condition has since been met: the vocabulary header is on `duck_block_utils` `main`
+(and on `origin/main`), so webbed now takes it as a submodule at `duck_block_utils/`, pinned
+to `e44efe6`.
+
+**Shape of the change.** `DuckBlockTypes` now inherits `DuckBlockVocabulary`:
+
+```cpp
+#include "duck_block_vocabulary.hpp"
+class DuckBlockTypes : public DuckBlockVocabulary { ... };
+```
+
+Every existing `DuckBlockTypes::TYPE_*` reference keeps resolving through inheritance, so no
+call site changed. The header dropped from 61 locally-declared constants to 5, and those five
+are the only genuinely webbed-specific ones:
+
+- `ATTR_HEADING_LEVEL`, `ATTR_ROLE`, `ATTR_SOURCE_TYPE`, `ATTR_LIST_TYPE` — the canonical
+  header documents these attribute keys as prose in its comments but declares no `ATTR_*`
+  constants, so there is nothing upstream to inherit.
+- `FRONTMATTER_MIME_TYPE` — HTML-specific, with no counterpart in a format-neutral vocabulary.
+
+Eleven names arrived that the copy never had: `SPEC_VERSION`, `TYPE_PAGE`, the `VALUE_*` set,
+and the `duck_block_ext` field indices.
+
+**Verified, not assumed.** A compile probe confirms `TYPE_HEADING`, `TYPE_SECTION`,
+`SPEC_VERSION` and `TYPE_PAGE` resolve while being declared **zero** times in webbed's own
+header — they can only be coming from the submodule. The full suite is unchanged at 3342
+assertions, which is the right result for a change that swaps where a constant is declared
+without altering its value.
+
+The conformance assertion remains required: a compile cannot catch a submodule nobody synced.
 
 **And a conformance assertion, so the next drift is loud.** A copied header does not error when
 it falls behind; code comparing `element_type` strings against a stale local copy silently

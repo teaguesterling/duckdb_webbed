@@ -2,14 +2,21 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/types.hpp"
+// Canonical duck_block vocabulary, taken as a submodule (duck_block_utils/) rather
+// than copied. Header-only and link-free: it declares nothing it does not define,
+// so nothing from duck_block_utils needs linking.
+#include "duck_block_vocabulary.hpp"
 
 namespace duckdb {
 
 /**
  * DuckBlockTypes provides type definitions and utilities for working with doc_element structures.
  *
- * This is a header-only interface that mirrors the duck_block_utils extension's type definitions,
- * enabling webbed to produce doc_element output without a compile-time dependency on duck_block_utils.
+ * The vocabulary itself -- kind values, element type names, encodings, field indices --
+ * comes from DuckBlockVocabulary in the duck_block_utils submodule, which this class
+ * inherits so every existing DuckBlockTypes::TYPE_* reference keeps resolving. Only
+ * webbed-specific additions are declared below. This replaces a hand-maintained copy
+ * that had silently drifted to 29 of 44 names.
  *
  * The doc_element type represents a document element with the following structure:
  * STRUCT(
@@ -25,7 +32,7 @@ namespace duckdb {
  * For headings, the heading level (1-6) is stored in attributes['heading_level'],
  * not in the 'level' field. The 'level' field is reserved for hierarchy depth.
  */
-class DuckBlockTypes {
+class DuckBlockTypes : public DuckBlockVocabulary {
 public:
 	// Create the doc_element type (unified type for both blocks and inlines)
 	static LogicalType DuckBlockType() {
@@ -57,93 +64,23 @@ public:
 		return DuckBlockListType();
 	}
 
-	// Field indices for doc_element struct
-	static constexpr idx_t KIND_IDX = 0;
-	static constexpr idx_t ELEMENT_TYPE_IDX = 1;
-	static constexpr idx_t CONTENT_IDX = 2;
-	static constexpr idx_t LEVEL_IDX = 3;
-	static constexpr idx_t ENCODING_IDX = 4;
-	static constexpr idx_t ATTRIBUTES_IDX = 5;
-	static constexpr idx_t ELEMENT_ORDER_IDX = 6;
+	// ------------------------------------------------------------------
+	// webbed-specific additions. Everything else -- KIND_*, TYPE_*, INLINE_*,
+	// ENCODING_*, the field indices -- is inherited from DuckBlockVocabulary.
+	// ------------------------------------------------------------------
 
-	// Kind values
-	static constexpr const char *KIND_BLOCK = "block";
-	static constexpr const char *KIND_INLINE = "inline";
-	static constexpr const char *KIND_VALUE = "value";
-
-	// Core block type names
-	static constexpr const char *TYPE_HEADING = "heading";
-	static constexpr const char *TYPE_PARAGRAPH = "paragraph";
-	static constexpr const char *TYPE_CODE = "code";
-	static constexpr const char *TYPE_BLOCKQUOTE = "blockquote";
-	static constexpr const char *TYPE_LIST = "list";
-	static constexpr const char *TYPE_TABLE = "table";
-	static constexpr const char *TYPE_HR = "hr";
-	static constexpr const char *TYPE_METADATA = "metadata";
-	static constexpr const char *TYPE_IMAGE = "image";
-	static constexpr const char *TYPE_RAW = "raw";
-	static constexpr const char *TYPE_DIV = "div";
-	// A SEMANTIC sectioning container, distinct from `div`. HTML's spec calls div
-	// "an element of last resort", so mapping <section>/<article>/<aside> onto it
-	// would make element_type say something false while the truth hid in an
-	// attribute. Which kind of section lives in attributes['role'] -- section,
-	// article, aside, nav, header, footer, main -- following the convention set by
-	// heading+heading_level and list+list_type rather than one type per variant.
-	static constexpr const char *TYPE_SECTION = "section";
-	static constexpr const char *TYPE_LINEBLOCK = "lineblock";
-	static constexpr const char *TYPE_DEFLIST = "deflist";
-	static constexpr const char *TYPE_FIGURE = "figure";
-	static constexpr const char *TYPE_LIST_ITEM = "list_item";
-	// A caption belonging to the container that precedes or follows it.
-	// Deliberately general rather than figure-specific. POSITION IS THE EMITTER'S
-	// CHOICE: a figure's caption follows its content, a <details> summary precedes
-	// its body. `caption` marks what a block is, not where it sits.
-	static constexpr const char *TYPE_CAPTION = "caption";
-	// A structurally-valid element whose type is not in the standard vocabulary.
-	// Distinct from TYPE_RAW, which is literal content in a *named* format. The
-	// originating type name is preserved in attributes['source_type'].
-	static constexpr const char *TYPE_GENERIC = "generic";
-
-	// Inline element type names
-	static constexpr const char *INLINE_TEXT = "text";
-	static constexpr const char *INLINE_BOLD = "bold";
-	static constexpr const char *INLINE_ITALIC = "italic";
-	static constexpr const char *INLINE_CODE = "code";
-	static constexpr const char *INLINE_LINK = "link";
-	static constexpr const char *INLINE_IMAGE = "image";
-	static constexpr const char *INLINE_SPACE = "space";
-	static constexpr const char *INLINE_SOFTBREAK = "softbreak";
-	static constexpr const char *INLINE_LINEBREAK = "linebreak";
-	static constexpr const char *INLINE_STRIKETHROUGH = "strikethrough";
-	static constexpr const char *INLINE_SUPERSCRIPT = "superscript";
-	static constexpr const char *INLINE_SUBSCRIPT = "subscript";
-	static constexpr const char *INLINE_UNDERLINE = "underline";
-	static constexpr const char *INLINE_SMALLCAPS = "smallcaps";
-	static constexpr const char *INLINE_SPAN = "span";
-	static constexpr const char *INLINE_RAW = "raw";
-	static constexpr const char *INLINE_MATH = "math";
-	static constexpr const char *INLINE_QUOTED = "quoted";
-	static constexpr const char *INLINE_CITE = "cite";
-	static constexpr const char *INLINE_NOTE = "note";
-	static constexpr const char *INLINE_GENERIC = "generic";
-
-	// Valid encoding values
-	static constexpr const char *ENCODING_TEXT = "text";
-	static constexpr const char *ENCODING_JSON = "json";
-	static constexpr const char *ENCODING_YAML = "yaml";
-	static constexpr const char *ENCODING_HTML = "html";
-	static constexpr const char *ENCODING_XML = "xml";
-	static constexpr const char *ENCODING_MARKDOWN = "markdown";
-	static constexpr const char *ENCODING_LATEX = "latex";
-
-	// MIME type for frontmatter in HTML (RFC 9512 compliant)
-	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
-
-	// Attribute keys
+	// Attribute keys. The canonical header documents these as prose inside its
+	// comments (attributes['role'] and so on) but declares no ATTR_* constants,
+	// so they are named here to keep the string literals in one place.
 	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
 	static constexpr const char *ATTR_ROLE = "role";
 	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
 	static constexpr const char *ATTR_LIST_TYPE = "list_type";
+
+	// MIME type for frontmatter in HTML (RFC 9512 compliant). HTML-specific, so
+	// it has no counterpart in the format-neutral canonical vocabulary.
+	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
+
 
 	// Helper to create an attributes MAP from a std::map
 	static Value CreateAttributesMap(const std::map<std::string, std::string> &attrs) {

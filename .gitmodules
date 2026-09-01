@@ -6,3 +6,6 @@
 	path = extension-ci-tools
 	url = https://github.com/duckdb/extension-ci-tools
 	branch = v1.5-variegata
+[submodule "duck_block_utils"]
+	path = duck_block_utils
+	url = https://github.com/teaguesterling/duckdb_duck_block_utils.git
