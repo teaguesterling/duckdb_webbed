@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: 143341f (SPEC_VERSION 6.2)
+// Vendored at upstream commit: fca9fb0 (SPEC_VERSION 6.2)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -47,6 +47,26 @@
 //
 // ---------------------------------------------------------------------------
 // VENDORING THIS FILE
+//
+// WHAT ELSE IS VENDORABLE, and where. `vendor/README.md` upstream is the index; this
+// header is the one vendorable file that does NOT live there, because four extensions
+// already pull it from `src/include/` and moving it to buy tidiness would break their
+// tooling for no gain. The others:
+//
+//     vendor/duck_block_conformance.sql   validity, error detail, declared kind /
+//                                         type / encoding lists -- pure DuckDB SQL
+//     vendor/duck_block_normalize.hpp     the content rule as a transform
+//
+// PATHS MOVE. `duck_block_conformance.sql` lived at `conformance/` until 2026-09-01.
+// A consumer re-syncing by URL got a 404 -- and duckdb_markdown pointed out how that
+// fails: `curl -sS -o file URL` writes GitHub's 404 page INTO the vendored file, and
+// `curl -sSf` leaves the stale copy in place while the consumer believes they
+// re-synced. Either way they keep validating against an old vocabulary and nothing
+// says so.
+//
+// So CHECK THE HTTP STATUS and fail loudly on anything but 200, the same way you
+// would refuse to print OK from an undatable fetch (below). A vendored file that
+// silently did not update is the failure this whole block exists to prevent.
 //
 // Copy it. Do NOT add duck_block_utils as a submodule: the DuckDB extension CI
 // templates check out with submodules: 'recursive' and this repo carries its
@@ -394,6 +414,51 @@ struct DuckBlockVocabulary {
 	static constexpr const char *ENCODING_XML = "xml";
 	static constexpr const char *ENCODING_LATEX = "latex";
 	static constexpr const char *ENCODING_MARKDOWN = "markdown";
+	// TOML is a distinct syntax with no equivalent in the set above. Emitting a
+	// verbatim .toml blob as 'text' discards the one fact a consumer needs in order to
+	// parse it, which is the opposite of what a verbatim blob is for. Asked for by the
+	// panduck session rather than minted by them -- the behaviour the spec asks for.
+	static constexpr const char *ENCODING_TOML = "toml";
+
+	// ========================================================================
+	// Attribute NAMES
+	//
+	// These were bare string literals until 2026-09-01 -- `"role"` appeared in six
+	// places in this repo's own source and in every consumer's, and a drift check that
+	// compares CONSTANTS by name and value could see none of it. A misspelled `"roles"`
+	// produces an element that is valid, conformant, lint-clean and wrong.
+	//
+	// Raised by duckdb_markdown, and the argument is the one that decided
+	// `metadata`+role over minting a `frontmatter` type in the first place: if the ROLE
+	// carries the meaning, the role needs the enforcement the type has.
+	// ========================================================================
+	static constexpr const char *ATTR_ROLE = "role";
+	static constexpr const char *ATTR_KEY = "key";
+	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
+	static constexpr const char *ATTR_LIST_TYPE = "list_type";
+	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
+	static constexpr const char *ATTR_PANDOC_AST = "pandoc_ast";
+
+	// ========================================================================
+	// Role values, per the type that carries them
+	// ========================================================================
+	// `metadata` -- which verbatim blob this is
+	static constexpr const char *ROLE_FRONTMATTER = "frontmatter"; // has a document body after it
+	static constexpr const char *ROLE_DOCUMENT = "document";       // the blob IS the whole document
+
+	// `list_item` in a definition list
+	static constexpr const char *ROLE_TERM = "term";
+	static constexpr const char *ROLE_DEFINITION = "definition";
+
+	// `section` -- which sectioning construct
+	static constexpr const char *ROLE_SECTION = "section";
+	static constexpr const char *ROLE_ARTICLE = "article";
+	static constexpr const char *ROLE_ASIDE = "aside";
+	static constexpr const char *ROLE_NAV = "nav";
+	static constexpr const char *ROLE_HEADER = "header";
+	static constexpr const char *ROLE_FOOTER = "footer";
+	static constexpr const char *ROLE_MAIN = "main";
+	static constexpr const char *ROLE_PAGE = "page";
 };
 
 } // namespace duckdb
