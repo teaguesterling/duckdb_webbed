@@ -1249,6 +1249,20 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_IMAGE) {
 				std::string src = attrs.count("src") ? attrs["src"] : "";
 				std::string alt = attrs.count("alt") ? attrs["alt"] : "";
+				// The duck_block content rule allows a single text child to be
+				// carried in `content` rather than duplicated into an attribute,
+				// so a conforming producer may put alt text ONLY in `content`.
+				// Fall back to it when attributes['alt'] is absent or empty, but
+				// prefer the attribute when both are present -- that is today's
+				// behaviour and must not change. webbed's OWN reader happens to
+				// write alt into both content and attributes['alt'], which is why
+				// a round trip through webbed's reader can never surface this: two
+				// copies written by the same party can't disagree with each other.
+				// Whether the reader should stop double-writing is a duck_block
+				// schema question that belongs to duck_block_utils, not here.
+				if (alt.empty() && !content.empty()) {
+					alt = content;
+				}
 				std::string title = attrs.count("title") ? attrs["title"] : "";
 				html << "<img src=\"" << XMLUtils::HTMLEscape(src) << "\"";
 				if (!alt.empty()) {

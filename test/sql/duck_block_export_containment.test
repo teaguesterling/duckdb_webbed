@@ -456,3 +456,33 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <p><br>after</p>
+
+# An image's alt text: three shapes the spec's content rule permits.
+#
+# alt in BOTH content and attributes['alt'] (webbed's own reader writes this
+# double copy) -- works, and the attribute is preferred.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in content ONLY -- a conforming producer per the spec's content rule
+# (a single text child belongs in content). Previously lost: the exporter
+# read only attributes['alt'] and emitted a bare <img src="i.png">. Now
+# falls back to content.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in attributes['alt'] ONLY, content empty -- works (this was always fine).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':NULL,'level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
