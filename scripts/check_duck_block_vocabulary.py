@@ -326,10 +326,18 @@ def report(local, upstream, root, show_gaps=True, verified=True, strict=False):
     added = sorted(set(upstream) - set(local))
     changed = sorted(k for k in set(local) & set(upstream) if local[k] != upstream[k])
 
+    # DRIFT reports what is OBSERVED -- the two copies disagree -- not which side
+    # moved. The check cannot tell an upstream change from a local edit to the
+    # vendored header: both produce an identical diff. Saying "changed upstream"
+    # would name one cause for a symptom with two, and a reader who trusts it goes
+    # looking in the wrong repository. A guard that explains its own failure
+    # substitutes for investigation instead of prompting it -- the panduck session
+    # lost a round to exactly that tonight, when a tripwire whose comment predicted
+    # one cause went red for another and the prediction was reported as fact.
     breaking = False
     if removed:
         breaking = True
-        print("DRIFT  gone upstream (our references would no longer compile):")
+        print("DRIFT  present locally, absent upstream (our references would no longer compile):")
         for k in removed:
             print(f"         {k} = {local[k]!r}")
     # SPEC_VERSION is not vocabulary, it is a statement ABOUT the vocabulary, so it gets
@@ -344,7 +352,7 @@ def report(local, upstream, root, show_gaps=True, verified=True, strict=False):
                                                        upstream.get("SPEC_VERSION"))
     if changed:
         breaking = True
-        print("DRIFT  value changed upstream (our output silently stops matching):")
+        print("DRIFT  values differ (our output silently stops matching):")
         for k in changed:
             print(f"         {k}: {local[k]!r} -> {upstream[k]!r}")
     if spec_moved:
