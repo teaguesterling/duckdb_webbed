@@ -85,6 +85,14 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 		return result;
 	} else if (element_type == DuckBlockTypes::INLINE_IMAGE) {
 		std::string src = attrs.count("src") ? attrs.at("src") : "";
+		// content wins over attributes['alt'] when both are present and differ
+		// (content is only ignored when it's empty). This is the OPPOSITE
+		// precedence from the block-side TYPE_IMAGE branch below, which prefers
+		// the attribute. That is a known inconsistency, not a decision -- see
+		// the longer comment on TYPE_IMAGE for why it exists and why it is
+		// invisible through webbed's own reader (which double-writes alt into
+		// both fields, so the two can never disagree on a round trip). Pinned
+		// by test/sql/duck_block_writer_contract.test using distinct values.
 		std::string alt = content.empty() && attrs.count("alt") ? attrs.at("alt") : content;
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
 		std::string result = "<img src=\"" + XMLUtils::HTMLEscape(src) + "\"";
@@ -1260,6 +1268,15 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// copies written by the same party can't disagree with each other.
 				// Whether the reader should stop double-writing is a duck_block
 				// schema question that belongs to duck_block_utils, not here.
+				//
+				// NOTE: INLINE_IMAGE's branch in RenderInlineElementToHtml (above,
+				// near the top of this file) implements the OPPOSITE precedence --
+				// content wins there. That is a known inconsistency between the
+				// block and inline paths, not a decision either one made
+				// deliberately; both are pinned as-is in
+				// test/sql/duck_block_writer_contract.test using distinct
+				// content/attribute values (the only way to make the divergence
+				// observable at all).
 				if (alt.empty() && !content.empty()) {
 					alt = content;
 				}

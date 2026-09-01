@@ -59,6 +59,36 @@ SELECT duck_blocks_to_html([
 <img src="i.png" alt="ALT">
 
 # ============================================================================
+# Known inconsistency, pinned rather than fixed: block and inline image
+# rendering disagree about which of content/attributes['alt'] wins when BOTH
+# are present and DIFFER. The three cases above all use the same value for
+# both, so they cannot distinguish a winner -- these two use distinct values
+# to make the actual, divergent behaviour visible. See the comments beside
+# TYPE_IMAGE (block) and INLINE_IMAGE's branch in RenderInlineElementToHtml
+# for the cross-referenced explanation. This is NOT a designed rule; do not
+# treat either assertion as license to rely on the precedence it records.
+# ============================================================================
+
+# Block image: attribute wins over content when both are present and differ.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'FROM_CONTENT','level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'FROM_ATTR'},'element_order':0}
+]);
+----
+<img src="i.png" alt="FROM_ATTR">
+
+# Inline image (a paragraph's inline child): content wins over the attribute
+# when both are present and differ -- the opposite precedence from block,
+# above, for the identical src/content/alt inputs.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'image','content':'FROM_CONTENT','level':2,'encoding':'text','attributes':MAP{'src':'i.png','alt':'FROM_ATTR'},'element_order':0}
+]);
+----
+<p><img src="i.png" alt="FROM_CONTENT"></p>
+
+# ============================================================================
 # Every block type that carries text: content set, NO attributes, verify the
 # text survives. Swept every element_type through the exporter by hand.
 # image is covered above; the remaining text-carrying types follow.
