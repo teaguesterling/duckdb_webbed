@@ -1,0 +1,150 @@
+# name: test/sql/duck_block_html_structure.test
+# description: html_to_duck_blocks must not duplicate or lose document structure
+# group: [sql]
+
+require webbed
+
+# --- Finding 1: <dl> produced zero blocks -----------------------------------
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>')) AS b) x;
+----
+deflist	[{"term":"Term","definitions":["Def."]}]	1
+
+# --- Finding 2: <blockquote> emitted its content TWICE -----------------------
+# len() equality, not contains(): the bug was a spurious extra block, which a
+# substring assertion cannot detect.
+query I
+SELECT len(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>'));
+----
+2
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>')) AS b) x;
+----
+blockquote	NULL
+paragraph	Quote.
+
+# A blockquote of bare text stays a leaf carrying its text.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote>Quoted text</blockquote>')) AS b) x;
+----
+blockquote	Quoted text
+
+# --- Finding 3: <figure> emitted the image twice, caption flattened ----------
+query I
+SELECT len(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b>.</figcaption></figure>'));
+----
+5
+
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b>.</figcaption></figure>')) AS b) x;
+----
+block	figure	NULL	1
+block	image	a	2
+block	caption	NULL	2
+inline	text	Cap 	3
+inline	bold	bold	3
+
+# --- Finding 4: <section> flattened, id and class discarded ------------------
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>')) AS b) x;
+----
+section	NULL	1	{role=section, id=s1, class=intro}
+paragraph	x	2	{}
+
+# heading_level is NOT affected by structural nesting.
+query III
+SELECT b.element_type, b.level, b.attributes['heading_level']
+FROM (SELECT unnest(html_to_duck_blocks('<section><h1>Foo</h1></section>')) AS b) x;
+----
+section	1	NULL
+heading	2	1
+
+# --- Finding 5: <details> lost its <summary> --------------------------------
+# The summary is emitted BEFORE the body: it labels the body and browsers
+# render it above. Caption position is the emitter's choice.
+# <summary> is the container's label. It maps to `caption` with role='summary',
+# which is what lets the exporter emit <summary> rather than <figcaption>:
+# <figcaption> is not a permitted child of <details>, so without the role the
+# disclosure widget renders with no label at all.
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<details><summary>Sum</summary><p>D.</p></details>')) AS b) x;
+----
+generic	NULL	1	NULL
+caption	Sum	2	summary
+paragraph	D.	2	NULL
+
+# --- Finding 6: the sectioning family ---------------------------------------
+query III
+SELECT b.element_type, b.attributes['role'], b.level
+FROM (SELECT unnest(html_to_duck_blocks('<nav><p>n</p></nav><aside><p>a</p></aside>')) AS b) x;
+----
+section	nav	1
+paragraph	NULL	2
+section	aside	1
+paragraph	NULL	2
+
+# --- Finding 7: <img> inside <p> emitted twice ------------------------------
+query I
+SELECT len(html_to_duck_blocks('<p>Text <img src="i.png" alt="I"> more</p>'));
+----
+4
+
+query III
+SELECT b.kind, b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<p>Text <img src="i.png" alt="I"> more</p>')) AS b) x;
+----
+block	paragraph	NULL
+inline	text	Text 
+inline	image	I
+inline	text	 more
+
+# --- Finding 8: block content inside <td>/<li> emitted twice ----------------
+query I
+SELECT len(html_to_duck_blocks('<table><tr><td><p>cellpara</p></td></tr></table>'));
+----
+1
+
+query I
+SELECT len(html_to_duck_blocks('<ul><li><p>itempara</p></li></ul>'));
+----
+1
+
+# --- Unmapped containers stay transparent (must NOT regress to zero) --------
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<form><p>inform</p></form>')) AS b) x;
+----
+paragraph	inform
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<my-widget><p>custom</p></my-widget>')) AS b) x;
+----
+paragraph	custom
+
+# --- Non-content subtrees are NOT walked ------------------------------------
+query I
+SELECT len(html_to_duck_blocks('<template><p>x</p></template>'));
+----
+0
+
+query I
+SELECT len(html_to_duck_blocks('<svg><p>x</p></svg>'));
+----
+0
+
+# --- KNOWN REGRESSION, pinned deliberately ----------------------------------
+# JSON-encoded containers are not recursed, so non-text block content inside a
+# cell is not separately represented. The text IS in the JSON; an image is not.
+# This is the documented price of removing the finding-8 duplication.
+query I
+SELECT len(html_to_duck_blocks('<table><tr><td><img src="x.png" alt="IMG"></td></tr></table>'));
+----
+1
