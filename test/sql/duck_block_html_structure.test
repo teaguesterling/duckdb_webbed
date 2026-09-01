@@ -87,6 +87,18 @@ FROM (SELECT unnest(html_to_duck_blocks('<img src="i.png" alt="a" title="t">')) 
 ----
 {src=i.png, alt=a, title=t}
 
+# The same source-order guarantee applies to an <img> reached via the INLINE
+# path (nested inside a <p>), not just the block path above. ExtractInlineElements
+# used to build attrs as a std::map, which sorts alphabetically -- the very same
+# <img> printed {alt=a, src=i.png, title=t} there while the block path above
+# printed source order for identical markup. Both now agree.
+query I
+SELECT b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<p><img src="i.png" alt="a" title="t"></p>')) AS b) x
+WHERE b.element_type = 'image';
+----
+{src=i.png, alt=a, title=t}
+
 query II
 SELECT b.element_type, b.content
 FROM (SELECT unnest(html_to_duck_blocks('<div><p>bare</p></div>')) AS b) x;

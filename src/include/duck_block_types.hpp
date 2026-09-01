@@ -75,7 +75,6 @@ public:
 	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
 	static constexpr const char *ATTR_ROLE = "role";
 	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
-	static constexpr const char *ATTR_LIST_TYPE = "list_type";
 
 	// MIME type for frontmatter in HTML (RFC 9512 compliant). HTML-specific, so
 	// it has no counterpart in the format-neutral canonical vocabulary.
@@ -159,6 +158,26 @@ public:
 		struct_values.push_back(make_pair("element_type", Value(element_type)));
 		// Empty content => NULL (a formatting container that recurses into
 		// structured child inlines carries no literal content of its own).
+		struct_values.push_back(make_pair("content", content.empty() ? Value(LogicalType::VARCHAR) : Value(content)));
+		struct_values.push_back(make_pair("level", level));
+		struct_values.push_back(make_pair("encoding", Value(encoding)));
+		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));
+		struct_values.push_back(make_pair("element_order", Value(element_order)));
+
+		return Value::STRUCT(std::move(struct_values));
+	}
+
+	// Order-preserving overload, matching the CreateBlock overload above --
+	// see CreateAttributesMap's ordered variant. Used so an inline element's
+	// attributes (e.g. an <img>'s src/alt/title) preserve the same order the
+	// block-side reader uses, rather than std::map's alphabetical order.
+	static Value CreateInline(const std::string &element_type, const std::string &content, const Value &level,
+	                          const std::string &encoding,
+	                          const std::vector<std::pair<std::string, std::string>> &attributes,
+	                          int32_t element_order = 0) {
+		child_list_t<Value> struct_values;
+		struct_values.push_back(make_pair("kind", Value(KIND_INLINE)));
+		struct_values.push_back(make_pair("element_type", Value(element_type)));
 		struct_values.push_back(make_pair("content", content.empty() ? Value(LogicalType::VARCHAR) : Value(content)));
 		struct_values.push_back(make_pair("level", level));
 		struct_values.push_back(make_pair("encoding", Value(encoding)));

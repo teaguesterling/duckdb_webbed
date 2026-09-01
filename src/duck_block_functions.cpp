@@ -476,7 +476,7 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 		if (child->type == XML_TEXT_NODE) {
 			std::string text = reinterpret_cast<const char *>(child->content);
 			if (!text.empty()) {
-				std::map<std::string, std::string> attrs;
+				OrderedAttrs attrs;
 				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, text,
 				                                               Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
@@ -493,19 +493,22 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			continue;
 		}
 
-		std::map<std::string, std::string> attrs;
+		OrderedAttrs attrs;
 
 		// Void inline elements (no children to recurse).
 		if (tag == "img") {
 			std::string src = GetNodeAttribute(child, "src");
 			std::string alt = GetNodeAttribute(child, "alt");
 			std::string title = GetNodeAttribute(child, "title");
+			// Insertion order (src, alt, title) mirrors the block-side <img>
+			// handling in WalkBlockNode, so attribute order is a property of the
+			// reader rather than of whether the image sits at block or inline level.
 			if (!src.empty())
-				attrs["src"] = src;
+				attrs.emplace_back("src", src);
 			if (!alt.empty())
-				attrs["alt"] = alt;
+				attrs.emplace_back("alt", alt);
 			if (!title.empty())
-				attrs["title"] = title;
+				attrs.emplace_back("title", title);
 			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
 			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
 			                                               attrs, element_order++));
@@ -523,17 +526,17 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			if (tag == "a") {
 				std::string href = GetNodeAttribute(child, "href");
 				if (!href.empty())
-					attrs["href"] = href;
+					attrs.emplace_back("href", href);
 				std::string title = GetNodeAttribute(child, "title");
 				if (!title.empty())
-					attrs["title"] = title;
+					attrs.emplace_back("title", title);
 			} else if (tag == "span") {
 				std::string id = GetNodeAttribute(child, "id");
 				std::string cls = GetNodeAttribute(child, "class");
 				if (!id.empty())
-					attrs["id"] = id;
+					attrs.emplace_back("id", id);
 				if (!cls.empty())
-					attrs["class"] = cls;
+					attrs.emplace_back("class", cls);
 			}
 			if (HasElementChildren(child)) {
 				// Container: empty content, then recurse children one level deeper.
