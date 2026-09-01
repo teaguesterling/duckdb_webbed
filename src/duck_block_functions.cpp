@@ -554,6 +554,26 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 	}
 }
 
+// A container currently open on the render stack.
+struct OpenContainer {
+	std::string close_tag;
+	int32_t level;
+};
+
+// Structural depth, normalised. NULL or anything < 1 is treated as top level,
+// matching the previous blockquote behaviour for NULL levels.
+static int32_t EffectiveLevel(const Value &level_val) {
+	if (level_val.IsNull()) {
+		return 1;
+	}
+	int32_t lvl = level_val.GetValue<int32_t>();
+	return lvl < 1 ? 1 : lvl;
+}
+
+// Guard against unbounded nesting from caller-constructed block lists. Blocks
+// deeper than this render flat rather than pushing, so output stays balanced.
+static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -569,6 +589,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 		std::stringstream html;
 		auto &blocks_list = ListValue::GetChildren(blocks_value);
 		std::set<size_t> consumed_indices; // Track consumed inline children
+		vector<OpenContainer> open_containers;
 
 		// Use index-based iteration for consuming look-ahead
 		for (size_t block_idx = 0; block_idx < blocks_list.size(); block_idx++) {
@@ -594,6 +615,13 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 			// Extract attributes from MAP using helper
 			std::map<std::string, std::string> attrs = ExtractAttributes(attrs_val);
+
+			// Close every container whose scope this block has left.
+			int32_t cur_level = EffectiveLevel(level_val);
+			while (!open_containers.empty() && open_containers.back().level >= cur_level) {
+				html << open_containers.back().close_tag;
+				open_containers.pop_back();
+			}
 
 			// Check if this is an inline element
 			if (kind == DuckBlockTypes::KIND_INLINE) {
@@ -656,18 +684,18 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 				html << "<pre><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
-				int depth = level_val.IsNull() ? 1 : level_val.GetValue<int32_t>();
-				if (depth < 1)
-					depth = 1;
-				for (int d = 0; d < depth; d++) {
-					html << "<blockquote>";
+				html << "<blockquote>";
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
 				}
-				if (encoding == DuckBlockTypes::ENCODING_HTML) {
-					html << content;
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</blockquote>", cur_level});
 				} else {
-					html << XMLUtils::HTMLEscape(content);
-				}
-				for (int d = 0; d < depth; d++) {
 					html << "</blockquote>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_LIST) {
@@ -723,6 +751,12 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				html << content; // No escaping - preserve YAML exactly
 				html << "\n</script>";
 			}
+		}
+
+		// Close anything still open at end of list, so output is always balanced.
+		while (!open_containers.empty()) {
+			html << open_containers.back().close_tag;
+			open_containers.pop_back();
 		}
 
 		result.SetValue(i, Value(html.str()));

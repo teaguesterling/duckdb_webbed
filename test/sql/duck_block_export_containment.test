@@ -1,0 +1,52 @@
+# name: test/sql/duck_block_export_containment.test
+# description: duck_blocks_to_html must represent nested containers
+# group: [webbed]
+
+require webbed
+
+# A container with a block child nests it, rather than emitting an empty
+# tag pair and spilling the child outside.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'Q.','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><p>Q.</p></blockquote>
+
+# A sibling at the container's own level closes it first.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'in','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'out','level':1,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>in</p></blockquote><p>out</p>
+
+# level is structural depth, NOT a repeat count. A level=2 blockquote is ONE
+# blockquote. The old reading emitted two nested tags, which double-wrapped any
+# quote inside a section.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Q','level':2,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>Q</blockquote>
+
+# Nesting comes from nested container blocks.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'blockquote','content':'Q','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><blockquote>Q</blockquote></blockquote>
+
+# A container carrying its own text still round-trips as a leaf (unchanged today).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Quoted text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>Quoted text</blockquote>
