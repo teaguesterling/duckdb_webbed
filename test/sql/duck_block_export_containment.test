@@ -363,3 +363,39 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <p>plain</p>
+
+# Nested inline formatting round-trips. The wrapper is a container: empty content
+# with children one level deeper. Rendering the run flat emitted <strong></strong>
+# and spilled the text outside it, silently un-bolding "bold ".
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>a <b>bold <i>inner</i></b> c</p>'));
+----
+<p>a <strong>bold <em>inner</em></strong> c</p>
+
+# Triple nesting.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><b>one <i>two <u>three</u></i></b></p>'));
+----
+<p><strong>one <em>two <u>three</u></em></strong></p>
+
+# A link inside emphasis.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><em>see <a href="u">here</a></em></p>'));
+----
+<p><em>see <a href="u">here</a></em></p>
+
+# Flat (non-nested) formatting is unchanged.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>a <b>bold</b> c</p>'));
+----
+<p>a <strong>bold</strong> c</p>
+
+# A <br> must not swallow a following deeper inline.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'linebreak','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'text','content':'after','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<p><br>after</p>

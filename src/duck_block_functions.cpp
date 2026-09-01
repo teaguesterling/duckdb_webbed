@@ -145,11 +145,128 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	       ">" + XMLUtils::HTMLEscape(content) + "</span>";
 }
 
+// Guard against unbounded nesting from caller-constructed block/inline lists.
+// Elements deeper than this render flat rather than pushing, so output stays
+// balanced. Shared between the block-level container stack and the
+// inline-level one below -- same mechanism, same limit.
+static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
+
+// An inline container currently open on the render stack, mirroring
+// OpenContainer at the block level (defined further down with the rest of
+// the block scope-stack machinery).
+struct OpenInline {
+	std::string close_tag;
+	int32_t level;
+};
+
+// True for inline types that legitimately carry empty content with no
+// children -- a <br>, a bare space/softbreak, or a void <img>. These must
+// never be mistaken for containers just because their content is empty.
+static bool IsVoidInlineType(const std::string &element_type) {
+	return element_type == DuckBlockTypes::INLINE_LINEBREAK || element_type == "br" ||
+	       element_type == DuckBlockTypes::INLINE_SPACE || element_type == DuckBlockTypes::INLINE_SOFTBREAK ||
+	       element_type == DuckBlockTypes::INLINE_IMAGE;
+}
+
+// Render just the opening tag for an inline element being treated as a
+// container. Kept in sync with RenderInlineElementToHtml's tag choices for
+// the same element_type -- see RenderInlineCloseTag for the matching close.
+static std::string RenderInlineOpenTag(const std::string &element_type,
+                                       const std::map<std::string, std::string> &attrs) {
+	if (element_type.empty()) {
+		return "";
+	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
+		return "<strong>";
+	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
+		return "<em>";
+	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
+		return "<code>";
+	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
+		std::string href = attrs.count("href") ? attrs.at("href") : "";
+		std::string title = attrs.count("title") ? attrs.at("title") : "";
+		std::string result = "<a href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		if (!title.empty()) {
+			result += " title=\"" + XMLUtils::HTMLEscape(title) + "\"";
+		}
+		result += ">";
+		return result;
+	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
+		return "<del>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
+		return "<sup>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
+		return "<sub>";
+	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
+		return "<u>";
+	} else if (element_type == DuckBlockTypes::INLINE_SMALLCAPS) {
+		return "<span style=\"font-variant: small-caps\">";
+	} else if (element_type == DuckBlockTypes::INLINE_SPAN) {
+		std::string id = attrs.count("id") ? attrs.at("id") : "";
+		std::string cls = attrs.count("class") ? attrs.at("class") : "";
+		std::string result = "<span";
+		if (!id.empty()) {
+			result += " id=\"" + XMLUtils::HTMLEscape(id) + "\"";
+		}
+		if (!cls.empty()) {
+			result += " class=\"" + XMLUtils::HTMLEscape(cls) + "\"";
+		}
+		result += ">";
+		return result;
+	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
+		return ""; // Raw HTML has no wrapper tag of its own.
+	}
+	// Unmapped/unknown type, mirroring RenderInlineElementToHtml's terminal
+	// fallback so a container of an unrecognized type still preserves identity.
+	return "<span data-duck-block-type=\"" + XMLUtils::HTMLEscape(element_type) + "\"" +
+	       (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)
+	            ? " data-source-type=\"" + XMLUtils::HTMLEscape(attrs.at(DuckBlockTypes::ATTR_SOURCE_TYPE)) + "\""
+	            : "") +
+	       ">";
+}
+
+// The closing counterpart to RenderInlineOpenTag -- must close whatever tag
+// the open side opened for the same element_type.
+static std::string RenderInlineCloseTag(const std::string &element_type) {
+	if (element_type.empty() || element_type == DuckBlockTypes::INLINE_RAW) {
+		return "";
+	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
+		return "</strong>";
+	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
+		return "</em>";
+	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
+		return "</code>";
+	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
+		return "</a>";
+	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
+		return "</del>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
+		return "</sup>";
+	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
+		return "</sub>";
+	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
+		return "</u>";
+	}
+	// Smallcaps, span, and the unmapped fallback all open a bare <span ...>.
+	return "</span>";
+}
+
 // Render the contiguous run of kind='inline' blocks following `parent_idx` as that
 // block's inline children, marking each consumed so the main loop skips it.
 // Stops at the first non-inline block, or an inline with NULL/<1 level.
+//
+// Mirrors the block-level scope stack in DuckBlocksToHtmlFunction: an inline
+// is a CONTAINER (its children are separate, deeper-level entries in the run)
+// rather than a LEAF (its own content is everything it holds) purely
+// structurally -- empty content plus a next-in-run inline at a strictly
+// deeper level. That is the same convention html_to_duck_blocks documents for
+// blocks, applied one level down. A container's open tag is emitted now, its
+// close pushed onto a level-keyed stack, and closed when a later inline in
+// the run arrives at or above that level (or the run ends) -- exactly the
+// close-before-render / drain-at-end shape used for blocks.
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
                                   std::set<size_t> &consumed_indices, std::stringstream &html) {
+	vector<OpenInline> open_inlines;
+
 	for (size_t next_idx = parent_idx + 1; next_idx < blocks_list.size(); next_idx++) {
 		auto &next_block = blocks_list[next_idx];
 		if (next_block.IsNull()) {
@@ -157,21 +274,62 @@ static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t paren
 		}
 		auto &next_struct = StructValue::GetChildren(next_block);
 		std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
-		Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
+		Value next_level_val = next_struct[DuckBlockTypes::LEVEL_IDX];
 
 		if (next_kind != DuckBlockTypes::KIND_INLINE) {
 			break;
 		}
-		if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
+		if (next_level_val.IsNull() || next_level_val.GetValue<int32_t>() < 1) {
 			break;
+		}
+		int32_t next_level = next_level_val.GetValue<int32_t>();
+
+		// Close every inline container whose scope this element has left.
+		while (!open_inlines.empty() && open_inlines.back().level >= next_level) {
+			html << open_inlines.back().close_tag;
+			open_inlines.pop_back();
 		}
 
 		std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
 		std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
 		auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
-		html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 
 		consumed_indices.insert(next_idx);
+
+		// Structural container test: empty content AND the next inline in the
+		// run (skipping NULLs) is strictly deeper -- never for void leaves.
+		bool is_container = false;
+		if (next_content.empty() && !IsVoidInlineType(next_type)) {
+			size_t peek_idx = next_idx + 1;
+			while (peek_idx < blocks_list.size() && blocks_list[peek_idx].IsNull()) {
+				peek_idx++;
+			}
+			if (peek_idx < blocks_list.size()) {
+				auto &peek_struct = StructValue::GetChildren(blocks_list[peek_idx]);
+				std::string peek_kind = GetVarcharField(peek_struct[DuckBlockTypes::KIND_IDX]);
+				Value peek_level_val = peek_struct[DuckBlockTypes::LEVEL_IDX];
+				if (peek_kind == DuckBlockTypes::KIND_INLINE && !peek_level_val.IsNull()) {
+					is_container = peek_level_val.GetValue<int32_t>() > next_level;
+				}
+			}
+		}
+
+		if (is_container) {
+			html << RenderInlineOpenTag(next_type, next_attrs);
+			if (static_cast<int32_t>(open_inlines.size()) < MAX_CONTAINER_DEPTH) {
+				open_inlines.push_back({RenderInlineCloseTag(next_type), next_level});
+			} else {
+				html << RenderInlineCloseTag(next_type);
+			}
+		} else {
+			html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
+		}
+	}
+
+	// Close anything still open at the end of the run, so output is always balanced.
+	while (!open_inlines.empty()) {
+		html << open_inlines.back().close_tag;
+		open_inlines.pop_back();
 	}
 }
 
@@ -730,9 +888,8 @@ static int32_t EffectiveLevel(const Value &level_val) {
 	return lvl < 1 ? 1 : lvl;
 }
 
-// Guard against unbounded nesting from caller-constructed block lists. Blocks
-// deeper than this render flat rather than pushing, so output stays balanced.
-static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
+// MAX_CONTAINER_DEPTH is defined earlier (with the inline scope-stack
+// machinery, which it is shared with) and reused here for the block stack.
 
 // Map a section block's role to an output tag. The role comes from parsed HTML,
 // so it is validated against a fixed enum rather than interpolated: an unchecked
