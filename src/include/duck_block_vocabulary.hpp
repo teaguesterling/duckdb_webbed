@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: e4329fa (SPEC_VERSION 5.0)
+// Vendored at upstream commit: 4c9d4cf (SPEC_VERSION 6.0)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -235,8 +235,32 @@ struct DuckBlockVocabulary {
 	//               as NOTHING and deflists rendered their own AST, and both poisoned
 	//               search. Breaking -- a consumer parsing either JSON must migrate.
 	//
+	//   5.0 -> 6.0  `plain` is NARROWED to text that has nowhere else to live. A
+	//               container whose only child is a text run carries that text in its
+	//               own `content` -- v1's content rule, unchanged since v1.0 -- so
+	//               `<li>text</li>` is `list_item(content='text')`, not
+	//               `list_item > plain('text')`. 5.0 shipped the second, which meant a
+	//               container with a single text child had TWO legal shapes depending
+	//               on which producer built it, and removing that ambiguity is the
+	//               thing every version since 2.0 has been for.
+	//
+	//               `plain` still exists and is still required, in exactly two places:
+	//                 * beside block siblings -- `section > plain('Lead') + heading`,
+	//                   where the container's content cannot hold the run because the
+	//                   run is not the only child;
+	//                 * at the TOP LEVEL, where the document root has no content field.
+	//
+	//               Tight-vs-loose list items are NOT lost by this and need no
+	//               attribute: content on the item is Pandoc's `Plain` (tight), a
+	//               `paragraph` child is `Para` (loose). Measured on the exporter
+	//               before the change, not assumed.
+	//
+	//               Breaking for a consumer that walks for a `plain` child; a consumer
+	//               that already read the container's `content` -- which the rule has
+	//               required since v1 -- needs no change.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "5.0";
+	static constexpr const char *SPEC_VERSION = "6.0";
 
 	// ========================================================================
 	// Block type names
