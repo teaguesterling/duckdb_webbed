@@ -202,6 +202,26 @@ label below the content it labels.
 | unmapped **semantic** element | `generic` + `source_type=<tag>` | per decision 2 |
 | bare `<div>`/`<span>`, no `id`/`class` | — | transparent; walk through without emitting |
 
+#### Open question for Plan 2: `<details>` gets no `<summary>` yet
+
+`caption` renders `<figcaption>` unconditionally — verified against the binary: a
+`generic[source_type=details]` containing a `caption` renders
+`<details><figcaption>Sum</figcaption>...</details>`. `<figcaption>` is not a permitted child of
+`<details>` per the HTML spec, and the disclosure widget ends up with no `<summary>`, so it has
+no label. This is not addressed by this design and must be resolved before Plan 2 makes the
+reader actually emit `<details>`/`<summary>` pairs — today `<summary>` text is simply lost
+(finding 5), and the mapping table above (`<summary>` → `caption`, emitted before the body)
+assumes a fix exists for this without specifying one.
+
+Options, not decided here:
+
+- A context-sensitive tag: `caption` emits `<summary>` when the innermost open container is
+  `details`, and `<figcaption>` otherwise.
+- A `role` (or `source_type`) attribute carried on the `caption` block itself, so the exporter
+  does not need to inspect its container to know which tag to emit.
+
+Recorded as an open question; Plan 2 must pick one before it emits `<details>`.
+
 ### What the walk recurses into — the rule an implementer needs
 
 The previous revision gave no default, which left `<form>`, `<fieldset>`, `<label>`,
@@ -333,6 +353,16 @@ is preserved, the unmapped type is named and greppable, and the block is impossi
 the opposite of today's silent drop. It is deliberately ugly: a fallback that renders cleanly
 is a fallback nobody fixes.
 
+**Container content is always escaped.** The container branches (`section`, `figure`, `caption`,
+`div`/`generic`) HTML-escape their own `content` unconditionally and never check
+`encoding='html'`, unlike the older `heading`/`paragraph`/`blockquote` branches, which pass
+`content` through raw when `encoding='html'`. Container content therefore cannot carry markup —
+an `encoding='html'` container's own text renders as literal escaped text, not as HTML.
+
+**Only `id` and `class` survive on `section`/`div`/`generic`.** These three branches read `id`
+and `class` out of `attributes` and re-emit nothing else — `open`, `data-*`, `style`, `lang`,
+`aria-*`, and any other attribute in the map is silently dropped on export.
+
 #### The fallback is guarded on a non-empty `element_type`
 
 A ruling made during implementation, not covered above: the terminal fallback fires only when
@@ -345,13 +375,19 @@ A ruling made during implementation, not covered above: the terminal fallback fi
 These are different failure modes, not the same one caught twice. A real-but-unknown type name
 is producer/renderer version skew — the block has an identity, this renderer just doesn't know
 it yet — and dropping it silently is the exact bug this plan fixes, so it must recover via the
-fallback. A NULL `element_type` is *absent* identity, i.e. malformed input: rendering it through
-the fallback would emit `data-duck-block-type=""`, which names nothing and conveys nothing. This
-is also why `test/sql/duck_block_robustness.test` — a file dedicated to malformed input — treats
-`element_type` differently from every other field it tests: a NULL `kind` defaults to `block`
-and a NULL `encoding` defaults to `text`, both sensible defaults for absent-but-recoverable data,
-but `element_type` is the block's identity, and identity has no sensible default. Its absence
-means there is nothing to render.
+fallback.
+
+**Correction:** an earlier draft of this section justified the NULL-`element_type` case by
+saying an absent type name "has nothing to make visible." That conflates the *type name* with
+the *content*, and is wrong: verified against the binary, `{element_type: NULL, content:
+'kept'}` renders `(empty)` — the content is lost too, not merely the name, which is the same
+silent-drop failure mode this plan exists to remove. The actual reason the guard stands for this
+change is narrower: lifting it means deciding what should render for a type-less block (an empty
+`data-duck-block-type=""` marker, or something else), and that decision reaches into
+`test/sql/duck_block_robustness.test` — a file dedicated to malformed input whose contract was
+out of scope here. A third option — preserving the content without inventing a type name for it
+— was not considered during implementation and remains open; see "Known interop divergences, not
+fixed here" below.
 
 ## Prerequisite: the local vocabulary header is stale
 
@@ -407,6 +443,17 @@ disagrees instead of failing. The sibling exposes `db_block_types()`, `db_block_
 dependency on it. This is the same self-describe-and-assert shape the extension family has
 converged on, and it caught a real 10-vs-18 drift in the sibling's own docs. A submodule does
 not remove the need for it: a compile cannot catch a submodule nobody synced.
+
+**Correction: this currently provides zero coverage, not one-directional coverage.**
+`test/sql/duck_block_vocabulary_conformance.test` opens with `require duck_block_utils`.
+`duck_block_utils` is not installed in this build environment, and neither workflow in
+`.github/workflows/` (`MainDistributionPipeline.yml`, `pre-commit-checks.yml`) installs it, so
+the `require` skips the file on every `make test` run — locally and in CI — every time (`make
+test` reports exactly one skipped test, and this is it). It is not merely asymmetric coverage
+that only catches drift when `duck_block_utils` happens to be present; the assertion has never
+once executed anywhere this design has been built or tested. webbed should not be described as
+having vocabulary conformance coverage until some CI job actually installs `duck_block_utils` and
+lets this test run.
 
 **What this assertion does not catch, and neither does anything else yet.** `db_block_types()`
 reports the *names* in the vocabulary, not what a field *means*. `level` is the live example —
@@ -491,6 +538,10 @@ Recorded because they are real and would otherwise be rediscovered:
   Same block type, different attribute, silently. Decision 3 cites `list`+`list_type` as the
   house convention — which webbed does not currently follow. Aligning it is a breaking change to
   existing assertions and belongs in its own change.
+- **A NULL or empty `element_type` with non-empty content is still dropped silently.** The
+  terminal fallback closes the silent-drop hole for *named* unknown types only (see "The
+  fallback is guarded on a non-empty `element_type`" above); a type-less block's content is lost
+  along with its (absent) name, not just the name.
 
 ## Future work
 
