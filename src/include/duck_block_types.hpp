@@ -72,12 +72,11 @@ public:
 	// ENCODING_*, the field indices -- is inherited from DuckBlockVocabulary.
 	// ------------------------------------------------------------------
 
-	// Attribute keys. The canonical header documents these as prose inside its
-	// comments (attributes['role'] and so on) but declares no ATTR_* constants,
-	// so they are named here to keep the string literals in one place.
-	static constexpr const char *ATTR_HEADING_LEVEL = "heading_level";
-	static constexpr const char *ATTR_ROLE = "role";
-	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
+	// Attribute keys. ATTR_HEADING_LEVEL, ATTR_ROLE, and ATTR_SOURCE_TYPE now come
+	// from the vendored DuckBlockVocabulary (inherited above), which as of
+	// upstream fca9fb0 declares its own ATTR_* constants instead of leaving them
+	// as prose in comments. ATTR_LIST_TYPE and ATTR_KEY are also inherited and
+	// available for the emission work.
 
 	// MIME type for frontmatter in HTML (RFC 9512 compliant). HTML-specific, so
 	// it has no counterpart in the format-neutral canonical vocabulary.
