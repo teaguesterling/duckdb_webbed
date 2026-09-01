@@ -85,3 +85,35 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <nav id="a&quot;b"></nav>
+
+# figure nests its content, then its caption. Caption POSITION is the emitter's
+# choice -- an image's caption belongs below it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'image','content':'a','level':2,'encoding':'text','attributes':MAP{'src':'i.png','alt':'a'},'element_order':1},
+  {'kind':'block','element_type':'caption','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Cap','level':3,'encoding':'text','attributes':MAP{},'element_order':3}
+]);
+----
+<figure><img src="i.png" alt="a"><figcaption><p>Cap</p></figcaption></figure>
+
+# A caption BEFORE its content is equally valid -- a <details> summary labels
+# the body and belongs above it. Same block type, opposite position.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'Sum','level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<figcaption>Sum</figcaption><p>D.</p>
+
+# A caption's inline children survive as real formatting, not flattened text.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'Cap ','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'bold','content':'bold','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<figcaption>Cap <strong>bold</strong></figcaption>

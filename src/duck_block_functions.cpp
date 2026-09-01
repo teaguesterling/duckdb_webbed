@@ -776,6 +776,28 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				} else {
 					html << "</" << tag << ">";
 				}
+			} else if (element_type == DuckBlockTypes::TYPE_FIGURE) {
+				html << "<figure>";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</figure>", cur_level});
+				} else {
+					html << "</figure>";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
+				html << "<figcaption>";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</figcaption>", cur_level});
+				} else {
+					html << "</figcaption>";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
