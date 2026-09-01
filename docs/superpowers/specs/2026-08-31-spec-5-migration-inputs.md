@@ -22,6 +22,16 @@ now structural. That vein is exhausted.
 
 ## The answers that change webbed's design
 
+> **PROCESS RULING, and it governs this whole document.** Teague: *"all decisions
+> on duck_block schema and rules should go through duck_block_utils to avoid
+> confusion."*
+>
+> webbed does not decide duck_block schema. It brings cases and measurements to
+> `duck_block_utils`, which owns the vocabulary, and implements what they publish.
+> Anything Teague says here about schema is INPUT to them, with attribution — not
+> a verdict webbed acts on locally. A future session in this repo should not
+> re-open a schema question here; take it to them.
+>
 > **SUPERSEDED IN PART — see "Teague's rulings" at the end of this document.**
 > He has ruled `plain` narrower than the answer recorded here, and that conflict
 > is back with the vocabulary owner. Do not build against this section until it
@@ -133,8 +143,12 @@ Plain-vs-Para, and a Pandoc reader sees two constructors where HTML sees one
 shape. Mapping Plain onto content-populated may lose something on the export side
 that an HTML-shaped example does not reveal.
 
-**Status: back with `duck_block_utils`,** at Teague's direction, rather than
-webbed picking a side. webbed has built none of this, so the cost of a change
+**Status: `duck_block_utils` decides.** Under the process ruling above, this is
+not a conflict for them to reconcile against a competing verdict — his sentence is
+input, they own the schema, and webbed implements whatever they publish. The
+framing in the first relay (a divergence table headed by his ruling) was wrong and
+was corrected: it put them in the position of appearing overruled by a third party
+on a spec they had already shipped, with the migration cost landing on them. webbed has built none of this, so the cost of a change
 falls on them, which is a reason for them to push back if his reading breaks the
 Pandoc path. Note also that extending his one-sentence rule to `<td>` is MY
 inference, not his statement.
