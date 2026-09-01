@@ -962,7 +962,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 				content.pop_back();
 			}
 			std::map<std::string, std::string> attrs;
-			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content,
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
 			                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 		}
 	}

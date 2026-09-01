@@ -129,11 +129,15 @@ public:
 		return Value::STRUCT(std::move(struct_values));
 	}
 
-	// Convenience overload for blocks without level
+	// Level-omitting overload -- DELETED. Spec 3.0 onward requires every element to
+	// carry an explicit level (top level 1, never NULL); this overload existed only
+	// because it was one argument shorter than the one above, and that made it the
+	// overload a hurried call site reached for. It cost the metadata emission path
+	// a silent NULL level for three spec versions with nothing in a position to
+	// object -- see the commit that deleted this. Every caller must pass a level
+	// explicitly via the five-argument overload above.
 	static Value CreateBlock(const std::string &element_type, const std::string &content, const std::string &encoding,
-	                         const std::map<std::string, std::string> &attributes, int32_t element_order = 0) {
-		return CreateBlock(element_type, content, Value(), encoding, attributes, element_order);
-	}
+	                         const std::map<std::string, std::string> &attributes, int32_t element_order = 0) = delete;
 
 	// Order-preserving overload, matching the CreateAttributesMap overload above.
 	static Value CreateBlock(const std::string &element_type, const std::string &content, const Value &level,
