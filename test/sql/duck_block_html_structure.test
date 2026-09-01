@@ -4,13 +4,13 @@
 
 require webbed
 
-# Conformance macro, needed only for the <head> metadata assertions further
-# down. Copied verbatim (blank lines removed, matching
-# test/sql/duck_block_conformance.test's own note about why) from the
-# CREATE OR REPLACE MACRO statements in test/sql/duck_block_conformance.sql --
-# see that file for the full upstream commentary. Only the two macros this
-# file actually calls (duck_block_is_valid needs duck_block_declared_kinds)
-# are reproduced; duck_block_conformance.test carries the complete set.
+# Conformance macros, needed for the <head> metadata assertions further down
+# and (added for Commit 4's round-trip proof) duck_blocks_warnings. Copied
+# verbatim (blank lines removed, matching test/sql/duck_block_conformance.test's
+# own note about why) from the CREATE OR REPLACE MACRO statements in
+# test/sql/duck_block_conformance.sql -- see that file for the full upstream
+# commentary. Only the macros this file actually calls are reproduced;
+# duck_block_conformance.test carries the complete set.
 statement ok
 CREATE OR REPLACE MACRO duck_block_declared_kinds() AS (['block', 'inline', 'value']);
 CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
@@ -32,6 +32,51 @@ CREATE OR REPLACE MACRO duck_blocks_are_valid(blocks) AS (
             FROM unnest(blocks) WITH ORDINALITY AS t(e, i)
         ) WHERE prev IS NOT NULL AND lvl > prev + 1
     )
+);
+CREATE OR REPLACE MACRO duck_block_declared_types() AS (
+    [
+        'blockquote', 'blocks', 'bold', 'bool', 'caption', 'cite', 'code', 'deflist',
+        'div', 'figure', 'generic', 'heading', 'hr', 'image', 'inlines', 'italic',
+        'lineblock', 'linebreak', 'link', 'list', 'list_item', 'map', 'math', 'metadata',
+        'note', 'page_break', 'paragraph', 'plain', 'quoted', 'raw', 'section',
+        'smallcaps', 'softbreak', 'space', 'span', 'strikethrough', 'string', 'subscript',
+        'superscript', 'table', 'text', 'underline', 'version'
+    ]
+);
+CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
+    WITH e AS (SELECT unnest(blocks) AS el, generate_subscripts(blocks, 1) AS pos),
+    nxt AS (
+        SELECT el, pos,
+               lead(el) OVER (ORDER BY pos) AS nx,
+               lag(el)  OVER (ORDER BY pos) AS pv
+        FROM e
+    )
+    SELECT el.element_order AS element_order, 'plain_should_be_content' AS rule,
+           'plain is the only child of ' || pv.element_type ||
+           '; its text belongs in that element''s content' AS message
+    FROM nxt
+    WHERE el.element_type = 'plain' AND el.kind = 'block'
+      AND pv IS NOT NULL AND pv.kind = 'block'
+      AND coalesce(pv.content, '') = '' AND pv.level = el.level - 1
+      AND (nx IS NULL OR nx.level < el.level OR nx.kind <> 'block')
+    UNION ALL
+    SELECT el.element_order, 'table_not_native',
+           'table content is not the native {headers,rows} schema'
+    FROM e WHERE el.element_type = 'table'
+      AND coalesce(el.content, '') <> '' AND position('"headers"' IN el.content) = 0
+    UNION ALL
+    SELECT el.element_order, 'deflist_superseded',
+           'deflist is superseded by list with list_type=''definition'''
+    FROM e WHERE el.element_type = 'deflist'
+    UNION ALL
+    SELECT el.element_order, 'heading_without_rank',
+           'heading without attributes[''heading_level'']: do NOT fall back to level'
+    FROM e WHERE el.element_type = 'heading'
+      AND coalesce(el.attributes['heading_level'], '') = ''
+    UNION ALL
+    SELECT el.element_order, 'undeclared_element_type',
+           'element_type ' || el.element_type || ' is not in the vocabulary'
+    FROM e WHERE NOT list_contains(duck_block_declared_types(), el.element_type)
 );
 
 # --- Finding 1: <dl> produced zero blocks -----------------------------------
@@ -490,3 +535,76 @@ SELECT contains(duck_blocks_to_html(html_to_duck_blocks(
 )), 'Doc Title');
 ----
 false
+
+# =============================================================================
+# Round-trip and conformance proof for structural lists (spec-6.2 migration,
+# Commit 4). All four are byte-exact -- html_to_duck_blocks then
+# duck_blocks_to_html reproduces the input HTML exactly -- and all four
+# produce zero duck_blocks_warnings rows, actually run rather than assumed.
+# =============================================================================
+
+# Tight list: item text carried directly in list_item's content (Pandoc's
+# Plain), no paragraph wrapper.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>tight</li><li>also tight</li></ul>'));
+----
+<ul><li>tight</li><li>also tight</li></ul>
+
+# Loose list: each item's text lives in a `paragraph` child (Pandoc's Para)
+# rather than the list_item's own content.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>'));
+----
+<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>
+
+# Nested list: the outer item's leading text and its nested <ul> are
+# siblings, not concatenated -- the corruption Commit 3's plan called out
+# explicitly ("outerinner" with no separator). Confirmed by shape below.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>'));
+----
+<ul><li>outer<ul><li>inner</li></ul></li></ul>
+
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>')) AS b) x;
+----
+list	NULL	1
+list_item	NULL	2
+plain	outer	3
+list	NULL	3
+list_item	inner	4
+
+# <ol start="N">: start is preserved via attributes['start'], not dropped.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ol start="3"><li>a</li></ol>'));
+----
+<ol start="3"><li>a</li></ol>
+
+query I
+SELECT (html_to_duck_blocks('<ol start="3"><li>a</li></ol>'))[1].attributes['start'];
+----
+3
+
+# Zero duck_blocks_warnings rows across all four list forms -- the
+# regression guard the round-trip proof exists to give, not just "these
+# specific strings happen to match".
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li>tight</li><li>also tight</li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ol start="3"><li>a</li></ol>'));
+----
+0
