@@ -1,7 +1,9 @@
 # Design inputs for webbed's duck_block spec 5.0 migration
 
 **Date:** 2026-08-31
-**Status:** design input, not yet a plan
+**Status:** inputs recorded; `plain` settled in spec 6.0, vendored at 6.1;
+emission migration not started. See "UPDATE — 6.1 vendored" near the end of
+this document for what changed and why nothing below was rewritten.
 **Source:** answers from the `duck_block_utils` session, which owns the vocabulary.
 Upstream `main` @ `e4329fa`, SPEC_VERSION 5.0, 952 assertions.
 
@@ -36,6 +38,14 @@ now structural. That vein is exhausted.
 > He has ruled `plain` narrower than the answer recorded here, and that conflict
 > is back with the vocabulary owner. Do not build against this section until it
 > resolves.
+>
+> **RESOLVED — spec 6.0.** `duck_block_utils` narrowed `plain` to match the rule
+> Teague stated below: a leaf carries its own text in `content`; `plain` is for
+> text that has nowhere else to live. `<li>text</li>` is `list_item(content='text')`,
+> not `list_item > plain('text')`. See the vendored header's 5.0 -> 6.0 changelog
+> entry (`src/include/duck_block_vocabulary.hpp`) for the shipped wording. The
+> header is now vendored at 6.1; see the update note near the end of this
+> document.
 
 **1. `plain` is a general RULE, not a list of positions.** A bare block-level text
 run is a `plain`, whatever contains it. `<li>`, `<td>`, `<dd>` were examples.
@@ -152,6 +162,39 @@ on a spec they had already shipped, with the migration cost landing on them. web
 falls on them, which is a reason for them to push back if his reading breaks the
 Pandoc path. Note also that extending his one-sentence rule to `<td>` is MY
 inference, not his statement.
+
+**RESOLVED — spec 6.0.** `duck_block_utils` shipped Teague's reading: `plain`
+narrowed to text with nowhere else to live, so `<li>text</li>` is
+`list_item(content='text')` and `<td>cell</td>` is a leaf carrying its own
+content. The divergence table above (`list_item`, `td` rows) now reads as
+history, not as an open question.
+
+## UPDATE — 6.1 vendored, recorded 2026-09-01
+
+The vendored header (`src/include/duck_block_vocabulary.hpp`) has moved to
+SPEC_VERSION 6.1, upstream commit `010f36f`. This document was written entirely
+against 5.0 and is left unrewritten below on purpose — it is dated input, not a
+living spec — but two things from the header's own changelog are worth recording
+here so a reader does not have to reconstruct them:
+
+- **6.0** shipped exactly the `plain` narrowing Teague argued for in "Teague's
+  rulings" below. See the RESOLVED notes inline above.
+- **6.1** is purely additive: it exports `duck_blocks_normalize(blocks)`, which
+  applies 6.0's content rule to a finished block vector after the fact. That
+  function exists because the rule is SIBLING-DEPENDENT — whether a text run
+  becomes its container's `content` or stays a `plain` child depends on what
+  FOLLOWS it, which a *streaming* reader (panduck's EPUB/LaTeX readers, which
+  emit as they walk) cannot know when it reaches the run. **webbed does not need
+  it**: webbed's HTML reader walks a parsed DOM, not a stream, so sibling
+  information is already available at the moment each decision is made — there
+  is nothing to normalize after the fact.
+
+Net effect on webbed: the 5.0 -> 6.1 header bump was a **no-op for webbed's
+behaviour**. The emission migration this document's inputs were gathered for
+(narrowing `plain`, dropping `deflist` as an emitted type, `list_type`, ordered-
+list attributes, table's native schema) has not been started — everything in
+this document past this point still describes work not yet done, current as of
+6.1.
 
 **Classed divs — SETTLED, agrees with the vocabulary owner.** Verbatim: *"i don't
 think so. css classes are attributes we can track but `<section>` and

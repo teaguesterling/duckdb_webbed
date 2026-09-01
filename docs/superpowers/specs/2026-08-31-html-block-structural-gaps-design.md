@@ -202,7 +202,15 @@ label below the content it labels.
 | unmapped **semantic** element | `generic` + `source_type=<tag>` | per decision 2 |
 | bare `<div>`/`<span>`, no `id`/`class` | — | transparent; walk through without emitting |
 
-#### Open question for Plan 2: `<details>` gets no `<summary>` yet
+#### ~~Open question for Plan 2: `<details>` gets no `<summary>` yet~~ — RESOLVED
+
+Plan 2 picked the first option below: `caption` carries `attributes['role'] = 'summary'`
+(set by the reader when the source tag is `<summary>`), and the exporter's `CaptionTagForRole`
+emits `<summary>` for that role and `<figcaption>` otherwise — a context-sensitive tag on the
+`caption` block itself, not inspection of the innermost open container. See
+`src/duck_block_functions.cpp`: the reader side sets `role='summary'` where it maps `<summary>`,
+and `CaptionTagForRole` on the exporter side switches on it. Kept below, struck through rather
+than deleted, so the record shows the question was asked and how it was answered.
 
 `caption` renders `<figcaption>` unconditionally — verified against the binary: a
 `generic[source_type=details]` containing a `caption` renders
@@ -220,7 +228,8 @@ Options, not decided here:
 - A `role` (or `source_type`) attribute carried on the `caption` block itself, so the exporter
   does not need to inspect its container to know which tag to emit.
 
-Recorded as an open question; Plan 2 must pick one before it emits `<details>`.
+~~Recorded as an open question; Plan 2 must pick one before it emits `<details>`.~~
+RESOLVED: the first option, above.
 
 ### What the walk recurses into — the rule an implementer needs
 
