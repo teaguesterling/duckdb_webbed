@@ -338,3 +338,103 @@ query I
 SELECT len(html_to_duck_blocks('<figure>Some text</figure>'));
 ----
 1
+
+# =============================================================================
+# dl-as-definition-list migration, Commit 4: zero-warnings proof across the
+# FULL advisory class, not just the dl instance that motivated it. Before this
+# migration, `deflist_superseded` was the only remaining rule this reader's
+# output could ever trip -- every other rule (plain_should_be_content,
+# table_not_native, heading_without_rank, undeclared_element_type) was already
+# clean. This corpus is that whole class: a <dl> document, a nested <ul> at
+# depth 3, a figure, a section, a <head>-metadata document, and a rich
+# document combining sectioning, headings, and nested inline formatting.
+#
+# One combined query (UNION ALL across all six) rather than six separate
+# assertions, so the count asserted is actually the total the task's own
+# framing describes -- zero across the corpus, not zero six times over.
+# =============================================================================
+
+query I
+SELECT count(*) FROM (
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<dl><dt>Term</dt><dd>Def.</dd></dl>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<ul><li>L1<ul><li>L2<ul><li>L3</li></ul></li></ul></li></ul>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<section id="intro"><p>Body.</p></section>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+    ))
+);
+----
+0
+
+# duck_blocks_are_valid, same six documents, each checked individually.
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<ul><li>L1<ul><li>L2<ul><li>L3</li></ul></li></ul></li></ul>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<section id="intro"><p>Body.</p></section>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+));
+----
+true
+
+# The actual round-trip output for all three <dl> target shapes, stated
+# plainly rather than only asserted via warnings/validity above.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>'));
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>'));
+----
+<dl><dt>T</dt><dd><p>loose</p></dd></dl>

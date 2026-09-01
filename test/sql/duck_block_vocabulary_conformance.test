@@ -127,12 +127,22 @@ SELECT (html_to_duck_blocks(duck_blocks_to_html([
 ----
 list
 
+# NOT a round trip through element_type any more: the exporter still renders a
+# `deflist` block as <dl><dt>T</dt><dd>D</dd></dl> (TYPE_DEFLIST's render
+# branch is kept for other producers), but dl-as-definition-list migration
+# means the READER now parses ANY <dl> as a structural `list` with
+# list_type='definition', regardless of what produced the markup -- so
+# reading it back no longer reproduces `deflist`. Checked against the
+# conformance macro before updating: the OLD 'deflist' round trip tripped
+# duck_blocks_warnings' deflist_superseded rule (1 row); the NEW 'list'
+# result is duck_blocks_are_valid and warning-free (0 rows) -- a strictly
+# better outcome by the spec's own oracle, not a regression.
 query I
 SELECT (html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'deflist','content':'[{"term":"T","definitions":["D"]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
 ])))[1].element_type;
 ----
-deflist
+list
 
 # --- Container with a nested block child -----------------------------------
 # figure holding an explicit child block (rather than direct content) round-trips

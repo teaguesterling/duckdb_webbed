@@ -26,7 +26,6 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
-static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
@@ -404,10 +403,13 @@ static bool IsNonContentTag(const std::string &tag) {
 //
 // <ul>/<ol> are NOT here: spec 6.x reads them as structural `list` +
 // `list_item` blocks (see the "List" branch in WalkBlockNode below), not as
-// an opaque JSON leaf. <dl> stays on the JSON-leaf path deliberately --
-// migrating it is a separate, not-yet-made call (see DefListToJson).
+// an opaque JSON leaf. <dl> is NOT here either, for the same reason -- see
+// the "Definition list" branch below. It migrated off this path (dl-as-
+// definition-list migration); `deflist` stays declared in the vocabulary
+// and the exporter still renders it for any other producer that emits it,
+// but this reader no longer produces it.
 static bool IsJsonLeafTag(const std::string &tag) {
-	return tag == "table" || tag == "dl";
+	return tag == "table";
 }
 
 // Semantic sectioning containers. One block type, variant in attributes['role'],
@@ -430,7 +432,7 @@ static bool IsBlockLevelTag(const std::string &tag) {
 	}
 	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
 	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
-	       tag == "ul" || tag == "ol" || tag == "li" ||
+	       tag == "ul" || tag == "ol" || tag == "li" || tag == "dl" || tag == "dt" || tag == "dd" ||
 	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
 }
 
@@ -790,20 +792,9 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		}
 
 		// --- JSON-encoded leaves: NOT recursed ---------------------------
-		// <dl> stays here deliberately -- LEAVE `<dl>` ALONE, per Teague's
-		// explicit call: one behaviour change (lists) at a time. `deflist` is
-		// still declared in spec 6.2; do not migrate it here.
 		if (IsJsonLeafTag(tag)) {
-			std::string content;
-			std::string block_type;
-			if (tag == "table") {
-				block_type = DuckBlockTypes::TYPE_TABLE;
-				content = TableToJson(child);
-			} else {
-				block_type = DuckBlockTypes::TYPE_DEFLIST;
-				content = DefListToJson(child);
-			}
-			blocks.push_back(DuckBlockTypes::CreateBlock(block_type, content, Value::INTEGER(level),
+			std::string content = TableToJson(child);
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_TABLE, content, Value::INTEGER(level),
 			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
 			continue;
 		}
@@ -841,6 +832,36 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		// (Pandoc's loose Para, or a nested list). Reuses EmitContainerOrLeaf
 		// rather than writing a fourth copy of that decision.
 		if (tag == "li") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Definition list: structural `list` with list_type='definition' -
+		// dl-as-definition-list migration: <dl> supersedes the opaque `deflist`
+		// JSON leaf (still declared in the vocabulary for other producers, see
+		// IsJsonLeafTag above) with the same structural treatment <ul>/<ol> get.
+		// `ordered` is NOT emitted here, unlike the bullet/ordered case above --
+		// it is the legacy alias for bullet-vs-ordered only, and has no meaning
+		// for a definition list.
+		if (tag == "dl") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_LIST_TYPE),
+			                   std::string(DuckBlockTypes::LIST_TYPE_DEFINITION));
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Definition term / definition: same content rule as <li> --------
+		// <dt> -> list_item(role='term'); <dd> -> list_item(role='definition').
+		// A lone text child carries it in `content` (Pandoc's tight Plain);
+		// block children (e.g. a <p>) are owned at level+1 (Pandoc's loose
+		// Para) -- reuses EmitContainerOrLeaf, the same helper <li> uses, rather
+		// than writing another copy of that decision. Document order is
+		// preserved regardless of whether a <dd> precedes any <dt> (malformed
+		// but legal HTML): no reordering, no drop, no crash.
+		if (tag == "dt" || tag == "dd") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE),
+			                   tag == "dt" ? std::string(DuckBlockTypes::ROLE_TERM)
+			                               : std::string(DuckBlockTypes::ROLE_DEFINITION));
 			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
 			continue;
 		}
@@ -1231,6 +1252,22 @@ static std::string GenericTagForSourceType(const std::string &source_type) {
 	return "";
 }
 
+// A list_item's role selects its tag inside a definition list. Validated
+// against a fixed enum for the same reason as SectionTagForRole and
+// CaptionTagForRole: role derives from parsed HTML, and interpolating it
+// unchecked into a tag name would let a crafted document emit a tag it never
+// contained. An unrecognised role (or none, the ordinary case) falls back to
+// <li>, today's behaviour.
+static std::string ListItemTagForRole(const std::string &role) {
+	if (role == DuckBlockTypes::ROLE_TERM) {
+		return "dt";
+	}
+	if (role == DuckBlockTypes::ROLE_DEFINITION) {
+		return "dd";
+	}
+	return "li";
+}
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -1397,19 +1434,34 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// entry in duck_block_vocabulary.hpp); attributes['ordered'] is a
 				// legacy alias kept for producers that predate list_type. When both
 				// are present and disagree, list_type wins.
+				//
+				// list_type='definition' -> <dl>, dl-as-definition-list migration.
+				// Distinct from the ordered/bullet choice below: a definition list
+				// has no ordered variant, so `ordered` and `start` are simply
+				// irrelevant to it rather than computed and ignored.
+				std::string list_type =
+				    attrs.count(DuckBlockTypes::ATTR_LIST_TYPE) ? attrs[DuckBlockTypes::ATTR_LIST_TYPE] : "";
+				bool is_definition = list_type == DuckBlockTypes::LIST_TYPE_DEFINITION;
 				bool ordered;
-				if (attrs.count(DuckBlockTypes::ATTR_LIST_TYPE)) {
-					ordered = attrs[DuckBlockTypes::ATTR_LIST_TYPE] == "ordered";
+				if (is_definition) {
+					ordered = false;
+				} else if (!list_type.empty()) {
+					ordered = list_type == DuckBlockTypes::LIST_TYPE_ORDERED;
 				} else {
 					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				}
-				std::string tag = ordered ? "ol" : "ul";
+				std::string tag = is_definition ? "dl" : (ordered ? "ol" : "ul");
 				html << "<" << tag;
 				if (ordered && attrs.count("start")) {
 					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
 				}
 				html << ">";
-				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
+				// The JSON-items shape (a flat array of strings) is a bullet/ordered
+				// convenience with no definition-list equivalent -- a definition
+				// list's items are always the structural list_item children below,
+				// never this shape. Guarded so a definition list's content, if ever
+				// non-empty JSON, cannot emit stray <li>s inside a <dl>.
+				if (!is_definition && encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
 						yyjson_val *root = yyjson_doc_get_root(doc);
@@ -1450,7 +1502,14 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// content (Pandoc's Plain), a loose item carries NULL content and a
 				// `paragraph` block child (Pandoc's Para) that the outer loop renders
 				// on its own next iteration, inside this list_item's still-open scope.
-				html << "<li>";
+				//
+				// role='term'/'definition' selects <dt>/<dd> for a definition list;
+				// no role (or any other role) stays <li>, today's behaviour. See
+				// ListItemTagForRole for why role is validated rather than
+				// interpolated.
+				std::string item_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string item_tag = ListItemTagForRole(item_role);
+				html << "<" << item_tag << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1460,9 +1519,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</li>", cur_level});
+					open_containers.push_back({"</" + item_tag + ">", cur_level});
 				} else {
-					html << "</li>";
+					html << "</" << item_tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
@@ -2496,51 +2555,6 @@ static std::string TableJsonToHtml(const std::string &json) {
 	html << "</table>";
 	yyjson_doc_free(doc);
 	return html.str();
-}
-
-// Serialise <dl> to [{"term": "...", "definitions": ["...", ...]}].
-// Consecutive <dd>s attach to the most recent <dt>. A <dd> with no preceding
-// <dt> is attached to an entry with an empty term rather than dropped.
-static std::string DefListToJson(xmlNodePtr node) {
-	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
-	yyjson_mut_val *arr = yyjson_mut_arr(doc);
-	yyjson_mut_doc_set_root(doc, arr);
-
-	yyjson_mut_val *cur_entry = nullptr;
-	yyjson_mut_val *cur_defs = nullptr;
-
-	for (xmlNodePtr child = node->children; child; child = child->next) {
-		if (child->type != XML_ELEMENT_NODE || !child->name) {
-			continue;
-		}
-		std::string tag(reinterpret_cast<const char *>(child->name));
-		if (tag == "dt") {
-			cur_entry = yyjson_mut_obj(doc);
-			cur_defs = yyjson_mut_arr(doc);
-			std::string term = GetNodeTextContent(child);
-			yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", term.c_str());
-			yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
-			yyjson_mut_arr_add_val(arr, cur_entry);
-		} else if (tag == "dd") {
-			if (!cur_entry) {
-				cur_entry = yyjson_mut_obj(doc);
-				cur_defs = yyjson_mut_arr(doc);
-				yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", "");
-				yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
-				yyjson_mut_arr_add_val(arr, cur_entry);
-			}
-			std::string def = GetNodeTextContent(child);
-			yyjson_mut_arr_add_strcpy(doc, cur_defs, def.c_str());
-		}
-	}
-
-	char *json = yyjson_mut_write(doc, 0, nullptr);
-	std::string result = json ? std::string(json) : std::string("[]");
-	if (json) {
-		free(json);
-	}
-	yyjson_mut_doc_free(doc);
-	return result;
 }
 
 static std::string TableToJson(xmlNodePtr node) {

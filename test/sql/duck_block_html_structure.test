@@ -80,11 +80,18 @@ CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
 );
 
 # --- Finding 1: <dl> produced zero blocks -----------------------------------
+# Historical framing: <dl> used to emit nothing at all, then an opaque
+# `deflist` JSON leaf. dl-as-definition-list migration supersedes that leaf
+# with a structural `list`/`list_item` shape (see the dedicated section
+# further down for the full target and its round-trips) -- this assertion is
+# updated in place rather than left pinning the shape the migration removes.
 query III
 SELECT b.element_type, b.content, b.level
 FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>')) AS b) x;
 ----
-deflist	[{"term":"Term","definitions":["Def."]}]	1
+list	NULL	1
+list_item	Term	2
+list_item	Def.	2
 
 # --- Finding 2: <blockquote> emitted its content TWICE -----------------------
 # len() equality, not contains(): the bug was a spurious extra block, which a
@@ -606,5 +613,96 @@ SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li>outer<ul>
 
 query I
 SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ol start="3"><li>a</li></ol>'));
+----
+0
+
+# =============================================================================
+# <dl> as a definition list (dl-as-definition-list migration, Commit 1: pin
+# the target, landing red). `deflist` (an opaque JSON leaf) is superseded by
+# `list` with attributes['list_type']='definition' -- the same structural
+# treatment <ul>/<ol> already got. NOT the legacy `ordered` alias: `ordered`
+# only ever answers bullet-vs-ordered and is meaningless for a definition
+# list, so it must be absent, not 'false'.
+#
+# <dt> -> list_item(role='term'); <dd> -> list_item(role='definition').
+# <dt>/<dd> follow the SAME content rule as every other container: a lone
+# text child is carried directly in `content` (Pandoc's tight Plain); block
+# children (e.g. a <p>) are owned at level+1 (Pandoc's loose Para) -- exactly
+# the tight/loose distinction the old deflist JSON flattened away.
+#
+# Verified valid with zero warnings against the conformance macro before this
+# task was written; these assertions pin that target and land red against
+# today's deflist-emitting reader.
+# =============================================================================
+
+# Single term/definition pair -- attributes checked by key: list_type on the
+# list, role on each item, and 'ordered' MUST be absent (not 'false') on a
+# definition list.
+query IIIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role'], b.attributes['ordered']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL	NULL
+list_item	Term	2	NULL	term	NULL
+list_item	Def.	2	NULL	definition	NULL
+
+# One term, two definitions -- both <dd>s become sibling list_items, not
+# concatenated into one.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	T	2	NULL	term
+list_item	A	2	NULL	definition
+list_item	B	2	NULL	definition
+
+# A loose definition -- a <p> child, not bare text -- keeps its own
+# `paragraph` block at level+1 instead of flattening to a bare string. This is
+# the tight/loose distinction the old deflist JSON destroyed.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	T	2	NULL	term
+list_item	NULL	2	NULL	definition
+paragraph	loose	3	NULL	NULL
+
+# A <dd> before any <dt> is malformed but legal HTML. Decision: document order
+# is preserved exactly as every other container's walk preserves it -- no
+# reordering, no drop, no crash. The orphan <dd> simply becomes the first
+# list_item, role='definition', with no preceding term.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dd>Orphan</dd><dt>T</dt><dd>D</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	Orphan	2	NULL	definition
+list_item	T	2	NULL	term
+list_item	D	2	NULL	definition
+
+# --- Round-trips: html -> blocks -> html, byte-exact for all three shapes ---
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>'));
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>'));
+----
+<dl><dt>T</dt><dd><p>loose</p></dd></dl>
+
+# Zero duck_blocks_warnings rows for a <dl> document: the deflist_superseded
+# rule that flagged webbed's OLD output must no longer fire once <dl> reads
+# as a definition list instead of the opaque deflist JSON leaf.
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
 ----
 0
