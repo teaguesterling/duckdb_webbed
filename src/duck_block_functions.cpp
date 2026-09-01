@@ -26,7 +26,6 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
-static int CountBlockquoteAncestors(xmlNodePtr node);
 static std::string ListItemsToJson(xmlNodePtr node);
 static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
@@ -1635,18 +1634,6 @@ static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name) {
 	std::string result(reinterpret_cast<const char *>(value));
 	xmlFree(value);
 	return result;
-}
-
-static int CountBlockquoteAncestors(xmlNodePtr node) {
-	int count = 0;
-	xmlNodePtr parent = node->parent;
-	while (parent) {
-		if (parent->type == XML_ELEMENT_NODE && parent->name && xmlStrcmp(parent->name, BAD_CAST "blockquote") == 0) {
-			count++;
-		}
-		parent = parent->parent;
-	}
-	return count;
 }
 
 static std::string RenderPandocInlinesToHtml(yyjson_val *inlines_val, int depth = 0) {
