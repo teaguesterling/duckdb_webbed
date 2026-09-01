@@ -26,7 +26,6 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
-static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
@@ -404,10 +403,13 @@ static bool IsNonContentTag(const std::string &tag) {
 //
 // <ul>/<ol> are NOT here: spec 6.x reads them as structural `list` +
 // `list_item` blocks (see the "List" branch in WalkBlockNode below), not as
-// an opaque JSON leaf. <dl> stays on the JSON-leaf path deliberately --
-// migrating it is a separate, not-yet-made call (see DefListToJson).
+// an opaque JSON leaf. <dl> is NOT here either, for the same reason -- see
+// the "Definition list" branch below. It migrated off this path (dl-as-
+// definition-list migration); `deflist` stays declared in the vocabulary
+// and the exporter still renders it for any other producer that emits it,
+// but this reader no longer produces it.
 static bool IsJsonLeafTag(const std::string &tag) {
-	return tag == "table" || tag == "dl";
+	return tag == "table";
 }
 
 // Semantic sectioning containers. One block type, variant in attributes['role'],
@@ -430,7 +432,7 @@ static bool IsBlockLevelTag(const std::string &tag) {
 	}
 	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
 	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
-	       tag == "ul" || tag == "ol" || tag == "li" ||
+	       tag == "ul" || tag == "ol" || tag == "li" || tag == "dl" || tag == "dt" || tag == "dd" ||
 	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
 }
 
@@ -790,20 +792,9 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		}
 
 		// --- JSON-encoded leaves: NOT recursed ---------------------------
-		// <dl> stays here deliberately -- LEAVE `<dl>` ALONE, per Teague's
-		// explicit call: one behaviour change (lists) at a time. `deflist` is
-		// still declared in spec 6.2; do not migrate it here.
 		if (IsJsonLeafTag(tag)) {
-			std::string content;
-			std::string block_type;
-			if (tag == "table") {
-				block_type = DuckBlockTypes::TYPE_TABLE;
-				content = TableToJson(child);
-			} else {
-				block_type = DuckBlockTypes::TYPE_DEFLIST;
-				content = DefListToJson(child);
-			}
-			blocks.push_back(DuckBlockTypes::CreateBlock(block_type, content, Value::INTEGER(level),
+			std::string content = TableToJson(child);
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_TABLE, content, Value::INTEGER(level),
 			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
 			continue;
 		}
@@ -841,6 +832,36 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		// (Pandoc's loose Para, or a nested list). Reuses EmitContainerOrLeaf
 		// rather than writing a fourth copy of that decision.
 		if (tag == "li") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Definition list: structural `list` with list_type='definition' -
+		// dl-as-definition-list migration: <dl> supersedes the opaque `deflist`
+		// JSON leaf (still declared in the vocabulary for other producers, see
+		// IsJsonLeafTag above) with the same structural treatment <ul>/<ol> get.
+		// `ordered` is NOT emitted here, unlike the bullet/ordered case above --
+		// it is the legacy alias for bullet-vs-ordered only, and has no meaning
+		// for a definition list.
+		if (tag == "dl") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_LIST_TYPE),
+			                   std::string(DuckBlockTypes::LIST_TYPE_DEFINITION));
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Definition term / definition: same content rule as <li> --------
+		// <dt> -> list_item(role='term'); <dd> -> list_item(role='definition').
+		// A lone text child carries it in `content` (Pandoc's tight Plain);
+		// block children (e.g. a <p>) are owned at level+1 (Pandoc's loose
+		// Para) -- reuses EmitContainerOrLeaf, the same helper <li> uses, rather
+		// than writing another copy of that decision. Document order is
+		// preserved regardless of whether a <dd> precedes any <dt> (malformed
+		// but legal HTML): no reordering, no drop, no crash.
+		if (tag == "dt" || tag == "dd") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE),
+			                   tag == "dt" ? std::string(DuckBlockTypes::ROLE_TERM)
+			                               : std::string(DuckBlockTypes::ROLE_DEFINITION));
 			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
 			continue;
 		}
@@ -2496,51 +2517,6 @@ static std::string TableJsonToHtml(const std::string &json) {
 	html << "</table>";
 	yyjson_doc_free(doc);
 	return html.str();
-}
-
-// Serialise <dl> to [{"term": "...", "definitions": ["...", ...]}].
-// Consecutive <dd>s attach to the most recent <dt>. A <dd> with no preceding
-// <dt> is attached to an entry with an empty term rather than dropped.
-static std::string DefListToJson(xmlNodePtr node) {
-	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
-	yyjson_mut_val *arr = yyjson_mut_arr(doc);
-	yyjson_mut_doc_set_root(doc, arr);
-
-	yyjson_mut_val *cur_entry = nullptr;
-	yyjson_mut_val *cur_defs = nullptr;
-
-	for (xmlNodePtr child = node->children; child; child = child->next) {
-		if (child->type != XML_ELEMENT_NODE || !child->name) {
-			continue;
-		}
-		std::string tag(reinterpret_cast<const char *>(child->name));
-		if (tag == "dt") {
-			cur_entry = yyjson_mut_obj(doc);
-			cur_defs = yyjson_mut_arr(doc);
-			std::string term = GetNodeTextContent(child);
-			yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", term.c_str());
-			yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
-			yyjson_mut_arr_add_val(arr, cur_entry);
-		} else if (tag == "dd") {
-			if (!cur_entry) {
-				cur_entry = yyjson_mut_obj(doc);
-				cur_defs = yyjson_mut_arr(doc);
-				yyjson_mut_obj_add_strcpy(doc, cur_entry, "term", "");
-				yyjson_mut_obj_add_val(doc, cur_entry, "definitions", cur_defs);
-				yyjson_mut_arr_add_val(arr, cur_entry);
-			}
-			std::string def = GetNodeTextContent(child);
-			yyjson_mut_arr_add_strcpy(doc, cur_defs, def.c_str());
-		}
-	}
-
-	char *json = yyjson_mut_write(doc, 0, nullptr);
-	std::string result = json ? std::string(json) : std::string("[]");
-	if (json) {
-		free(json);
-	}
-	yyjson_mut_doc_free(doc);
-	return result;
 }
 
 static std::string TableToJson(xmlNodePtr node) {
