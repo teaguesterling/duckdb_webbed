@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: 010f36f (SPEC_VERSION 6.1)
+// Vendored at upstream commit: 143341f (SPEC_VERSION 6.2)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -21,7 +21,6 @@
 // fresh checkout of upstream to detect drift -- run it (or `make
 // check-vocabulary`) after bumping the vendored commit above.
 // ============================================================================
-
 
 // ============================================================================
 // The duck_block vocabulary -- PUBLISHED INTERFACE.
@@ -272,8 +271,27 @@ struct DuckBlockVocabulary {
 	//               that drift. Nothing is removed or renamed -- a consumer on 6.0 is
 	//               unaffected.
 	//
+	//   6.1 -> 6.2  ADDITIVE, three clarifications that were load-bearing and unstated.
+	//               `metadata` gains attributes['role'], with 'frontmatter' declared --
+	//               one type plus a role rather than minting `frontmatter` as its own
+	//               element_type, which is this vocabulary's own rule applied to a case
+	//               three producers had each guessed differently.
+	//
+	//               Value elements after the blocks is now a CONTRACT, not the
+	//               "convenience" the spec called it: two producers asked where they go,
+	//               which is a question a convenience cannot answer. With it, the rule
+	//               that a consumer must end an inline run at any NON-INLINE element --
+	//               getting that wrong made this repo's exporter emit a document whose
+	//               body had been replaced by its title.
+	//
+	//               A document with NO blocks -- a .toml file read as pure metadata --
+	//               is conformant, and stated rather than left to be inferred from
+	//               nothing objecting.
+	//
+	//               Nothing renamed, nothing removed; a consumer on 6.1 is unaffected.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "6.1";
+	static constexpr const char *SPEC_VERSION = "6.2";
 
 	// ========================================================================
 	// Block type names
