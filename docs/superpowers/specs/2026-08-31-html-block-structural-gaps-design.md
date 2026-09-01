@@ -1,7 +1,7 @@
 # Design: structural gaps in `html_to_duck_blocks()`
 
 **Date:** 2026-08-31
-**Status:** approved, pending implementation
+**Status:** Plan 1 (exporter containment) implemented; Plan 2 (reader tree walk) pending
 
 ## Problem
 
@@ -333,6 +333,26 @@ is preserved, the unmapped type is named and greppable, and the block is impossi
 the opposite of today's silent drop. It is deliberately ugly: a fallback that renders cleanly
 is a fallback nobody fixes.
 
+#### The fallback is guarded on a non-empty `element_type`
+
+A ruling made during implementation, not covered above: the terminal fallback fires only when
+`element_type` is non-empty. The two cases it distinguishes:
+
+- A **named but unrecognised** `element_type` (e.g. `'no_such_type'`) renders the fallback —
+  `<div data-duck-block-type="no_such_type">content</div>`.
+- An **empty or NULL** `element_type` renders nothing.
+
+These are different failure modes, not the same one caught twice. A real-but-unknown type name
+is producer/renderer version skew — the block has an identity, this renderer just doesn't know
+it yet — and dropping it silently is the exact bug this plan fixes, so it must recover via the
+fallback. A NULL `element_type` is *absent* identity, i.e. malformed input: rendering it through
+the fallback would emit `data-duck-block-type=""`, which names nothing and conveys nothing. This
+is also why `test/sql/duck_block_robustness.test` — a file dedicated to malformed input — treats
+`element_type` differently from every other field it tests: a NULL `kind` defaults to `block`
+and a NULL `encoding` defaults to `text`, both sensible defaults for absent-but-recoverable data,
+but `element_type` is the block's identity, and identity has no sensible default. Its absence
+means there is nothing to render.
+
 ## Prerequisite: the local vocabulary header is stale
 
 `src/include/duck_block_types.hpp` is a deliberate mirror of the sibling's `block_types.hpp`,
@@ -463,11 +483,9 @@ requirement, and bundling it makes this diff hard to review. Follow-up work.
 
 Recorded because they are real and would otherwise be rediscovered:
 
-- **`deflist` JSON shape is unspecified.** The sibling emits raw Pandoc
-  `DefinitionList c = [([Inline],[[Block]])]`. webbed's `list` JSON is `["a","b"]` and its
-  `table` JSON is `{"headers":[...],"rows":[...]}`. Neither matches. This design must state
-  webbed's deflist shape explicitly at implementation time; whatever is chosen will differ from
-  the sibling's under the same `element_type` and `encoding`.
+- **`deflist` JSON shape is decided.** webbed emits `[{"term": "...", "definitions": ["...", "..."]}]`. The sibling emits raw Pandoc
+  `DefinitionList c = [([Inline],[[Block]])]`. These differ under the same `element_type` and
+  `encoding`, which is a live interop gap requiring a converter on one side or the other.
 - **`list` variant attribute disagrees today.** webbed emits `attributes['ordered']='true'|'false'`
   (`duck_block_html.test:72,83`); the sibling emits `attributes['list_type']='bullet'|'ordered'`.
   Same block type, different attribute, silently. Decision 3 cites `list`+`list_type` as the
