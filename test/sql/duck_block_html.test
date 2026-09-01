@@ -1000,13 +1000,18 @@ SELECT duck_blocks_to_html([{kind: 'inline', element_type: 'text', content: '<sc
 # -----------------------------------------------------------------------------
 
 # Test paragraph with inline children
+# Inline children must be STRICTLY deeper than their parent (level: NULL here
+# is effective level 1, so children sit at 2) -- matching what the reader
+# actually emits (html_to_duck_blocks always puts inline children at
+# parent_level + 1). ConsumeInlineChildren stops at <= parent_level, so a
+# same-level inline is a sibling, not a child.
 query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Hello ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Hello ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'bold', content: 'world', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'world', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----
@@ -1017,13 +1022,13 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'This is ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'This is ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'italic', content: 'italic', level: 1,
+    {kind: 'inline', element_type: 'italic', content: 'italic', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2},
-    {kind: 'inline', element_type: 'text', content: ' and ', level: 1,
+    {kind: 'inline', element_type: 'text', content: ' and ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 3},
-    {kind: 'inline', element_type: 'bold', content: 'bold', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'bold', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 4}
 ]);
 ----
@@ -1034,9 +1039,9 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Visit ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Visit ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'link', content: 'example', level: 1,
+    {kind: 'inline', element_type: 'link', content: 'example', level: 2,
      encoding: 'text', attributes: MAP{'href': 'https://example.com'}, element_order: 2}
 ]);
 ----
@@ -1047,11 +1052,11 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'First para', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'First para', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
     {kind: 'block', element_type: 'paragraph', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 2},
-    {kind: 'inline', element_type: 'text', content: 'Second para', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Second para', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 3}
 ]);
 ----
@@ -1062,7 +1067,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'paragraph', content: 'Prefix: ', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 0},
-    {kind: 'inline', element_type: 'bold', content: 'suffix', level: 1,
+    {kind: 'inline', element_type: 'bold', content: 'suffix', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1077,9 +1082,9 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '1'}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Chapter ', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Chapter ', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'italic', content: 'One', level: 1,
+    {kind: 'inline', element_type: 'italic', content: 'One', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----
@@ -1090,7 +1095,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '2'}, element_order: 0},
-    {kind: 'inline', element_type: 'code', content: 'Section', level: 1,
+    {kind: 'inline', element_type: 'code', content: 'Section', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1101,7 +1106,7 @@ query I
 SELECT duck_blocks_to_html([
     {kind: 'block', element_type: 'heading', content: '', level: NULL,
      encoding: 'text', attributes: MAP{'heading_level': '1', 'id': 'intro'}, element_order: 0},
-    {kind: 'inline', element_type: 'text', content: 'Introduction', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'Introduction', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 1}
 ]);
 ----
@@ -1160,7 +1165,7 @@ SELECT duck_blocks_to_html([
      encoding: 'text', attributes: MAP{}, element_order: 0},
     {kind: 'block', element_type: 'hr', content: '', level: NULL,
      encoding: 'text', attributes: MAP{}, element_order: 1},
-    {kind: 'inline', element_type: 'text', content: 'After HR', level: 1,
+    {kind: 'inline', element_type: 'text', content: 'After HR', level: 2,
      encoding: 'text', attributes: MAP{}, element_order: 2}
 ]);
 ----

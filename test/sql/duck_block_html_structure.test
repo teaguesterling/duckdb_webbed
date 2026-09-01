@@ -228,3 +228,31 @@ query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<aside class="note"><p>n</p></aside>'));
 ----
 <aside class="note"><p>n</p></aside>
+
+# --- Loose text inside a container that also has block children --------------
+# Loose text inside a container that also has block children is preserved. It was
+# silently dropped: the container walk ignored text nodes entirely. For
+# <blockquote> this was a regression -- the old flat path kept the text in content.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote>a<p>b</p></blockquote>'));
+----
+<blockquote>a<p>b</p></blockquote>
+
+# Lead-in text before a heading inside a sectioning element -- common on real pages.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<article>Lead-in.<h2>H</h2><p>P</p></article>'));
+----
+<article>Lead-in.<h2>H</h2><p>P</p></article>
+
+# Loose inline FORMATTING, not just text.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s">Loose <em>em</em> text<p>para</p></section>'));
+----
+<section id="s">Loose <em>em</em> text<p>para</p></section>
+
+# Trailing loose text after a block child keeps its own scope rather than being
+# absorbed into the preceding paragraph.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>b</p>tail</blockquote>'));
+----
+<blockquote><p>b</p>tail</blockquote>

@@ -33,7 +33,8 @@ static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
-                                  std::set<size_t> &consumed_indices, std::stringstream &html);
+                                  std::set<size_t> &consumed_indices, std::stringstream &html,
+                                  int32_t parent_level);
 
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
@@ -252,7 +253,8 @@ static std::string RenderInlineCloseTag(const std::string &element_type) {
 
 // Render the contiguous run of kind='inline' blocks following `parent_idx` as that
 // block's inline children, marking each consumed so the main loop skips it.
-// Stops at the first non-inline block, or an inline with NULL/<1 level.
+// Stops at the first non-inline block, or an inline that is not strictly
+// deeper than `parent_level`.
 //
 // Mirrors the block-level scope stack in DuckBlocksToHtmlFunction: an inline
 // is a CONTAINER (its children are separate, deeper-level entries in the run)
@@ -263,8 +265,19 @@ static std::string RenderInlineCloseTag(const std::string &element_type) {
 // close pushed onto a level-keyed stack, and closed when a later inline in
 // the run arrives at or above that level (or the run ends) -- exactly the
 // close-before-render / drain-at-end shape used for blocks.
+//
+// `parent_level` is the level of the block this run is being consumed for
+// (its own `cur_level` in the caller). An inline must be STRICTLY deeper than
+// that to belong to it -- an inline at the same level is a sibling, not a
+// child, of the block it follows (e.g. loose trailing text after a
+// paragraph inside a blockquote). Consuming it anyway mis-attributes it: it
+// would render as if it were part of the preceding block's content instead
+// of standing on its own. This must agree with the block-level scope
+// stack's own pop rule (`open_containers.back().level >= cur_level`), or
+// containment and inline consumption disagree about which blocks are whose.
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
-                                  std::set<size_t> &consumed_indices, std::stringstream &html) {
+                                  std::set<size_t> &consumed_indices, std::stringstream &html,
+                                  int32_t parent_level) {
 	vector<OpenInline> open_inlines;
 
 	for (size_t next_idx = parent_idx + 1; next_idx < blocks_list.size(); next_idx++) {
@@ -279,7 +292,7 @@ static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t paren
 		if (next_kind != DuckBlockTypes::KIND_INLINE) {
 			break;
 		}
-		if (next_level_val.IsNull() || next_level_val.GetValue<int32_t>() < 1) {
+		if (next_level_val.IsNull() || next_level_val.GetValue<int32_t>() <= parent_level) {
 			break;
 		}
 		int32_t next_level = next_level_val.GetValue<int32_t>();
@@ -433,16 +446,33 @@ static bool HasBlockChildren(xmlNodePtr node) {
 	return false;
 }
 
-// Extract inline elements from an HTML node's children as structured
-// kind='inline' duck_blocks. Nested formatting (e.g. <b>x <i>y</i></b>) is
-// preserved: a wrapper containing further elements is emitted with empty
-// content (=> NULL) followed by its children at level+1; a wrapper containing
-// only text becomes a leaf carrying that text. Returns the inline Values and
-// advances element_order.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
+// Attribute list for a single walked/extracted node. A vector, not a
+// std::map: a few callers (section's role/id/class, div's id/class, and now
+// inline img/a/span attributes) are tested on exact MAP display order, and
+// std::map would silently re-sort those keys alphabetically. This preserves
+// the insertion order below.
+using OrderedAttrs = std::vector<std::pair<std::string, std::string>>;
+
+// Forward declaration: ExtractInlineElementsRange recurses into a parent's
+// full child list (e.g. a nested formatting wrapper) via this convenience
+// form, defined just after it below.
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order);
+
+// Extract inline elements from an explicit sibling range [start, stop) as
+// structured kind='inline' duck_blocks. Nested formatting (e.g. <b>x
+// <i>y</i></b>) is preserved: a wrapper containing further elements is
+// emitted with empty content (=> NULL) followed by its children at
+// level+1; a wrapper containing only text becomes a leaf carrying that
+// text. Returns the inline Values and advances element_order.
+//
+// Range-based rather than "all children of a parent" so WalkBlockNode can
+// hand it a run of loose inline nodes (text plus inline elements) that sit
+// among block siblings, not gathered under a dedicated inline parent.
+static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level,
+                                                      int32_t &element_order) {
 	std::vector<Value> inlines;
 
-	for (xmlNodePtr child = parent_node->children; child; child = child->next) {
+	for (xmlNodePtr child = start; child && child != stop; child = child->next) {
 		if (child->type == XML_TEXT_NODE) {
 			std::string text = reinterpret_cast<const char *>(child->content);
 			if (!text.empty()) {
@@ -537,11 +567,71 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 	return inlines;
 }
 
-// Attribute list for a single walked node. A vector, not a std::map: a few
-// callers (section's role/id/class, div's id/class) are tested on exact MAP
-// display order, and std::map would silently re-sort those keys
-// alphabetically. This preserves the insertion order below.
-using OrderedAttrs = std::vector<std::pair<std::string, std::string>>;
+// Convenience form of ExtractInlineElementsRange over ALL of a parent's
+// children -- the common case; WalkBlockNode is the only caller that needs
+// the explicit-range form above.
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
+	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order);
+}
+
+// True when `node` is the start of a loose-inline run inside a container's
+// child list: a text node carrying real (non-whitespace) content, or an
+// element ExtractInlineElements already knows how to render as inline
+// formatting (img/br, or a tag InlineTypeForTag recognizes -- b/strong,
+// i/em, code, del/s/strike, sup, sub, u, a, span). WalkBlockNode uses this
+// to batch such a run and hand it to ExtractInlineElementsRange instead of
+// silently dropping it, as it did before this fix.
+//
+// Deliberately narrow: an element that is neither block-forming NOR a
+// recognized inline tag (e.g. <form>, <button>, <label>, a custom element)
+// does NOT start a run, even with no block descendants of its own. Such an
+// element already falls to WalkBlockNode's transparent-recursion branch
+// (see IsLooseInlineStart's non-use there below), which only ever searched
+// for nested BLOCKS -- widening this to also harvest arbitrary elements'
+// bare text would newly leak content like a <button>'s label into the
+// document body.
+static bool IsLooseInlineStart(xmlNodePtr node) {
+	if (!node) {
+		return false;
+	}
+	if (node->type == XML_TEXT_NODE) {
+		std::string text = reinterpret_cast<const char *>(node->content);
+		// Whitespace-only text between block siblings is pretty-printing, not
+		// content -- e.g. the indentation between </h1> and <p> in a
+		// hand-formatted file. Only a node carrying real text starts a run;
+		// once a run has started, ExtractInlineElementsRange (which uses the
+		// same emptiness check ExtractInlineElements always has) still emits
+		// any whitespace-only text nodes that fall inside it verbatim.
+		return text.find_first_not_of(" \t\n\r\f\v") != std::string::npos;
+	}
+	if (node->type != XML_ELEMENT_NODE || !node->name) {
+		return false;
+	}
+	std::string tag(reinterpret_cast<const char *>(node->name));
+	// A tag WalkBlockNode itself routes to a dedicated BLOCK below (headings,
+	// <img> standing alone, etc.) keeps that meaning regardless of context --
+	// this only widens what counts as loose INLINE content, it must never
+	// steal a tag away from its existing block handling (<img> is both
+	// IsBlockLevelTag and, via "br"/"img", something ExtractInlineElements
+	// separately knows how to render inline -- WalkBlockNode's own dispatch
+	// wins).
+	if (IsBlockLevelTag(tag)) {
+		return false;
+	}
+	bool recognized_inline = tag == "img" || tag == "br" || !InlineTypeForTag(tag).empty();
+	if (!recognized_inline) {
+		return false;
+	}
+	// A <span> carrying id/class is routed to the div/span-container branch
+	// below instead -- it must reach that per-child dispatch, not be
+	// intercepted here as plain inline formatting.
+	if (tag == "span" && (!GetNodeAttribute(node, "id").empty() || !GetNodeAttribute(node, "class").empty())) {
+		return false;
+	}
+	// A malformed document nesting a block inside an inline wrapper still
+	// needs that block found by a transparent walk, not swallowed as text.
+	return !HasBlockChildren(node);
+}
 
 // Emit a container block, then recurse into its children one level deeper.
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
@@ -556,8 +646,42 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 // descendants can never match independently (which produced duplicates) and an
 // unmapped container can never be invisible while its descendants match alone
 // (which produced losses).
-static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector<Value> &blocks) {
+//
+// `detect_loose_inline` gates the loose-inline-run handling below. It is on
+// for every ordinary call (a container's own children, or the top-level
+// walk) but OFF for the recursive call the "Default: recurse transparently"
+// branch makes into an unmapped element (<form>, <button>, a custom tag,
+// ...). That branch exists solely to search for nested BLOCKS inside a
+// wrapper with no document meaning of its own; it must not also start
+// harvesting the wrapper's bare text as if it were prose -- e.g. a
+// <button>Submit</button> inside a <form> must not leak "Submit" into the
+// body. detect_loose_inline threads through recursive WalkBlockNode calls
+// unchanged so it stays off for the whole unmapped subtree, not just its
+// immediate children.
+static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector<Value> &blocks,
+                          bool detect_loose_inline = true) {
 	for (xmlNodePtr child = node->children; child; child = child->next) {
+		// Loose inline content interleaved with block siblings -- bare text, or
+		// an inline-only element -- is emitted in document order at this level
+		// via ExtractInlineElementsRange rather than dropped. It stands as a
+		// sibling of the surrounding blocks (not a child of one), which is why
+		// it is emitted here at `level` rather than `level + 1`.
+		if (detect_loose_inline && IsLooseInlineStart(child)) {
+			xmlNodePtr run_end = child;
+			while (IsLooseInlineStart(run_end)) {
+				run_end = run_end->next;
+			}
+			auto inlines = ExtractInlineElementsRange(child, run_end, level, order);
+			blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			if (!run_end) {
+				break;
+			}
+			// Land back on the node just before run_end so the for-loop's own
+			// `child = child->next` advances to run_end next iteration.
+			child = run_end->prev;
+			continue;
+		}
+
 		if (child->type != XML_ELEMENT_NODE || !child->name) {
 			continue;
 		}
@@ -747,8 +871,11 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		// --- Default: recurse transparently ---------------------------------
 		// No block, no level increment. This preserves today's behaviour for
 		// every unmapped container -- <form>, <fieldset>, <label>, custom
-		// elements -- which would otherwise regress to zero blocks.
-		WalkBlockNode(child, level, order, blocks);
+		// elements -- which would otherwise regress to zero blocks. Loose-inline
+		// detection is OFF for this call: it exists only to find nested BLOCKS,
+		// not to harvest the wrapper's own bare text (see WalkBlockNode's
+		// detect_loose_inline doc comment).
+		WalkBlockNode(child, level, order, blocks, false);
 	}
 }
 
@@ -1036,7 +1163,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 
 				html << "</h" << lvl << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_PARAGRAPH) {
@@ -1051,7 +1178,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 
 				html << "</p>";
 			} else if (element_type == DuckBlockTypes::TYPE_CODE) {
@@ -1069,7 +1196,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						html << XMLUtils::HTMLEscape(content);
 					}
 				}
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
 					open_containers.push_back({"</blockquote>", cur_level});
 				} else {
@@ -1136,7 +1263,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
 					open_containers.push_back({"</" + tag + ">", cur_level});
 				} else {
@@ -1147,7 +1274,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
 					open_containers.push_back({"</figure>", cur_level});
 				} else {
@@ -1160,7 +1287,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
 					open_containers.push_back({"</" + caption_tag + ">", cur_level});
 				} else {
@@ -1223,7 +1350,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
-				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
 					open_containers.push_back({"</" + tag + ">", cur_level});
 				} else {
