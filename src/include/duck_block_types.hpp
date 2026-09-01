@@ -82,8 +82,24 @@ public:
 	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
 
 
-	// Helper to create an attributes MAP from a std::map
+	// Helper to create an attributes MAP from a std::map. Key order in the
+	// resulting MAP follows std::map's sorted iteration (alphabetical by key),
+	// which is fine for callers that only ever look attributes up by name.
 	static Value CreateAttributesMap(const std::map<std::string, std::string> &attrs) {
+		vector<Value> keys;
+		vector<Value> values;
+		for (auto &entry : attrs) {
+			keys.push_back(Value(entry.first));
+			values.push_back(Value(entry.second));
+		}
+		return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, keys, values);
+	}
+
+	// Overload for callers where attribute DISPLAY ORDER is part of the
+	// contract (e.g. role before id before class on a section block) and
+	// std::map's alphabetical sort would scramble it. Preserves caller
+	// insertion order.
+	static Value CreateAttributesMap(const std::vector<std::pair<std::string, std::string>> &attrs) {
 		vector<Value> keys;
 		vector<Value> values;
 		for (auto &entry : attrs) {
@@ -115,6 +131,23 @@ public:
 	static Value CreateBlock(const std::string &element_type, const std::string &content, const std::string &encoding,
 	                         const std::map<std::string, std::string> &attributes, int32_t element_order = 0) {
 		return CreateBlock(element_type, content, Value(), encoding, attributes, element_order);
+	}
+
+	// Order-preserving overload, matching the CreateAttributesMap overload above.
+	static Value CreateBlock(const std::string &element_type, const std::string &content, const Value &level,
+	                         const std::string &encoding,
+	                         const std::vector<std::pair<std::string, std::string>> &attributes,
+	                         int32_t element_order = 0) {
+		child_list_t<Value> struct_values;
+		struct_values.push_back(make_pair("kind", Value(KIND_BLOCK)));
+		struct_values.push_back(make_pair("element_type", Value(element_type)));
+		struct_values.push_back(make_pair("content", content.empty() ? Value(LogicalType::VARCHAR) : Value(content)));
+		struct_values.push_back(make_pair("level", level));
+		struct_values.push_back(make_pair("encoding", Value(encoding)));
+		struct_values.push_back(make_pair("attributes", CreateAttributesMap(attributes)));
+		struct_values.push_back(make_pair("element_order", Value(element_order)));
+
+		return Value::STRUCT(std::move(struct_values));
 	}
 
 	// Helper to create an inline doc_element Value

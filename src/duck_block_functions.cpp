@@ -36,11 +36,6 @@ static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
                                   std::set<size_t> &consumed_indices, std::stringstream &html);
 
-// XPath query for block-level elements
-static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 "
-                                 "or self::p or self::pre or self::blockquote or self::ul or self::ol "
-                                 "or self::table or self::hr or self::img or self::figure]";
-
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
 
@@ -385,6 +380,248 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 	return inlines;
 }
 
+// Attribute list for a single walked node. A vector, not a std::map: a few
+// callers (section's role/id/class, div's id/class) are tested on exact MAP
+// display order, and std::map would silently re-sort those keys
+// alphabetically. This preserves the insertion order below.
+using OrderedAttrs = std::vector<std::pair<std::string, std::string>>;
+
+// Emit a container block, then recurse into its children one level deeper.
+static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                    vector<Value> &blocks, OrderedAttrs &attrs);
+static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                vector<Value> &blocks, OrderedAttrs &attrs);
+
+// Walk `node`'s children depth-first, emitting blocks in document order.
+//
+// Traversal is OWNED here rather than delegated to an XPath node-set. That is
+// the whole fix: a container decides whether to recurse, so a container and its
+// descendants can never match independently (which produced duplicates) and an
+// unmapped container can never be invisible while its descendants match alone
+// (which produced losses).
+static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector<Value> &blocks) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
+		}
+		std::string tag(reinterpret_cast<const char *>(child->name));
+
+		// Non-content subtrees are not walked at all.
+		if (IsNonContentTag(tag)) {
+			continue;
+		}
+
+		OrderedAttrs attrs;
+
+		// --- Headings ---------------------------------------------------
+		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
+			std::string id = GetNodeAttribute(child, "id");
+			if (!id.empty()) {
+				attrs.emplace_back("id", id);
+			}
+			if (HasElementChildren(child)) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				auto inlines = ExtractInlineElements(child, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             attrs, order++));
+			}
+			continue;
+		}
+
+		// --- Paragraph ---------------------------------------------------
+		if (tag == "p") {
+			if (HasElementChildren(child)) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				auto inlines = ExtractInlineElements(child, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             attrs, order++));
+			}
+			continue;
+		}
+
+		// --- Code --------------------------------------------------------
+		if (tag == "pre") {
+			for (xmlNodePtr c = child->children; c; c = c->next) {
+				if (c->type == XML_ELEMENT_NODE && xmlStrcmp(c->name, BAD_CAST "code") == 0) {
+					std::string cls = GetNodeAttribute(c, "class");
+					std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
+					std::smatch match;
+					if (std::regex_search(cls, match, lang_regex)) {
+						attrs.emplace_back("language", match[1].str());
+					}
+					break;
+				}
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_CODE, GetNodeTextContent(child),
+			                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
+			                                             order++));
+			continue;
+		}
+
+		// --- Blockquote: container when it holds blocks, leaf otherwise ---
+		if (tag == "blockquote") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_BLOCKQUOTE, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- JSON-encoded leaves: NOT recursed ---------------------------
+		if (IsJsonLeafTag(tag)) {
+			std::string content;
+			std::string block_type;
+			if (tag == "table") {
+				block_type = DuckBlockTypes::TYPE_TABLE;
+				content = TableToJson(child);
+			} else if (tag == "dl") {
+				block_type = DuckBlockTypes::TYPE_DEFLIST;
+				content = DefListToJson(child);
+			} else {
+				block_type = DuckBlockTypes::TYPE_LIST;
+				content = ListItemsToJson(child);
+				attrs.emplace_back("ordered", (tag == "ol") ? "true" : "false");
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(block_type, content, Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
+			continue;
+		}
+
+		// --- Horizontal rule ---------------------------------------------
+		if (tag == "hr") {
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HR, "", Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			continue;
+		}
+
+		// --- Image --------------------------------------------------------
+		if (tag == "img") {
+			std::string src = GetNodeAttribute(child, "src");
+			std::string alt = GetNodeAttribute(child, "alt");
+			std::string title = GetNodeAttribute(child, "title");
+			attrs.emplace_back("src", src);
+			std::string content;
+			if (!alt.empty()) {
+				attrs.emplace_back("alt", alt);
+				content = alt;
+			}
+			if (!title.empty()) {
+				attrs.emplace_back("title", title);
+			}
+			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_IMAGE, content, Value::INTEGER(level),
+			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			continue;
+		}
+
+		// --- Figure and its caption ---------------------------------------
+		if (tag == "figure") {
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs);
+			continue;
+		}
+		if (tag == "figcaption") {
+			// An empty caption (no text, no element children) emits nothing: a
+			// consumer is entitled to assume a caption block means a caption
+			// exists.
+			if (!HasElementChildren(child) && GetNodeTextContent(child).empty()) {
+				continue;
+			}
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <summary>: the container's label, same role as <figcaption> ---
+		// Maps to `caption` WITH attributes['role'] = 'summary'. <figcaption> is
+		// not a permitted child of <details>, so the role is what lets the
+		// exporter (CaptionTagForRole) emit <summary> instead.
+		if (tag == "summary") {
+			if (!HasElementChildren(child) && GetNodeTextContent(child).empty()) {
+				continue;
+			}
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), "summary");
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- Semantic sectioning ------------------------------------------
+		std::string role = SectionRoleForTag(tag);
+		if (!role.empty()) {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), role);
+			std::string id = GetNodeAttribute(child, "id");
+			std::string cls = GetNodeAttribute(child, "class");
+			if (!id.empty()) {
+				attrs.emplace_back("id", id);
+			}
+			if (!cls.empty()) {
+				attrs.emplace_back("class", cls);
+			}
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <details>: semantic, but not a sectioning container -----------
+		if (tag == "details") {
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_SOURCE_TYPE), tag);
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- <div>/<span> carrying id or class ------------------------------
+		if (tag == "div" || tag == "span") {
+			std::string id = GetNodeAttribute(child, "id");
+			std::string cls = GetNodeAttribute(child, "class");
+			if (!id.empty() || !cls.empty()) {
+				if (!id.empty()) {
+					attrs.emplace_back("id", id);
+				}
+				if (!cls.empty()) {
+					attrs.emplace_back("class", cls);
+				}
+				EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs);
+				continue;
+			}
+		}
+
+		// --- Default: recurse transparently ---------------------------------
+		// No block, no level increment. This preserves today's behaviour for
+		// every unmapped container -- <form>, <fieldset>, <label>, custom
+		// elements -- which would otherwise regress to zero blocks.
+		WalkBlockNode(child, level, order, blocks);
+	}
+}
+
+static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                    vector<Value> &blocks, OrderedAttrs &attrs) {
+	blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
+	                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+	WalkBlockNode(node, level + 1, order, blocks);
+}
+
+// Emit a container three ways, depending on what it actually holds:
+//   block children  -> container, then recurse for blocks
+//   inline children -> container, then extract inlines (NOT WalkBlockNode, which
+//                      would transparently recurse past a <b> and emit nothing)
+//   text only       -> a leaf carrying its text
+static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
+                                vector<Value> &blocks, OrderedAttrs &attrs) {
+	if (HasBlockChildren(node)) {
+		EmitContainerAndRecurse(node, block_type, level, order, blocks, attrs);
+	} else if (HasElementChildren(node)) {
+		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
+		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+		auto inlines = ExtractInlineElements(node, level + 1, order);
+		blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+	} else {
+		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, GetNodeTextContent(node), Value::INTEGER(level),
+		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+	}
+}
+
 vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) {
 	if (html_str.empty()) {
 		return vector<Value>();
@@ -438,176 +675,22 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 		xmlXPathFreeObject(frontmatter_obj);
 	}
 
-	// Execute XPath query for block-level elements
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xpath_ctx, BLOCK_XPATH);
-
-	if (xpath_obj && xpath_obj->nodesetval) {
-		for (int j = 0; j < xpath_obj->nodesetval->nodeNr; j++) {
-			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[j];
-			if (!node || !node->name) {
-				continue;
-			}
-
-			std::string tag(reinterpret_cast<const char *>(node->name));
-			std::string content;
-			// Top-level blocks are structural depth 1 (matches duckdb_markdown /
-			// duck_block_utils); blockquote overrides with its nesting depth below.
-			Value level_value = Value::INTEGER(1);
-			std::string block_type;
-			std::string encoding = DuckBlockTypes::ENCODING_TEXT;
-			std::map<std::string, std::string> attrs;
-
-			// Heading: h1-h6
-			if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
-				block_type = DuckBlockTypes::TYPE_HEADING;
-				// Store heading level in attributes, not in the level field
-				attrs[DuckBlockTypes::ATTR_HEADING_LEVEL] = std::string(1, tag[1]);
-				std::string id = GetNodeAttribute(node, "id");
-				if (!id.empty()) {
-					attrs["id"] = id;
-				}
-				// Check for inline formatting elements
-				if (HasElementChildren(node)) {
-					// Extract structured inline elements instead of storing raw HTML
-					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(1),
-					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-					// Extract inline children at level 2 (parent block is level 1)
-					auto inline_elements = ExtractInlineElements(node, 2, block_order);
-					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-					continue; // Skip default block creation
-				} else {
-					content = GetNodeTextContent(node);
-				}
-			}
-			// Paragraph
-			else if (tag == "p") {
-				block_type = DuckBlockTypes::TYPE_PARAGRAPH;
-				// Check for inline formatting elements
-				if (HasElementChildren(node)) {
-					// Extract structured inline elements instead of storing raw HTML
-					// Create paragraph block with empty content
-					blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(1),
-					                                             DuckBlockTypes::ENCODING_TEXT, attrs, block_order++));
-					// Extract inline children at level 2 (parent block is level 1)
-					auto inline_elements = ExtractInlineElements(node, 2, block_order);
-					blocks.insert(blocks.end(), inline_elements.begin(), inline_elements.end());
-					continue; // Skip default block creation
-				} else {
-					content = GetNodeTextContent(node);
-				}
-			}
-			// Code block (pre with optional code child)
-			else if (tag == "pre") {
-				block_type = DuckBlockTypes::TYPE_CODE;
-				content = GetNodeTextContent(node);
-
-				// Look for language class on <code> child
-				xmlNodePtr code_child = node->children;
-				while (code_child) {
-					if (code_child->type == XML_ELEMENT_NODE && xmlStrcmp(code_child->name, BAD_CAST "code") == 0) {
-						std::string cls = GetNodeAttribute(code_child, "class");
-						// Extract language from "language-xxx" or "lang-xxx"
-						std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
-						std::smatch match;
-						if (std::regex_search(cls, match, lang_regex)) {
-							attrs["language"] = match[1].str();
-						}
-						break;
-					}
-					code_child = code_child->next;
-				}
-			}
-			// Blockquote
-			else if (tag == "blockquote") {
-				block_type = DuckBlockTypes::TYPE_BLOCKQUOTE;
-				int depth = CountBlockquoteAncestors(node) + 1;
-				level_value = Value::INTEGER(depth);
-				content = GetNodeTextContent(node);
-			}
-			// Unordered list
-			else if (tag == "ul") {
-				block_type = DuckBlockTypes::TYPE_LIST;
-				content = ListItemsToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-				attrs["ordered"] = "false";
-			}
-			// Ordered list
-			else if (tag == "ol") {
-				block_type = DuckBlockTypes::TYPE_LIST;
-				content = ListItemsToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-				attrs["ordered"] = "true";
-			}
-			// Table
-			else if (tag == "table") {
-				block_type = DuckBlockTypes::TYPE_TABLE;
-				content = TableToJson(node);
-				encoding = DuckBlockTypes::ENCODING_JSON;
-			}
-			// Horizontal rule
-			else if (tag == "hr") {
-				block_type = DuckBlockTypes::TYPE_HR;
-				content = "";
-			}
-			// Image
-			else if (tag == "img") {
-				block_type = DuckBlockTypes::TYPE_IMAGE;
-				std::string src = GetNodeAttribute(node, "src");
-				std::string alt = GetNodeAttribute(node, "alt");
-				std::string title = GetNodeAttribute(node, "title");
-				attrs["src"] = src;
-				if (!alt.empty()) {
-					attrs["alt"] = alt;
-					content = alt;
-				}
-				if (!title.empty()) {
-					attrs["title"] = title;
-				}
-			}
-			// Figure (contains img)
-			else if (tag == "figure") {
-				block_type = DuckBlockTypes::TYPE_IMAGE;
-				// Look for img child
-				xmlNodePtr img_child = node->children;
-				while (img_child) {
-					if (img_child->type == XML_ELEMENT_NODE && xmlStrcmp(img_child->name, BAD_CAST "img") == 0) {
-						std::string src = GetNodeAttribute(img_child, "src");
-						std::string alt = GetNodeAttribute(img_child, "alt");
-						attrs["src"] = src;
-						if (!alt.empty()) {
-							attrs["alt"] = alt;
-							content = alt;
-						}
-						break;
-					}
-					img_child = img_child->next;
-				}
-				// Look for figcaption
-				xmlNodePtr caption_child = node->children;
-				while (caption_child) {
-					if (caption_child->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(caption_child->name, BAD_CAST "figcaption") == 0) {
-						std::string caption = GetNodeTextContent(caption_child);
-						if (!caption.empty()) {
-							attrs["title"] = caption;
-						}
-						break;
-					}
-					caption_child = caption_child->next;
-				}
-			} else {
-				// Skip unknown elements
-				continue;
-			}
-
-			blocks.push_back(
-			    DuckBlockTypes::CreateBlock(block_type, content, level_value, encoding, attrs, block_order++));
+	// Walk the document tree. The <body> is synthesised by libxml2's HTML parser
+	// even for bare fragments, so this reaches content in both cases.
+	xmlNodePtr root = xmlDocGetRootElement(doc);
+	xmlNodePtr body = nullptr;
+	for (xmlNodePtr n = root ? root->children : nullptr; n; n = n->next) {
+		if (n->type == XML_ELEMENT_NODE && n->name && xmlStrcmp(n->name, BAD_CAST "body") == 0) {
+			body = n;
+			break;
 		}
 	}
-
-	if (xpath_obj) {
-		xmlXPathFreeObject(xpath_obj);
+	if (body) {
+		WalkBlockNode(body, 1, block_order, blocks);
+	} else if (root) {
+		WalkBlockNode(root, 1, block_order, blocks);
 	}
+
 	xmlXPathFreeContext(xpath_ctx);
 	xmlFreeDoc(doc);
 
