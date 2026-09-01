@@ -647,6 +647,18 @@ static std::string SectionTagForRole(const std::string &role) {
 	return "div";
 }
 
+// A caption's role selects its tag. Validated against a fixed enum for the same
+// reason as SectionTagForRole: role derives from parsed HTML, and interpolating
+// it unchecked into a tag name would let a crafted document emit a tag it never
+// contained. <figcaption> stays the default, so a caption with no role is
+// unchanged.
+static std::string CaptionTagForRole(const std::string &role) {
+	if (role == "summary") {
+		return "summary";
+	}
+	return "figcaption";
+}
+
 // Allowlist for generic's source_type, same discipline as SectionTagForRole.
 // Returns "" when the type is not allowlisted, meaning "use the terminal fallback".
 static std::string GenericTagForSourceType(const std::string &source_type) {
@@ -859,15 +871,17 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</figure>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
-				html << "<figcaption>";
+				std::string caption_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string caption_tag = CaptionTagForRole(caption_role);
+				html << "<" << caption_tag << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</figcaption>", cur_level});
+					open_containers.push_back({"</" + caption_tag + ">", cur_level});
 				} else {
-					html << "</figcaption>";
+					html << "</" << caption_tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
 				html << "<dl>";

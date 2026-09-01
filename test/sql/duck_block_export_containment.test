@@ -300,3 +300,22 @@ query I
 SELECT duck_blocks_to_html([]::STRUCT(kind VARCHAR, element_type VARCHAR, content VARCHAR, level INTEGER, encoding VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER)[]);
 ----
 (empty)
+
+# A caption's role selects its tag: <summary> labels a <details>, where
+# <figcaption> would be invalid and leave the widget unlabelled.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'details'},'element_order':0},
+  {'kind':'block','element_type':'caption','content':'Sum','level':2,'encoding':'text','attributes':MAP{'role':'summary'},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<details><summary>Sum</summary><p>D.</p></details>
+
+# An unrecognised role falls back to figcaption and is never used as a tag.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'C','level':1,'encoding':'text','attributes':MAP{'role':'script src=x'},'element_order':0}
+]);
+----
+<figcaption>C</figcaption>
