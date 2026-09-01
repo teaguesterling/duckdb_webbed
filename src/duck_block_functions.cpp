@@ -203,6 +203,68 @@ static std::string InlineTypeForTag(const std::string &tag) {
 	return "";
 }
 
+// Subtrees that carry no document content and must not be walked at all.
+// HasElementChildren and the text accumulator already filter these; the block
+// walk must agree with them.
+static bool IsNonContentTag(const std::string &tag) {
+	return tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg";
+}
+
+// Containers that serialise their own contents to JSON. The walk does NOT
+// recurse into these: their text is already in the JSON, so emitting the
+// descendants as blocks too would duplicate it.
+static bool IsJsonLeafTag(const std::string &tag) {
+	return tag == "table" || tag == "ul" || tag == "ol" || tag == "dl";
+}
+
+// Semantic sectioning containers. One block type, variant in attributes['role'],
+// following the heading+heading_level and list+list_type convention rather than
+// minting one type per variant. Returns "" for non-sectioning tags.
+static std::string SectionRoleForTag(const std::string &tag) {
+	if (tag == "section" || tag == "article" || tag == "aside" || tag == "nav" || tag == "header" ||
+	    tag == "footer" || tag == "main") {
+		return tag;
+	}
+	return "";
+}
+
+// Tags the walk emits a block for. Used to decide whether a container holds
+// BLOCK children (recurse with WalkBlockNode) or only INLINE children (extract
+// with ExtractInlineElements).
+static bool IsBlockLevelTag(const std::string &tag) {
+	if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+		return true;
+	}
+	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
+	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
+	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
+}
+
+// True when `node` has at least one BLOCK-level element child, ignoring
+// non-content subtrees. Distinct from HasElementChildren, which cannot tell a
+// block child from an inline one -- a container holding only inlines must route
+// to ExtractInlineElements or its formatting is dropped entirely.
+static bool HasBlockChildren(xmlNodePtr node) {
+	for (xmlNodePtr c = node->children; c; c = c->next) {
+		if (c->type != XML_ELEMENT_NODE || !c->name) {
+			continue;
+		}
+		std::string tag(reinterpret_cast<const char *>(c->name));
+		if (IsNonContentTag(tag)) {
+			continue;
+		}
+		if (IsBlockLevelTag(tag)) {
+			return true;
+		}
+		// A transparent wrapper is walked through, so a block inside it counts
+		// as a block child of this node.
+		if (HasBlockChildren(c)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Extract inline elements from an HTML node's children as structured
 // kind='inline' duck_blocks. Nested formatting (e.g. <b>x <i>y</i></b>) is
 // preserved: a wrapper containing further elements is emitted with empty
