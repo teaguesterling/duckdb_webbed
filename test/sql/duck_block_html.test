@@ -1481,8 +1481,8 @@ true
 
 # -----------------------------------------------------------------------------
 # Blockquote Handling Tests
-# Note: Blockquotes currently produce duplicated content (blockquote + paragraph).
-# This is a known limitation.
+# Content is no longer duplicated: the blockquote is a container and its
+# paragraph nests inside it.
 # -----------------------------------------------------------------------------
 
 # Blockquote element is present
@@ -1503,11 +1503,17 @@ SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>
 ----
 true
 
-# Content text is preserved
+# Content text round-trips exactly. Previously this only passed because a
+# <blockquote> matched BLOCK_XPATH directly and was flattened to a single
+# leaf whose content was plain-text concatenation ("Important quote"),
+# trivially containing the substring. Now the blockquote is a proper
+# container (blockquote -> paragraph -> [bold "Important", text " quote"]),
+# so the round trip faithfully reconstructs the source markup instead of
+# the loose substring check that blessed the old lossy flattening.
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>')), 'Important quote');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p><strong>Important</strong> quote</p></blockquote>'));
 ----
-true
+<blockquote><p><strong>Important</strong> quote</p></blockquote>
 
 # -----------------------------------------------------------------------------
 # Level Hierarchy Tests

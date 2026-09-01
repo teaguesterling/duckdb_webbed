@@ -36,28 +36,38 @@ paragraph	1	text	NULL
 # Test 3: read_html_blocks on complex HTML file
 # =============================================================================
 
+# complex.html wraps its content in <nav>/<main>/<article>, which are now
+# preserved as `section` blocks with their role rather than flattened away.
+# Content blocks therefore sit one level deeper than before.
 query II
 SELECT kind, element_type FROM read_html_blocks('test/html/complex.html') WHERE kind = 'block';
 ----
 block	heading
+block	section
 block	list
+block	section
+block	section
 block	heading
 block	paragraph
 block	image
 block	table
 
-# Test structured inlines in complex.html paragraph
+# Test structured inlines in complex.html paragraph. Keyed on content
+# (element_type = 'paragraph') rather than an element_order window: a
+# position-indexed filter breaks on every structural change upstream of the
+# target row and asserts nothing about what actually matters.
 query IIII
 SELECT kind, element_type, content, level
 FROM read_html_blocks('test/html/complex.html')
-WHERE element_order >= 3 AND element_order <= 7
+WHERE element_type IN ('paragraph', 'bold', 'italic', 'text')
 ORDER BY element_order;
 ----
-block	paragraph	NULL	1
-inline	text	This is some content with 	2
-inline	bold	bold	2
-inline	text	 and 	2
-inline	italic	italic	2
+block	paragraph	NULL	3
+inline	text	This is some content with 	4
+inline	bold	bold	4
+inline	text	 and 	4
+inline	italic	italic	4
+inline	text	 text.	4
 
 # =============================================================================
 # Test 4: read_html_blocks with filename parameter
@@ -86,13 +96,15 @@ SELECT count(*) FROM read_html_blocks('test/html/simple.html', include_filepath 
 # Test 5: Multi-file reading (glob & list of files)
 # =============================================================================
 
+# 11 -> 14: +3 section blocks for <nav>/<main>/<article>, now preserved
+# instead of flattened away.
 query II
 SELECT filename, count(*)
 FROM read_html_blocks(['test/html/simple.html', 'test/html/complex.html'], filename := true)
 GROUP BY filename
 ORDER BY filename;
 ----
-test/html/complex.html	11
+test/html/complex.html	14
 test/html/simple.html	2
 
 # Glob pattern reading
