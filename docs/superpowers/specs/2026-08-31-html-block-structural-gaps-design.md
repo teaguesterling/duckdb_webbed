@@ -1,7 +1,7 @@
 # Design: structural gaps in `html_to_duck_blocks()`
 
 **Date:** 2026-08-31
-**Status:** Plan 1 (exporter containment) implemented; Plan 2 (reader tree walk) pending
+**Status:** implemented (Plan 1 and Plan 2 complete)
 
 ## Problem
 
@@ -599,6 +599,54 @@ State clearly that this is:
 - deferred to the reader-tree-walk plan (`docs/superpowers/plans/2026-08-31-reader-tree-walk.md`),
   which must decide **both** the rule and whether to migrate those 16 fixture lines, because that
   plan nests real containers and makes the misattribution reachable.
+
+## Additional findings, recorded during Plan 2 completion (verification and docs)
+
+Five things surfaced while proving Plan 1 and Plan 2 meet (round-trip verification) and
+closing out the docs. None required a `src/` change; they are recorded here so they are
+not rediscovered.
+
+**1. Attributes now preserve source order, not alphabetical order.** This changed when the
+tree walk landed, and it affected a pre-existing path: `<img>` attributes were previously
+printed alphabetically on export. `attributes['src']`-style MAP lookups are unaffected —
+only printed attribute order and whole-MAP equality assertions change.
+
+**2. Three vocabulary block types have no render branch in `duck_blocks_to_html` and always
+hit the terminal fallback:** `lineblock`, `list_item`, `page_break`. Found by sweeping all
+19 vocabulary types through the exporter in one query rather than reasoning type-by-type
+about which reach the fallback. They render as `<div data-duck-block-type="...">` —
+visible and greppable per the fallback's design, not silently dropped, but not correct
+output either. Recorded as a known gap; not fixed here.
+
+**3. Nested inline formatting was corrupted by the exporter until this branch.**
+`<p>a <b>bold <i>inner</i></b> c</p>` rendered `<strong></strong>` with its text spilled
+outside the tag, silently un-bolding (and un-italicizing) the nested run. The reader was
+always correct; the writer walked the inline run flat instead of tracking scope. Fixed by
+mirroring the block scope stack (see "Export direction: a scope stack replaces the flat
+loop" above) for inline containment as well.
+
+**4. A second, structural JSON-shape divergence exists for `list`, and the same problem
+affects `deflist`.** This is distinct from the `ordered`/`list_type` attribute-name
+divergence already recorded under "Known interop divergences" above. webbed's `list` JSON
+is a flat array of strings, `["a","b"]`. The sibling extension's Pandoc-derived path emits
+nested block lists, `[[block],[block]]`. A sibling-shaped list fed into webbed's exporter
+renders `<ul></ul>` — silently empty, because webbed's decoder does not recognize the
+shape. The same applies to `deflist`. This survives because webbed's own reader and writer
+agree with each other, so no round-trip test inside this repo can see it — it only
+surfaces when JSON produced by one producer is consumed by the other's exporter. The
+sibling has since published spec 2.0, which makes `list` and `blockquote` structural
+containers (flat block lists with `level`) rather than JSON — this supersedes the shape
+question for those two types. `table` and `deflist` still carry JSON under spec 2.0, so
+the divergence remains live for those two.
+
+**5. Version skew across three contracts is a live, ongoing concern.** At any moment there
+are at least three different vocabulary contracts in play: the vocabulary header webbed
+compiles against (the `duck_block_utils` submodule, currently spec 1.1), the
+`duck_block_utils` extension a user has installed at runtime (which may be older still),
+and the sibling repository's current `main` (spec 2.0, already ahead of what webbed
+compiles against). `duck_block_spec_version()` reports which version is live, but that
+only helps a consumer that can see the runtime — it does nothing for a document produced
+under one version and consumed, offline, by code compiled against another.
 
 ## Future work
 

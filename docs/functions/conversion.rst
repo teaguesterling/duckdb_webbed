@@ -275,6 +275,44 @@ Each block is a struct with the following fields:
    )) as block)
    WHERE block.block_type = 'code';
 
+**Structural Elements (reader tree walk):**
+
+``html_to_duck_blocks`` walks the HTML tree recursively rather than running a flat XPath
+query, so containers now nest instead of flattening. This affects several element types:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Element(s)
+     - Behavior
+   * - ``<section>``, ``<article>``, ``<nav>``, ``<header>``, ``<footer>``, ``<main>``
+     - Emit a ``section`` block. The originating tag name is recorded in
+       ``attributes['role']`` (e.g. ``attributes['role'] = 'nav'``), and ``id``/``class``
+       are preserved as attributes rather than discarded.
+   * - ``<dl>``
+     - Emits a ``deflist`` block (``<dt>``/``<dd>`` pairs), not zero blocks.
+   * - ``<figure>`` / ``<figcaption>``
+     - Emit ``figure`` / ``caption`` blocks. The caption keeps its inline formatting
+       (e.g. ``<b>``, ``<i>``) instead of being flattened into a plain-text ``title``
+       attribute.
+   * - Any other element carrying document semantics with no dedicated mapping
+       (e.g. ``<aside>``, ``<details>``, a custom element)
+     - Emits a ``generic`` block rather than being silently dropped or flattened.
+       ``attributes['source_type']`` records the original tag name so a consumer can
+       still distinguish it.
+
+``level`` is now structural nesting depth: content emitted underneath an emitted
+container (``section``, ``blockquote``, ``figure``, etc.) is one level deeper than its
+container, and this composes — a ``<blockquote>`` inside a ``<section>`` inside a
+``<section>`` nests three deep. This is a change from the previous flat model, where
+``level`` was meaningful only for headings and blockquote depth.
+
+**Known limitation:** non-text block content inside ``<td>`` or ``<li>`` is not
+separately represented. Table cells and list items are encoded as JSON strings inside
+their parent's ``content``; the tree walk does not recurse into that JSON to emit
+child blocks. Plain text inside a cell/item is captured (it's part of the JSON string);
+a nested element such as an ``<img>`` inside a ``<td>`` is not emitted as its own block.
 
 duck_blocks_to_html
 ~~~~~~~~~~~~~~~~~~
