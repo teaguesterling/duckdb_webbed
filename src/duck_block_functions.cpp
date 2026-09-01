@@ -673,17 +673,36 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
                           bool detect_loose_inline = true) {
 	for (xmlNodePtr child = node->children; child; child = child->next) {
 		// Loose inline content interleaved with block siblings -- bare text, or
-		// an inline-only element -- is emitted in document order at this level
-		// via ExtractInlineElementsRange rather than dropped. It stands as a
-		// sibling of the surrounding blocks (not a child of one), which is why
-		// it is emitted here at `level` rather than `level + 1`.
+		// an inline-only element -- has nowhere else to live (no container of
+		// its own to carry it in `content`), so it is emitted in document
+		// order at this level as its own `plain` block rather than dropped.
+		// It stands as a sibling of the surrounding blocks (not a child of
+		// one), which is why it is emitted here at `level` rather than
+		// `level + 1`.
+		//
+		// A run that is exactly one bare text node carries that text directly
+		// in `plain`'s own `content` -- the same single-text-child rule
+		// EmitContainerOrLeaf applies to a real container. A run that mixes
+		// in inline formatting (or is itself a formatting element) cannot: it
+		// gets a `plain` container (NULL content) with its own inline
+		// children at level + 1, exactly parallel to how `paragraph` and
+		// `blockquote` hold mixed inline content.
 		if (detect_loose_inline && IsLooseInlineStart(child)) {
 			xmlNodePtr run_end = child;
 			while (IsLooseInlineStart(run_end)) {
 				run_end = run_end->next;
 			}
-			auto inlines = ExtractInlineElementsRange(child, run_end, level, order);
-			blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			bool single_text_node = child->type == XML_TEXT_NODE && child->next == run_end;
+			if (single_text_node) {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, GetNodeTextContent(child),
+				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                             OrderedAttrs(), order++));
+			} else {
+				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, "", Value::INTEGER(level),
+				                                             DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
+				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order);
+				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
+			}
 			if (!run_end) {
 				break;
 			}
@@ -852,14 +871,19 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			if (!cls.empty()) {
 				attrs.emplace_back("class", cls);
 			}
-			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs);
+			// EmitContainerOrLeaf, not EmitContainerAndRecurse: a sectioning
+			// element whose only child is a lone text run must carry it in its
+			// own `content` (single-text-child rule) rather than always
+			// recursing into WalkBlockNode. HasBlockChildren containers still
+			// take the same recurse path EmitContainerAndRecurse always did.
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs);
 			continue;
 		}
 
 		// --- <details>: semantic, but not a sectioning container -----------
 		if (tag == "details") {
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_SOURCE_TYPE), tag);
-			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs);
 			continue;
 		}
 
@@ -874,9 +898,23 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 				if (!cls.empty()) {
 					attrs.emplace_back("class", cls);
 				}
-				EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs);
+				// EmitContainerOrLeaf: a lone text child (e.g. <div id="d">Bare
+				// text</div>) carries it in the div's own `content` instead of
+				// unconditionally opening a container and recursing into a
+				// same-level `plain` sibling.
+				EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs);
 				continue;
 			}
+			// A bare <div>/<span> (no id, no class) stays transparent -- no
+			// block of its own -- but unlike the wildcard unmapped-wrapper
+			// fallback below, it is a known prose container: its loose text is
+			// real document content, not UI chrome (contrast <button> inside
+			// <form>, which must stay suppressed). detect_loose_inline stays ON
+			// so that content surfaces as a `plain` at the parent's level
+			// (WalkBlockNode's loose-inline-run handling above) instead of
+			// being silently dropped.
+			WalkBlockNode(child, level, order, blocks, true);
+			continue;
 		}
 
 		// --- Default: recurse transparently ---------------------------------
