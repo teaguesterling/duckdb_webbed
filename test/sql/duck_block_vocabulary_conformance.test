@@ -1,34 +1,181 @@
 # name: test/sql/duck_block_vocabulary_conformance.test
-# description: webbed's mirror of the duck_block vocabulary must not drift from canonical
+# description: webbed's emitted duck_block vocabulary must round-trip through its own functions
 # group: [sql]
 
 require webbed
 
-# duck_block_utils is optional. When absent this file must skip, not fail --
-# webbed deliberately has no hard dependency on it.
-require duck_block_utils
+# This file used to require duck_block_utils and query db_block_types()/
+# db_block_kinds() from it -- an extension nothing in this repo or CI installs,
+# so the whole file skipped on every run, everywhere, always. Zero coverage
+# wearing the appearance of coverage. See scripts/check_duck_block_vocabulary.py
+# (`make check-vocabulary`) for the vendored-header-vs-upstream check that took
+# over the "does our vocabulary still match the family's" job; this file's job
+# is different and does not need duck_block_utils to do it: pin what webbed
+# itself EMITS, since that is what other extensions actually consume.
+#
+# The property under test: for every block type webbed's HTML reader can
+# produce, an inline struct literal of that type survives
+# html_to_duck_blocks(duck_blocks_to_html(...)) with its element_type intact.
+# Built entirely from inline struct literals and webbed's own two functions --
+# nothing here can skip.
+#
+# kind semantics (kind='value' being skipped by level scope rather than by
+# branching on VALUE_* types) are pinned separately in
+# duck_block_export_containment.test; this file is about element_type, not kind.
 
-statement ok
-CREATE TEMP TABLE canonical AS SELECT unnest(db_block_types()) AS name;
+# --- Simple leaves --------------------------------------------------------
 
-# Every block type webbed can EMIT must exist in the canonical vocabulary.
-# This is the direction that matters: emitting a name the family does not know
-# is a silent interop break.
 query I
-SELECT count(*) FROM (
-  SELECT unnest([
-    'heading','paragraph','code','blockquote','list','table','hr','metadata',
-    'image','raw','div','section','lineblock','deflist','figure','list_item',
-    'caption','generic'
-  ]) AS name
-) w
-WHERE w.name NOT IN (SELECT name FROM canonical);
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'heading','content':'Title','level':1,'encoding':'text','attributes':MAP{'heading_level':'1'},'element_order':0}
+])))[1].element_type;
 ----
-0
+heading
 
-# The three kinds must agree.
 query I
-SELECT count(*) FROM (SELECT unnest(['block','inline','value']) AS k) x
-WHERE x.k NOT IN (SELECT unnest(db_block_kinds()));
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'Text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].element_type;
 ----
-0
+paragraph
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'code','content':'print()','level':1,'encoding':'text','attributes':MAP{'language':'python'},'element_order':0}
+])))[1].element_type;
+----
+code
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Quoted','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+blockquote
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'hr','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+hr
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'alt text','level':1,'encoding':'text','attributes':MAP{'src':'x.png','alt':'alt text'},'element_order':0}
+])))[1].element_type;
+----
+image
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'metadata','content':'title: x','level':1,'encoding':'yaml','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+metadata
+
+# A standalone caption (not nested under a figure) is still recognised on
+# read-back: WalkBlockNode matches <figcaption> unconditionally, not only as a
+# figure's child.
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'Cap text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+caption
+
+# --- Attribute-gated containers -------------------------------------------
+# div only round-trips as a block when it carries id or class -- a bare <div>
+# recurses transparently on read-back, by design (see WalkBlockNode).
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'id':'d1'},'element_order':0}
+])))[1].element_type;
+----
+div
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'article'},'element_order':0}
+])))[1].element_type;
+----
+section
+
+# generic only round-trips for an allowlisted source_type (GenericTagForSourceType);
+# 'details' is the one tag the reader also recognises on the way in.
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'details'},'element_order':0}
+])))[1].element_type;
+----
+generic
+
+# --- JSON-encoded leaves ---------------------------------------------------
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'table','content':'{"headers":["A"],"rows":[["1"]]}','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+table
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':'["First","Second"]','level':1,'encoding':'json','attributes':MAP{'ordered':'false'},'element_order':0}
+])))[1].element_type;
+----
+list
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'[{"term":"T","definitions":["D"]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+deflist
+
+# --- Container with a nested block child -----------------------------------
+# figure holding an explicit child block (rather than direct content) round-trips
+# as the pair it started as: the container, then its child at level+1.
+
+query I
+SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'caption','content':'Cap','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+])), x -> x.element_type);
+----
+[figure, caption]
+
+# --- Known non-round-trips, asserted rather than omitted -------------------
+#
+# raw is literal pass-through by contract: webbed's writer emits raw content
+# verbatim with no wrapping tag (see the TYPE_RAW branch in
+# DuckBlocksToHtmlFunction), and HTML has no marker to say "this text was raw"
+# for the reader to pick back up. It necessarily reads back as an ordinary
+# inline text run, not as element_type='raw' -- inherent to the contract, not
+# a bug in the reader.
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'raw','content':'hello raw content','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].kind;
+----
+inline
+
+query I
+SELECT (html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'raw','content':'hello raw content','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])))[1].element_type;
+----
+text
+
+# figure carrying its content DIRECTLY (no explicit child block) writes that
+# content as the <figure> element's own text, which the reader treats as loose
+# inline content of the figure -- so it reads back as TWO elements: the figure
+# (now with content NULL) plus a separate text inline at level+1. The
+# element_type list, not just the first element, is what pins this.
+query I
+SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':'Some text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+])), x -> x.element_type);
+----
+[figure, text]
