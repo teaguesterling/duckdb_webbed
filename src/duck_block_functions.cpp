@@ -1278,7 +1278,16 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</blockquote>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_LIST) {
-				bool ordered = attrs.count("ordered") && attrs["ordered"] == "true";
+				// list_type is canonical (spec 6.x, see the 3.0 -> 4.0 changelog
+				// entry in duck_block_vocabulary.hpp); attributes['ordered'] is a
+				// legacy alias kept for producers that predate list_type. When both
+				// are present and disagree, list_type wins.
+				bool ordered;
+				if (attrs.count(DuckBlockTypes::ATTR_LIST_TYPE)) {
+					ordered = attrs[DuckBlockTypes::ATTR_LIST_TYPE] == "ordered";
+				} else {
+					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
+				}
 				std::string tag = ordered ? "ol" : "ul";
 				html << "<" << tag << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
@@ -1300,7 +1309,42 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						yyjson_doc_free(doc);
 					}
 				}
-				html << "</" << tag << ">";
+				// A structural list (NULL/empty content) leaves its close tag open:
+				// its list_item children are separate, deeper-level entries in the
+				// run, rendered by the loop's own list_item branch below, exactly
+				// like blockquote/section/div. The JSON-items shape above already
+				// wrote its own <li>s inline and has no such children, so deferring
+				// the close costs it nothing -- it is simply closed at the next
+				// sibling or at the end-of-run drain instead of immediately, with
+				// identical output either way.
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
+			} else if (element_type == DuckBlockTypes::TYPE_LIST_ITEM) {
+				// A container by the established pattern (blockquote/section/div):
+				// open tag, own content if non-empty, ConsumeInlineChildren for any
+				// inline run directly beside it, then push the close tag. One
+				// branch keyed on whether content is empty -- not two cases keyed on
+				// which producer made it: a tight item carries its text directly in
+				// content (Pandoc's Plain), a loose item carries NULL content and a
+				// `paragraph` block child (Pandoc's Para) that the outer loop renders
+				// on its own next iteration, inside this list_item's still-open scope.
+				html << "<li>";
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</li>", cur_level});
+				} else {
+					html << "</li>";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					html << TableJsonToHtml(content);
