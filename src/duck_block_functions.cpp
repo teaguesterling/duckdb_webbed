@@ -32,6 +32,8 @@ static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
 static std::string PandocTableToHtml(const std::string &json);
 static bool ContentContainsTags(const std::string &content);
+static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
+                                  std::set<size_t> &consumed_indices, std::stringstream &html);
 
 // XPath query for block-level elements
 static const char *BLOCK_XPATH = "//body//*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 "
@@ -131,6 +133,36 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	}
 	// Default: return escaped content
 	return XMLUtils::HTMLEscape(content);
+}
+
+// Render the contiguous run of kind='inline' blocks following `parent_idx` as that
+// block's inline children, marking each consumed so the main loop skips it.
+// Stops at the first non-inline block, or an inline with NULL/<1 level.
+static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
+                                  std::set<size_t> &consumed_indices, std::stringstream &html) {
+	for (size_t next_idx = parent_idx + 1; next_idx < blocks_list.size(); next_idx++) {
+		auto &next_block = blocks_list[next_idx];
+		if (next_block.IsNull()) {
+			continue;
+		}
+		auto &next_struct = StructValue::GetChildren(next_block);
+		std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
+		Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
+
+		if (next_kind != DuckBlockTypes::KIND_INLINE) {
+			break;
+		}
+		if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
+			break;
+		}
+
+		std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
+		std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
+		auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
+		html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
+
+		consumed_indices.insert(next_idx);
+	}
 }
 
 // True if `node` has at least one child that is an element (not just text),
@@ -599,32 +631,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				// Consuming look-ahead: collect and render inline children at level >= 1
-				for (size_t next_idx = block_idx + 1; next_idx < blocks_list.size(); next_idx++) {
-					auto &next_block = blocks_list[next_idx];
-					if (next_block.IsNull()) {
-						continue;
-					}
-					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
-					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
-
-					// Stop if we hit a block or an element back at base level (NULL)
-					if (next_kind != DuckBlockTypes::KIND_INLINE) {
-						break;
-					}
-					if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
-						break;
-					}
-
-					// Render this inline child
-					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
-					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
-					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
-					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
-
-					consumed_indices.insert(next_idx);
-				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
 
 				html << "</h" << lvl << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_PARAGRAPH) {
@@ -639,32 +646,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 
-				// Consuming look-ahead: collect and render inline children at level >= 1
-				for (size_t next_idx = block_idx + 1; next_idx < blocks_list.size(); next_idx++) {
-					auto &next_block = blocks_list[next_idx];
-					if (next_block.IsNull()) {
-						continue;
-					}
-					auto &next_struct = StructValue::GetChildren(next_block);
-					std::string next_kind = GetVarcharField(next_struct[DuckBlockTypes::KIND_IDX]);
-					Value next_level = next_struct[DuckBlockTypes::LEVEL_IDX];
-
-					// Stop if we hit a block or an element back at base level (NULL)
-					if (next_kind != DuckBlockTypes::KIND_INLINE) {
-						break;
-					}
-					if (next_level.IsNull() || next_level.GetValue<int32_t>() < 1) {
-						break;
-					}
-
-					// Render this inline child
-					std::string next_type = GetVarcharField(next_struct[DuckBlockTypes::ELEMENT_TYPE_IDX]);
-					std::string next_content = GetVarcharField(next_struct[DuckBlockTypes::CONTENT_IDX]);
-					auto next_attrs = ExtractAttributes(next_struct[DuckBlockTypes::ATTRIBUTES_IDX]);
-					html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
-
-					consumed_indices.insert(next_idx);
-				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
 
 				html << "</p>";
 			} else if (element_type == DuckBlockTypes::TYPE_CODE) {
