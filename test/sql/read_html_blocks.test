@@ -157,12 +157,16 @@ code	print("hello")	python
 # Test 8: Frontmatter metadata script extraction
 # =============================================================================
 
+# No ORDER BY: this relies on parse_html_blocks emitting rows in element_order.
+# Per spec 6.2's ordering contract, metadata is appended AFTER a document's
+# blocks (so blocks[1] is the first content block), so the heading comes
+# first here and the metadata block comes last.
 query III
 SELECT element_type, encoding, content
 FROM parse_html_blocks('<script type="application/vnd.frontmatter+yaml">title: Test Document</script><h1>Title</h1>');
 ----
-metadata	yaml	title: Test Document
 heading	text	Title
+metadata	yaml	title: Test Document
 
 # =============================================================================
 # Test 9: Lists and Tables JSON encoding

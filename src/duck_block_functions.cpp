@@ -944,7 +944,13 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	vector<Value> blocks;
 	int32_t block_order = 0;
 
-	// First, extract frontmatter script blocks
+	// Extract frontmatter script blocks' text now, but do NOT emit them yet: spec
+	// 6.2 makes it a contract that metadata is appended AFTER a document's blocks
+	// (so blocks[1] points at the first content block), and this reader's own
+	// output had been violating that by emitting metadata at element_order 0,
+	// before the body walk below. Collecting into a temporary and appending after
+	// the walk keeps the extraction where it already was while fixing the order.
+	vector<std::string> frontmatter_contents;
 	xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
 	if (frontmatter_obj && frontmatter_obj->nodesetval) {
 		for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
@@ -961,9 +967,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 			if (!content.empty() && content.back() == '\n') {
 				content.pop_back();
 			}
-			std::map<std::string, std::string> attrs;
-			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
-			                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+			frontmatter_contents.push_back(std::move(content));
 		}
 	}
 	if (frontmatter_obj) {
@@ -984,6 +988,14 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 		WalkBlockNode(body, 1, block_order, blocks);
 	} else if (root) {
 		WalkBlockNode(root, 1, block_order, blocks);
+	}
+
+	// Now emit the metadata blocks, AFTER the document's blocks, continuing
+	// element_order from wherever the walk above left off.
+	for (auto &content : frontmatter_contents) {
+		std::map<std::string, std::string> attrs;
+		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
+		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
 
 	xmlXPathFreeContext(xpath_ctx);
