@@ -225,3 +225,82 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <hr>
+
+# ============================================================================
+# list_item rendering and list_type precedence (spec 6.x: `list` is a
+# structural container whose children are `list_item`s -- see
+# HTML_BLOCK_GAPS.md). Before this, list_item had no render branch and fell
+# to the terminal fallback, so a structural list + list_item pair rendered
+# as an empty <ul></ul> followed by orphaned data-duck-block-type divs.
+# ============================================================================
+
+# list_item carrying its text directly in `content` (tight item -- Pandoc's
+# Plain, per the vocabulary's 5.0 -> 6.0 changelog entry).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'list_item','content':'two','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<ul><li>one</li><li>two</li></ul>
+
+# list_item with NULL content and a `paragraph` block child (loose item --
+# Pandoc's Para).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'one','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<ul><li><p>one</p></li></ul>
+
+# attributes['list_type']='ordered' -> <ol>.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'ordered'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# Legacy attributes['ordered']='true' still produces <ol> -- must not break.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'ordered':'true'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# list_type and ordered disagree -- list_type is canonical and wins: 'ordered'
+# with legacy ordered='false' still renders <ol>.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'ordered','ordered':'false'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# ...and the reverse: list_type='bullet' with legacy ordered='true' still
+# renders <ul> -- list_type wins regardless of which direction the two
+# attributes disagree.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'bullet','ordered':'true'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ul><li>one</li></ul>
+
+# webbed's existing JSON-items shape (list carrying its items as a JSON array
+# in `content`, encoding='json') must keep rendering exactly as it does
+# today -- the structural list_item path must not preclude it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':'["one","two"]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<ul><li>one</li><li>two</li></ul>
