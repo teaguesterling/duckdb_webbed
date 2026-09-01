@@ -196,3 +196,45 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <div data-duck-block-type="a&quot;b">&lt;script&gt;</div>
+
+# A level JUMP opens no implicit containers.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'deep','level':9,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><p>deep</p></blockquote>
+
+# A level that never drops is closed by the end-of-list drain.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'blockquote','content':'x','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><blockquote><blockquote>x</blockquote></blockquote></blockquote>
+
+# A NULL level is treated as top level.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':NULL,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'y','level':NULL,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote>x</blockquote><p>y</p>
+
+# A negative level is clamped to top level, not used as an array index.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':-5,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>x</blockquote>
+
+# An empty list produces empty output.
+query I
+SELECT duck_blocks_to_html([]::STRUCT(kind VARCHAR, element_type VARCHAR, content VARCHAR, level INTEGER, encoding VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER)[]);
+----
+(empty)
