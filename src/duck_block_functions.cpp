@@ -574,6 +574,17 @@ static int32_t EffectiveLevel(const Value &level_val) {
 // deeper than this render flat rather than pushing, so output stays balanced.
 static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
 
+// Map a section block's role to an output tag. The role comes from parsed HTML,
+// so it is validated against a fixed enum rather than interpolated: an unchecked
+// value would let a crafted document emit a tag it never contained.
+static std::string SectionTagForRole(const std::string &role) {
+	if (role == "section" || role == "article" || role == "aside" || role == "nav" || role == "header" ||
+	    role == "footer" || role == "main") {
+		return role;
+	}
+	return "div";
+}
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -745,6 +756,26 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_RAW) {
 				// Pass through raw content
 				html << content;
+			} else if (element_type == DuckBlockTypes::TYPE_SECTION) {
+				std::string role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string tag = SectionTagForRole(role);
+				html << "<" << tag;
+				if (attrs.count("id")) {
+					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
+				}
+				if (attrs.count("class")) {
+					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
+				}
+				html << ">";
+				if (!content.empty()) {
+					html << XMLUtils::HTMLEscape(content);
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html);
+				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
+					open_containers.push_back({"</" + tag + ">", cur_level});
+				} else {
+					html << "</" << tag << ">";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";

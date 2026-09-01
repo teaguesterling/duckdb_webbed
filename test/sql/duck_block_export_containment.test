@@ -50,3 +50,38 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <blockquote>Quoted text</blockquote>
+
+# section renders its role as the tag, restoring id and class.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'section','id':'s1','class':'intro'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'x','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<section id="s1" class="intro"><p>x</p></section>
+
+# Every role in the enum is honoured.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'aside'},'element_order':0}
+]);
+----
+<aside></aside>
+
+# An unrecognised role falls back to div and is NEVER interpolated as a tag.
+# role derives from parsed HTML; unchecked interpolation would let a crafted
+# document emit a tag it never contained.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'script src=x'},'element_order':0}
+]);
+----
+<div></div>
+
+# id and class are escaped.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'nav','id':'a"b'},'element_order':0}
+]);
+----
+<nav id="a&quot;b"></nav>
