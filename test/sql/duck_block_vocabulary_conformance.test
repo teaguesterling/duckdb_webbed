@@ -151,31 +151,43 @@ SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
 # raw is literal pass-through by contract: webbed's writer emits raw content
 # verbatim with no wrapping tag (see the TYPE_RAW branch in
 # DuckBlocksToHtmlFunction), and HTML has no marker to say "this text was raw"
-# for the reader to pick back up. It necessarily reads back as an ordinary
-# inline text run, not as element_type='raw' -- inherent to the contract, not
-# a bug in the reader.
+# for the reader to pick back up. It necessarily reads back as something other
+# than element_type='raw' -- inherent to the contract, not a bug in the reader.
+#
+# WHAT it reads back as changed when `plain` emission landed. Bare text at the
+# top level has nowhere else to live -- no container to carry it in `content` --
+# which is precisely the case spec 6.0 defines `plain` for. It was an inline
+# text run before that rule existed. The non-round-trip being asserted here is
+# unchanged; only the shape it lands in moved, and it moved to the correct one.
 query I
 SELECT (html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'raw','content':'hello raw content','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
 ])))[1].kind;
 ----
-inline
+block
 
 query I
 SELECT (html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'raw','content':'hello raw content','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
 ])))[1].element_type;
 ----
-text
+plain
 
 # figure carrying its content DIRECTLY (no explicit child block) writes that
-# content as the <figure> element's own text, which the reader treats as loose
-# inline content of the figure -- so it reads back as TWO elements: the figure
-# (now with content NULL) plus a separate text inline at level+1. The
-# element_type list, not just the first element, is what pins this.
+# content as the <figure> element's own text, which the reader reads back as
+# TWO elements: the figure (now with content NULL) plus its text at level+1.
+#
+# That text was an inline run until `plain` emission landed; it is now a `plain`
+# block, because loose block-level text inside a container is what `plain` is
+# for. Both this shape and the alternative -- figure carrying the text in its own
+# `content`, per "content iff a single text child" -- validate against the
+# vendored conformance macro, so webbed is conformant either way. Which is
+# CANONICAL for a container whose only child is text is an open question with
+# the vocabulary owner; this asserts what webbed actually emits rather than
+# guessing at a preference the macro does not express.
 query I
 SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'figure','content':'Some text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
 ])), x -> x.element_type);
 ----
-[figure, text]
+[figure, plain]
