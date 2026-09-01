@@ -176,3 +176,55 @@ query I
 SELECT len(html_to_duck_blocks('<table><tr><td><img src="x.png" alt="IMG"></td></tr></table>'));
 ----
 1
+
+# --- Round-trip: html -> blocks -> html -------------------------------------
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>'));
+----
+<blockquote><p>Quote.</p></blockquote>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>'));
+----
+<section id="s1" class="intro"><p>x</p></section>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<nav><p>n</p></nav>'));
+----
+<nav><p>n</p></nav>
+
+# Nested sectioning survives both directions.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="o"><section id="i"><p>deep</p></section></section>'));
+----
+<section id="o"><section id="i"><p>deep</p></section></section>
+
+# The figure caption keeps its formatting instead of flattening to a title attr.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b></figcaption></figure>'));
+----
+<figure><img src="i.png" alt="a"><figcaption>Cap <strong>bold</strong></figcaption></figure>
+
+# Block containment and inline containment nesting simultaneously.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s"><blockquote><p>q <b>bold <i>in</i></b></p></blockquote></section>'));
+----
+<section id="s"><blockquote><p>q <strong>bold <em>in</em></strong></p></blockquote></section>
+
+# <details> round-trips with a real <summary>, not a <figcaption>.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<details><summary>Sum</summary><p>D.</p></details>'));
+----
+<details><summary>Sum</summary><p>D.</p></details>
+
+# An unmapped semantic element survives as generic rather than vanishing.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<aside class="note"><p>n</p></aside>'));
+----
+<aside class="note"><p>n</p></aside>
