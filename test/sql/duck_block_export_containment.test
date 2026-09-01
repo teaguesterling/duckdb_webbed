@@ -217,6 +217,7 @@ SELECT duck_blocks_to_html([
 <blockquote><blockquote><blockquote>x</blockquote></blockquote></blockquote>
 
 # A NULL level is treated as top level.
+# balance/no-crash only; the clamp itself is pinned by the discriminating tests below.
 query I
 SELECT duck_blocks_to_html([
   {'kind':'block','element_type':'blockquote','content':'x','level':NULL,'encoding':'text','attributes':MAP{},'element_order':0},
@@ -226,12 +227,45 @@ SELECT duck_blocks_to_html([
 <blockquote>x</blockquote><p>y</p>
 
 # A negative level is clamped to top level, not used as an array index.
+# balance/no-crash only; the clamp itself is pinned by the discriminating tests below.
 query I
 SELECT duck_blocks_to_html([
   {'kind':'block','element_type':'blockquote','content':'x','level':-5,'encoding':'text','attributes':MAP{},'element_order':0}
 ]);
 ----
 <blockquote>x</blockquote>
+
+# A negative level is clamped to top level. The trailing sibling at level 1 is
+# what makes this discriminate: if EffectiveLevel returned the raw -5, the
+# paragraph would NOT close the blockquote and this would nest instead.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':-5,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'in','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote></blockquote><p>in</p>
+
+# A NULL level is clamped to top level too. If NULL mapped to 0 instead of 1,
+# the level-1 paragraph would not close the blockquote and this would nest.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':NULL,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'y','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote>x</blockquote><p>y</p>
+
+# A NULL level after real nesting returns to TOP level specifically -- this pins
+# NULL == 1 rather than merely "some consistent constant".
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'deep','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'back','level':NULL,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>deep</p></blockquote><p>back</p>
 
 # An empty list produces empty output.
 query I
