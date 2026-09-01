@@ -51,12 +51,14 @@ inline	bold	bold	3
 inline	text	.	3
 
 # --- Finding 4: <section> flattened, id and class discarded ------------------
-query IIII
-SELECT b.element_type, b.content, b.level, b.attributes
+# Attributes are asserted by key, not by the printed MAP string: MAP iteration
+# order is an internal-structure detail, not a contract.
+query IIIIII
+SELECT b.element_type, b.content, b.level, b.attributes['role'], b.attributes['id'], b.attributes['class']
 FROM (SELECT unnest(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>')) AS b) x;
 ----
-section	NULL	1	{role=section, id=s1, class=intro}
-paragraph	x	2	{}
+section	NULL	1	section	s1	intro
+paragraph	x	2	NULL	NULL	NULL
 
 # heading_level is NOT affected by structural nesting.
 query III
@@ -67,12 +69,23 @@ section	1	NULL
 heading	2	1
 
 # A <div> carrying id/class becomes a `div` block; a bare one stays transparent.
-query IIII
-SELECT b.element_type, b.content, b.level, b.attributes
+# Attributes are asserted by key, not by the printed MAP string (see above).
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['id'], b.attributes['class']
 FROM (SELECT unnest(html_to_duck_blocks('<div id="w" class="row"><p>x</p></div>')) AS b) x;
 ----
-div	NULL	1	{id=w, class=row}
-paragraph	x	2	{}
+div	NULL	1	w	row
+paragraph	x	2	NULL	NULL
+
+# Attributes preserve SOURCE ORDER, not alphabetical order. This changed when the
+# tree walk landed: <img> attributes previously printed alphabetically. Source
+# order is more faithful to the document; MAP lookup (attributes['src']) is
+# unaffected either way.
+query I
+SELECT b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<img src="i.png" alt="a" title="t">')) AS b) x;
+----
+{src=i.png, alt=a, title=t}
 
 query II
 SELECT b.element_type, b.content
