@@ -8,22 +8,32 @@ require webbed
 # Test 1: Basic read_html_blocks on simple HTML file
 # =============================================================================
 
+# simple.html's <head><title>Simple Page</title></head> is now captured
+# (see test/sql/duck_block_html_structure.test): a third row, kind='value'
+# element_type='string', appended after the two body blocks, per the same
+# "metadata after blocks" ordering contract frontmatter already follows.
+# Checked against the vendored conformance macro before moving this
+# expectation, the same way the two other consequential breaks on this
+# branch were -- see that macro's use in duck_block_html_structure.test.
 query III
 SELECT kind, element_type, content FROM read_html_blocks('test/html/simple.html') ORDER BY element_order;
 ----
 block	heading	Welcome
 block	paragraph	This is a test page.
+value	string	Simple Page
 
-# Test count of blocks in simple.html
+# Test count of blocks in simple.html -- 2 -> 3 for the same reason.
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html');
 ----
-2
+3
 
 # =============================================================================
 # Test 2: Attributes and level from simple.html
 # =============================================================================
 
+# The title's `string` row also has level 1 (the metadata-is-level-1
+# contract) and no heading_level attribute, same as paragraph.
 query IIII
 SELECT element_type, level, encoding, attributes['heading_level']
 FROM read_html_blocks('test/html/simple.html')
@@ -31,6 +41,7 @@ ORDER BY element_order;
 ----
 heading	1	text	1
 paragraph	1	text	NULL
+string	1	text	NULL
 
 # =============================================================================
 # Test 3: read_html_blocks on complex HTML file
@@ -80,32 +91,35 @@ ORDER BY element_order;
 ----
 test/html/simple.html	block	heading	Welcome
 test/html/simple.html	block	paragraph	This is a test page.
+test/html/simple.html	value	string	Simple Page
 
-# Test filename aliases: file_path and include_filepath
+# Test filename aliases: file_path and include_filepath -- 2 -> 3, same title.
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html', file_path := true);
 ----
-2
+3
 
 query I
 SELECT count(*) FROM read_html_blocks('test/html/simple.html', include_filepath := true);
 ----
-2
+3
 
 # =============================================================================
 # Test 5: Multi-file reading (glob & list of files)
 # =============================================================================
 
 # 11 -> 14: +3 section blocks for <nav>/<main>/<article>, now preserved
-# instead of flattened away.
+# instead of flattened away. 14 -> 15 and 2 -> 3: both files carry their own
+# <head><title>, now captured as a trailing value/string row each (complex.html
+# is "Complex Page", simple.html is "Simple Page" -- see Test 1 above).
 query II
 SELECT filename, count(*)
 FROM read_html_blocks(['test/html/simple.html', 'test/html/complex.html'], filename := true)
 GROUP BY filename
 ORDER BY filename;
 ----
-test/html/complex.html	14
-test/html/simple.html	2
+test/html/complex.html	15
+test/html/simple.html	3
 
 # Glob pattern reading
 query I

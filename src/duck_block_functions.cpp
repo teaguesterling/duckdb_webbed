@@ -989,6 +989,50 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	// before the body walk below. Collecting into a temporary and appending after
 	// the walk keeps the extraction where it already was while fixing the order.
 	vector<std::string> frontmatter_contents;
+
+	// Collect <head> document metadata now, for the same reason: emitted after
+	// the body walk, per the same ordering contract. Scoped tightly to <title>
+	// and <meta name=...content=...> -- <meta charset>, <meta http-equiv>, and
+	// <meta property> are transport/presentation metadata, not document
+	// metadata, and <link> carries no `content` to map at all; all are
+	// silently skipped, not an error and not a best-effort mapping.
+	//
+	// Each field becomes kind='value', element_type='string' (VALUE_STRING),
+	// level 1, attributes['key'] = field name, content = the value -- a
+	// <title> is plain text, so 'string' carries it directly; there is no
+	// duck_block_utils-side value/inlines construct for webbed to produce.
+	vector<std::pair<std::string, std::string>> head_metadata_fields; // key, value; document order
+	xmlXPathObjectPtr title_obj = EvalXPathChecked(xpath_ctx, "//head/title");
+	if (title_obj && title_obj->nodesetval) {
+		for (int j = 0; j < title_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = title_obj->nodesetval->nodeTab[j];
+			if (!node) {
+				continue;
+			}
+			head_metadata_fields.emplace_back("title", GetNodeTextContent(node));
+		}
+	}
+	if (title_obj) {
+		xmlXPathFreeObject(title_obj);
+	}
+	xmlXPathObjectPtr meta_obj = EvalXPathChecked(xpath_ctx, "//head/meta[@name and @content]");
+	if (meta_obj && meta_obj->nodesetval) {
+		for (int j = 0; j < meta_obj->nodesetval->nodeNr; j++) {
+			xmlNodePtr node = meta_obj->nodesetval->nodeTab[j];
+			if (!node) {
+				continue;
+			}
+			std::string name = GetNodeAttribute(node, "name");
+			if (name.empty()) {
+				continue;
+			}
+			head_metadata_fields.emplace_back(name, GetNodeAttribute(node, "content"));
+		}
+	}
+	if (meta_obj) {
+		xmlXPathFreeObject(meta_obj);
+	}
+
 	xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
 	if (frontmatter_obj && frontmatter_obj->nodesetval) {
 		for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
@@ -1028,8 +1072,31 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 		WalkBlockNode(root, 1, block_order, blocks);
 	}
 
-	// Now emit the metadata blocks, AFTER the document's blocks, continuing
+	// Now emit the metadata, AFTER the document's blocks, continuing
 	// element_order from wherever the walk above left off.
+	//
+	// head_metadata_fields BEFORE frontmatter_contents: <head> physically
+	// precedes <body> (where a frontmatter <script> lives) in the source
+	// document, so this keeps the metadata's own emission order matching the
+	// source's -- an arbitrary choice between two orderings the ordering
+	// contract does not itself distinguish (both are "after the blocks"),
+	// made for that reason rather than left to whichever loop happened to run
+	// first.
+	for (auto &field : head_metadata_fields) {
+		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_KEY] = field.first;
+		child_list_t<Value> struct_values;
+		struct_values.push_back(make_pair("kind", Value(DuckBlockTypes::KIND_VALUE)));
+		struct_values.push_back(make_pair("element_type", Value(DuckBlockTypes::VALUE_STRING)));
+		struct_values.push_back(make_pair(
+		    "content", field.second.empty() ? Value(LogicalType::VARCHAR) : Value(field.second)));
+		struct_values.push_back(make_pair("level", Value::INTEGER(1)));
+		struct_values.push_back(make_pair("encoding", Value(DuckBlockTypes::ENCODING_TEXT)));
+		struct_values.push_back(make_pair("attributes", DuckBlockTypes::CreateAttributesMap(attrs)));
+		struct_values.push_back(make_pair("element_order", Value(block_order++)));
+		blocks.push_back(Value::STRUCT(std::move(struct_values)));
+	}
+
 	for (auto &content : frontmatter_contents) {
 		// This metadata block is a <script type="application/vnd.frontmatter+yaml">
 		// element, which by definition sits in a document that also has body
