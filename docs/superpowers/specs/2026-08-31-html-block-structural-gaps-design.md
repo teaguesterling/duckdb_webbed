@@ -542,6 +542,35 @@ Recorded because they are real and would otherwise be rediscovered:
   terminal fallback closes the silent-drop hole for *named* unknown types only (see "The
   fallback is guarded on a non-empty `element_type`" above); a type-less block's content is lost
   along with its (absent) name, not just the name.
+- **Inline containment: two different level semantics collide.** The scope stack pops a container
+  when `open_containers.back().level >= cur_level` — a level compared **relative to the parent**.
+  But `ConsumeInlineChildren` stops only when an inline's level is `< 1` — an **absolute** test.
+  The two use different definitions of "child", so an inline at or above its parent's level is
+  swallowed into the preceding block instead of rendering as its sibling. Measured:
+
+```
+section@1 + paragraph('a')@2 + inline text('loose')@2
+  ->  <section><p>aloose</p></section>
+  expected: <section><p>a</p>loose</section>
+```
+
+The fix — passing the parent's level into `ConsumeInlineChildren` and breaking on
+`next_level <= parent_level` — was implemented, verified correct, and then reverted. It breaks 16
+hand-authored fixture lines in `test/sql/duck_block_html.test` (first failure at `:1003`) which
+place inline children at `level: 1` under a `level: NULL` parent, i.e. at the *same* level as
+their parent.
+
+Those fixtures encode a convention the reader never produces: `html_to_duck_blocks` always emits
+inline children at `parent_level + 1` (measured: zero inlines at parent level across paragraph,
+heading and blockquote inputs). So the fixtures were written against the old absolute rule and do
+not reflect real reader output.
+
+State clearly that this is:
+- **not reachable from the reader today**, so it is latent rather than live;
+- **misattribution, not corruption** — tag balance is unaffected;
+- deferred to the reader-tree-walk plan (`docs/superpowers/plans/2026-08-31-reader-tree-walk.md`),
+  which must decide **both** the rule and whether to migrate those 16 fixture lines, because that
+  plan nests real containers and makes the misattribution reachable.
 
 ## Future work
 
