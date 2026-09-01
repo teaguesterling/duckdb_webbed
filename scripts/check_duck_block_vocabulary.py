@@ -20,10 +20,14 @@ KNOWN BLIND SPOT IN THE GAPS ARM -- it fails in the hiding direction.
 
 "Branched on" means a `DuckBlockTypes::NAME` reference OR the constant's VALUE
 found as a bare string literal. A short, generic value collides with unrelated
-code: webbed quotes "value" in xml_sax_reader.hpp and "string" in xml_utils.cpp
-for XML type names having nothing to do with duck_block, so KIND_VALUE and
-VALUE_STRING read as handled when nothing branches on them. Measured, not
-supposed.
+code -- these are EXAMPLES, not an exhaustive list of every collision, only the
+ones actually found and confirmed by enumeration: webbed quotes "value" in
+xml_sax_reader.hpp and "string" in xml_utils.cpp for XML type names having
+nothing to do with duck_block, so KIND_VALUE and VALUE_STRING read as handled
+when nothing branches on them. ENCODING_XML = "xml" is a third: this is an XML
+extension, and "xml" appears throughout as a namespace prefix, a default node
+name, and a scalar function name, none of which have anything to do with
+duck_block encoding. Measured, not supposed.
 
 Worse, and structural rather than incidental: the vocabulary contains SIX
 same-valued constant pairs by design --
@@ -95,6 +99,17 @@ the name+value comparison). Changed for webbed:
     stale-read failure mode (see UPSTREAM_RAW below) with no local symptom
     when it happens. HTTPS remains the default for anyone running the script
     directly without a local clone to point at.
+
+NOT WIRED INTO CI, and nothing else records why -- so it's recorded here. The
+unauthenticated GitHub API this check calls is rate-limited to 60 requests/hour
+(see the GITHUB_TOKEN handling in _get() below), which a shared CI runner can
+exhaust on unrelated jobs; by design the check then SKIPS cleanly rather than
+failing (verified=False, see report() below) so an offline or rate-limited run
+never blocks anyone. --strict exists precisely so a CI that wants the check to
+be load-bearing can turn that clean skip into a failure instead. Whether to
+actually add it to a CI job -- and whether to spend a GITHUB_TOKEN on raising
+the rate limit there -- is a deliberate open choice, not an oversight: nobody
+has decided webbed's CI should depend on a third repo's API availability.
 
 Usage:
     python3 scripts/check_duck_block_vocabulary.py            # fetch over HTTPS
