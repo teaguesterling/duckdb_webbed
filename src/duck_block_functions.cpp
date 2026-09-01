@@ -26,7 +26,6 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
-static std::string ListItemsToJson(xmlNodePtr node);
 static std::string DefListToJson(xmlNodePtr node);
 static std::string TableToJson(xmlNodePtr node);
 static std::string TableJsonToHtml(const std::string &json);
@@ -402,8 +401,13 @@ static bool IsNonContentTag(const std::string &tag) {
 // Containers that serialise their own contents to JSON. The walk does NOT
 // recurse into these: their text is already in the JSON, so emitting the
 // descendants as blocks too would duplicate it.
+//
+// <ul>/<ol> are NOT here: spec 6.x reads them as structural `list` +
+// `list_item` blocks (see the "List" branch in WalkBlockNode below), not as
+// an opaque JSON leaf. <dl> stays on the JSON-leaf path deliberately --
+// migrating it is a separate, not-yet-made call (see DefListToJson).
 static bool IsJsonLeafTag(const std::string &tag) {
-	return tag == "table" || tag == "ul" || tag == "ol" || tag == "dl";
+	return tag == "table" || tag == "dl";
 }
 
 // Semantic sectioning containers. One block type, variant in attributes['role'],
@@ -426,6 +430,7 @@ static bool IsBlockLevelTag(const std::string &tag) {
 	}
 	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
 	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
+	       tag == "ul" || tag == "ol" || tag == "li" ||
 	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
 }
 
@@ -785,22 +790,58 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		}
 
 		// --- JSON-encoded leaves: NOT recursed ---------------------------
+		// <dl> stays here deliberately -- LEAVE `<dl>` ALONE, per Teague's
+		// explicit call: one behaviour change (lists) at a time. `deflist` is
+		// still declared in spec 6.2; do not migrate it here.
 		if (IsJsonLeafTag(tag)) {
 			std::string content;
 			std::string block_type;
 			if (tag == "table") {
 				block_type = DuckBlockTypes::TYPE_TABLE;
 				content = TableToJson(child);
-			} else if (tag == "dl") {
+			} else {
 				block_type = DuckBlockTypes::TYPE_DEFLIST;
 				content = DefListToJson(child);
-			} else {
-				block_type = DuckBlockTypes::TYPE_LIST;
-				content = ListItemsToJson(child);
-				attrs.emplace_back("ordered", (tag == "ol") ? "true" : "false");
 			}
 			blocks.push_back(DuckBlockTypes::CreateBlock(block_type, content, Value::INTEGER(level),
 			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
+			continue;
+		}
+
+		// --- List: structural `list` + `list_item`, not a JSON leaf --------
+		// spec 6.2 (see the 3.0 -> 4.0 changelog entry) makes list_type
+		// canonical; attributes['ordered'] is emitted too, as the legacy alias
+		// for consumers that predate list_type. <ol start="N"> carries that
+		// start in attributes['start'] -- omitted entirely when the source
+		// does not say, never defaulted.
+		//
+		// The list itself is always a container (never the single-text-child
+		// leaf case): its children are list_items, which are block-level, so
+		// EmitContainerAndRecurse is correct unconditionally here -- there is
+		// no "list holds bare text" shape to collapse into `content`.
+		if (tag == "ul" || tag == "ol") {
+			bool is_ordered = (tag == "ol");
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_LIST_TYPE),
+			                   is_ordered ? std::string(DuckBlockTypes::LIST_TYPE_ORDERED)
+			                              : std::string(DuckBlockTypes::LIST_TYPE_BULLET));
+			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ORDERED_LEGACY), is_ordered ? "true" : "false");
+			if (is_ordered) {
+				std::string start = GetNodeAttribute(child, "start");
+				if (!start.empty()) {
+					attrs.emplace_back("start", start);
+				}
+			}
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			continue;
+		}
+
+		// --- List item: same content rule as every other container ---------
+		// A lone text child carries it in `content` (Pandoc's tight Plain);
+		// block children (e.g. a <p>, or a nested <ul>) are owned at level+1
+		// (Pandoc's loose Para, or a nested list). Reuses EmitContainerOrLeaf
+		// rather than writing a fourth copy of that decision.
+		if (tag == "li") {
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
 			continue;
 		}
 
@@ -1363,7 +1404,11 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				}
 				std::string tag = ordered ? "ol" : "ul";
-				html << "<" << tag << ">";
+				html << "<" << tag;
+				if (ordered && attrs.count("start")) {
+					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
+				}
+				html << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
@@ -2451,30 +2496,6 @@ static std::string TableJsonToHtml(const std::string &json) {
 	html << "</table>";
 	yyjson_doc_free(doc);
 	return html.str();
-}
-
-static std::string ListItemsToJson(xmlNodePtr node) {
-	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
-	yyjson_mut_val *arr = yyjson_mut_arr(doc);
-	yyjson_mut_doc_set_root(doc, arr);
-
-	xmlNodePtr child = node->children;
-	while (child) {
-		if (child->type == XML_ELEMENT_NODE && child->name && xmlStrcmp(child->name, BAD_CAST "li") == 0) {
-			std::string item_text = GetNodeTextContent(child);
-			yyjson_mut_arr_add_strncpy(doc, arr, item_text.data(), item_text.size());
-		}
-		child = child->next;
-	}
-
-	size_t len = 0;
-	char *json = yyjson_mut_write(doc, 0, &len);
-	std::string res(json ? json : "[]", len);
-	if (json) {
-		free(json);
-	}
-	yyjson_mut_doc_free(doc);
-	return res;
 }
 
 // Serialise <dl> to [{"term": "...", "definitions": ["...", ...]}].

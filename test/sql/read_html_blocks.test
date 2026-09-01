@@ -50,12 +50,21 @@ string	1	text	NULL
 # complex.html wraps its content in <nav>/<main>/<article>, which are now
 # preserved as `section` blocks with their role rather than flattened away.
 # Content blocks therefore sit one level deeper than before.
+#
+# The <nav>'s <ul> now reads as a structural `list` with `list_item` children
+# (spec-6.2 migration, Commit 3) rather than an opaque JSON leaf, so its two
+# <li>s -- each holding only a link, an inline -- surface as two additional
+# `list_item` rows here. Checked against duck_blocks_are_valid() and
+# duck_blocks_warnings() (both pass, zero warnings) on this exact fixture
+# before updating this expectation, not just re-baselined to output.
 query II
 SELECT kind, element_type FROM read_html_blocks('test/html/complex.html') WHERE kind = 'block';
 ----
 block	heading
 block	section
 block	list
+block	list_item
+block	list_item
 block	section
 block	section
 block	heading
@@ -112,13 +121,16 @@ SELECT count(*) FROM read_html_blocks('test/html/simple.html', include_filepath 
 # instead of flattened away. 14 -> 15 and 2 -> 3: both files carry their own
 # <head><title>, now captured as a trailing value/string row each (complex.html
 # is "Complex Page", simple.html is "Simple Page" -- see Test 1 above).
+# 15 -> 19: the <nav>'s <ul> is now structural (spec-6.2 migration, Commit 3)
+# -- its 2 <li>s each hold only a link (an inline), so each contributes a
+# `list_item` block row PLUS the `link` inline row it now carries, for +4.
 query II
 SELECT filename, count(*)
 FROM read_html_blocks(['test/html/simple.html', 'test/html/complex.html'], filename := true)
 GROUP BY filename
 ORDER BY filename;
 ----
-test/html/complex.html	15
+test/html/complex.html	19
 test/html/simple.html	3
 
 # Glob pattern reading
@@ -183,15 +195,23 @@ heading	text	Title
 metadata	yaml	title: Test Document
 
 # =============================================================================
-# Test 9: Lists and Tables JSON encoding
+# Test 9: Lists are structural (spec-6.2 migration, Commit 3), tables stay JSON
 # =============================================================================
 
-query III
-SELECT element_type, encoding, attributes['ordered']
+# <ul>/<ol> now read as structural `list` + `list_item` blocks, not an opaque
+# JSON leaf (encoding text, content NULL for the list itself; attributes
+# carry BOTH list_type -- canonical -- and the legacy `ordered` alias).
+# Verified against duck_blocks_are_valid()/duck_blocks_warnings() (valid,
+# zero warnings) on this exact fixture before updating this expectation.
+query IIIII
+SELECT element_type, encoding, attributes['ordered'], attributes['list_type'], content
 FROM parse_html_blocks('<ul><li>Item 1</li><li>Item 2</li></ul><ol><li>First</li></ol>');
 ----
-list	json	false
-list	json	true
+list	text	false	bullet	NULL
+list_item	text	NULL	NULL	Item 1
+list_item	text	NULL	NULL	Item 2
+list	text	true	ordered	NULL
+list_item	text	NULL	NULL	First
 
 query II
 SELECT element_type, encoding
@@ -277,11 +297,15 @@ inline	text	.	2
 # Test 15: Nested list items and tables with embedded styles/scripts
 # =============================================================================
 
+# Structural list_items now, not a JSON array -- style/script are still
+# filtered out of each item's text content the same as everywhere else.
 query III
 SELECT element_type, encoding, content
 FROM parse_html_blocks('<ul><li>First<style>.item{margin:0}</style></li><li>Second<script>log();</script></li></ul>');
 ----
-list	json	["First","Second"]
+list	text	NULL
+list_item	text	First
+list_item	text	Second
 
 query III
 SELECT element_type, encoding, content

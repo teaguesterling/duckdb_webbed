@@ -175,16 +175,25 @@ inline	text	Text
 inline	image	I
 inline	text	 more
 
-# --- Finding 8: block content inside <td>/<li> emitted twice ----------------
+# --- Finding 8: block content inside <td> emitted twice ---------------------
 query I
 SELECT len(html_to_duck_blocks('<table><tr><td><p>cellpara</p></td></tr></table>'));
 ----
 1
 
-query I
-SELECT len(html_to_duck_blocks('<ul><li><p>itempara</p></li></ul>'));
+# <li> USED to share this finding: <ul> was a JSON leaf, so a <p> inside <li>
+# duplicated (once serialised into the list's JSON, once recursed as its own
+# block). spec-6.2 migration Commit 3 makes <ul>/<ol> structural -- <li> now
+# follows the SAME content rule as every other container (list_item(NULL) at
+# level+1, its <p> child owned at level+2), which is 3 legitimate elements,
+# not a duplicate. Checked against duck_blocks_are_valid() before updating.
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<ul><li><p>itempara</p></li></ul>')) AS b) x;
 ----
-1
+list	NULL	1
+list_item	NULL	2
+paragraph	itempara	3
 
 # --- Unmapped containers stay transparent (must NOT regress to zero) --------
 query II

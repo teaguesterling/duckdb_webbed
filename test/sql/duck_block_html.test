@@ -73,10 +73,15 @@ SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].attrib
 ----
 false
 
+# <ul>/<ol> read as structural `list` (spec-6.2 migration, Commit 3), not a
+# JSON leaf, so the list block itself carries no serialised content -- its
+# items are separate list_item children instead. encoding is therefore
+# 'text', same as every other container block (blockquote, section, ...).
+# Checked against duck_blocks_are_valid() before updating this expectation.
 query I
 SELECT (html_to_duck_blocks('<ul><li>First</li><li>Second</li></ul>'))[1].encoding;
 ----
-json
+text
 
 # Test ordered list
 query I
@@ -501,16 +506,18 @@ SELECT (html_to_duck_blocks('<hr>'))[1].encoding;
 ----
 text
 
-# JSON encoding for complex structures
+# Lists are structural now (spec-6.2 migration, Commit 3): text encoding,
+# same as every other container -- see the encoding assertion near the top
+# of this file for the full rationale. Table stays JSON (unaffected).
 query I
 SELECT (html_to_duck_blocks('<ul><li>Item</li></ul>'))[1].encoding;
 ----
-json
+text
 
 query I
 SELECT (html_to_duck_blocks('<ol><li>Item</li></ol>'))[1].encoding;
 ----
-json
+text
 
 query I
 SELECT (html_to_duck_blocks('<table><tr><td>Cell</td></tr></table>'))[1].encoding;
@@ -1417,8 +1424,15 @@ true
 
 # -----------------------------------------------------------------------------
 # List Structure Tests
-# Note: Basic lists work, but inline formatting inside list items is currently
-# flattened to plain text.
+#
+# UPDATED for the spec-6.2 migration (Commit 3): lists are now structural
+# (`list` + `list_item`, read through the same content-rule helper as every
+# other container) rather than an opaque JSON leaf, so inline formatting
+# inside a list item is no longer flattened -- a <li> with element children
+# that are inline (bold, a link, code, ...) takes EmitContainerOrLeaf's
+# "inline children" branch and is exported back out via the same
+# ConsumeInlineChildren path a <p> uses. Measured byte-exact below, so the
+# `contains` checks are upgraded to full round-trips.
 # -----------------------------------------------------------------------------
 
 # Simple unordered list round-trip
@@ -1438,22 +1452,23 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<ol><li>First</li><li>Second</li
 ----
 <ol><li>First</li><li>Second</li></ol>
 
-# List items preserve text content (formatting is flattened)
+# List items now round-trip their inline formatting byte-exact, not just
+# preserve the text (formatting is NOT flattened, per the section note above).
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li><strong>Bold item</strong></li></ul>')), 'Bold item');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li><strong>Bold item</strong></li></ul>'));
 ----
-true
+<ul><li><strong>Bold item</strong></li></ul>
 
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item with <a href="https://example.com">link</a></li></ul>')), 'link');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>Item with <a href="https://example.com">link</a></li></ul>'));
 ----
-true
+<ul><li>Item with <a href="https://example.com">link</a></li></ul>
 
-# List items with code - text is preserved
+# List items with code round-trip byte-exact too.
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<ul><li>Use <code>SELECT</code> query</li></ul>')), 'SELECT');
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>Use <code>SELECT</code> query</li></ul>'));
 ----
-true
+<ul><li>Use <code>SELECT</code> query</li></ul>
 
 # -----------------------------------------------------------------------------
 # Table Edge Cases
@@ -1729,11 +1744,13 @@ true
 # Multiple Block Types in Document
 # -----------------------------------------------------------------------------
 
-# Document with heading, paragraph, list, and code
+# Document with heading, paragraph, list, and code. 4 -> 5: the <ul>'s <li>
+# is now a separate `list_item` element (spec-6.2 migration, Commit 3)
+# instead of being serialised inside the list's JSON content.
 query I
 SELECT len(html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'));
 ----
-4
+5
 
 # All element types are correct
 query I
@@ -1753,6 +1770,11 @@ list
 
 query I
 SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[4].element_type;
+----
+list_item
+
+query I
+SELECT (html_to_duck_blocks('<h1>Title</h1><p>Intro</p><ul><li>Item</li></ul><pre><code>code</code></pre>'))[5].element_type;
 ----
 code
 
