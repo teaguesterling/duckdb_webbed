@@ -242,3 +242,36 @@ webbed copies the spec's `duck_block_is_valid` macro nowhere, so it never
 inherited that macro's rejection of valid `value`-kind elements; and webbed's own
 docs never restate the kind enumeration, so there is no competing definition here
 to supersede.
+
+
+### Second metadata defect: webbed emits `metadata` at level NULL
+
+Measured @ c790228:
+
+```
+metadata block   level = NULL
+paragraph        level = 1
+```
+
+`src/duck_block_functions.cpp:965` uses the four-argument `CreateBlock` overload
+(element_type, content, encoding, attrs, order), which omits `level` and so
+defaults it to NULL. Every other emission path passes an explicit level.
+
+Spec 3.0 onward requires every element to carry an explicit level with top level
+1, and the vocabulary owner's validator errors below 1. So webbed's `metadata`
+blocks are **non-conforming**, and have been since 3.0.
+
+Nobody could have caught this by running that validator against webbed: the
+extension is built for released DuckDB v1.5.5 and webbed builds its own DuckDB
+from a pinned submodule reporting `v1.5.5-dev154`, so it refuses to load by ABI
+version string. The check that would have found this is one webbed structurally
+cannot run.
+
+It is the same defect class as the dropped `<title>`/`<meta>` above: the metadata
+path is an afterthought, reached by a different code path from every other block
+type. One uses a different `CreateBlock` overload; the other never visits `<head>`
+at all.
+
+**For the emission migration:** `metadata` at level 1, and `kind='value'` for
+document metadata from `<head>`. The vocabulary owner has pinned the real emitted
+shape in their `vocabulary.test` if the exact structure is needed.
