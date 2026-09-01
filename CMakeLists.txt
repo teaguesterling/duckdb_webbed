@@ -42,12 +42,6 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 
 project(${TARGET_NAME})
 include_directories(src/include)
-# duck_block vocabulary constants, taken as a submodule rather than copied.
-# Header-only and link-free by design: duck_block_vocabulary.hpp declares nothing
-# it does not define, so no duck_block_utils object needs linking. Copies of this
-# vocabulary drifted silently twice before (webbed carried 29 of 44 names), which
-# is why it is a submodule now.
-include_directories(duck_block_utils/src/include)
 
 set(EXTENSION_SOURCES
     src/webbed_extension.cpp

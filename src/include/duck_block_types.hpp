@@ -2,9 +2,10 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/types.hpp"
-// Canonical duck_block vocabulary, taken as a submodule (duck_block_utils/) rather
-// than copied. Header-only and link-free: it declares nothing it does not define,
-// so nothing from duck_block_utils needs linking.
+// Canonical duck_block vocabulary, vendored from duck_block_utils (see the header
+// comment in duck_block_vocabulary.hpp for the upstream commit and drift check).
+// Header-only and link-free: it declares nothing it does not define, so nothing
+// from duck_block_utils needs linking.
 #include "duck_block_vocabulary.hpp"
 
 namespace duckdb {
@@ -13,10 +14,12 @@ namespace duckdb {
  * DuckBlockTypes provides type definitions and utilities for working with doc_element structures.
  *
  * The vocabulary itself -- kind values, element type names, encodings, field indices --
- * comes from DuckBlockVocabulary in the duck_block_utils submodule, which this class
- * inherits so every existing DuckBlockTypes::TYPE_* reference keeps resolving. Only
- * webbed-specific additions are declared below. This replaces a hand-maintained copy
- * that had silently drifted to 29 of 44 names.
+ * comes from DuckBlockVocabulary, vendored from duck_block_utils in
+ * src/include/duck_block_vocabulary.hpp, which this class inherits so every existing
+ * DuckBlockTypes::TYPE_* reference keeps resolving. Only webbed-specific additions are
+ * declared below. This replaces a hand-maintained copy that had silently drifted to 29
+ * of 44 names; scripts/check_duck_block_vocabulary.py guards against the vendored copy
+ * drifting the same way.
  *
  * The doc_element type represents a document element with the following structure:
  * STRUCT(
