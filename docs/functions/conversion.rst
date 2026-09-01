@@ -197,6 +197,12 @@ Convert HTML content into a list of structured document blocks. This function pa
 
 Each block is a struct with the following fields:
 
+.. note::
+
+   **Field names.** These fields are ``element_type`` and ``element_order``. Older
+   documentation of this extension showed them as ``block_type`` and ``block_order``;
+   those names do not exist, and ``SELECT b.block_type`` fails with a binder error.
+
 .. list-table::
    :header-rows: 1
    :widths: 20 15 65
@@ -204,7 +210,12 @@ Each block is a struct with the following fields:
    * - Field
      - Type
      - Description
-   * - ``block_type``
+   * - ``kind``
+     - VARCHAR
+     - Element class: ``'block'`` for block-level elements, ``'inline'`` for inline
+       elements such as text spans and links. Filter on this to select only
+       block-level content.
+   * - ``element_type``
      - VARCHAR
      - Type of block: ``'heading'``, ``'paragraph'``, ``'code'``, ``'list'``, ``'blockquote'``, ``'table'``, ``'hr'``, ``'image'``, ``'figure'``
    * - ``content``
@@ -219,7 +230,7 @@ Each block is a struct with the following fields:
    * - ``attributes``
      - MAP(VARCHAR, VARCHAR)
      - Additional attributes (id, class, language, src, alt, etc.)
-   * - ``block_order``
+   * - ``element_order``
      - INTEGER
      - Zero-based position of the block in the document
 
@@ -261,19 +272,19 @@ Each block is a struct with the following fields:
    -- Get all headings from a document
    SELECT block.content, block.level
    FROM (SELECT unnest(html_to_duck_blocks(html)) as block FROM documents)
-   WHERE block.block_type = 'heading';
+   WHERE block.element_type = 'heading';
 
    -- Count blocks by type
-   SELECT block.block_type, COUNT(*)
+   SELECT block.element_type, COUNT(*)
    FROM (SELECT unnest(html_to_duck_blocks(html)) as block FROM documents)
-   GROUP BY block.block_type;
+   GROUP BY block.element_type;
 
    -- Extract code blocks with their language
    SELECT block.content, block.attributes['language'] as language
    FROM (SELECT unnest(html_to_duck_blocks(
        '<pre><code class="language-python">print("hello")</code></pre>'
    )) as block)
-   WHERE block.block_type = 'code';
+   WHERE block.element_type = 'code';
 
 
 duck_blocks_to_html
@@ -305,16 +316,14 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
    SELECT duck_blocks_to_html(
        list_filter(
            html_to_duck_blocks(html),
-           block -> block.block_type IN ('heading', 'paragraph')
+           block -> block.element_type IN ('heading', 'paragraph')
        )
    ) FROM documents;
 
-   -- Reorder blocks
+   -- Reverse document order (blocks come out in element_order, so reversing
+   -- the list is enough; list_sort does not take a lambda)
    SELECT duck_blocks_to_html(
-       list_sort(
-           html_to_duck_blocks(html),
-           block -> block.block_order DESC
-       )
+       list_reverse(html_to_duck_blocks(html))
    ) FROM documents;
 
 
@@ -379,7 +388,7 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
    SELECT duck_blocks_to_markdown(
        list_filter(
            html_to_duck_blocks(html_content),
-           b -> b.block_type IN ('heading', 'paragraph')
+           b -> b.element_type IN ('heading', 'paragraph')
        )
    ) as simplified_markdown
    FROM web_pages;
@@ -391,17 +400,17 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
        block.level
    FROM web_pages,
         LATERAL unnest(html_to_duck_blocks(html_content)) as block
-   WHERE block.block_type = 'heading'
-   ORDER BY url, block.block_order;
+   WHERE block.element_type = 'heading'
+   ORDER BY url, block.element_order;
 
    -- Convert code blocks from one language syntax highlighting to another format
    SELECT duck_blocks_to_html(
        list_transform(
            html_to_duck_blocks(html),
            b -> CASE
-               WHEN b.block_type = 'code'
-               THEN {'block_type': 'code', 'content': b.content, 'level': b.level,
-                     'encoding': b.encoding, 'block_order': b.block_order,
+               WHEN b.element_type = 'code'
+               THEN {'element_type': 'code', 'content': b.content, 'level': b.level,
+                     'encoding': b.encoding, 'element_order': b.element_order,
                      'attributes': map_from_entries([('language', 'python')])}
                ELSE b
            END
@@ -416,19 +425,21 @@ For Python-style xmltodict behavior, create a macro:
 
 .. code-block:: sql
 
-   CREATE MACRO xmltodict(xml,
-                          attr_prefix := '@',
-                          text_key := '#',
-                          process_namespaces := false,
-                          empty_elements := 'object',
-                          force_list := []) AS
+   CREATE MACRO xmltodict(xml) AS
      xml_to_json(xml,
-       attr_prefix := attr_prefix,
-       text_key := text_key,
-       empty_elements := empty_elements,
-       force_list := force_list,
-       namespaces := IF(process_namespaces, 'expand', 'strip')
+       attr_prefix := '@',
+       text_key := '#',
+       empty_elements := 'object',
+       namespaces := 'strip'
      );
 
    -- Usage matches Python's xmltodict.parse()
    SELECT xmltodict('<root><item>Test</item></root>');
+
+.. note::
+
+   The ``xml_to_json`` settings must be literal constants, so they are baked into the
+   macro rather than exposed as macro parameters. Forwarding a macro parameter --
+   ``xml_to_json(xml, attr_prefix := attr_prefix)`` -- raises
+   ``Binder Error: Parameter 'attr_prefix' must be a constant value``. To use different
+   settings, define another macro or call ``xml_to_json`` directly with literals.
