@@ -296,11 +296,23 @@ query, so containers now nest instead of flattening. This affects several elemen
      - Emit ``figure`` / ``caption`` blocks. The caption keeps its inline formatting
        (e.g. ``<b>``, ``<i>``) instead of being flattened into a plain-text ``title``
        attribute.
-   * - Any other element carrying document semantics with no dedicated mapping
-       (e.g. ``<aside>``, ``<details>``, a custom element)
-     - Emits a ``generic`` block rather than being silently dropped or flattened.
-       ``attributes['source_type']`` records the original tag name so a consumer can
-       still distinguish it.
+   * - ``<details>``
+     - Emits a ``generic`` block. ``attributes['source_type']`` records the original
+       tag name (``'details'``) so a consumer can still distinguish it. This is the
+       only tag that maps to ``generic`` -- it is not a catch-all for unmapped elements
+       in general (see the row below).
+   * - Any other element with no dedicated mapping (a custom element, ``<form>``,
+       ``<address>``, a presentational ``<div>``/``<span>`` wrapper with no
+       ``id``/``class``, etc.)
+     - Walked through transparently: no block is emitted for the element itself and
+       its level is not incremented, only its recognized descendants become blocks.
+       A catch-all ``generic`` block per unmapped element was considered and
+       deliberately rejected (Decision 2 in
+       ``docs/superpowers/specs/2026-08-31-html-block-structural-gaps-design.md``):
+       unlike a closed, fully-semantic vocabulary such as Pandoc's, HTML's tag set is
+       open-ended and most elements on a real page are presentational wrappers with
+       no document meaning, so a catch-all would flood real pages with a ``generic``
+       block for every layout wrapper.
 
 ``level`` is now structural nesting depth: content emitted underneath an emitted
 container (``section``, ``blockquote``, ``figure``, etc.) is one level deeper than its
