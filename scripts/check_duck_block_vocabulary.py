@@ -25,6 +25,22 @@ for XML type names having nothing to do with duck_block, so KIND_VALUE and
 VALUE_STRING read as handled when nothing branches on them. Measured, not
 supposed.
 
+Worse, and structural rather than incidental: the vocabulary contains SIX
+same-valued constant pairs by design --
+
+    'code'    TYPE_CODE / INLINE_CODE        'raw'   TYPE_RAW / INLINE_RAW
+    'generic' TYPE_GENERIC / INLINE_GENERIC  'list'  VALUE_LIST / TYPE_LIST
+    'image'   TYPE_IMAGE / INLINE_IMAGE      'text'  INLINE_TEXT / ENCODING_TEXT
+
+-- and the duck_block spec instructs consumers to "always test kind AND
+element_type together" for exactly this reason. A value-only match is therefore
+structurally unable to tell those pairs apart: it conflates precisely the
+constants the spec names as conflatable. That is a stronger argument for scoping
+the literal match to duck_block context than unrelated-subsystem collisions,
+because the vocabulary guarantees these regardless of what else the codebase
+quotes. Found by the panduck session on their copy; confirmed here by
+enumeration.
+
 So an empty GAPS line means "no gap the scan can see", not "no gap". The arm
 still earns its place -- it independently rediscovered lineblock, list_item and
 page_break, all three separately confirmed by sweeping every block type through
