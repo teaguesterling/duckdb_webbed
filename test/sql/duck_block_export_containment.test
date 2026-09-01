@@ -319,3 +319,47 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <figcaption>C</figcaption>
+
+# kind='value' is document metadata, not body content: neither the marker nor
+# its level scope may render. Skipping only the marker is not enough -- a
+# `blocks` value's children are themselves kind='block'.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'value','element_type':'inlines','content':NULL,'level':1,'encoding':'text','attributes':MAP{'key':'title'},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'Doc Title','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'value','element_type':'blocks','content':NULL,'level':1,'encoding':'text','attributes':MAP{'key':'abstract'},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Secret abstract.','level':2,'encoding':'text','attributes':MAP{},'element_order':3},
+  {'kind':'block','element_type':'paragraph','content':'Real body.','level':1,'encoding':'text','attributes':MAP{},'element_order':4}
+]);
+----
+<p>Real body.</p>
+
+# A value marker inside an open container must not close it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'value','element_type':'string','content':'meta','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'in','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>in</p></blockquote>
+
+# An unmapped inline keeps its identity rather than degrading to bare text.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'before ','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'generic','content':'KEPT','level':2,'encoding':'text','attributes':MAP{'source_type':'kbd'},'element_order':2}
+]);
+----
+<p>before <span data-duck-block-type="generic" data-source-type="kbd">KEPT</span></p>
+
+# An inline with NO element_type has no identity to preserve, so it renders as
+# bare text rather than an empty-typed span. Mirrors the block-side guard.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':NULL,'content':'plain','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<p>plain</p>

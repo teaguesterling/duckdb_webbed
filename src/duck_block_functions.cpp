@@ -132,8 +132,23 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
 		return content; // Pass through raw HTML
 	}
-	// Default: return escaped content
-	return XMLUtils::HTMLEscape(content);
+	// Deliberately parallel to the block-side terminal fallback (see the
+	// !element_type.empty() guard there): the fallback exists to preserve an
+	// unmapped element's IDENTITY, because a NAMED type silently degrading to
+	// text is unrecoverable on a round trip. An absent type name has no
+	// identity to preserve -- wrapping it would emit data-duck-block-type="",
+	// which conveys nothing while changing output for no reason. This is the
+	// same rule already settled for the block side; duck_block_robustness.test
+	// pins it in both directions, so keep the two guards from drifting apart.
+	if (element_type.empty()) {
+		return XMLUtils::HTMLEscape(content);
+	}
+	// source_type is carried when present.
+	return "<span data-duck-block-type=\"" + XMLUtils::HTMLEscape(element_type) + "\"" +
+	       (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)
+	            ? " data-source-type=\"" + XMLUtils::HTMLEscape(attrs.at(DuckBlockTypes::ATTR_SOURCE_TYPE)) + "\""
+	            : "") +
+	       ">" + XMLUtils::HTMLEscape(content) + "</span>";
 }
 
 // Render the contiguous run of kind='inline' blocks following `parent_idx` as that
@@ -722,6 +737,34 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			if (kind == DuckBlockTypes::KIND_INLINE) {
 				// Render standalone inline element
 				html << RenderInlineElementToHtml(element_type, content, attrs);
+				continue;
+			}
+
+			// Allowlist, not a blocklist: only 'block', 'inline', or an empty/NULL
+			// kind render as body content (an existing robustness test pins NULL
+			// kind as a block). Anything else -- e.g. kind='value' -- is document
+			// metadata, not body prose. Its children follow at level+1 carrying
+			// ordinary kinds (an 'inlines' value's children are kind='inline', a
+			// 'blocks' value's children are kind='block'), so skipping the marker
+			// alone is not enough: skip its entire level scope -- the marker plus
+			// every following block whose level is strictly greater than the
+			// marker's, stopping at the first block back at or above the marker's
+			// own level. This never touches open_containers: a metadata marker is
+			// not body structure and must not open or close containers.
+			if (!kind.empty() && kind != DuckBlockTypes::KIND_BLOCK) {
+				for (size_t scope_idx = block_idx + 1; scope_idx < blocks_list.size(); scope_idx++) {
+					auto &scope_block = blocks_list[scope_idx];
+					if (scope_block.IsNull()) {
+						consumed_indices.insert(scope_idx);
+						continue;
+					}
+					auto &scope_struct = StructValue::GetChildren(scope_block);
+					int32_t scope_level = EffectiveLevel(scope_struct[DuckBlockTypes::LEVEL_IDX]);
+					if (scope_level <= cur_level) {
+						break;
+					}
+					consumed_indices.insert(scope_idx);
+				}
 				continue;
 			}
 
