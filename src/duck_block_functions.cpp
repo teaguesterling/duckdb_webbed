@@ -798,6 +798,39 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				} else {
 					html << "</figcaption>";
 				}
+			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
+				html << "<dl>";
+				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
+					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
+					if (doc) {
+						yyjson_val *root = yyjson_doc_get_root(doc);
+						if (yyjson_is_arr(root)) {
+							size_t idx, max;
+							yyjson_val *entry;
+							yyjson_arr_foreach(root, idx, max, entry) {
+								if (!yyjson_is_obj(entry)) {
+									continue;
+								}
+								yyjson_val *term = yyjson_obj_get(entry, "term");
+								if (term && yyjson_is_str(term)) {
+									html << "<dt>" << XMLUtils::HTMLEscape(yyjson_get_str(term)) << "</dt>";
+								}
+								yyjson_val *defs = yyjson_obj_get(entry, "definitions");
+								if (defs && yyjson_is_arr(defs)) {
+									size_t d_idx, d_max;
+									yyjson_val *d;
+									yyjson_arr_foreach(defs, d_idx, d_max, d) {
+										if (yyjson_is_str(d)) {
+											html << "<dd>" << XMLUtils::HTMLEscape(yyjson_get_str(d)) << "</dd>";
+										}
+									}
+								}
+							}
+						}
+						yyjson_doc_free(doc);
+					}
+				}
+				html << "</dl>";
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";

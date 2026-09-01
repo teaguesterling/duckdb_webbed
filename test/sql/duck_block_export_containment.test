@@ -117,3 +117,26 @@ SELECT duck_blocks_to_html([
 ]);
 ----
 <figcaption>Cap <strong>bold</strong></figcaption>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'[{"term":"Term","definitions":["Def."]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+# Multiple definitions per term.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'[{"term":"T","definitions":["A","B"]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+# Malformed JSON must not crash or emit unbalanced tags.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'not json','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl></dl>
