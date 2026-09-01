@@ -1470,6 +1470,22 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
 				html << content; // No escaping - preserve YAML exactly
 				html << "\n</script>";
+			} else if (element_type == DuckBlockTypes::TYPE_PLAIN) {
+				// plain is bare escaped text with NO wrapper element -- that is what
+				// lets a lone text run that has nowhere else to live (beside a block
+				// sibling, or under a transparent wrapper) round-trip byte-exact back
+				// to the source text instead of gaining structure the source never
+				// had. Deliberately NOT <p>: a paragraph wrapper would assert
+				// paragraph semantics plain exists specifically to deny, and would
+				// break the round trip (see duck_block_html_structure.test).
+				if (!content.empty()) {
+					if (encoding == DuckBlockTypes::ENCODING_HTML) {
+						html << content;
+					} else {
+						html << XMLUtils::HTMLEscape(content);
+					}
+				}
+				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 			} else {
 				// Terminal fallback. Deliberately ugly: a fallback that renders
 				// cleanly is a fallback nobody fixes. Text is preserved and the
