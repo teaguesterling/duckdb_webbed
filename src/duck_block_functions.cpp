@@ -1252,6 +1252,22 @@ static std::string GenericTagForSourceType(const std::string &source_type) {
 	return "";
 }
 
+// A list_item's role selects its tag inside a definition list. Validated
+// against a fixed enum for the same reason as SectionTagForRole and
+// CaptionTagForRole: role derives from parsed HTML, and interpolating it
+// unchecked into a tag name would let a crafted document emit a tag it never
+// contained. An unrecognised role (or none, the ordinary case) falls back to
+// <li>, today's behaviour.
+static std::string ListItemTagForRole(const std::string &role) {
+	if (role == DuckBlockTypes::ROLE_TERM) {
+		return "dt";
+	}
+	if (role == DuckBlockTypes::ROLE_DEFINITION) {
+		return "dd";
+	}
+	return "li";
+}
+
 void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -1418,19 +1434,34 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// entry in duck_block_vocabulary.hpp); attributes['ordered'] is a
 				// legacy alias kept for producers that predate list_type. When both
 				// are present and disagree, list_type wins.
+				//
+				// list_type='definition' -> <dl>, dl-as-definition-list migration.
+				// Distinct from the ordered/bullet choice below: a definition list
+				// has no ordered variant, so `ordered` and `start` are simply
+				// irrelevant to it rather than computed and ignored.
+				std::string list_type =
+				    attrs.count(DuckBlockTypes::ATTR_LIST_TYPE) ? attrs[DuckBlockTypes::ATTR_LIST_TYPE] : "";
+				bool is_definition = list_type == DuckBlockTypes::LIST_TYPE_DEFINITION;
 				bool ordered;
-				if (attrs.count(DuckBlockTypes::ATTR_LIST_TYPE)) {
-					ordered = attrs[DuckBlockTypes::ATTR_LIST_TYPE] == "ordered";
+				if (is_definition) {
+					ordered = false;
+				} else if (!list_type.empty()) {
+					ordered = list_type == DuckBlockTypes::LIST_TYPE_ORDERED;
 				} else {
 					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				}
-				std::string tag = ordered ? "ol" : "ul";
+				std::string tag = is_definition ? "dl" : (ordered ? "ol" : "ul");
 				html << "<" << tag;
 				if (ordered && attrs.count("start")) {
 					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
 				}
 				html << ">";
-				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
+				// The JSON-items shape (a flat array of strings) is a bullet/ordered
+				// convenience with no definition-list equivalent -- a definition
+				// list's items are always the structural list_item children below,
+				// never this shape. Guarded so a definition list's content, if ever
+				// non-empty JSON, cannot emit stray <li>s inside a <dl>.
+				if (!is_definition && encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
 						yyjson_val *root = yyjson_doc_get_root(doc);
@@ -1471,7 +1502,14 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// content (Pandoc's Plain), a loose item carries NULL content and a
 				// `paragraph` block child (Pandoc's Para) that the outer loop renders
 				// on its own next iteration, inside this list_item's still-open scope.
-				html << "<li>";
+				//
+				// role='term'/'definition' selects <dt>/<dd> for a definition list;
+				// no role (or any other role) stays <li>, today's behaviour. See
+				// ListItemTagForRole for why role is validated rather than
+				// interpolated.
+				std::string item_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string item_tag = ListItemTagForRole(item_role);
+				html << "<" << item_tag << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1481,9 +1519,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
 				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</li>", cur_level});
+					open_containers.push_back({"</" + item_tag + ">", cur_level});
 				} else {
-					html << "</li>";
+					html << "</" << item_tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
