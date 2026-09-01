@@ -268,3 +268,109 @@ query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>b</p>tail</blockquote>'));
 ----
 <blockquote><p>b</p>tail</blockquote>
+
+# --- Spec 6.0: `plain` emission ---------------------------------------------
+# The rule: `content` is populated iff the element has a SINGLE TEXT CHILD.
+# `plain` exists only for a text run that has nowhere else to live -- text
+# sitting BESIDE a block sibling, or bare text under a transparent wrapper
+# with no container of its own to carry it. Decided by what sits beside the
+# run, never by which element type is above it.
+
+# A container with a LONE text child carries it directly in `content` -- one
+# block, not a container plus a same-level inline text child.
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div id="d">Bare text</div>')) AS b) x;
+----
+div	Bare text	1
+
+# Text beside a BLOCK SIBLING cannot live in `content` (content is populated
+# iff the element has a single text child) -- it becomes its own `plain`
+# block instead of leaking out as loose inline children of the section.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">Lead<h2>H</h2></section>')) AS b) x;
+----
+block	section	NULL	1
+block	plain	Lead	2
+block	heading	H	2
+
+# Regression guards: single-text-child leaves that were already correct must
+# not change shape.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<p>text</p>')) AS b) x;
+----
+paragraph	text
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote>Quoted</blockquote>')) AS b) x;
+----
+blockquote	Quoted
+
+# A transparent (no id/class) <div> mixing a lone text run with a block
+# sibling: the div itself stays invisible (no div block, as always), but its
+# text has nowhere else to live -- no container to carry it in `content` --
+# so it becomes a `plain` at the parent's level, same level `paragraph` sits.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div>Bare text<p>para</p></div>')) AS b) x;
+----
+block	plain	Bare text	1
+block	paragraph	para	1
+
+# A bare <div> (no id/class) whose ONLY child is text: still transparent (no
+# div block emitted), but the text is now a `plain` at the parent's level
+# rather than silently dropped.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div>Bare text</div>')) AS b) x;
+----
+block	plain	Bare text	1
+
+# Loose text beside a block sibling, WITH inline formatting mixed in, becomes
+# a `plain` container (NULL content) carrying its own inline children --
+# exactly parallel to how `paragraph`/`blockquote` hold mixed inline content.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">Loose <em>em</em> text<p>para</p></section>')) AS b) x;
+----
+block	section	NULL	1
+block	plain	NULL	2
+inline	text	Loose 	3
+inline	italic	em	3
+inline	text	 text	3
+block	paragraph	para	2
+
+# --- Round-trips: the two `plain`-triggering shapes above must survive ------
+# html_to_duck_blocks -> duck_blocks_to_html unchanged.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<div id="d">Bare text</div>'));
+----
+<div id="d">Bare text</div>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s">Lead<h2>H</h2></section>'));
+----
+<section id="s">Lead<h2>H</h2></section>
+
+# --- Regression guards for mechanisms plain-emission must not disturb ------
+
+# detect_loose_inline suppression inside an unmapped non-inline wrapper: a
+# <button>'s label is UI chrome, not document prose, and must stay dropped.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<form><button>Submit</button><p>inform</p></form>')) AS b) x;
+----
+paragraph	inform
+
+# Whitespace-only text between block siblings is pretty-printing, not
+# content -- it must not become a spurious `plain` block.
+query II
+SELECT b.element_type, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">' || chr(10) || '<h1>H</h1>' || chr(10) || '<p>P</p>' || chr(10) || '</section>')) AS b) x;
+----
+section	1
+heading	2
+paragraph	2
