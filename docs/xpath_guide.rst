@@ -10,14 +10,34 @@ XPath uses path expressions to navigate XML documents:
 
 .. code-block:: sql
 
+   -- Setup: the examples on this page query this table
+   CREATE OR REPLACE TABLE documents AS SELECT
+     '<catalog>
+        <book category="fiction">
+          <title>A Novel</title><author>First</author><author>Second</author>
+        </book>
+        <product category="electronics" price="150"><name>Gadget</name></product>
+        <item id="123"><name>Widget</name><description>On sale now</description></item>
+        <item id="124"><name>Sprocket</name><description>New arrival</description></item>
+      </catalog>' AS xml,
+     '<html><body>
+        <nav><a href="/home">Home</a></nav>
+        <p>Paragraph text.</p>
+        <img src="/logo.png" alt="Logo"/>
+        <table><tr><td>Cell</td></tr></table>
+      </body></html>' AS html,
+     '//gml:pos' AS xpath;
+
+.. code-block:: sql
+
    -- Select all <title> elements anywhere in document
-   SELECT xml_extract_text(xml, '//title');
+   SELECT xml_extract_text(xml, '//title') FROM documents;
 
    -- Select <title> elements that are children of <book>
-   SELECT xml_extract_text(xml, '/catalog/book/title');
+   SELECT xml_extract_text(xml, '/catalog/book/title') FROM documents;
 
    -- Select the first <item> element
-   SELECT xml_extract_text(xml, '//item[1]');
+   SELECT xml_extract_text(xml, '//item[1]') FROM documents;
 
 Path Expressions
 ----------------
@@ -47,13 +67,13 @@ Examples
 .. code-block:: sql
 
    -- Absolute path from root
-   SELECT xml_extract_text(xml, '/catalog/book/title');
+   SELECT xml_extract_text(xml, '/catalog/book/title') FROM documents;
 
    -- Any <title> anywhere
-   SELECT xml_extract_text(xml, '//title');
+   SELECT xml_extract_text(xml, '//title') FROM documents;
 
    -- All child elements of current node
-   SELECT xml_extract_text(xml, '//*');
+   SELECT xml_extract_text(xml, '//*') FROM documents;
 
 Attribute Selection
 -------------------
@@ -63,10 +83,10 @@ Use ``@`` to select attributes:
 .. code-block:: sql
 
    -- Get the 'id' attribute
-   SELECT xml_extract_text(xml, '//item/@id');
+   SELECT xml_extract_text(xml, '//item/@id') FROM documents;
 
    -- Get all attributes of <item> elements
-   SELECT xml_extract_attributes(xml, '//item');
+   SELECT xml_extract_attributes(xml, '//item') FROM documents;
 
 Predicates
 ----------
@@ -79,13 +99,13 @@ Position Predicates
 .. code-block:: sql
 
    -- First element
-   SELECT xml_extract_text(xml, '//item[1]');
+   SELECT xml_extract_text(xml, '//item[1]') FROM documents;
 
    -- Last element
-   SELECT xml_extract_text(xml, '//item[last()]');
+   SELECT xml_extract_text(xml, '//item[last()]') FROM documents;
 
    -- First three elements
-   SELECT xml_extract_text(xml, '//item[position() <= 3]');
+   SELECT xml_extract_text(xml, '//item[position() <= 3]') FROM documents;
 
 Attribute Predicates
 ~~~~~~~~~~~~~~~~~~~~
@@ -93,13 +113,13 @@ Attribute Predicates
 .. code-block:: sql
 
    -- Elements with specific attribute value
-   SELECT xml_extract_text(xml, '//book[@category="fiction"]/title');
+   SELECT xml_extract_text(xml, '//book[@category="fiction"]/title') FROM documents;
 
    -- Elements that have an attribute
-   SELECT xml_extract_text(xml, '//item[@id]');
+   SELECT xml_extract_text(xml, '//item[@id]') FROM documents;
 
    -- Numeric comparison
-   SELECT xml_extract_text(xml, '//product[@price > 100]/name');
+   SELECT xml_extract_text(xml, '//product[@price > 100]/name') FROM documents;
 
 Text Predicates
 ~~~~~~~~~~~~~~~
@@ -107,10 +127,10 @@ Text Predicates
 .. code-block:: sql
 
    -- Elements containing specific text
-   SELECT xml_extract_text(xml, '//item[contains(text(), "sale")]');
+   SELECT xml_extract_text(xml, '//item[contains(text(), "sale")]') FROM documents;
 
    -- Elements starting with text
-   SELECT xml_extract_text(xml, '//item[starts-with(text(), "New")]');
+   SELECT xml_extract_text(xml, '//item[starts-with(text(), "New")]') FROM documents;
 
 Namespace Handling
 ------------------
@@ -120,20 +140,20 @@ For namespaced documents, simple paths may not work:
 .. code-block:: sql
 
    -- This might return empty for namespaced XML:
-   SELECT xml_extract_text(xml, '//element');
+   SELECT xml_extract_text(xml, '//element') FROM documents;
 
 Use ``local-name()`` to match regardless of namespace:
 
 .. code-block:: sql
 
    -- Match any element with local name 'element'
-   SELECT xml_extract_text(xml, '//*[local-name()="element"]');
+   SELECT xml_extract_text(xml, '//*[local-name()="element"]') FROM documents;
 
    -- With predicates
-   SELECT xml_extract_text(xml, '//*[local-name()="item" and @id="123"]');
+   SELECT xml_extract_text(xml, '//*[local-name()="item" and @id="123"]') FROM documents;
 
    -- Nested elements
-   SELECT xml_extract_text(xml, '//*[local-name()="person"]/*[local-name()="name"]');
+   SELECT xml_extract_text(xml, '//*[local-name()="person"]/*[local-name()="name"]') FROM documents;
 
 .. note::
 
@@ -231,18 +251,18 @@ Complex Queries
    -- Products over $100 in electronics category
    SELECT xml_extract_text(xml,
        '//product[@category="electronics" and @price > 100]/name'
-   );
+   ) FROM documents;
 
    -- Second author of first book
-   SELECT xml_extract_text(xml, '//book[1]/author[2]');
+   SELECT xml_extract_text(xml, '//book[1]/author[2]') FROM documents;
 
    -- All items with 'sale' in description
    SELECT xml_extract_text(xml,
        '//item[contains(description, "sale")]/name'
-   );
+   ) FROM documents;
 
    -- Count of items
-   SELECT xml_extract_text(xml, 'count(//item)');
+   SELECT xml_extract_text(xml, 'count(//item)') FROM documents;
 
 HTML-Specific Patterns
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -250,13 +270,13 @@ HTML-Specific Patterns
 .. code-block:: sql
 
    -- All paragraph text
-   SELECT html_extract_text(html, '//p');
+   SELECT html_extract_text(html, '//p') FROM documents;
 
    -- Links in navigation
-   SELECT html_extract_text(html, '//nav//a/@href');
+   SELECT html_extract_text(html, '//nav//a/@href') FROM documents;
 
    -- Images with alt text
-   SELECT html_extract_text(html, '//img[@alt]/@src');
+   SELECT html_extract_text(html, '//img[@alt]/@src') FROM documents;
 
    -- Table cells in first row
-   SELECT html_extract_text(html, '//table//tr[1]//td');
+   SELECT html_extract_text(html, '//table//tr[1]//td') FROM documents;

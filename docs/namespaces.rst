@@ -112,8 +112,28 @@ When using XPath extraction functions on namespaced documents, simple paths may 
 
 .. code-block:: sql
 
+   -- Setup: the examples on this page query this table
+   CREATE OR REPLACE TABLE documents AS SELECT
+     '<catalog>
+        <book category="fiction">
+          <title>A Novel</title><author>First</author><author>Second</author>
+        </book>
+        <product category="electronics" price="150"><name>Gadget</name></product>
+        <item id="123"><name>Widget</name><description>On sale now</description></item>
+        <item id="124"><name>Sprocket</name><description>New arrival</description></item>
+      </catalog>' AS xml,
+     '<html><body>
+        <nav><a href="/home">Home</a></nav>
+        <p>Paragraph text.</p>
+        <img src="/logo.png" alt="Logo"/>
+        <table><tr><td>Cell</td></tr></table>
+      </body></html>' AS html,
+     '//gml:pos' AS xpath;
+
+.. code-block:: sql
+
    -- This may return empty for namespaced XML:
-   SELECT xml_extract_text(xml, '//item');
+   SELECT xml_extract_text(xml, '//item') FROM documents;
 
 **Solution 1: Use namespaces := 'auto' (Recommended)**
 
@@ -144,15 +164,15 @@ For maximum compatibility, use ``local-name()`` to match elements regardless of 
 .. code-block:: sql
 
    -- Match elements regardless of namespace
-   SELECT xml_extract_text(xml, '//*[local-name()="item"]');
+   SELECT xml_extract_text(xml, '//*[local-name()="item"]') FROM documents;
 
    -- With predicates
-   SELECT xml_extract_text(xml, '//*[local-name()="item" and @id="123"]');
+   SELECT xml_extract_text(xml, '//*[local-name()="item" and @id="123"]') FROM documents;
 
    -- Nested elements
    SELECT xml_extract_text(xml,
        '//*[local-name()="catalog"]/*[local-name()="product"]/*[local-name()="name"]'
-   );
+   ) FROM documents;
 
 Discovering Namespaces
 ----------------------

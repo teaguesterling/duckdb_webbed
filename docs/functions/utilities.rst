@@ -153,12 +153,31 @@ Returns a MAP of well-known namespace prefixes to their URIs (XML, XHTML, SVG, R
 
 .. code-block:: sql
 
+   -- Setup: the examples on this page query this table
+   CREATE OR REPLACE TABLE documents AS SELECT
+     '<catalog>
+        <book category="fiction">
+          <title>A Novel</title><author>First</author><author>Second</author>
+        </book>
+        <product category="electronics" price="150"><name>Gadget</name></product>
+        <item id="123"><name>Widget</name><description>On sale now</description></item>
+        <item id="124"><name>Sprocket</name><description>New arrival</description></item>
+      </catalog>' AS xml,
+     '<html><body>
+        <nav><a href="/home">Home</a></nav>
+        <p>Paragraph text.</p>
+        <img src="/logo.png" alt="Logo"/>
+        <table><tr><td>Cell</td></tr></table>
+      </body></html>' AS html,
+     '//gml:pos' AS xpath;
+
+.. code-block:: sql
+
    SELECT xml_common_namespaces();
    -- Result: {xml: "http://www.w3.org/XML/1998/namespace", xhtml: "http://www.w3.org/1999/xhtml", ...}
 
    -- Use with XPath extraction
-   SELECT xml_extract_text(xml, '//atom:entry/atom:title', xml_common_namespaces());
-
+   SELECT xml_extract_text(xml, '//atom:entry/atom:title', xml_common_namespaces()) FROM documents;
 
 xml_detect_prefixes
 ~~~~~~~~~~~~~~~~~~~
@@ -218,8 +237,7 @@ Create mock namespace URIs for a list of prefixes. Useful when namespace URIs ar
        xml,
        xpath,
        xml_mock_namespaces(xml_detect_prefixes(xpath))
-   );
-
+   ) FROM documents;
 
 xml_add_namespace_declarations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -254,8 +272,7 @@ Add namespace declarations to an XML document's root element.
    SELECT xml_add_namespace_declarations(
        xml,
        xml_mock_namespaces(xml_detect_prefixes('//gml:pos'))
-   );
-
+   ) FROM documents;
 
 xml_lookup_namespace
 ~~~~~~~~~~~~~~~~~~~~

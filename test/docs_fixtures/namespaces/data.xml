@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog xmlns="http://example.com/catalog" xmlns:meta="http://example.com/meta">
+  <item id="123"><name>Widget</name><meta:added>2024-03-04</meta:added></item>
+  <item id="124"><name>Gadget</name><meta:added>2024-06-15</meta:added></item>
+</catalog>
