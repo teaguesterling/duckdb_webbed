@@ -54,7 +54,27 @@ Extract text content from all matching elements.
 
    .. code-block:: sql
 
-      SELECT xml_extract_text(xml, '//*[local-name()="title"]')
+      -- Setup: the examples on this page query this table
+      CREATE OR REPLACE TABLE documents AS SELECT
+        '<catalog>
+           <book category="fiction">
+             <title>A Novel</title><author>First</author><author>Second</author>
+           </book>
+           <product category="electronics" price="150"><name>Gadget</name></product>
+           <item id="123"><name>Widget</name><description>On sale now</description></item>
+           <item id="124"><name>Sprocket</name><description>New arrival</description></item>
+         </catalog>' AS xml,
+        '<html><body>
+           <nav><a href="/home">Home</a></nav>
+           <p>Paragraph text.</p>
+           <img src="/logo.png" alt="Logo"/>
+           <table><tr><td>Cell</td></tr></table>
+         </body></html>' AS html,
+        '//gml:pos' AS xpath;
+
+   .. code-block:: sql
+
+      SELECT xml_extract_text(xml, '//*[local-name()="title"]') FROM documents
 
 **With Namespace Support:**
 

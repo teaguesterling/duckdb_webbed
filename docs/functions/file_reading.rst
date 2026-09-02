@@ -257,7 +257,7 @@ Parse XML string with automatic schema inference.
    SELECT * FROM parse_xml('<root><item>42</item></root>', columns := {item: 'INTEGER'});
 
    -- Ignore parse errors
-   SELECT * FROM parse_xml(xml_column, ignore_errors := true) FROM raw_data;
+   SELECT * FROM parse_xml('<root><item>42</item></root>', ignore_errors := true);
 
 
 parse_xml_objects

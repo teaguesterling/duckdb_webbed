@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Example Feed</title>
+  <entry><title>First Post</title><id>urn:1</id></entry>
+  <entry><title>Second Post</title><id>urn:2</id></entry>
+</feed>

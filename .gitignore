@@ -32,3 +32,8 @@ test/xml/sax_stress_test.xml.gz
 !.bird/config.toml
 !.bird/commands.toml
 .cache/
+
+# Session scratch reports and Python bytecode
+.superpowers/
+__pycache__/
+*.pyc

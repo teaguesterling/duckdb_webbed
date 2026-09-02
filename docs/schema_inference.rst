@@ -42,7 +42,7 @@ You can customize this with the ``record_element`` parameter:
    .. code-block:: sql
 
       SELECT * FROM read_xml('data.xml', record_element := 'item')
-      WHERE specific_column IS NOT NULL;
+      WHERE price IS NOT NULL;
 
 Phase 2: Identify Columns
 -------------------------
