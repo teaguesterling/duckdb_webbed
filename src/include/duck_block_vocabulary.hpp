@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: b917e77 (SPEC_VERSION 6.2)
+// Vendored at upstream commit: b3b1e26 (SPEC_VERSION 6.3)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -310,7 +310,7 @@ struct DuckBlockVocabulary {
 	//               Nothing renamed, nothing removed; a consumer on 6.1 is unaffected.
 	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "6.2";
+	static constexpr const char *SPEC_VERSION = "6.3";
 
 	// ========================================================================
 	// Block type names
@@ -443,6 +443,15 @@ struct DuckBlockVocabulary {
 	// ========================================================================
 	// `metadata` -- which verbatim blob this is
 	static constexpr const char *ROLE_FRONTMATTER = "frontmatter"; // has a document body after it
+	// The author put the blob at the END on purpose. Added in 6.3 because the spec
+	// already named `tailmatter` in its position rules while the vocabulary declared no
+	// such constant -- so a producer following the prose had to invent a literal, which
+	// is the drift the vendoring exists to catch. Requested by the webbed session, who
+	// declined to invent it locally for exactly that reason.
+	//
+	// Without it, a blob the author deliberately placed last is indistinguishable from
+	// metadata the FORMAT supplied with no position at all: both appended, both roleless.
+	static constexpr const char *ROLE_TAILMATTER = "tailmatter";
 	static constexpr const char *ROLE_DOCUMENT = "document";       // the blob IS the whole document
 
 	// ========================================================================

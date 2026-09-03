@@ -625,6 +625,29 @@ SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">tit
 ----
 heading	1
 
+# A blob the source placed LAST is tailmatter, not frontmatter. Both roles are
+# positional CLAIMS -- 'frontmatter' asserts it precedes every top-level body
+# block -- so this one makes the opposite claim and must say so. Emitting
+# 'frontmatter' here would be false and trips the frontmatter_not_first
+# conformance rule; emitting no role at all would lose the distinction between
+# a blob the author deliberately put last and <head> metadata the format
+# supplied, which is never positioned and so claims nothing.
+query III
+SELECT (html_to_duck_blocks('<h1>Title</h1><script type="application/vnd.frontmatter+yaml">a: 1</script>'))[2].element_type,
+       (html_to_duck_blocks('<h1>Title</h1><script type="application/vnd.frontmatter+yaml">a: 1</script>'))[2].element_order,
+       (html_to_duck_blocks('<h1>Title</h1><script type="application/vnd.frontmatter+yaml">a: 1</script>'))[2].attributes['role'];
+----
+metadata	1	tailmatter
+
+# <head> metadata is the third case: the source never positioned it, so it is
+# appended and carries NO role. Asserted alongside tailmatter deliberately --
+# these two are what an absent role has to stay distinguishable from.
+query II
+SELECT (html_to_duck_blocks('<html><head><title>T</title></head><body><h1>H</h1></body></html>'))[2].kind,
+       (html_to_duck_blocks('<html><head><title>T</title></head><body><h1>H</h1></body></html>'))[2].attributes['role'] IS NULL;
+----
+value	true
+
 # Test multi-line YAML frontmatter preservation (verify content contains expected lines)
 query I
 SELECT length((html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test

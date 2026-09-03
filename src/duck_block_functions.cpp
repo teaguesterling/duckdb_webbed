@@ -1201,14 +1201,18 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	}
 
 	for (auto &content : trailing_frontmatter) {
-		// Deliberately no role. ROLE_FRONTMATTER is a POSITIONAL claim -- "comes
-		// before every top-level body block" -- and this blob does not, so saying
-		// it would be false and trips the frontmatter_not_first conformance rule.
-		// The accurate label is tailmatter, but the vendored vocabulary carries no
-		// such constant (6.2 has FRONTMATTER and DOCUMENT only), and adding one is
-		// upstream's call, not this reader's. Spec v1.1 makes an absent role its
-		// own signal: unpositioned metadata is appended, and claims nothing.
+		// ROLE_TAILMATTER, not ROLE_FRONTMATTER: both are POSITIONAL claims, and
+		// this blob makes the opposite one -- it follows every top-level body
+		// block rather than preceding it. Claiming 'frontmatter' here would be
+		// false and trips the frontmatter_not_first conformance rule.
+		//
+		// Not no-role either, though that is also never false: an absent role is
+		// reserved for metadata the source did not position at all (<head>
+		// title/meta, which sits in a sibling of <body>). Using it here would
+		// make a blob the author deliberately put last indistinguishable from
+		// one the format supplied.
 		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_TAILMATTER;
 		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
 		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
