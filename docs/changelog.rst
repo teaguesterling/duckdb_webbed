@@ -1,8 +1,168 @@
 Changelog
 =========
 
-v2.6.0 (Current)
+v2.8.1 (Current)
 ----------------
+
+Adds first-class HTML block table functions and migrates JSON codecs to
+``yyjson``.
+
+**Changes**
+
+- **First-class table functions.** Added ``read_html_blocks`` and
+  ``parse_html_blocks`` table functions matching ``read_markdown_blocks`` and
+  aligning with ``duck_block_utils``.
+- **CSS and script isolation.** Filter out non-content tags (``<style>``,
+  ``<script>``, ``<noscript>``, ``<template>``, ``<svg>``) from block text and
+  inline elements while preserving frontmatter scripts.
+- **yyjson migration.** High-performance JSON codecs replacing bespoke
+  tokenizers.
+
+v2.8.0
+------
+
+Native yyjson codecs for HTML tables and JSON-to-XML.
+
+Replaced regex-based string extraction, bracket counting, and custom JSON
+parsers (~990 lines) with DuckDB's bundled ``yyjson`` library.
+
+**Highlights**
+
+- **HTML ↔ table JSON conversion.** ``PandocTableToHtml``, ``TableJsonToHtml``,
+  ``ListItemsToJson``, and ``TableToJson`` now use native ``yyjson_val``
+  traversal and ``yyjson_mut_doc`` emission.
+- **JSON-to-XML parsing.** ``XMLUtils::JSONToXML`` rewritten using
+  ``yyjson_read`` and clean recursive XML DOM tree generation.
+- **Full test pass.** All 94 test suites (3,155 assertions) passing cleanly.
+
+v2.7.0
+------
+
+A correctness release covering five reported issues. The headline is that
+``html_extract_*`` functions now accept plain ``VARCHAR`` without an explicit
+``::HTML`` cast, and that a malformed XPath now raises instead of silently
+returning an empty result. Shippable artifacts continue to build against the
+**DuckDB v1.5.4** release tag.
+
+Two of these change behavior in ways worth reading before upgrading: the XPath
+change (Issue #134) and the ``html_extract_tables_json`` return type
+(Issue #130).
+
+**Behavior changes (review before upgrading)**
+
+- **Malformed XPath now raises.** ``xmlXPathEvalExpression`` returns NULL for
+  two unrelated reasons: the expression failed to **parse**, and the
+  expression parsed but could not be **evaluated**. All 33 call sites guarded
+  with ``if (xpath_obj)`` and fell through to an empty result, so a typo, an
+  unclosed bracket, or a CSS selector passed by mistake was indistinguishable
+  from a valid expression that legitimately matched nothing. Compiling before
+  evaluating separates the two cases:
+
+  .. list-table::
+     :header-rows: 1
+
+     * - expression
+       - result
+     * - ``//h2``
+       - ``[Two]`` — unchanged
+     * - ``//h2[``
+       - now raises ``Invalid XPath expression: '//h2['``
+     * - ``this is not xpath``
+       - now raises
+     * - ``h2``
+       - ``[]`` — valid XPath, correctly matches nothing
+     * - ``//gml:posList`` (undeclared prefix)
+       - ``[]`` — unchanged
+
+  A query that silently returned empty because the expression was malformed
+  now raises ``Invalid Input Error``. That is the point of the change — an
+  empty result meaning "your query is wrong" and one meaning "no matches" are
+  different facts — but it will surface expressions that were quietly broken.
+  An undeclared namespace prefix keeps returning empty: that case fails at
+  evaluation, not at parse, and the distinction is pinned by tests so it
+  cannot regress. Not addressed: ``count(//h2)`` still returns ``[]`` because
+  the result is a number rather than a node-set. (Issue #134)
+- **Fixed-shape return type.** ``html_extract_tables_json``'s
+  content-dependent ``rows`` field is replaced by a fixed-shape
+  ``table_json VARCHAR``, so the type no longer depends on the document.
+  Callers destructure it with the JSON functions:
+
+  .. code-block:: sql
+
+     SELECT html_extract_tables_json(page)[1].table_json ->> '$.records[0].h';
+
+  In practice nothing could have depended on the old shape — every access to
+  it raised (see Bug Fixes below). (Issue #130)
+
+**New Features**
+
+- **VARCHAR accepted directly.** Every ``html_extract_*`` function previously
+  required an explicit ``::HTML`` cast, so the obvious form failed:
+
+  .. code-block:: sql
+
+     SELECT html_extract_text(content, '//h2') FROM read_text('page.html');
+     -- No function matches ... candidates: html_extract_text(HTML, VARCHAR)
+
+  VARCHAR overloads are now registered alongside the ``HTML`` ones; existing
+  ``HTML``-typed calls are unchanged. (Issue #129)
+- **Footer rows are now modelled.** A footer row was either silently dropped
+  by ``html_to_duck_blocks`` or silently relabelled as data by
+  ``html_extract_table_rows``, neither distinguishable from a table with no
+  footer. ``html_extract_table_rows`` now reports ``row_type = 'footer'``.
+  (Issue #131)
+
+**Bug Fixes**
+
+- Fixed ``html_extract_tables_json`` being effectively unusable — two faults,
+  both reachable from a two-line document: a table with no ``<th>`` raised
+  ``INTERNAL Error: Value::LIST(values) cannot be used to make an empty list``
+  (an INTERNAL error is an assertion failure and should not be reachable from
+  input); and the declared return type never matched the value, since the
+  ``rows`` field's element type was derived from the table's own header names
+  but a scalar function's return type is fixed at bind time — any cast,
+  ``len()``, or field access failed with ``Mismatch Type Error`` or
+  ``Could not find key "metadata" in struct``. (Issue #130)
+- Fixed invalid JSON for control characters — ``EscapeJsonString`` escaped
+  only ``"``, ``\``, ``\n``, ``\r`` and ``\t``; every other control character
+  was copied through verbatim, and JSON forbids unescaped bytes below
+  ``0x20``. A table or list block built from HTML containing one — a vertical
+  tab, say — carried content that was not valid JSON. All C0 control
+  characters are now ``\uXXXX``-escaped. (Issue #132)
+
+**CI**
+
+- The DuckDB-``main`` canary shared a job name with the shippable build, so an
+  expected upstream breakage read as a failing required check on every pull
+  request. It now runs only on ``main`` and on manual dispatch, and is named
+  as advisory.
+- The format check, which had been commented out entirely, is re-enabled.
+
+v2.6.1
+------
+
+Fixes to ``html_to_duck_blocks`` structured output.
+
+**Bug Fixes**
+
+- **Nested inline formatting preserved.** ``<b>x <i>y</i></b>`` previously
+  flattened to one ``bold`` inline (dropping the inner ``<i>``); now nested
+  formatting (bold links, emphasis-in-strong, code-in-link) is emitted as
+  structured ``kind='inline'`` children — a wrapper with nested elements
+  becomes a container followed by its children at ``level+1``.
+- **NULL container content**, matching the ``duckdb_markdown`` /
+  ``duck_block_utils`` spec convention.
+- **Aligned level convention.** Top-level blocks are depth 1, direct inlines
+  are level 2, and nested elements are level+1; blockquote keeps its own
+  nesting depth.
+
+**Testing**
+
+- Verified end-to-end with ``duck_block_utils``' renderer. Full suite green
+  (3104 assertions).
+
+v2.6.0
+------
 
 A multi-file release. ``read_xml`` / ``read_html`` now process a glob or list of files
 **across threads** (order-preserving), and schema inference samples **multiple files** by

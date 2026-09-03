@@ -1,0 +1,306 @@
+# name: test/sql/duck_block_writer_contract.test
+# description: duck_blocks_to_html contract, tested by hand-built blocks with NO reader involved
+# group: [sql]
+
+# WHAT THIS FILE IS FOR.
+#
+# Every other duck_block export test constructs its input by calling
+# html_to_duck_blocks() first, or otherwise mirrors assumptions webbed's own
+# reader happens to make. That is exactly why the image/alt defect fixed
+# alongside this file was invisible for as long as it was: webbed's reader
+# double-writes an image's alt text into BOTH content and attributes['alt'],
+# so every round trip through webbed's own code looks perfect regardless of
+# which of the two the exporter actually reads. Two copies of one fact,
+# written and checked by the same party, cannot detect their own
+# disagreement.
+#
+# These assertions deliberately do NOT call html_to_duck_blocks(). Every
+# input here is a block literal built by hand, so the only thing under test
+# is duck_blocks_to_html()'s own contract against the duck_block spec --
+# reader assumptions cannot leak in and cover for writer assumptions, or vice
+# versa. If a future reader change stops double-writing alt (a duck_block
+# schema question that belongs to duck_block_utils, not webbed), these
+# assertions must keep passing unmodified: they never depended on the reader
+# in the first place.
+
+require webbed
+
+# ============================================================================
+# The three image/alt shapes. See src/duck_block_functions.cpp's TYPE_IMAGE
+# branch and test/sql/duck_block_export_containment.test for the same cases
+# exercised through the normal containment suite; repeated here so the
+# reader-bypass file stands on its own as the contract record.
+# ============================================================================
+
+# alt in BOTH content and attributes['alt'] -- attribute wins (unchanged).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in content ONLY -- a conforming producer per the spec's content rule.
+# This was the defect: the exporter used to read only attributes['alt'] and
+# silently dropped this, producing a valid but alt-less <img src="i.png">.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in attributes['alt'] ONLY, content empty -- always worked.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':NULL,'level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# ============================================================================
+# Known inconsistency, pinned rather than fixed: block and inline image
+# rendering disagree about which of content/attributes['alt'] wins when BOTH
+# are present and DIFFER. The three cases above all use the same value for
+# both, so they cannot distinguish a winner -- these two use distinct values
+# to make the actual, divergent behaviour visible. See the comments beside
+# TYPE_IMAGE (block) and INLINE_IMAGE's branch in RenderInlineElementToHtml
+# for the cross-referenced explanation. This is NOT a designed rule; do not
+# treat either assertion as license to rely on the precedence it records.
+# ============================================================================
+
+# Block image: attribute wins over content when both are present and differ.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'FROM_CONTENT','level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'FROM_ATTR'},'element_order':0}
+]);
+----
+<img src="i.png" alt="FROM_ATTR">
+
+# Inline image (a paragraph's inline child): content wins over the attribute
+# when both are present and differ -- the opposite precedence from block,
+# above, for the identical src/content/alt inputs.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'image','content':'FROM_CONTENT','level':2,'encoding':'text','attributes':MAP{'src':'i.png','alt':'FROM_ATTR'},'element_order':0}
+]);
+----
+<p><img src="i.png" alt="FROM_CONTENT"></p>
+
+# ============================================================================
+# Every block type that carries text: content set, NO attributes, verify the
+# text survives. Swept every element_type through the exporter by hand.
+# image is covered above; the remaining text-carrying types follow.
+# ============================================================================
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'heading','content':'Head','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<h1>Head</h1>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'Para','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<p>Para</p>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'code','content':'x=1','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<pre><code>x=1</code></pre>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Quote','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>Quote</blockquote>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'raw','content':'<b>Raw</b>','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<b>Raw</b>
+
+# section with no role attribute falls back to <div> (SectionTagForRole("")),
+# same fallback the unrecognised-role case in the containment suite exercises.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':'Sec','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div>Sec</div>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':'Fig','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<figure>Fig</figure>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'Cap','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<figcaption>Cap</figcaption>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'div','content':'Div','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div>Div</div>
+
+# generic with no source_type attribute is not allowlisted to any real tag,
+# so it takes the terminal fallback: a <div data-duck-block-type="generic">
+# wrapper that still carries the text, rather than dropping it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':'Gen','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div data-duck-block-type="generic">Gen</div>
+
+# Expected value embeds real newlines (the <script> wrapper is emitted on its
+# own lines), which the sqllogic single-column format would otherwise parse
+# as three separate result rows -- compare as one boolean instead.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'metadata','content':'title: x','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]) = E'<script type="application/vnd.frontmatter+yaml">\ntitle: x\n</script>';
+----
+true
+
+# ============================================================================
+# Four types that REPORT as "content lost" under the same probe, and are NOT
+# defects. Encoded here with the reason for each so the distinction is a
+# checked assertion, not a comment someone has to trust.
+# ============================================================================
+
+# list carries its items as a JSON array in `content` (encoding='json'); a
+# plain non-JSON string is malformed input, not text the exporter drops.
+# yyjson_read fails to parse it, so no <li> is emitted -- this is "reject
+# malformed input silently", the same shape table and deflist take below, not
+# "text carried in content was lost".
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':'not json','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<ul></ul>
+
+# table carries its rows as a JSON structure in `content` (encoding='json');
+# same reasoning as list -- a non-JSON string fails to parse and yields an
+# empty table rather than losing genuine text content.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'table','content':'not json','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<table></table>
+
+# deflist carries its term/definition pairs as a JSON array in `content`
+# (encoding='json'); same reasoning again.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'not json','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl></dl>
+
+# hr has no meaningful text content -- a horizontal rule is not a text
+# carrier at all, so content is intentionally ignored regardless of what it
+# holds.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'hr','content':'ignored','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<hr>
+
+# ============================================================================
+# list_item rendering and list_type precedence (spec 6.x: `list` is a
+# structural container whose children are `list_item`s -- see
+# HTML_BLOCK_GAPS.md). Before this, list_item had no render branch and fell
+# to the terminal fallback, so a structural list + list_item pair rendered
+# as an empty <ul></ul> followed by orphaned data-duck-block-type divs.
+# ============================================================================
+
+# list_item carrying its text directly in `content` (tight item -- Pandoc's
+# Plain, per the vocabulary's 5.0 -> 6.0 changelog entry).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'list_item','content':'two','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<ul><li>one</li><li>two</li></ul>
+
+# list_item with NULL content and a `paragraph` block child (loose item --
+# Pandoc's Para).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'one','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<ul><li><p>one</p></li></ul>
+
+# attributes['list_type']='ordered' -> <ol>.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'ordered'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# Legacy attributes['ordered']='true' still produces <ol> -- must not break.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'ordered':'true'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# list_type and ordered disagree -- list_type is canonical and wins: 'ordered'
+# with legacy ordered='false' still renders <ol>.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'ordered','ordered':'false'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ol><li>one</li></ol>
+
+# ...and the reverse: list_type='bullet' with legacy ordered='true' still
+# renders <ul> -- list_type wins regardless of which direction the two
+# attributes disagree.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':NULL,'level':1,'encoding':'text','attributes':MAP{'list_type':'bullet','ordered':'true'},'element_order':0},
+  {'kind':'block','element_type':'list_item','content':'one','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<ul><li>one</li></ul>
+
+# webbed's existing JSON-items shape (list carrying its items as a JSON array
+# in `content`, encoding='json') must keep rendering exactly as it does
+# today -- the structural list_item path must not preclude it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'list','content':'["one","two"]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<ul><li>one</li><li>two</li></ul>

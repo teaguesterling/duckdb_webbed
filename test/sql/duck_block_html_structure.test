@@ -1,0 +1,709 @@
+# name: test/sql/duck_block_html_structure.test
+# description: html_to_duck_blocks must not duplicate or lose document structure
+# group: [sql]
+
+require webbed
+
+# Conformance macros, needed for the <head> metadata assertions further down
+# and (added for Commit 4's round-trip proof) duck_blocks_warnings. Copied
+# verbatim (blank lines removed, matching test/sql/duck_block_conformance.test's
+# own note about why) from the CREATE OR REPLACE MACRO statements in
+# test/sql/duck_block_conformance.sql -- see that file for the full upstream
+# commentary. Only the macros this file actually calls are reproduced;
+# duck_block_conformance.test carries the complete set.
+statement ok
+CREATE OR REPLACE MACRO duck_block_declared_kinds() AS (['block', 'inline', 'value']);
+CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
+    list_contains(duck_block_declared_kinds(), elem.kind)
+    AND elem.element_type IS NOT NULL
+    AND elem.encoding IN ('text', 'json', 'yaml', 'html', 'xml', 'latex', 'markdown')
+    AND elem.level IS NOT NULL
+    AND elem.level >= 1
+    AND elem.element_order IS NOT NULL
+    AND elem.element_order >= 0
+);
+CREATE OR REPLACE MACRO duck_blocks_are_valid(blocks) AS (
+    NOT EXISTS (SELECT 1 FROM unnest(blocks) AS t(e) WHERE NOT duck_block_is_valid(e))
+    AND (SELECT count(DISTINCT e.element_order) = count(*) FROM unnest(blocks) AS t(e))
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT e.level AS lvl,
+                   lag(e.level) OVER (ORDER BY i) AS prev
+            FROM unnest(blocks) WITH ORDINALITY AS t(e, i)
+        ) WHERE prev IS NOT NULL AND lvl > prev + 1
+    )
+);
+CREATE OR REPLACE MACRO duck_block_declared_types() AS (
+    [
+        'blockquote', 'blocks', 'bold', 'bool', 'caption', 'cite', 'code', 'deflist',
+        'div', 'figure', 'generic', 'heading', 'hr', 'image', 'inlines', 'italic',
+        'lineblock', 'linebreak', 'link', 'list', 'list_item', 'map', 'math', 'metadata',
+        'note', 'page_break', 'paragraph', 'plain', 'quoted', 'raw', 'section',
+        'smallcaps', 'softbreak', 'space', 'span', 'strikethrough', 'string', 'subscript',
+        'superscript', 'table', 'text', 'underline', 'version'
+    ]
+);
+CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
+    WITH e AS (SELECT unnest(blocks) AS el, generate_subscripts(blocks, 1) AS pos),
+    nxt AS (
+        SELECT el, pos,
+               lead(el) OVER (ORDER BY pos) AS nx,
+               lag(el)  OVER (ORDER BY pos) AS pv
+        FROM e
+    )
+    SELECT el.element_order AS element_order, 'plain_should_be_content' AS rule,
+           'plain is the only child of ' || pv.element_type ||
+           '; its text belongs in that element''s content' AS message
+    FROM nxt
+    WHERE el.element_type = 'plain' AND el.kind = 'block'
+      AND pv IS NOT NULL AND pv.kind = 'block'
+      AND coalesce(pv.content, '') = '' AND pv.level = el.level - 1
+      AND (nx IS NULL OR nx.level < el.level OR nx.kind <> 'block')
+    UNION ALL
+    SELECT el.element_order, 'table_not_native',
+           'table content is not the native {headers,rows} schema'
+    FROM e WHERE el.element_type = 'table'
+      AND coalesce(el.content, '') <> '' AND position('"headers"' IN el.content) = 0
+    UNION ALL
+    SELECT el.element_order, 'deflist_superseded',
+           'deflist is superseded by list with list_type=''definition'''
+    FROM e WHERE el.element_type = 'deflist'
+    UNION ALL
+    SELECT el.element_order, 'heading_without_rank',
+           'heading without attributes[''heading_level'']: do NOT fall back to level'
+    FROM e WHERE el.element_type = 'heading'
+      AND coalesce(el.attributes['heading_level'], '') = ''
+    UNION ALL
+    SELECT el.element_order, 'undeclared_element_type',
+           'element_type ' || el.element_type || ' is not in the vocabulary'
+    FROM e WHERE NOT list_contains(duck_block_declared_types(), el.element_type)
+);
+
+# --- Finding 1: <dl> produced zero blocks -----------------------------------
+# Historical framing: <dl> used to emit nothing at all, then an opaque
+# `deflist` JSON leaf. dl-as-definition-list migration supersedes that leaf
+# with a structural `list`/`list_item` shape (see the dedicated section
+# further down for the full target and its round-trips) -- this assertion is
+# updated in place rather than left pinning the shape the migration removes.
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>')) AS b) x;
+----
+list	NULL	1
+list_item	Term	2
+list_item	Def.	2
+
+# --- Finding 2: <blockquote> emitted its content TWICE -----------------------
+# len() equality, not contains(): the bug was a spurious extra block, which a
+# substring assertion cannot detect.
+query I
+SELECT len(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>'));
+----
+2
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>')) AS b) x;
+----
+blockquote	NULL
+paragraph	Quote.
+
+# A blockquote of bare text stays a leaf carrying its text.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote>Quoted text</blockquote>')) AS b) x;
+----
+blockquote	Quoted text
+
+# --- Finding 3: <figure> emitted the image twice, caption flattened ----------
+query I
+SELECT len(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b>.</figcaption></figure>'));
+----
+6
+
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b>.</figcaption></figure>')) AS b) x;
+----
+block	figure	NULL	1
+block	image	a	2
+block	caption	NULL	2
+inline	text	Cap 	3
+inline	bold	bold	3
+inline	text	.	3
+
+# --- Finding 4: <section> flattened, id and class discarded ------------------
+# Attributes are asserted by key, not by the printed MAP string: MAP iteration
+# order is an internal-structure detail, not a contract.
+query IIIIII
+SELECT b.element_type, b.content, b.level, b.attributes['role'], b.attributes['id'], b.attributes['class']
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>')) AS b) x;
+----
+section	NULL	1	section	s1	intro
+paragraph	x	2	NULL	NULL	NULL
+
+# heading_level is NOT affected by structural nesting.
+query III
+SELECT b.element_type, b.level, b.attributes['heading_level']
+FROM (SELECT unnest(html_to_duck_blocks('<section><h1>Foo</h1></section>')) AS b) x;
+----
+section	1	NULL
+heading	2	1
+
+# A <div> carrying id/class becomes a `div` block; a bare one stays transparent.
+# Attributes are asserted by key, not by the printed MAP string (see above).
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['id'], b.attributes['class']
+FROM (SELECT unnest(html_to_duck_blocks('<div id="w" class="row"><p>x</p></div>')) AS b) x;
+----
+div	NULL	1	w	row
+paragraph	x	2	NULL	NULL
+
+# Attributes preserve SOURCE ORDER, not alphabetical order. This changed when the
+# tree walk landed: <img> attributes previously printed alphabetically. Source
+# order is more faithful to the document; MAP lookup (attributes['src']) is
+# unaffected either way.
+query I
+SELECT b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<img src="i.png" alt="a" title="t">')) AS b) x;
+----
+{src=i.png, alt=a, title=t}
+
+# The same source-order guarantee applies to an <img> reached via the INLINE
+# path (nested inside a <p>), not just the block path above. ExtractInlineElements
+# used to build attrs as a std::map, which sorts alphabetically -- the very same
+# <img> printed {alt=a, src=i.png, title=t} there while the block path above
+# printed source order for identical markup. Both now agree.
+query I
+SELECT b.attributes
+FROM (SELECT unnest(html_to_duck_blocks('<p><img src="i.png" alt="a" title="t"></p>')) AS b) x
+WHERE b.element_type = 'image';
+----
+{src=i.png, alt=a, title=t}
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<div><p>bare</p></div>')) AS b) x;
+----
+paragraph	bare
+
+# --- Finding 5: <details> lost its <summary> --------------------------------
+# The summary is emitted BEFORE the body: it labels the body and browsers
+# render it above. Caption position is the emitter's choice.
+# <summary> is the container's label. It maps to `caption` with role='summary',
+# which is what lets the exporter emit <summary> rather than <figcaption>:
+# <figcaption> is not a permitted child of <details>, so without the role the
+# disclosure widget renders with no label at all.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['role'], b.attributes['source_type']
+FROM (SELECT unnest(html_to_duck_blocks('<details><summary>Sum</summary><p>D.</p></details>')) AS b) x;
+----
+generic	NULL	1	NULL	details
+caption	Sum	2	summary	NULL
+paragraph	D.	2	NULL	NULL
+
+# --- Finding 6: the sectioning family ---------------------------------------
+query III
+SELECT b.element_type, b.attributes['role'], b.level
+FROM (SELECT unnest(html_to_duck_blocks('<nav><p>n</p></nav><aside><p>a</p></aside>')) AS b) x;
+----
+section	nav	1
+paragraph	NULL	2
+section	aside	1
+paragraph	NULL	2
+
+# --- Finding 7: <img> inside <p> emitted twice ------------------------------
+query I
+SELECT len(html_to_duck_blocks('<p>Text <img src="i.png" alt="I"> more</p>'));
+----
+4
+
+query III
+SELECT b.kind, b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<p>Text <img src="i.png" alt="I"> more</p>')) AS b) x;
+----
+block	paragraph	NULL
+inline	text	Text 
+inline	image	I
+inline	text	 more
+
+# --- Finding 8: block content inside <td> emitted twice ---------------------
+query I
+SELECT len(html_to_duck_blocks('<table><tr><td><p>cellpara</p></td></tr></table>'));
+----
+1
+
+# <li> USED to share this finding: <ul> was a JSON leaf, so a <p> inside <li>
+# duplicated (once serialised into the list's JSON, once recursed as its own
+# block). spec-6.2 migration Commit 3 makes <ul>/<ol> structural -- <li> now
+# follows the SAME content rule as every other container (list_item(NULL) at
+# level+1, its <p> child owned at level+2), which is 3 legitimate elements,
+# not a duplicate. Checked against duck_blocks_are_valid() before updating.
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<ul><li><p>itempara</p></li></ul>')) AS b) x;
+----
+list	NULL	1
+list_item	NULL	2
+paragraph	itempara	3
+
+# --- Unmapped containers stay transparent (must NOT regress to zero) --------
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<form><p>inform</p></form>')) AS b) x;
+----
+paragraph	inform
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<my-widget><p>custom</p></my-widget>')) AS b) x;
+----
+paragraph	custom
+
+# --- Non-content subtrees are NOT walked ------------------------------------
+query I
+SELECT len(html_to_duck_blocks('<template><p>x</p></template>'));
+----
+0
+
+query I
+SELECT len(html_to_duck_blocks('<svg><p>x</p></svg>'));
+----
+0
+
+# --- KNOWN REGRESSION, pinned deliberately ----------------------------------
+# JSON-encoded containers are not recursed, so non-text block content inside a
+# cell is not separately represented. The text IS in the JSON; an image is not.
+# This is the documented price of removing the finding-8 duplication.
+query I
+SELECT len(html_to_duck_blocks('<table><tr><td><img src="x.png" alt="IMG"></td></tr></table>'));
+----
+1
+
+# --- Round-trip: html -> blocks -> html -------------------------------------
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>Quote.</p></blockquote>'));
+----
+<blockquote><p>Quote.</p></blockquote>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>'));
+----
+<section id="s1" class="intro"><p>x</p></section>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<nav><p>n</p></nav>'));
+----
+<nav><p>n</p></nav>
+
+# Nested sectioning survives both directions.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="o"><section id="i"><p>deep</p></section></section>'));
+----
+<section id="o"><section id="i"><p>deep</p></section></section>
+
+# The figure caption keeps its formatting instead of flattening to a title attr.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<figure><img src="i.png" alt="a"><figcaption>Cap <b>bold</b></figcaption></figure>'));
+----
+<figure><img src="i.png" alt="a"><figcaption>Cap <strong>bold</strong></figcaption></figure>
+
+# Block containment and inline containment nesting simultaneously.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s"><blockquote><p>q <b>bold <i>in</i></b></p></blockquote></section>'));
+----
+<section id="s"><blockquote><p>q <strong>bold <em>in</em></strong></p></blockquote></section>
+
+# <details> round-trips with a real <summary>, not a <figcaption>.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<details><summary>Sum</summary><p>D.</p></details>'));
+----
+<details><summary>Sum</summary><p>D.</p></details>
+
+# An unmapped semantic element survives as generic rather than vanishing.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<aside class="note"><p>n</p></aside>'));
+----
+<aside class="note"><p>n</p></aside>
+
+# --- Loose text inside a container that also has block children --------------
+# Loose text inside a container that also has block children is preserved. It was
+# silently dropped: the container walk ignored text nodes entirely. For
+# <blockquote> this was a regression -- the old flat path kept the text in content.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote>a<p>b</p></blockquote>'));
+----
+<blockquote>a<p>b</p></blockquote>
+
+# Lead-in text before a heading inside a sectioning element -- common on real pages.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<article>Lead-in.<h2>H</h2><p>P</p></article>'));
+----
+<article>Lead-in.<h2>H</h2><p>P</p></article>
+
+# Loose inline FORMATTING, not just text.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s">Loose <em>em</em> text<p>para</p></section>'));
+----
+<section id="s">Loose <em>em</em> text<p>para</p></section>
+
+# Trailing loose text after a block child keeps its own scope rather than being
+# absorbed into the preceding paragraph.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>b</p>tail</blockquote>'));
+----
+<blockquote><p>b</p>tail</blockquote>
+
+# --- Spec 6.0: `plain` emission ---------------------------------------------
+# The rule: `content` is populated iff the element has a SINGLE TEXT CHILD.
+# `plain` exists only for a text run that has nowhere else to live -- text
+# sitting BESIDE a block sibling, or bare text under a transparent wrapper
+# with no container of its own to carry it. Decided by what sits beside the
+# run, never by which element type is above it.
+
+# A container with a LONE text child carries it directly in `content` -- one
+# block, not a container plus a same-level inline text child.
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div id="d">Bare text</div>')) AS b) x;
+----
+div	Bare text	1
+
+# Text beside a BLOCK SIBLING cannot live in `content` (content is populated
+# iff the element has a single text child) -- it becomes its own `plain`
+# block instead of leaking out as loose inline children of the section.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">Lead<h2>H</h2></section>')) AS b) x;
+----
+block	section	NULL	1
+block	plain	Lead	2
+block	heading	H	2
+
+# Regression guards: single-text-child leaves that were already correct must
+# not change shape.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<p>text</p>')) AS b) x;
+----
+paragraph	text
+
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<blockquote>Quoted</blockquote>')) AS b) x;
+----
+blockquote	Quoted
+
+# A transparent (no id/class) <div> mixing a lone text run with a block
+# sibling: the div itself stays invisible (no div block, as always), but its
+# text has nowhere else to live -- no container to carry it in `content` --
+# so it becomes a `plain` at the parent's level, same level `paragraph` sits.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div>Bare text<p>para</p></div>')) AS b) x;
+----
+block	plain	Bare text	1
+block	paragraph	para	1
+
+# A bare <div> (no id/class) whose ONLY child is text: still transparent (no
+# div block emitted), but the text is now a `plain` at the parent's level
+# rather than silently dropped.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<div>Bare text</div>')) AS b) x;
+----
+block	plain	Bare text	1
+
+# Loose text beside a block sibling, WITH inline formatting mixed in, becomes
+# a `plain` container (NULL content) carrying its own inline children --
+# exactly parallel to how `paragraph`/`blockquote` hold mixed inline content.
+query IIII
+SELECT b.kind, b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">Loose <em>em</em> text<p>para</p></section>')) AS b) x;
+----
+block	section	NULL	1
+block	plain	NULL	2
+inline	text	Loose 	3
+inline	italic	em	3
+inline	text	 text	3
+block	paragraph	para	2
+
+# --- Round-trips: the two `plain`-triggering shapes above must survive ------
+# html_to_duck_blocks -> duck_blocks_to_html unchanged.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<div id="d">Bare text</div>'));
+----
+<div id="d">Bare text</div>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s">Lead<h2>H</h2></section>'));
+----
+<section id="s">Lead<h2>H</h2></section>
+
+# --- Regression guards for mechanisms plain-emission must not disturb ------
+
+# detect_loose_inline suppression inside an unmapped non-inline wrapper: a
+# <button>'s label is UI chrome, not document prose, and must stay dropped.
+query II
+SELECT b.element_type, b.content
+FROM (SELECT unnest(html_to_duck_blocks('<form><button>Submit</button><p>inform</p></form>')) AS b) x;
+----
+paragraph	inform
+
+# Whitespace-only text between block siblings is pretty-printing, not
+# content -- it must not become a spurious `plain` block.
+query II
+SELECT b.element_type, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s">' || chr(10) || '<h1>H</h1>' || chr(10) || '<p>P</p>' || chr(10) || '</section>')) AS b) x;
+----
+section	1
+heading	2
+paragraph	2
+
+# =============================================================================
+# <head> metadata: <title> and <meta name=...content=...> are dropped today.
+# webbed's reader walks <body>; <head> is never visited at all.
+#
+# Target shape: kind='value', element_type='string', level 1, one element per
+# field, appended AFTER the document's blocks -- because <head> sits outside the
+# block flow, so nothing positioned it. Frontmatter is NOT the same case: spec
+# v1.1 emits it where the source put it.
+# attributes['key'] carries the field name; `content` carries the value.
+# =============================================================================
+
+# title and meta-author land after the body's one block, as kind='value'
+# element_type='string' at level 1, each carrying its field name in
+# attributes['key'].
+query IIIII
+SELECT b.kind, b.element_type, b.content, b.level, b.attributes['key']
+FROM (SELECT unnest(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body</p></body></html>'
+)) AS b) x;
+----
+block	paragraph	body	1	NULL
+value	string	Doc Title	1	title
+value	string	Ann	1	author
+
+# Scoped tightly: transport metadata (charset, http-equiv) and presentation
+# metadata (property, e.g. OpenGraph) produce NOTHING -- not an error, not a
+# best-effort mapping, just skipped. So does <link>, which isn't even a
+# candidate (no `content` to carry). Only the body's one paragraph survives.
+query I
+SELECT len(html_to_duck_blocks(
+  '<html><head>' ||
+  '<meta charset="utf-8">' ||
+  '<meta http-equiv="X-UA-Compatible" content="IE=edge">' ||
+  '<meta property="og:title" content="Doc Title">' ||
+  '<link rel="stylesheet" href="style.css">' ||
+  '</head><body><p>body</p></body></html>'
+));
+----
+1
+
+# A document carrying BOTH <head> metadata and body content must still
+# conform to the spec's own validity macro (level >= 1 on every element,
+# non-decreasing-by-more-than-one level nesting, declared kind).
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+));
+----
+true
+
+# --- Round-trip: metadata + blocks together must not corrupt the body ------
+#
+# A sibling extension found that a document carrying BOTH metadata and blocks
+# exported with its body REPLACED BY ITS TITLE -- an inline-collection loop
+# that stopped at kind='block' but walked past a kind='value' element,
+# mis-attributing the value as more inline content of the preceding run.
+# webbed's ConsumeInlineChildren breaks on ANY kind != 'inline' (see its
+# `if (next_kind != DuckBlockTypes::KIND_INLINE) break;`), so it should be
+# immune -- but that is a claim to TEST, not assert. This is exactly the
+# shape that would expose the failure mode if it existed here: a paragraph
+# whose OWN inline children (mixed text + <b>) are immediately followed, in
+# the flat block run, by the head-metadata value elements.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body <b>bold</b> text</p></body></html>'
+));
+----
+<p>body <strong>bold</strong> text</p>
+
+# Same round trip, stated as the negative the bug would produce: the
+# rendered body must not contain the title text anywhere.
+query I
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><p>body <b>bold</b> text</p></body></html>'
+)), 'Doc Title');
+----
+false
+
+# =============================================================================
+# Round-trip and conformance proof for structural lists (spec-6.2 migration,
+# Commit 4). All four are byte-exact -- html_to_duck_blocks then
+# duck_blocks_to_html reproduces the input HTML exactly -- and all four
+# produce zero duck_blocks_warnings rows, actually run rather than assumed.
+# =============================================================================
+
+# Tight list: item text carried directly in list_item's content (Pandoc's
+# Plain), no paragraph wrapper.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>tight</li><li>also tight</li></ul>'));
+----
+<ul><li>tight</li><li>also tight</li></ul>
+
+# Loose list: each item's text lives in a `paragraph` child (Pandoc's Para)
+# rather than the list_item's own content.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>'));
+----
+<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>
+
+# Nested list: the outer item's leading text and its nested <ul> are
+# siblings, not concatenated -- the corruption Commit 3's plan called out
+# explicitly ("outerinner" with no separator). Confirmed by shape below.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>'));
+----
+<ul><li>outer<ul><li>inner</li></ul></li></ul>
+
+query III
+SELECT b.element_type, b.content, b.level
+FROM (SELECT unnest(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>')) AS b) x;
+----
+list	NULL	1
+list_item	NULL	2
+plain	outer	3
+list	NULL	3
+list_item	inner	4
+
+# <ol start="N">: start is preserved via attributes['start'], not dropped.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<ol start="3"><li>a</li></ol>'));
+----
+<ol start="3"><li>a</li></ol>
+
+query I
+SELECT (html_to_duck_blocks('<ol start="3"><li>a</li></ol>'))[1].attributes['start'];
+----
+3
+
+# Zero duck_blocks_warnings rows across all four list forms -- the
+# regression guard the round-trip proof exists to give, not just "these
+# specific strings happen to match".
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li>tight</li><li>also tight</li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li><p>loose</p></li><li><p>also loose</p></li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ul><li>outer<ul><li>inner</li></ul></li></ul>'));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<ol start="3"><li>a</li></ol>'));
+----
+0
+
+# =============================================================================
+# <dl> as a definition list (dl-as-definition-list migration, Commit 1: pin
+# the target, landing red). `deflist` (an opaque JSON leaf) is superseded by
+# `list` with attributes['list_type']='definition' -- the same structural
+# treatment <ul>/<ol> already got. NOT the legacy `ordered` alias: `ordered`
+# only ever answers bullet-vs-ordered and is meaningless for a definition
+# list, so it must be absent, not 'false'.
+#
+# <dt> -> list_item(role='term'); <dd> -> list_item(role='definition').
+# <dt>/<dd> follow the SAME content rule as every other container: a lone
+# text child is carried directly in `content` (Pandoc's tight Plain); block
+# children (e.g. a <p>) are owned at level+1 (Pandoc's loose Para) -- exactly
+# the tight/loose distinction the old deflist JSON flattened away.
+#
+# Verified valid with zero warnings against the conformance macro before this
+# task was written; these assertions pin that target and land red against
+# today's deflist-emitting reader.
+# =============================================================================
+
+# Single term/definition pair -- attributes checked by key: list_type on the
+# list, role on each item, and 'ordered' MUST be absent (not 'false') on a
+# definition list.
+query IIIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role'], b.attributes['ordered']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL	NULL
+list_item	Term	2	NULL	term	NULL
+list_item	Def.	2	NULL	definition	NULL
+
+# One term, two definitions -- both <dd>s become sibling list_items, not
+# concatenated into one.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	T	2	NULL	term
+list_item	A	2	NULL	definition
+list_item	B	2	NULL	definition
+
+# A loose definition -- a <p> child, not bare text -- keeps its own
+# `paragraph` block at level+1 instead of flattening to a bare string. This is
+# the tight/loose distinction the old deflist JSON destroyed.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	T	2	NULL	term
+list_item	NULL	2	NULL	definition
+paragraph	loose	3	NULL	NULL
+
+# A <dd> before any <dt> is malformed but legal HTML. Decision: document order
+# is preserved exactly as every other container's walk preserves it -- no
+# reordering, no drop, no crash. The orphan <dd> simply becomes the first
+# list_item, role='definition', with no preceding term.
+query IIIII
+SELECT b.element_type, b.content, b.level, b.attributes['list_type'], b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dd>Orphan</dd><dt>T</dt><dd>D</dd></dl>')) AS b) x;
+----
+list	NULL	1	definition	NULL
+list_item	Orphan	2	NULL	definition
+list_item	T	2	NULL	term
+list_item	D	2	NULL	definition
+
+# --- Round-trips: html -> blocks -> html, byte-exact for all three shapes ---
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>'));
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>'));
+----
+<dl><dt>T</dt><dd><p>loose</p></dd></dl>
+
+# Zero duck_blocks_warnings rows for a <dl> document: the deflist_superseded
+# rule that flagged webbed's OLD output must no longer fire once <dl> reads
+# as a definition list instead of the opaque deflist JSON leaf.
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+0

@@ -1,0 +1,488 @@
+# name: test/sql/duck_block_export_containment.test
+# description: duck_blocks_to_html must represent nested containers
+# group: [sql]
+
+require webbed
+
+# A container with a block child nests it, rather than emitting an empty
+# tag pair and spilling the child outside.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'Q.','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><p>Q.</p></blockquote>
+
+# A sibling at the container's own level closes it first.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'in','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'out','level':1,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>in</p></blockquote><p>out</p>
+
+# level is structural depth, NOT a repeat count. A level=2 blockquote is ONE
+# blockquote. The old reading emitted two nested tags, which double-wrapped any
+# quote inside a section.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Q','level':2,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>Q</blockquote>
+
+# Nesting comes from nested container blocks.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'blockquote','content':'Q','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><blockquote>Q</blockquote></blockquote>
+
+# A container carrying its own text still round-trips as a leaf (unchanged today).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'Quoted text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>Quoted text</blockquote>
+
+# section renders its role as the tag, restoring id and class.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'section','id':'s1','class':'intro'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'x','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<section id="s1" class="intro"><p>x</p></section>
+
+# Every role in the enum is honoured.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'aside'},'element_order':0}
+]);
+----
+<aside></aside>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'article'},'element_order':0}
+]);
+----
+<article></article>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'header'},'element_order':0}
+]);
+----
+<header></header>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'footer'},'element_order':0}
+]);
+----
+<footer></footer>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'main'},'element_order':0}
+]);
+----
+<main></main>
+
+# An unrecognised role falls back to div and is NEVER interpolated as a tag.
+# role derives from parsed HTML; unchecked interpolation would let a crafted
+# document emit a tag it never contained.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'script src=x'},'element_order':0}
+]);
+----
+<div></div>
+
+# id and class are escaped.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'section','content':NULL,'level':1,'encoding':'text','attributes':MAP{'role':'nav','id':'a"b'},'element_order':0}
+]);
+----
+<nav id="a&quot;b"></nav>
+
+# figure nests its content, then its caption. Caption POSITION is the emitter's
+# choice -- an image's caption belongs below it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'figure','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'image','content':'a','level':2,'encoding':'text','attributes':MAP{'src':'i.png','alt':'a'},'element_order':1},
+  {'kind':'block','element_type':'caption','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Cap','level':3,'encoding':'text','attributes':MAP{},'element_order':3}
+]);
+----
+<figure><img src="i.png" alt="a"><figcaption><p>Cap</p></figcaption></figure>
+
+# A caption BEFORE its content is equally valid -- a <details> summary labels
+# the body and belongs above it. Same block type, opposite position.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'Sum','level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<figcaption>Sum</figcaption><p>D.</p>
+
+# A caption's inline children survive as real formatting, not flattened text.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'Cap ','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'bold','content':'bold','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<figcaption>Cap <strong>bold</strong></figcaption>
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'[{"term":"Term","definitions":["Def."]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+# Multiple definitions per term.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'[{"term":"T","definitions":["A","B"]}]','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+# Malformed JSON must not crash or emit unbalanced tags.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'deflist','content':'not json','level':1,'encoding':'json','attributes':MAP{},'element_order':0}
+]);
+----
+<dl></dl>
+
+# generic renders its allowlisted source_type as a tag.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'details'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<details><p>D.</p></details>
+
+# A non-allowlisted source_type falls to the fallback rather than becoming a
+# tag. The fallback carries source_type (data-source-type), parallel to the
+# inline-side fallback -- it used to drop it, losing the element's identity.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':'x','level':1,'encoding':'text','attributes':MAP{'source_type':'script'},'element_order':0}
+]);
+----
+<div data-duck-block-type="generic" data-source-type="script">x</div>
+
+# The not-allowlisted-generic fallback also consumes inline children, so they
+# render inside the wrapper instead of spilling out as later top-level siblings.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'aside'},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'inside','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div data-duck-block-type="generic" data-source-type="aside">inside</div>
+
+# The terminal (truly-unmapped element_type) fallback is parallel too: it
+# carries source_type when present...
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':'kept','level':1,'encoding':'text','attributes':MAP{'source_type':'widget'},'element_order':0}
+]);
+----
+<div data-duck-block-type="no_such_type" data-source-type="widget">kept</div>
+
+# ...and consumes inline children so they render inside it too.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'inside','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div data-duck-block-type="no_such_type">inside</div>
+
+# div carries id and class.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'id':'w','class':'row'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'x','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<div id="w" class="row"><p>x</p></div>
+
+# An UNKNOWN element_type no longer vanishes silently. This is the regression
+# test for the missing terminal else.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'no_such_type','content':'kept','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div data-duck-block-type="no_such_type">kept</div>
+
+# A NULL element_type is absent identity, not an unmapped-but-named type: it
+# renders nothing rather than a fallback with an empty data-duck-block-type
+# attribute. This pins the boundary against the assertion above -- a named
+# unknown type recovers as a fallback, an absent type name has nothing to
+# recover. See also test/sql/duck_block_robustness.test, which is untouched
+# by this task and pins the same rule for malformed blocks.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':NULL,'content':'kept','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+(empty)
+
+# The fallback escapes both the type name and the content.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'a"b','content':'<script>','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<div data-duck-block-type="a&quot;b">&lt;script&gt;</div>
+
+# A level JUMP opens no implicit containers.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'deep','level':9,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote><p>deep</p></blockquote>
+
+# A level that never drops is closed by the end-of-list drain.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'blockquote','content':'x','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><blockquote><blockquote>x</blockquote></blockquote></blockquote>
+
+# A NULL level is treated as top level.
+# balance/no-crash only; the clamp itself is pinned by the discriminating tests below.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':NULL,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'y','level':NULL,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote>x</blockquote><p>y</p>
+
+# A negative level is clamped to top level, not used as an array index.
+# balance/no-crash only; the clamp itself is pinned by the discriminating tests below.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':-5,'encoding':'text','attributes':MAP{},'element_order':0}
+]);
+----
+<blockquote>x</blockquote>
+
+# A negative level is clamped to top level. The trailing sibling at level 1 is
+# what makes this discriminate: if EffectiveLevel returned the raw -5, the
+# paragraph would NOT close the blockquote and this would nest instead.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':-5,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'in','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote></blockquote><p>in</p>
+
+# A NULL level is clamped to top level too. If NULL mapped to 0 instead of 1,
+# the level-1 paragraph would not close the blockquote and this would nest.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':'x','level':NULL,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'y','level':1,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<blockquote>x</blockquote><p>y</p>
+
+# A NULL level after real nesting returns to TOP level specifically -- this pins
+# NULL == 1 rather than merely "some consistent constant".
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'deep','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'back','level':NULL,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>deep</p></blockquote><p>back</p>
+
+# An empty list produces empty output.
+query I
+SELECT duck_blocks_to_html([]::STRUCT(kind VARCHAR, element_type VARCHAR, content VARCHAR, level INTEGER, encoding VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER)[]);
+----
+(empty)
+
+# A caption's role selects its tag: <summary> labels a <details>, where
+# <figcaption> would be invalid and leave the widget unlabelled.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'generic','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'details'},'element_order':0},
+  {'kind':'block','element_type':'caption','content':'Sum','level':2,'encoding':'text','attributes':MAP{'role':'summary'},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'D.','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<details><summary>Sum</summary><p>D.</p></details>
+
+# An unrecognised role falls back to figcaption and is never used as a tag.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'caption','content':'C','level':1,'encoding':'text','attributes':MAP{'role':'script src=x'},'element_order':0}
+]);
+----
+<figcaption>C</figcaption>
+
+# kind='value' is document metadata, not body content: neither the marker nor
+# its level scope may render. Skipping only the marker is not enough -- a
+# `blocks` value's children are themselves kind='block'.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'value','element_type':'inlines','content':NULL,'level':1,'encoding':'text','attributes':MAP{'key':'title'},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'Doc Title','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'value','element_type':'blocks','content':NULL,'level':1,'encoding':'text','attributes':MAP{'key':'abstract'},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Secret abstract.','level':2,'encoding':'text','attributes':MAP{},'element_order':3},
+  {'kind':'block','element_type':'paragraph','content':'Real body.','level':1,'encoding':'text','attributes':MAP{},'element_order':4}
+]);
+----
+<p>Real body.</p>
+
+# A value marker never OPENS a container (the block branches that push onto
+# open_containers are never reached for it), but the close loop runs for
+# EVERY block regardless of kind, before the kind check -- so a marker DOES
+# participate in closing, correctly, when its own level places it as a
+# sibling of an open container. Two cases, since a single level cannot tell
+# these apart: level:2 here is strictly deeper than the blockquote's level:1,
+# so the close loop can't fire either way -- it does not discriminate
+# between "markers never touch open_containers" and "markers close via the
+# ordinary level-based rule". The level:1 test below does.
+
+# A value marker STRICTLY DEEPER than the open container must not close it.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'value','element_type':'string','content':'meta','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'in','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote><p>in</p></blockquote>
+
+# A value marker AT the open container's own level closes it, same as an
+# ordinary sibling block would. The trailing paragraph is at the SAME level
+# as the marker (not deeper) so it is a sibling of the marker, not swallowed
+# by the marker's own metadata-scope skip (which only consumes blocks
+# strictly deeper than the marker). This is the discriminating case: if a
+# marker truly never touched open_containers, the blockquote would still be
+# open when the paragraph arrives, giving "<blockquote><p>x</p></blockquote>"
+# instead.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'value','element_type':'string','content':'meta','level':1,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<blockquote></blockquote><p>x</p>
+
+# An unmapped inline keeps its identity rather than degrading to bare text.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'before ','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'generic','content':'KEPT','level':2,'encoding':'text','attributes':MAP{'source_type':'kbd'},'element_order':2}
+]);
+----
+<p>before <span data-duck-block-type="generic" data-source-type="kbd">KEPT</span></p>
+
+# An inline with NO element_type has no identity to preserve, so it renders as
+# bare text rather than an empty-typed span. Mirrors the block-side guard.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':NULL,'content':'plain','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
+]);
+----
+<p>plain</p>
+
+# Nested inline formatting round-trips. The wrapper is a container: empty content
+# with children one level deeper. Rendering the run flat emitted <strong></strong>
+# and spilled the text outside it, silently un-bolding "bold ".
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>a <b>bold <i>inner</i></b> c</p>'));
+----
+<p>a <strong>bold <em>inner</em></strong> c</p>
+
+# Triple nesting.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><b>one <i>two <u>three</u></i></b></p>'));
+----
+<p><strong>one <em>two <u>three</u></em></strong></p>
+
+# A link inside emphasis.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><em>see <a href="u">here</a></em></p>'));
+----
+<p><em>see <a href="u">here</a></em></p>
+
+# Flat (non-nested) formatting is unchanged.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p>a <b>bold</b> c</p>'));
+----
+<p>a <strong>bold</strong> c</p>
+
+# A <br> must not swallow a following deeper inline.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'linebreak','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'text','content':'after','level':3,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<p><br>after</p>
+
+# An image's alt text: three shapes the spec's content rule permits.
+#
+# alt in BOTH content and attributes['alt'] (webbed's own reader writes this
+# double copy) -- works, and the attribute is preferred.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in content ONLY -- a conforming producer per the spec's content rule
+# (a single text child belongs in content). Previously lost: the exporter
+# read only attributes['alt'] and emitted a bare <img src="i.png">. Now
+# falls back to content.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':'ALT','level':1,'encoding':'text','attributes':MAP{'src':'i.png'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">
+
+# alt in attributes['alt'] ONLY, content empty -- works (this was always fine).
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'image','content':NULL,'level':1,'encoding':'text','attributes':MAP{'src':'i.png','alt':'ALT'},'element_order':0}
+]);
+----
+<img src="i.png" alt="ALT">

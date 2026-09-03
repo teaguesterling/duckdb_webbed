@@ -1,0 +1,442 @@
+# name: test/sql/duck_block_conformance.test
+# description: webbed's real reader output judged by the spec's own conformance macro
+# group: [sql]
+
+require webbed
+
+# This is the test spec 6.2 asked for: judge webbed's own html_to_duck_blocks()
+# output with duck_blocks_are_valid(), the conformance macro duck_block_utils
+# publishes for exactly this purpose (see test/sql/duck_block_conformance.sql,
+# vendored from duck_block_utils@b917e77, for the full macro and its rationale).
+#
+# webbed cannot LOAD duck_block_utils to get the real extension-side validator:
+# webbed builds its own DuckDB from a pinned submodule reporting a dev version
+# string (e.g. 'v1.5.5-dev154'), and DuckDB's extension ABI match is exact-string,
+# so INSTALL/LOAD of a duck_block_utils build against a released version always
+# refuses. The vendored SQL macro is pure SQL with no extension dependency, which
+# is exactly the gap it exists to fill.
+#
+# The macro definitions below are copied verbatim (blank lines only removed, since
+# a "statement ok" body ends at the first blank line) from the CREATE OR REPLACE
+# MACRO statements in test/sql/duck_block_conformance.sql -- see that file for the
+# full upstream commentary this omits.
+statement ok
+CREATE OR REPLACE MACRO duck_block_declared_kinds() AS (['block', 'inline', 'value']);
+CREATE OR REPLACE MACRO duck_block_declared_encodings() AS (
+    ['text', 'json', 'yaml', 'html', 'xml', 'latex', 'markdown', 'toml']
+);
+CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
+    list_contains(duck_block_declared_kinds(), elem.kind)
+    AND elem.element_type IS NOT NULL
+    AND list_contains(duck_block_declared_encodings(), elem.encoding)
+    AND elem.level IS NOT NULL
+    AND elem.level >= 1
+    AND elem.element_order IS NOT NULL
+    AND elem.element_order >= 0
+);
+CREATE OR REPLACE MACRO duck_block_declared_types() AS (
+    [
+        'blockquote', 'blocks', 'bold', 'bool', 'caption', 'cite', 'code', 'deflist',
+        'div', 'figure', 'generic', 'heading', 'hr', 'image', 'inlines', 'italic',
+        'lineblock', 'linebreak', 'link', 'list', 'list_item', 'map', 'math', 'metadata',
+        'note', 'page_break', 'paragraph', 'plain', 'quoted', 'raw', 'section',
+        'smallcaps', 'softbreak', 'space', 'span', 'strikethrough', 'string', 'subscript',
+        'superscript', 'table', 'text', 'underline', 'version'
+    ]
+);
+CREATE OR REPLACE MACRO duck_blocks_undeclared_types(blocks) AS (
+    coalesce(
+        (SELECT list_sort(list_distinct(list(e.element_type)))
+         FROM unnest(blocks) AS t(e)
+         WHERE NOT list_contains(duck_block_declared_types(), e.element_type)),
+        []::VARCHAR[]
+    )
+);
+CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
+    WITH e AS (SELECT unnest(blocks) AS el, generate_subscripts(blocks, 1) AS pos),
+    nxt AS (
+        SELECT el, pos,
+               lead(el) OVER (ORDER BY pos) AS nx,
+               lag(el)  OVER (ORDER BY pos) AS pv
+        FROM e
+    )
+    SELECT el.element_order AS element_order, 'plain_should_be_content' AS rule,
+           'plain is the only child of ' || pv.element_type ||
+           '; its text belongs in that element''s content' AS message
+    FROM nxt
+    WHERE el.element_type = 'plain' AND el.kind = 'block'
+      AND pv IS NOT NULL AND pv.kind = 'block'
+      AND coalesce(pv.content, '') = '' AND pv.level = el.level - 1
+      AND (nx IS NULL OR nx.level < el.level OR nx.kind <> 'block')
+    UNION ALL
+    SELECT el.element_order, 'table_not_native',
+           'table content is not the native {headers,rows} schema'
+    FROM e WHERE el.element_type = 'table'
+      AND coalesce(el.content, '') <> '' AND position('"headers"' IN el.content) = 0
+    UNION ALL
+    SELECT el.element_order, 'deflist_superseded',
+           'deflist is superseded by list with list_type=''definition'''
+    FROM e WHERE el.element_type = 'deflist'
+    UNION ALL
+    SELECT el.element_order, 'heading_without_rank',
+           'heading without attributes[''heading_level'']: do NOT fall back to level'
+    FROM e WHERE el.element_type = 'heading'
+      AND coalesce(el.attributes['heading_level'], '') = ''
+    UNION ALL
+    SELECT el.element_order, 'undeclared_element_type',
+           'element_type ' || el.element_type || ' is not in the vocabulary'
+    FROM e WHERE NOT list_contains(duck_block_declared_types(), el.element_type)
+);
+CREATE OR REPLACE MACRO duck_blocks_errors(blocks) AS TABLE (
+    WITH e AS (SELECT unnest(blocks) AS el, generate_subscripts(blocks, 1) AS pos),
+    lv AS (SELECT el, pos, el.level AS lvl, lag(el.level) OVER (ORDER BY pos) AS prev FROM e),
+    dup AS (SELECT el.element_order AS ord FROM e GROUP BY 1 HAVING count(*) > 1)
+    SELECT el.element_order AS element_order, 'kind' AS field,
+           'Invalid kind ' || chr(39) || coalesce(el.kind, 'NULL') || chr(39)
+             || '; see duck_block_kind_names()' AS message
+      FROM e WHERE NOT list_contains(duck_block_declared_kinds(), el.kind)
+    UNION ALL
+    SELECT el.element_order, 'element_type', 'element_type is NULL'
+      FROM e WHERE el.element_type IS NULL
+    UNION ALL
+    SELECT el.element_order, 'encoding',
+           'Invalid encoding ' || chr(39) || el.encoding || chr(39)
+      FROM e WHERE el.encoding IS NOT NULL
+        AND NOT list_contains(duck_block_declared_encodings(), el.encoding)
+    UNION ALL
+    SELECT el.element_order, 'level',
+           CASE WHEN el.level IS NULL
+                THEN 'level is NULL; every element carries an explicit depth, top level is 1'
+                ELSE 'level ' || el.level || ' is below 1; top level is 1' END
+      FROM e WHERE el.level IS NULL OR el.level < 1
+    UNION ALL
+    SELECT el.element_order, 'level',
+           'level jumps from ' || prev || ' to ' || lvl
+             || '; depth-first ordering descends one at a time, so this element''s parent is missing'
+      FROM lv WHERE prev IS NOT NULL AND lvl > prev + 1
+    UNION ALL
+    SELECT el.element_order, 'element_order', 'element_order must be non-negative'
+      FROM e WHERE el.element_order IS NULL OR el.element_order < 0
+    UNION ALL
+    SELECT ord, 'element_order', 'Duplicate element_order value' FROM dup
+);
+CREATE OR REPLACE MACRO duck_blocks_are_valid(blocks) AS (
+    NOT EXISTS (SELECT 1 FROM unnest(blocks) AS t(e) WHERE NOT duck_block_is_valid(e))
+    AND (SELECT count(DISTINCT e.element_order) = count(*) FROM unnest(blocks) AS t(e))
+    AND NOT EXISTS (
+        SELECT 1 FROM (
+            SELECT e.level AS lvl,
+                   lag(e.level) OVER (ORDER BY i) AS prev
+            FROM unnest(blocks) WITH ORDINALITY AS t(e, i)
+        ) WHERE prev IS NOT NULL AND lvl > prev + 1
+    )
+);
+
+# =============================================================================
+# Metadata document: frontmatter + body content.
+#
+# THIS IS THE RED CASE. Measured before any fix in this migration:
+#   duck_blocks_are_valid(...)              -> false  (metadata carries level NULL,
+#                                                        which duck_block_is_valid
+#                                                        rejects outright)
+#   blocks[1].element_type                  -> 'metadata' (frontmatter is emitted at
+#                                                        element_order 0, before the
+#                                                        body walk -- HtmlToDuckBlocks
+#                                                        runs the frontmatter XPath
+#                                                        first)
+#
+# Both assertions below encode the TARGET (spec 6.2 conformant), not today's
+# behaviour, so this file lands red on purpose:
+#   - the `duck_blocks_are_valid` assertion turns green once the metadata block
+#     carries an explicit level (fix: pass Value::INTEGER(1) instead of the
+#     level-omitting CreateBlock overload -- see the next commit);
+#   - the `blocks[1].element_type` assertion tracked spec 6.2, which had every
+#     value element follow the document's blocks. Spec v1.1 supersedes that for
+#     metadata the SOURCE positioned: this frontmatter opens the document, so it
+#     is emitted first and blocks[1] is the metadata again. <head> title/meta,
+#     which the source never placed in the block flow, is still appended.
+# =============================================================================
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<script type="application/vnd.frontmatter+yaml">title: Test
+author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
+));
+----
+true
+
+query I
+SELECT (html_to_duck_blocks(
+  '<script type="application/vnd.frontmatter+yaml">title: Test
+author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
+))[1].element_type;
+----
+metadata
+
+# The metadata block for that same frontmatter script carries role='frontmatter'
+# (not 'document'): a <script type="application/vnd.frontmatter+yaml"> element by
+# definition sits in a document that also has body content, per the vendored
+# vocabulary's ROLE_FRONTMATTER / ROLE_DOCUMENT distinction. It is at index 1,
+# not 3: the role is a POSITIONAL claim -- "before every top-level body block" --
+# so it is only truthful where the block actually is first, which here it is.
+
+query I
+SELECT (html_to_duck_blocks(
+  '<script type="application/vnd.frontmatter+yaml">title: Test
+author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
+))[1].attributes['role'];
+----
+frontmatter
+
+# A document that is ENTIRELY frontmatter, no body blocks at all, is declared
+# conformant by spec 6.2 explicitly (see the 6.1 -> 6.2 changelog entry in
+# src/include/duck_block_vocabulary.hpp) -- there is nothing for the ordering
+# contract to say here (no blocks to follow), so only the level fix is needed
+# for this one to turn green.
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<script type="application/vnd.frontmatter+yaml">title: Only Metadata</script>'
+));
+----
+true
+
+# =============================================================================
+# Rich document: a semantic section, loose text beside a heading, and nested
+# inline formatting (bold, a link) inside a paragraph. Already conformant
+# today -- this is regression coverage, not a target.
+# =============================================================================
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+));
+----
+true
+
+# =============================================================================
+# List document. Already conformant today -- regression coverage.
+# =============================================================================
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<ul><li>Item 1</li><li>Item 2</li></ul>'
+));
+----
+true
+
+# =============================================================================
+# Figure/caption document. Already conformant today -- regression coverage.
+# =============================================================================
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+));
+----
+true
+
+# =============================================================================
+# No metadata at all: plain body content, no frontmatter script. Already
+# conformant today -- regression coverage, and confirms the metadata fixes
+# above cannot regress the common (no-metadata) case.
+# =============================================================================
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<p>Just a paragraph, no frontmatter.</p>'
+));
+----
+true
+
+# =============================================================================
+# duck_blocks_warnings: the content rule (single-text-child -> that element's
+# own `content`, not a `plain` child) is UNIVERSAL, not type-keyed. Measured
+# before the figure fix: `<figure>Some text</figure>` was the ONE shape in
+# this corpus that tripped rule `plain_should_be_content` --
+#   duck_blocks_warnings(html_to_duck_blocks('<figure>Some text</figure>'))
+#     -> 1 row: {rule: 'plain_should_be_content',
+#                message: "plain is the only child of figure; its text
+#                          belongs in that element's content"}
+# because `figure` alone called EmitContainerAndRecurse unconditionally
+# instead of routing through EmitContainerOrLeaf the way section, div and
+# blockquote already did. section/div/blockquote/list/the rich document were
+# already canonical (measured, not assumed) -- this corpus is the regression
+# guard for the whole advisory class, not just the figure instance.
+#
+# A figure whose only child is an <img> (an ELEMENT child, not a text child)
+# must stay a container -- asserted separately below.
+# =============================================================================
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<figure>Some text</figure>'
+));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<section>Some text</section>'
+));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<div id="d">Some text</div>'
+));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<blockquote>Some text</blockquote>'
+));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<ul><li>Item 1</li><li>Item 2</li></ul>'
+));
+----
+0
+
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+));
+----
+0
+
+# A figure whose only child is an <img> has an ELEMENT child, not a text
+# child -- HasBlockChildren is true (img is block-level), so it must stay a
+# container via EmitContainerAndRecurse, not collapse its (nonexistent) text
+# into content.
+query I
+SELECT count(*) FROM duck_blocks_warnings(html_to_duck_blocks(
+  '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+));
+----
+0
+
+query I
+SELECT (html_to_duck_blocks('<figure><img src="photo.jpg" alt="Photo"></figure>'))[1].element_type;
+----
+figure
+
+query I
+SELECT (html_to_duck_blocks('<figure><img src="photo.jpg" alt="Photo"></figure>'))[2].element_type;
+----
+image
+
+query I
+SELECT (html_to_duck_blocks('<figure>Some text</figure>'))[1].content;
+----
+Some text
+
+query I
+SELECT len(html_to_duck_blocks('<figure>Some text</figure>'));
+----
+1
+
+# =============================================================================
+# dl-as-definition-list migration, Commit 4: zero-warnings proof across the
+# FULL advisory class, not just the dl instance that motivated it. Before this
+# migration, `deflist_superseded` was the only remaining rule this reader's
+# output could ever trip -- every other rule (plain_should_be_content,
+# table_not_native, heading_without_rank, undeclared_element_type) was already
+# clean. This corpus is that whole class: a <dl> document, a nested <ul> at
+# depth 3, a figure, a section, a <head>-metadata document, and a rich
+# document combining sectioning, headings, and nested inline formatting.
+#
+# One combined query (UNION ALL across all six) rather than six separate
+# assertions, so the count asserted is actually the total the task's own
+# framing describes -- zero across the corpus, not zero six times over.
+# =============================================================================
+
+query I
+SELECT count(*) FROM (
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<dl><dt>Term</dt><dd>Def.</dd></dl>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<ul><li>L1<ul><li>L2<ul><li>L3</li></ul></li></ul></li></ul>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<section id="intro"><p>Body.</p></section>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+    ))
+    UNION ALL
+    SELECT * FROM duck_blocks_warnings(html_to_duck_blocks(
+      '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+    ))
+);
+----
+0
+
+# duck_blocks_are_valid, same six documents, each checked individually.
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<ul><li>L1<ul><li>L2<ul><li>L3</li></ul></li></ul></li></ul>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<figure><img src="photo.jpg" alt="Photo"><figcaption>A photo</figcaption></figure>'
+));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks('<section id="intro"><p>Body.</p></section>'));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<html><head><title>Doc Title</title><meta name="author" content="Ann"></head><body><h1>H</h1><p>body</p></body></html>'
+));
+----
+true
+
+query I
+SELECT duck_blocks_are_valid(html_to_duck_blocks(
+  '<section id="intro">Lead text before heading.<h2>Heading</h2><p>Body with <strong>bold</strong> and <a href="https://example.com">a link</a>.</p></section>'
+));
+----
+true
+
+# The actual round-trip output for all three <dl> target shapes, stated
+# plainly rather than only asserted via warnings/validity above.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
+----
+<dl><dt>Term</dt><dd>Def.</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>'));
+----
+<dl><dt>T</dt><dd>A</dd><dd>B</dd></dl>
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>T</dt><dd><p>loose</p></dd></dl>'));
+----
+<dl><dt>T</dt><dd><p>loose</p></dd></dl>
