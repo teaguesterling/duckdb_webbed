@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <book id="bk101"><title>DuckDB in Practice</title><author>A. Author</author><price>39.95</price></book>
+  <book id="bk102"><title>XML Processing</title><author>B. Writer</author><price>24.95</price></book>
+</catalog>

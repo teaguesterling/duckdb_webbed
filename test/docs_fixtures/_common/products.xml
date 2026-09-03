@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<catalog>
+  <item id="101" category="tools">
+    <name>Widget</name>
+    <price>29.99</price>
+    <quantity>10</quantity>
+    <released>03/04/2024</released>
+    <notes>N/A</notes>
+  </item>
+  <item id="102" category="parts">
+    <name>Gadget</name>
+    <price>14.50</price>
+    <quantity>3</quantity>
+    <released>15/06/2024</released>
+    <notes>In stock</notes>
+  </item>
+</catalog>

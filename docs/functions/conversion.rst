@@ -205,6 +205,12 @@ listed first for that reason.
    ``SELECT b.block_type`` will fail with a binder error against current builds. ``kind`` is
    new: it did not exist under the old names.
 
+.. note::
+
+   **Field names.** These fields are ``element_type`` and ``element_order``. Older
+   documentation of this extension showed them as ``block_type`` and ``block_order``;
+   those names do not exist, and ``SELECT b.block_type`` fails with a binder error.
+
 .. list-table::
    :header-rows: 1
    :widths: 20 15 65
@@ -577,19 +583,21 @@ For Python-style xmltodict behavior, create a macro:
 
 .. code-block:: sql
 
-   CREATE MACRO xmltodict(xml,
-                          attr_prefix := '@',
-                          text_key := '#',
-                          process_namespaces := false,
-                          empty_elements := 'object',
-                          force_list := []) AS
+   CREATE MACRO xmltodict(xml) AS
      xml_to_json(xml,
-       attr_prefix := attr_prefix,
-       text_key := text_key,
-       empty_elements := empty_elements,
-       force_list := force_list,
-       namespaces := IF(process_namespaces, 'expand', 'strip')
+       attr_prefix := '@',
+       text_key := '#',
+       empty_elements := 'object',
+       namespaces := 'strip'
      );
 
    -- Usage matches Python's xmltodict.parse()
    SELECT xmltodict('<root><item>Test</item></root>');
+
+.. note::
+
+   The ``xml_to_json`` settings must be literal constants, so they are baked into the
+   macro rather than exposed as macro parameters. Forwarding a macro parameter --
+   ``xml_to_json(xml, attr_prefix := attr_prefix)`` -- raises
+   ``Binder Error: Parameter 'attr_prefix' must be a constant value``. To use different
+   settings, define another macro or call ``xml_to_json`` directly with literals.
