@@ -150,10 +150,11 @@ CREATE OR REPLACE MACRO duck_blocks_are_valid(blocks) AS (
 #   - the `duck_blocks_are_valid` assertion turns green once the metadata block
 #     carries an explicit level (fix: pass Value::INTEGER(1) instead of the
 #     level-omitting CreateBlock overload -- see the next commit);
-#   - the `blocks[1].element_type` assertion turns green only once metadata is
-#     emitted AFTER the block walk, per spec 6.2's now-explicit ordering
-#     contract that value elements (including metadata) follow the document's
-#     blocks (see the commit after that).
+#   - the `blocks[1].element_type` assertion tracked spec 6.2, which had every
+#     value element follow the document's blocks. Spec v1.1 supersedes that for
+#     metadata the SOURCE positioned: this frontmatter opens the document, so it
+#     is emitted first and blocks[1] is the metadata again. <head> title/meta,
+#     which the source never placed in the block flow, is still appended.
 # =============================================================================
 
 query I
@@ -170,19 +171,20 @@ SELECT (html_to_duck_blocks(
 author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
 ))[1].element_type;
 ----
-heading
+metadata
 
 # The metadata block for that same frontmatter script carries role='frontmatter'
 # (not 'document'): a <script type="application/vnd.frontmatter+yaml"> element by
 # definition sits in a document that also has body content, per the vendored
-# vocabulary's ROLE_FRONTMATTER / ROLE_DOCUMENT distinction. Metadata is the last
-# block emitted (after the h1/p body walk), so it lands at index 3.
+# vocabulary's ROLE_FRONTMATTER / ROLE_DOCUMENT distinction. It is at index 1,
+# not 3: the role is a POSITIONAL claim -- "before every top-level body block" --
+# so it is only truthful where the block actually is first, which here it is.
 
 query I
 SELECT (html_to_duck_blocks(
   '<script type="application/vnd.frontmatter+yaml">title: Test
 author: Someone</script><h1>Title</h1><p>Body paragraph.</p>'
-))[3].attributes['role'];
+))[1].attributes['role'];
 ----
 frontmatter
 

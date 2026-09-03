@@ -608,17 +608,22 @@ SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">tit
 ----
 title: Test
 
-# Test frontmatter element_order is 0
-query I
-SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[1].element_order;
+# Source-positioned frontmatter comes first (duck_block spec v1.1). Asserting
+# element_type alongside element_order on purpose: reading element_order off
+# [1] alone passes whichever element is first, so it cannot fail on the thing
+# these two cases exist to pin.
+query II
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[1].element_type,
+       (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[1].element_order;
 ----
-0
+metadata	0
 
-# Test content element_order follows frontmatter
-query I
-SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[2].element_order;
+# The body block follows it.
+query II
+SELECT (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[2].element_type,
+       (html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>'))[2].element_order;
 ----
-1
+heading	1
 
 # Test multi-line YAML frontmatter preservation (verify content contains expected lines)
 query I

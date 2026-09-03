@@ -37,6 +37,28 @@ static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t paren
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
 
+// True if nothing but whitespace precedes this node among its siblings -- i.e.
+// it really is first in the document's block flow. duck_block spec v1.1 makes
+// metadata's position follow the SOURCE: frontmatter that is first is emitted
+// first. Whitespace text nodes are skipped because the HTML parser preserves
+// the newlines between tags, and a source file that indents its markup would
+// otherwise never qualify.
+static bool IsFirstInFlow(xmlNodePtr node) {
+	for (xmlNodePtr prev = node->prev; prev; prev = prev->prev) {
+		if (prev->type == XML_ELEMENT_NODE) {
+			return false;
+		}
+		if (prev->type == XML_TEXT_NODE && prev->content) {
+			for (const xmlChar *c = prev->content; *c; ++c) {
+				if (!isspace(*c)) {
+					return false;
+				}
+			}
+		}
+	}
+	return true;
+}
+
 // Helper to read a VARCHAR struct field, treating NULL as an empty string
 static std::string GetVarcharField(const Value &val) {
 	return val.IsNull() ? std::string() : val.GetValue<string>();
@@ -1051,13 +1073,14 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	vector<Value> blocks;
 	int32_t block_order = 0;
 
-	// Extract frontmatter script blocks' text now, but do NOT emit them yet: spec
-	// 6.2 makes it a contract that metadata is appended AFTER a document's blocks
-	// (so blocks[1] points at the first content block), and this reader's own
-	// output had been violating that by emitting metadata at element_order 0,
-	// before the body walk below. Collecting into a temporary and appending after
-	// the walk keeps the extraction where it already was while fixing the order.
-	vector<std::string> frontmatter_contents;
+	// Extract frontmatter script blocks' text now, but decide WHERE to emit each
+	// by where it sits in the source. duck_block spec v1.1: frontmatter that is
+	// first in the block flow is emitted first; a blob the source did not put at
+	// the front is appended instead. An earlier revision of this reader appended
+	// unconditionally, which was correct for <head> metadata and wrong for a
+	// frontmatter <script> that opens the document.
+	vector<std::string> leading_frontmatter;
+	vector<std::string> trailing_frontmatter;
 
 	// Collect <head> document metadata now, for the same reason: emitted after
 	// the body walk, per the same ordering contract. Scoped tightly to <title>
@@ -1118,7 +1141,11 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 			if (!content.empty() && content.back() == '\n') {
 				content.pop_back();
 			}
-			frontmatter_contents.push_back(std::move(content));
+			if (IsFirstInFlow(node)) {
+				leading_frontmatter.push_back(std::move(content));
+			} else {
+				trailing_frontmatter.push_back(std::move(content));
+			}
 		}
 	}
 	if (frontmatter_obj) {
@@ -1135,6 +1162,14 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 			break;
 		}
 	}
+	// Source-positioned frontmatter goes ahead of the body, taking element_order 0.
+	for (auto &content : leading_frontmatter) {
+		std::map<std::string, std::string> attrs;
+		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_FRONTMATTER;
+		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
+		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+	}
+
 	if (body) {
 		WalkBlockNode(body, 1, block_order, blocks);
 	} else if (root) {
@@ -1144,13 +1179,12 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	// Now emit the metadata, AFTER the document's blocks, continuing
 	// element_order from wherever the walk above left off.
 	//
-	// head_metadata_fields BEFORE frontmatter_contents: <head> physically
+	// head_metadata_fields BEFORE trailing_frontmatter: <head> physically
 	// precedes <body> (where a frontmatter <script> lives) in the source
 	// document, so this keeps the metadata's own emission order matching the
-	// source's -- an arbitrary choice between two orderings the ordering
-	// contract does not itself distinguish (both are "after the blocks"),
-	// made for that reason rather than left to whichever loop happened to run
-	// first.
+	// source's -- an arbitrary choice between two orderings the spec does not
+	// itself distinguish (both are appended), made for that reason rather than
+	// left to whichever loop happened to run first.
 	for (auto &field : head_metadata_fields) {
 		std::map<std::string, std::string> attrs;
 		attrs[DuckBlockTypes::ATTR_KEY] = field.first;
@@ -1166,13 +1200,15 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 		blocks.push_back(Value::STRUCT(std::move(struct_values)));
 	}
 
-	for (auto &content : frontmatter_contents) {
-		// This metadata block is a <script type="application/vnd.frontmatter+yaml">
-		// element, which by definition sits in a document that also has body
-		// content -- so it is ROLE_FRONTMATTER, not ROLE_DOCUMENT (the blob IS the
-		// whole document).
+	for (auto &content : trailing_frontmatter) {
+		// Deliberately no role. ROLE_FRONTMATTER is a POSITIONAL claim -- "comes
+		// before every top-level body block" -- and this blob does not, so saying
+		// it would be false and trips the frontmatter_not_first conformance rule.
+		// The accurate label is tailmatter, but the vendored vocabulary carries no
+		// such constant (6.2 has FRONTMATTER and DOCUMENT only), and adding one is
+		// upstream's call, not this reader's. Spec v1.1 makes an absent role its
+		// own signal: unpositioned metadata is appended, and claims nothing.
 		std::map<std::string, std::string> attrs;
-		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_FRONTMATTER;
 		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
 		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}

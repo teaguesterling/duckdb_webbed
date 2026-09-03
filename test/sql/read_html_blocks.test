@@ -184,15 +184,18 @@ code	print("hello")	python
 # =============================================================================
 
 # No ORDER BY: this relies on parse_html_blocks emitting rows in element_order.
-# Per spec 6.2's ordering contract, metadata is appended AFTER a document's
-# blocks (so blocks[1] is the first content block), so the heading comes
-# first here and the metadata block comes last.
+# Position follows the SOURCE (duck_block spec v1.1): this frontmatter is first
+# in the document, so it is emitted first. Metadata the source never positioned
+# -- <head> title/meta, which sit in a sibling of <body> rather than anywhere in
+# the block flow -- is still appended instead. An absent role is the signal for
+# that case: 'frontmatter' is a positional claim, and unpositioned metadata has
+# none to make.
 query III
 SELECT element_type, encoding, content
 FROM parse_html_blocks('<script type="application/vnd.frontmatter+yaml">title: Test Document</script><h1>Title</h1>');
 ----
-heading	text	Title
 metadata	yaml	title: Test Document
+heading	text	Title
 
 # =============================================================================
 # Test 9: Lists are structural (spec-6.2 migration, Commit 3), tables stay JSON
