@@ -1082,8 +1082,11 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	vector<std::string> leading_frontmatter;
 	vector<std::string> trailing_frontmatter;
 
-	// Collect <head> document metadata now, for the same reason: emitted after
-	// the body walk, per the same ordering contract. Scoped tightly to <title>
+	// Collect <head> document metadata now, but emitted after the body walk --
+	// not by the same rule as frontmatter above, which follows the source. <head>
+	// is a sibling of <body>, so the source never positioned this metadata in the
+	// block flow at all, and appending is what spec v1.1 says to do with it.
+	// Scoped tightly to <title>
 	// and <meta name=...content=...> -- <meta charset>, <meta http-equiv>, and
 	// <meta property> are transport/presentation metadata, not document
 	// metadata, and <link> carries no `content` to map at all; all are

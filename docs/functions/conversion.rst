@@ -435,13 +435,39 @@ legacy ``'true'``/``'false'`` alias for consumers written against the old vocabu
 elements at ``level = 1``, with ``content`` holding the value and ``attributes['key']`` holding
 the field name (``'title'`` for ``<title>``, the ``name`` attribute for ``<meta>``). A
 ``<script type="application/vnd.frontmatter+yaml">`` frontmatter block becomes a
-``kind = 'block'``, ``element_type = 'metadata'`` element with ``attributes['role'] =
-'frontmatter'``. **All of this metadata is appended after the document's body blocks** -- the
-order is: body blocks first, then ``value`` elements, then a frontmatter ``metadata`` element
-last, if present. Because metadata comes last, ``blocks[1]`` (DuckDB lists are 1-indexed) is
-always the first *content* block, not a title or meta field. Still, a consumer should filter on
-``kind = 'block'`` rather than index into the list positionally -- indexing blindly will pick up
-title/meta/frontmatter entries once it walks off the end of the body content.
+``kind = 'block'``, ``element_type = 'metadata'`` element.
+
+**Position follows the source.** Metadata the document positioned keeps that position; metadata
+the format supplied is appended. The ``role`` records which:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 22 44
+
+   * - Where it is in the source
+     - Emitted
+     - ``attributes['role']``
+   * - Frontmatter *before* the body
+     - first, at ``element_order`` 0
+     - ``'frontmatter'``
+   * - Frontmatter *after* the body
+     - appended
+     - ``'tailmatter'``
+   * - ``<title>``/``<meta>`` (in ``<head>``, never in the block flow)
+     - appended
+     - *absent*
+
+``'frontmatter'`` and ``'tailmatter'`` are positional *claims* -- they assert the element comes
+before, or after, every top-level body block. An absent role is the third case rather than an
+omission: ``<head>`` metadata sits in a sibling of ``<body>``, so the source never positioned it
+and it has no claim to make.
+
+**Do not index positionally.** ``blocks[1]`` (DuckDB lists are 1-indexed) is *not* reliably the
+first content block: a document that opens with frontmatter puts the metadata there. Filter
+instead -- and note that frontmatter is ``kind = 'block'``, so ``kind = 'block'`` alone does not
+exclude it::
+
+    WHERE block.kind = 'block' AND block.element_type <> 'metadata'
 
 duck_blocks_to_html
 ~~~~~~~~~~~~~~~~~~

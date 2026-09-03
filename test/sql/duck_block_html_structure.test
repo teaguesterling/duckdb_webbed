@@ -470,9 +470,10 @@ paragraph	2
 # <head> metadata: <title> and <meta name=...content=...> are dropped today.
 # webbed's reader walks <body>; <head> is never visited at all.
 #
-# Target shape (spec 6.2's ordering contract, the same one frontmatter
-# metadata follows): kind='value', element_type='string', level 1, one
-# element per field, appended AFTER the document's blocks.
+# Target shape: kind='value', element_type='string', level 1, one element per
+# field, appended AFTER the document's blocks -- because <head> sits outside the
+# block flow, so nothing positioned it. Frontmatter is NOT the same case: spec
+# v1.1 emits it where the source put it.
 # attributes['key'] carries the field name; `content` carries the value.
 # =============================================================================
 

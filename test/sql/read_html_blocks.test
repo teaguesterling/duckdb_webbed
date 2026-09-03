@@ -10,8 +10,9 @@ require webbed
 
 # simple.html's <head><title>Simple Page</title></head> is now captured
 # (see test/sql/duck_block_html_structure.test): a third row, kind='value'
-# element_type='string', appended after the two body blocks, per the same
-# "metadata after blocks" ordering contract frontmatter already follows.
+# element_type='string', appended after the two body blocks. <head> metadata is
+# appended because the source never positioned it -- unlike frontmatter, whose
+# position follows the source (spec v1.1), so it is NOT the same rule.
 # Checked against the vendored conformance macro before moving this
 # expectation, the same way the two other consequential breaks on this
 # branch were -- see that macro's use in duck_block_html_structure.test.
