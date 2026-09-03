@@ -1,8 +1,74 @@
 Changelog
 =========
 
-v2.8.1 (Current)
+v2.8.2 (Current)
 ----------------
+
+A bugfix release for the ``duck_block`` reader and writer. Behavioural
+corrections against a spec that moved -- no new public surface, so the function
+list is unchanged.
+
+**Fixed**
+
+- **Containment.** ``html_to_duck_blocks()`` selected blocks with an XPath
+  descendant query, which cannot express containment. ``<blockquote>`` and
+  ``<figure>`` emitted their children *and* themselves; ``<dl>`` produced zero
+  blocks; ``<section>`` and ``<details>`` flattened; ``<img>`` inside ``<p>``
+  emitted twice; ``<td>`` and ``<li>`` content duplicated. The XPath is replaced
+  by a recursive walk with a container/leaf distinction.
+- **Dropped content.** ``<title>`` and ``<meta>`` were dropped entirely; nested
+  lists corrupted text (``["outerinner"]``); ``<ol start>`` was ignored; loose
+  text was dropped in mixed containers.
+- **Inline formatting.** Unmapped inline elements lost their identity, and
+  nested formatting emitted ``<strong></strong>`` with the text spilled outside.
+- **Metadata.** Emitted at ``level`` NULL and ahead of the body, where it
+  rendered as body prose.
+
+**Metadata position follows the source** (duck_block spec v1.1)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Where it is in the source
+     - Emitted
+     - ``attributes['role']``
+   * - Frontmatter before the body
+     - first, ``element_order`` 0
+     - ``'frontmatter'``
+   * - Frontmatter after the body
+     - appended
+     - ``'tailmatter'``
+   * - ``<title>``/``<meta>`` (in ``<head>``)
+     - appended
+     - *absent*
+
+Frontmatter is ``kind = 'block'``, so filtering on ``kind = 'block'`` alone does
+not exclude it. Use ``kind = 'block' AND element_type <> 'metadata'`` for body
+content.
+
+**Vocabulary**
+
+- Vendored ``duck_block`` vocabulary at upstream ``b3b1e26``
+  (``SPEC_VERSION`` 6.3), verified against upstream by name *and* value --
+  a rename is a compile error, but a changed value would compile clean and
+  silently stop matching. ``make check-vocabulary`` runs the check.
+- ``duck_block_spec_version()`` reports 6.3; the public spec name is v1.1.
+  Those axes are deliberately separate.
+
+**Documentation**
+
+- The reference documented ``block_type`` and ``block_order`` -- field names the
+  struct has never had, so ``SELECT b.block_type`` copied from the docs failed
+  with a binder error. Corrected, along with ``kind`` (previously undocumented),
+  the content rule, structural lists, and metadata.
+- ``make check-docs`` executes every SQL example against the built extension:
+  105 examples, 99 running clean, 0 broken.
+
+3828 assertions across 100 test cases.
+
+v2.8.1
+------
 
 Adds first-class HTML block table functions and migrates JSON codecs to
 ``yyjson``.
