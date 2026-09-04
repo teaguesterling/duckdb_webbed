@@ -1850,7 +1850,7 @@ struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
 
 unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
                                                                 vector<LogicalType> &return_types,
-                                                                vector<string> &names) {
+                                                                vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksReadFunctionData>();
 
 	if (input.inputs.empty()) {
@@ -2063,7 +2063,7 @@ struct HTMLBlocksParseLocalState : public LocalTableFunctionState {
 
 unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksParseFunctionData>();
 
 	if (input.inputs.empty()) {
@@ -2177,11 +2177,12 @@ void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFu
 void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)
 	ScalarFunctionSet html_to_duck_blocks_set("html_to_duck_blocks");
-	html_to_duck_blocks_set.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_to_duck_blocks_set,
 	    ScalarFunction({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
-	html_to_duck_blocks_set.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_to_duck_blocks_set,
 	    ScalarFunction({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
-	PreventStructConstantFolding(html_to_duck_blocks_set);
 	loader.RegisterFunction(html_to_duck_blocks_set);
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML

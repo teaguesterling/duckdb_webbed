@@ -1,4 +1,5 @@
 #include "xml_types.hpp"
+#include "duckdb_compat.hpp"
 #include "xml_utils.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/type_catalog_entry.hpp"
@@ -12,21 +13,19 @@
 namespace duckdb {
 
 LogicalType XMLTypes::XMLType() {
-	auto xml_type = LogicalType(LogicalTypeId::VARCHAR);
-	xml_type.SetAlias("XML");
-	return xml_type;
+	return CompatWithAlias(LogicalType(LogicalTypeId::VARCHAR), "XML");
 }
 
 LogicalType XMLTypes::XMLFragmentType() {
-	auto xml_frag_type = LogicalType(LogicalTypeId::VARCHAR);
-	xml_frag_type.SetAlias("xmlfragment");
-	return xml_frag_type;
+	// Alias spelled lowercase here but "XMLFragment" where the type is REGISTERED (see
+	// Register() below). Left as-is: IsXMLFragmentType() compares GetAlias() to this exact
+	// lowercase string, so changing either spelling changes which values that predicate
+	// accepts. Reconciling them is a behaviour decision, not part of the v2.0 port.
+	return CompatWithAlias(LogicalType(LogicalTypeId::VARCHAR), "xmlfragment");
 }
 
 LogicalType XMLTypes::HTMLType() {
-	auto html_type = LogicalType(LogicalTypeId::VARCHAR);
-	html_type.SetAlias("HTML");
-	return html_type;
+	return CompatWithAlias(LogicalType(LogicalTypeId::VARCHAR), "HTML");
 }
 
 LogicalType XMLTypes::OpaqueType(const std::string &type_name) {
@@ -114,20 +113,17 @@ void XMLTypes::Register(ExtensionLoader &loader) {
 	// For now, register XML as a simple type alias
 	// This creates a user-defined type that acts like VARCHAR but with the name "XML"
 
-	auto xml_type = LogicalType(LogicalType::VARCHAR);
-	xml_type.SetAlias("XML");
+	auto xml_type = CompatWithAlias(LogicalType(LogicalType::VARCHAR), "XML");
 
 	// Register the XML type through the extension utility
 	loader.RegisterType("XML", xml_type);
 
 	// Register XMLFragment type
-	auto xml_fragment_type = LogicalType(LogicalType::VARCHAR);
-	xml_fragment_type.SetAlias("XMLFragment");
+	auto xml_fragment_type = CompatWithAlias(LogicalType(LogicalType::VARCHAR), "XMLFragment");
 	loader.RegisterType("XMLFragment", xml_fragment_type);
 
 	// Register HTML type
-	auto html_type = LogicalType(LogicalType::VARCHAR);
-	html_type.SetAlias("HTML");
+	auto html_type = CompatWithAlias(LogicalType(LogicalType::VARCHAR), "HTML");
 	loader.RegisterType("HTML", html_type);
 
 	// Register cast functions for XML type conversion
