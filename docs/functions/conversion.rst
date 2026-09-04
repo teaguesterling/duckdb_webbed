@@ -498,7 +498,7 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
    SELECT duck_blocks_to_html(
        list_filter(
            html_to_duck_blocks(html),
-           block -> block.kind = 'block' AND block.element_type IN ('heading', 'paragraph')
+           lambda block: block.kind = 'block' AND block.element_type IN ('heading', 'paragraph')
        )
    ) FROM documents;
 
@@ -572,7 +572,7 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
    SELECT duck_blocks_to_markdown(
        list_filter(
            html_to_duck_blocks(html_content),
-           b -> b.kind = 'block' AND b.element_type IN ('heading', 'paragraph')
+           lambda b: b.kind = 'block' AND b.element_type IN ('heading', 'paragraph')
        )
    ) as simplified_markdown
    FROM web_pages;
@@ -591,7 +591,7 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
    SELECT duck_blocks_to_html(
        list_transform(
            html_to_duck_blocks(html),
-           b -> CASE
+           lambda b: CASE
                WHEN b.kind = 'block' AND b.element_type = 'code'
                THEN {'kind': 'block', 'element_type': 'code', 'content': b.content, 'level': b.level,
                      'encoding': b.encoding, 'element_order': b.element_order,
