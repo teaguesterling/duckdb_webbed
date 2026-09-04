@@ -26,9 +26,10 @@ using namespace duckdb_yyjson;
 static std::string GetNodeTextContent(xmlNodePtr node);
 static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
+
 static std::string TableToJson(xmlNodePtr node);
-static std::string TableJsonToHtml(const std::string &json);
-static std::string PandocTableToHtml(const std::string &json);
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "");
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
                                   std::set<size_t> &consumed_indices, std::stringstream &html,
@@ -65,6 +66,26 @@ static std::string GetVarcharField(const Value &val) {
 }
 
 // Helper to extract attributes MAP into std::map
+// GitHub #142, writer half. Render the source identity a block carries, so
+// read-then-write no longer silently drops id/class the user's source had.
+// One helper on every block open tag, for the same reason the reader copies
+// in one place: three sites that each rendered independently (section and
+// div both, heading id only, nothing else) is how the loss happened, and
+// nothing about the output looked wrong. Empty string when the block carries
+// neither, so a bare element renders bare -- never ` id=""`.
+static std::string IdentityAttrs(const std::map<std::string, std::string> &attrs) {
+	std::string out;
+	auto it = attrs.find("id");
+	if (it != attrs.end() && !it->second.empty()) {
+		out += " id=\"" + XMLUtils::HTMLEscape(it->second) + "\"";
+	}
+	it = attrs.find("class");
+	if (it != attrs.end() && !it->second.empty()) {
+		out += " class=\"" + XMLUtils::HTMLEscape(it->second) + "\"";
+	}
+	return out;
+}
+
 static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_val) {
 	std::map<std::string, std::string> attrs;
 	if (!attrs_val.IsNull()) {
@@ -674,6 +695,24 @@ static bool IsLooseInlineStart(xmlNodePtr node) {
 }
 
 // Emit a container block, then recurse into its children one level deeper.
+// GitHub #142. Every block that came from a source element carries that
+// element's id and class in `attributes` when present. Copied in ONE place,
+// for every block, rather than at each emit site: three sites that each
+// remembered independently (div/section both, heading id only, everything
+// else nothing) is exactly how the gap happened, and per-site copying is a
+// gap that reopens with every new element type. Identity keys come first in
+// the map, ahead of type-specific keys, so the shape is uniform across types.
+static void CopySourceIdentity(xmlNodePtr node, OrderedAttrs &attrs) {
+	std::string id = GetNodeAttribute(node, "id");
+	if (!id.empty()) {
+		attrs.emplace_back("id", id);
+	}
+	std::string cls = GetNodeAttribute(node, "class");
+	if (!cls.empty()) {
+		attrs.emplace_back("class", cls);
+	}
+}
+
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
                                     vector<Value> &blocks, OrderedAttrs &attrs);
 static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
@@ -752,14 +791,11 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		}
 
 		OrderedAttrs attrs;
+		CopySourceIdentity(child, attrs);
 
 		// --- Headings ---------------------------------------------------
 		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
-			std::string id = GetNodeAttribute(child, "id");
-			if (!id.empty()) {
-				attrs.emplace_back("id", id);
-			}
 			if (HasElementChildren(child)) {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
 				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
@@ -954,14 +990,6 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		std::string role = SectionRoleForTag(tag);
 		if (!role.empty()) {
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), role);
-			std::string id = GetNodeAttribute(child, "id");
-			std::string cls = GetNodeAttribute(child, "class");
-			if (!id.empty()) {
-				attrs.emplace_back("id", id);
-			}
-			if (!cls.empty()) {
-				attrs.emplace_back("class", cls);
-			}
 			// EmitContainerOrLeaf, not EmitContainerAndRecurse: a sectioning
 			// element whose only child is a lone text run must carry it in its
 			// own `content` (single-text-child rule) rather than always
@@ -980,15 +1008,9 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 
 		// --- <div>/<span> carrying id or class ------------------------------
 		if (tag == "div" || tag == "span") {
-			std::string id = GetNodeAttribute(child, "id");
-			std::string cls = GetNodeAttribute(child, "class");
-			if (!id.empty() || !cls.empty()) {
-				if (!id.empty()) {
-					attrs.emplace_back("id", id);
-				}
-				if (!cls.empty()) {
-					attrs.emplace_back("class", cls);
-				}
+			// Presence of id or class is the GATE for emitting a div at all (a
+			// bare one is transparent); the copy itself already happened above.
+			if (!GetNodeAttribute(child, "id").empty() || !GetNodeAttribute(child, "class").empty()) {
 				// EmitContainerOrLeaf: a lone text child (e.g. <div id="d">Bare
 				// text</div>) carries it in the div's own `content` instead of
 				// unconditionally opening a container and recursing into a
@@ -1418,11 +1440,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					lvl = 1;
 				if (lvl > 6)
 					lvl = 6;
-				std::string id_attr = "";
-				if (attrs.count("id")) {
-					id_attr = " id=\"" + XMLUtils::HTMLEscape(attrs["id"]) + "\"";
-				}
-				html << "<h" << lvl << id_attr << ">";
+				html << "<h" << lvl << IdentityAttrs(attrs) << ">";
 
 				// Render block's own content if present
 				if (!content.empty()) {
@@ -1437,7 +1455,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 				html << "</h" << lvl << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_PARAGRAPH) {
-				html << "<p>";
+				html << "<p" << IdentityAttrs(attrs) << ">";
 
 				// Render block's own content if present
 				if (!content.empty()) {
@@ -1456,9 +1474,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (attrs.count("language")) {
 					lang_class = " class=\"language-" + XMLUtils::HTMLEscape(attrs["language"]) + "\"";
 				}
-				html << "<pre><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
+				html << "<pre" << IdentityAttrs(attrs) << "><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
-				html << "<blockquote>";
+				html << "<blockquote" << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1494,7 +1512,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				}
 				std::string tag = is_definition ? "dl" : (ordered ? "ol" : "ul");
-				html << "<" << tag;
+				html << "<" << tag << IdentityAttrs(attrs);
 				if (ordered && attrs.count("start")) {
 					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
 				}
@@ -1552,7 +1570,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// interpolated.
 				std::string item_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string item_tag = ListItemTagForRole(item_role);
-				html << "<" << item_tag << ">";
+				html << "<" << item_tag << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1568,12 +1586,12 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
-					html << TableJsonToHtml(content);
+					html << TableJsonToHtml(content, IdentityAttrs(attrs));
 				} else {
-					html << "<table></table>";
+					html << "<table" << IdentityAttrs(attrs) << "></table>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_HR) {
-				html << "<hr>";
+				html << "<hr" << IdentityAttrs(attrs) << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_IMAGE) {
 				std::string src = attrs.count("src") ? attrs["src"] : "";
 				std::string alt = attrs.count("alt") ? attrs["alt"] : "";
@@ -1601,7 +1619,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					alt = content;
 				}
 				std::string title = attrs.count("title") ? attrs["title"] : "";
-				html << "<img src=\"" << XMLUtils::HTMLEscape(src) << "\"";
+				html << "<img" << IdentityAttrs(attrs) << " src=\"" << XMLUtils::HTMLEscape(src) << "\"";
 				if (!alt.empty()) {
 					html << " alt=\"" << XMLUtils::HTMLEscape(alt) << "\"";
 				}
@@ -1615,14 +1633,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_SECTION) {
 				std::string role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string tag = SectionTagForRole(role);
-				html << "<" << tag;
-				if (attrs.count("id")) {
-					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
-				}
-				if (attrs.count("class")) {
-					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
-				}
-				html << ">";
+				html << "<" << tag << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1633,7 +1644,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</" << tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_FIGURE) {
-				html << "<figure>";
+				html << "<figure" << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1646,7 +1657,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
 				std::string caption_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string caption_tag = CaptionTagForRole(caption_role);
-				html << "<" << caption_tag << ">";
+				html << "<" << caption_tag << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1657,7 +1668,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</" << caption_tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
-				html << "<dl>";
+				html << "<dl" << IdentityAttrs(attrs) << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
@@ -1713,14 +1724,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						continue;
 					}
 				}
-				html << "<" << tag;
-				if (attrs.count("id")) {
-					html << " id=\"" << XMLUtils::HTMLEscape(attrs["id"]) << "\"";
-				}
-				if (attrs.count("class")) {
-					html << " class=\"" << XMLUtils::HTMLEscape(attrs["class"]) << "\"";
-				}
-				html << ">";
+				html << "<" << tag << IdentityAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -2432,9 +2436,9 @@ static std::string RenderPandocCellToHtml(yyjson_val *cell_val, int depth = 0) {
 	return RenderPandocInlinesToHtml(cell_val, depth);
 }
 
-static std::string PandocTableToHtml(const std::string &json) {
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs) {
 	std::stringstream html;
-	html << "<table>";
+	html << "<table" << open_attrs << ">";
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
 	if (!doc) {
@@ -2518,10 +2522,10 @@ static std::string PandocTableToHtml(const std::string &json) {
 	return html.str();
 }
 
-static std::string TableJsonToHtml(const std::string &json) {
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs) {
 	size_t first_char = json.find_first_not_of(" \t\n\r");
 	if (first_char != std::string::npos && json[first_char] == '[') {
-		return PandocTableToHtml(json);
+		return PandocTableToHtml(json, open_attrs);
 	}
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
@@ -2536,7 +2540,7 @@ static std::string TableJsonToHtml(const std::string &json) {
 	}
 
 	std::stringstream html;
-	html << "<table>";
+	html << "<table" << open_attrs << ">";
 
 	yyjson_val *headers_val = yyjson_obj_get(root, "headers");
 	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {

@@ -1,0 +1,102 @@
+# name: test/sql/duck_block_source_identity.test
+# description: id and class survive html -> duck_blocks -> html on EVERY block element (#142)
+# group: [webbed]
+
+require webbed
+
+# ============================================================================
+# GitHub #142. read_html_blocks kept id and class on div/section, kept only id
+# on heading, and dropped both on everything else. There were no tiers -- three
+# independent copy sites written at different times, and the writer mirrored the
+# same asymmetry, so read-then-write silently destroyed attributes present in
+# the user's source while every test stayed green.
+#
+# The rule now: every block element that came from a source element carries
+# that element's id and class in `attributes` when present, and the writer
+# renders them back. Where one block stands for a nested pair (<pre><code>),
+# the OUTER element is the block and its identity is the one kept.
+# ============================================================================
+
+# --- Reader: id and class captured on every block type ----------------------
+# The issue's own reproduction, verbatim.
+
+query III
+SELECT b.element_type, b.attributes['id'], b.attributes['class']
+FROM (SELECT unnest(html_to_duck_blocks('<div id="d1" class="c1">x</div>
+<section id="s1" class="c2">x</section>
+<h2 id="h1" class="c3">head</h2>
+<p id="p1" class="c4">para</p>
+<ul id="u1" class="c5"><li id="l1" class="c6">item</li></ul>
+<ol id="o1"><li>num</li></ol>
+<blockquote id="b1" class="c7">quote</blockquote>
+<pre id="pre1" class="c8"><code id="co1">code</code></pre>
+<table id="t1" class="c9"><tr><td>cell</td></tr></table>
+<figure id="f1"><img id="i1" src="a.png" alt="alt"></figure>
+<hr id="hr1">')) AS b) t
+WHERE b.kind = 'block' ORDER BY b.element_order;
+----
+div	d1	c1
+section	s1	c2
+heading	h1	c3
+paragraph	p1	c4
+list	u1	c5
+list_item	l1	c6
+list	o1	NULL
+list_item	NULL	NULL
+blockquote	b1	c7
+code	pre1	c8
+table	t1	c9
+figure	f1	NULL
+image	i1	NULL
+hr	hr1	NULL
+
+# --- Writer: byte-exact round trip for each element carrying both -----------
+# One row per element type. `exact` is input == output: if the writer dropped
+# either attribute, rendered them in the wrong order, or quoted them wrongly,
+# that row reads false. (A foreach would split these on whitespace.)
+
+query II
+SELECT h, duck_blocks_to_html(html_to_duck_blocks(h))::VARCHAR = h AS exact
+FROM (VALUES
+  ('<h2 id="h" class="k">t</h2>'),
+  ('<p id="p" class="k">y</p>'),
+  ('<ul id="u" class="k"><li id="l" class="m">i</li></ul>'),
+  ('<ol id="o" class="k"><li>n</li></ol>'),
+  ('<blockquote id="b" class="k">q</blockquote>'),
+  ('<pre id="c" class="k"><code>x</code></pre>'),
+  ('<hr id="r" class="k">'),
+  ('<section id="s" class="k">z</section>'),
+  ('<div id="d" class="k">w</div>'),
+  ('<figure id="f" class="k"><figcaption id="g" class="m">cap</figcaption></figure>'),
+  ('<figure id="f"><img id="i" src="a.png" alt="a"></figure>')
+) t(h);
+----
+<h2 id="h" class="k">t</h2>	true
+<p id="p" class="k">y</p>	true
+<ul id="u" class="k"><li id="l" class="m">i</li></ul>	true
+<ol id="o" class="k"><li>n</li></ol>	true
+<blockquote id="b" class="k">q</blockquote>	true
+<pre id="c" class="k"><code>x</code></pre>	true
+<hr id="r" class="k">	true
+<section id="s" class="k">z</section>	true
+<div id="d" class="k">w</div>	true
+<figure id="f" class="k"><figcaption id="g" class="m">cap</figcaption></figure>	true
+<figure id="f"><img id="i" src="a.png" alt="a"></figure>	true
+
+# table is not byte-exact for a pre-existing, unrelated reason (the writer
+# promotes the first row to <thead>/<th>), so assert the identity survives
+# rather than the whole string.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table id="t" class="k"><tr><td>x</td></tr></table>'))::VARCHAR
+       LIKE '<table id="t" class="k">%';
+----
+true
+
+# --- An element with NO id/class must still render without empty attributes -
+# i.e. the fix adds attributes only when present, never ` id=""`.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>t</h2><p>y</p><hr>'))::VARCHAR;
+----
+<h2>t</h2><p>y</p><hr>

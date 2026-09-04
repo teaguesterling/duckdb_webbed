@@ -245,7 +245,11 @@ listed first for that reason.
        (e.g. tables), ``'yaml'`` for frontmatter metadata, among other format tags.
    * - ``attributes``
      - MAP(VARCHAR, VARCHAR)
-     - Additional attributes (id, class, language, src, alt, role, etc.)
+     - Additional attributes. **Every block that came from a source element carries that
+       element's** ``id`` **and** ``class`` **when present** -- on any element type, not only
+       containers -- and ``duck_blocks_to_html`` renders them back. Type-specific keys follow:
+       ``language`` (code), ``src``/``alt`` (image), ``role`` (section, metadata),
+       ``heading_level``, ``list_type``, ``start``, ``key`` (metadata).
    * - ``element_order``
      - INTEGER
      - Zero-based position of the element in the document's flattened element list.
