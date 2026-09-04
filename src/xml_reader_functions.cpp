@@ -552,7 +552,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(CompatMakeIdentifier(CompatIdentifierName(name)));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -671,7 +671,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Convert union schema to return types
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
-					names.push_back(CompatMakeIdentifier(col_name));
+					names.push_back(CompatMakeName(col_name));
 					return_types.push_back(union_schema[col_name]);
 				}
 
@@ -1526,7 +1526,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(CompatMakeIdentifier(CompatIdentifierName(name)));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -1635,7 +1635,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Convert union schema to return types
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
-					names.push_back(CompatMakeIdentifier(col_name));
+					names.push_back(CompatMakeName(col_name));
 					return_types.push_back(union_schema[col_name]);
 				}
 
@@ -1712,7 +1712,7 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	// Set alias for non-glob patterns
 	if (!FileSystem::HasGlob(table_name)) {
 		auto &fs = FileSystem::GetFileSystem(context);
-		table_function->alias = CompatMakeIdentifier(fs.ExtractBaseName(table_name));
+		table_function->alias = CompatMakeAlias(fs.ExtractBaseName(table_name));
 	}
 
 	return std::move(table_function);
@@ -1996,7 +1996,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 				return_types.push_back(logical_type);
-				names.push_back(CompatMakeIdentifier(CompatIdentifierName(name)));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -2041,7 +2041,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 			if (!inferred_columns.empty()) {
 				for (const auto &col_info : inferred_columns) {
-					names.push_back(CompatMakeIdentifier(col_info.name));
+					names.push_back(CompatMakeName(col_info.name));
 					return_types.push_back(col_info.type);
 				}
 
