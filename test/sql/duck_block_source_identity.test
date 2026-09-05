@@ -1,0 +1,280 @@
+# name: test/sql/duck_block_source_identity.test
+# description: capture_attributes -- source attributes on every element, read and write (#142)
+# group: [webbed]
+
+require webbed
+
+# ============================================================================
+# GitHub #142. read_html_blocks kept id and class on div/section, kept only id
+# on heading, and dropped both on everything else. There were no tiers -- three
+# independent copy sites written at different times -- and the writer mirrored
+# the same asymmetry, so read-then-write silently destroyed attributes present
+# in the user's source while every test stayed green.
+#
+# Now: capture_attributes := 'default' | 'classes' | '*' | true | false | [...]
+# governs which SOURCE attributes are copied verbatim onto EVERY element, block
+# and inline, and the writer renders them back. Default is identity and
+# references -- ['id', 'name', 'href', 'src']. class is opt-in: on real-world
+# HTML it is mostly framework noise. The semantic attributes the vocabulary
+# defines (heading_level, list_type, role, ...) are set unconditionally and are
+# not governed by this. Where one block stands for a nested pair (<pre><code>),
+# the OUTER element is the block and its attributes are the ones kept.
+# ============================================================================
+
+# --- Default: id everywhere, class nowhere -----------------------------------
+# The issue's own reproduction, verbatim. Every source element carries an id;
+# all but ol/figure/img/hr carry a class. id is captured on all fourteen; class
+# on none, by default.
+
+query III
+SELECT b.element_type, b.attributes['id'], b.attributes['class']
+FROM (SELECT unnest(html_to_duck_blocks('<div id="d1" class="c1">x</div>
+<section id="s1" class="c2">x</section>
+<h2 id="h1" class="c3">head</h2>
+<p id="p1" class="c4">para</p>
+<ul id="u1" class="c5"><li id="l1" class="c6">item</li></ul>
+<ol id="o1"><li>num</li></ol>
+<blockquote id="b1" class="c7">quote</blockquote>
+<pre id="pre1" class="c8"><code id="co1">code</code></pre>
+<table id="t1" class="c9"><tr><td>cell</td></tr></table>
+<figure id="f1"><img id="i1" src="a.png" alt="alt"></figure>
+<hr id="hr1">')) AS b) t
+WHERE b.kind = 'block' ORDER BY b.element_order;
+----
+div	d1	NULL
+section	s1	NULL
+heading	h1	NULL
+paragraph	p1	NULL
+list	u1	NULL
+list_item	l1	NULL
+list	o1	NULL
+list_item	NULL	NULL
+blockquote	b1	NULL
+code	pre1	NULL
+table	t1	NULL
+figure	f1	NULL
+image	i1	NULL
+hr	hr1	NULL
+
+# --- The presets, on one element carrying identity, class, data-* and ARIA --
+# 'default' == omitted. '*' == true. false leaves only the semantic key.
+# role="banner" is ABSENT under '*': vocabulary keys are reserved, so a source
+# attribute of that name cannot forge the vocabulary's own role.
+
+# (Named scalar parameters are bind-time constants, as with xml_to_json, so
+# each preset is its own query rather than a column fed through VALUES.)
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := 'default'))[1].attributes;
+----
+{id=h, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := 'classes'))[1].attributes;
+----
+{id=h, class=c, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := '*'))[1].attributes;
+----
+{id=h, class=c, data-x=1, heading_level=2}
+
+statement error
+SELECT html_to_duck_blocks('<p>x</p>', capture_attributes := lower('DEFAULT') || random()::VARCHAR);
+----
+must be a constant value
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>'))[1].attributes;
+----
+{id=h, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := true))[1].attributes;
+----
+{id=h, class=c, data-x=1, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := false))[1].attributes;
+----
+{heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := ['class', 'data-x']))[1].attributes;
+----
+{class=c, data-x=1, heading_level=2}
+
+statement error
+SELECT html_to_duck_blocks('<p>x</p>', capture_attributes := 'bogus');
+----
+Binder Error: capture_attributes: unknown preset 'bogus'
+
+# --- Inline elements are covered too, including <a name> --------------------
+# <a name="top"> is the pre-HTML5 anchor -- a link target sharing the fragment
+# namespace with id. It was dropped outright before, so a legacy anchor was
+# indistinguishable from a bare <a>. Kept faithful as `name`, not folded into
+# id: rewriting a user's markup on the way through is the #142 shape again.
+
+query III
+SELECT b.element_type, b.attributes['name'], b.attributes['href']
+FROM (SELECT unnest(html_to_duck_blocks('<p><a name="top"></a><a href="#top" name="both">up</a><strong id="s">b</strong></p>')) AS b) t
+WHERE b.kind = 'inline' AND b.element_type <> 'text' ORDER BY b.element_order;
+----
+link	top	NULL
+link	both	#top
+bold	NULL	NULL
+
+query I
+SELECT (html_to_duck_blocks('<p><strong id="s" class="k">b</strong></p>', capture_attributes := 'classes'))[2].attributes;
+----
+{id=s, class=k}
+
+# --- href and src are in the default set AND set by their type sites --------
+# Stored once, not twice, whichever path adds them first.
+
+query I
+SELECT (html_to_duck_blocks('<p><a href="/x">l</a></p>'))[2].attributes;
+----
+{href=/x}
+
+query I
+SELECT (html_to_duck_blocks('<p><a href="/x">l</a></p>', capture_attributes := false))[2].attributes;
+----
+{href=/x}
+
+query I
+SELECT (html_to_duck_blocks('<ol start="3" id="o"><li>x</li></ol>', capture_attributes := '*'))[1].attributes;
+----
+{start=3, id=o, list_type=ordered, ordered=true}
+
+# --- Writer: byte-exact round trip, default set --------------------------------
+# One row per element type. input == output means nothing was dropped and the
+# attribute was rendered in place. Table is asserted by containment below: its
+# first-row -> <thead>/<th> rewrite predates this and is unrelated.
+
+query II
+SELECT h, duck_blocks_to_html(html_to_duck_blocks(h))::VARCHAR = h AS exact
+FROM (VALUES
+  ('<h2 id="h">t</h2>'),
+  ('<p id="p">y</p>'),
+  ('<ul id="u"><li id="l">i</li></ul>'),
+  ('<ol id="o"><li>n</li></ol>'),
+  ('<blockquote id="b">q</blockquote>'),
+  ('<pre id="c"><code>x</code></pre>'),
+  ('<hr id="r">'),
+  ('<section id="s">z</section>'),
+  ('<div id="d">w</div>'),
+  ('<figure id="f"><figcaption id="g">cap</figcaption></figure>'),
+  ('<figure id="f"><img id="i" src="a.png" alt="a"></figure>'),
+  ('<p><a name="top"></a><a name="n" href="#top">up</a></p>'),
+  ('<p><strong id="s">b</strong></p>')
+) t(h);
+----
+<h2 id="h">t</h2>	true
+<p id="p">y</p>	true
+<ul id="u"><li id="l">i</li></ul>	true
+<ol id="o"><li>n</li></ol>	true
+<blockquote id="b">q</blockquote>	true
+<pre id="c"><code>x</code></pre>	true
+<hr id="r">	true
+<section id="s">z</section>	true
+<div id="d">w</div>	true
+<figure id="f"><figcaption id="g">cap</figcaption></figure>	true
+<figure id="f"><img id="i" src="a.png" alt="a"></figure>	true
+<p><a name="top"></a><a name="n" href="#top">up</a></p>	true
+<p><strong id="s">b</strong></p>	true
+
+# An anchor with no href renders without one: href="" would invent a link.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><a name="top"></a></p>'))::VARCHAR;
+----
+<p><a name="top"></a></p>
+
+# --- Writer with 'classes': id then class, canonical order --------------------
+# The writer's attributes are a map, so source order is not recoverable; it
+# renders id, name, class, then the rest alphabetically. Inputs here use that
+# order so the row reads exact.
+
+query II
+SELECT h, duck_blocks_to_html(html_to_duck_blocks(h, capture_attributes := 'classes'))::VARCHAR = h AS exact
+FROM (VALUES
+  ('<h2 id="h" class="k">t</h2>'),
+  ('<p id="p" class="k">y</p>'),
+  ('<ul id="u" class="k"><li id="l" class="m">i</li></ul>'),
+  ('<blockquote id="b" class="k">q</blockquote>'),
+  ('<hr id="r" class="k">'),
+  ('<div id="d" class="k">w</div>'),
+  ('<p><span id="s" class="k">x</span></p>')
+) t(h);
+----
+<h2 id="h" class="k">t</h2>	true
+<p id="p" class="k">y</p>	true
+<ul id="u" class="k"><li id="l" class="m">i</li></ul>	true
+<blockquote id="b" class="k">q</blockquote>	true
+<hr id="r" class="k">	true
+<div id="d" class="k">w</div>	true
+<p><span id="s" class="k">x</span></p>	true
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table id="t" class="k"><tr><td>x</td></tr></table>', capture_attributes := 'classes'))::VARCHAR
+       LIKE '<table id="t" class="k">%';
+----
+true
+
+# --- The default round trip DROPS class, and says so ----------------------------
+# The one fidelity loss the opt-in default accepts. Asserted rather than left
+# implicit: a silent loss here would be #142 one layer up.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2 id="h" class="k">t</h2>'))::VARCHAR;
+----
+<h2 id="h">t</h2>
+
+# --- Elements with nothing to carry render bare, never ` id=""` ---------------
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>t</h2><p>y</p><hr>'))::VARCHAR;
+----
+<h2>t</h2><p>y</p><hr>
+
+# --- The table functions take the same parameter ---------------------------
+
+query I
+SELECT attributes FROM parse_html_blocks('<h2 id="h" class="c">T</h2>', capture_attributes := 'classes');
+----
+{id=h, class=c, heading_level=2}
+
+query I
+SELECT attributes FROM parse_html_blocks('<h2 id="h" class="c">T</h2>');
+----
+{id=h, heading_level=2}
+
+# --- filename is TRAILING, and the emitted type is asserted exactly ------------
+# duck_block spec 6.4 keys 8-field acceptance on the exact type: the seven
+# canonical fields, then filename VARCHAR. The column sat FIRST before this
+# (STRUCT(filename, kind, ...)), a different type that refused to bind against
+# duck_block_utils -- which, since every consumer reads the struct by index,
+# is the only reason it never put a file path where each expected `kind`.
+# The full type string is asserted, not just the column list, so a reordering
+# fails HERE, in the producer, rather than three repos away.
+
+query I
+SELECT typeof(list(r)) FROM read_html_blocks('test/html/simple.html', filename := true) r;
+----
+STRUCT(kind VARCHAR, element_type VARCHAR, "content" VARCHAR, "level" INTEGER, "encoding" VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER, filename VARCHAR)[]
+
+# Without the flag, list(r) IS the scalar's type -- the `list(b)` idiom holds.
+query I
+SELECT (SELECT typeof(list(r)) FROM read_html_blocks('test/html/simple.html') r) = typeof(html_to_duck_blocks('<p>x</p>'));
+----
+true
+
+# filename := 'src_path' renames the column, as read_csv/read_json do. That
+# yields STRUCT(..., src_path VARCHAR), which is NOT the accepted 8-field type
+# and will not bind as duck_blocks under duck_block_utils. Documented as such;
+# a caller who wants the list(b) idiom uses the boolean form.
+query I
+SELECT typeof(list(r)) LIKE '%element_order INTEGER, src_path VARCHAR)[]'
+FROM read_html_blocks('test/html/simple.html', filename := 'src_path') r;
+----
+true

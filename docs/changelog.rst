@@ -1,8 +1,56 @@
 Changelog
 =========
 
-v2.8.2 (Current)
-----------------
+Unreleased
+----------
+
+**Behaviour change: attribute capture is now a parameter, and** ``class`` **is opt-in.**
+
+``read_html_blocks`` kept ``id`` and ``class`` on ``div``/``section``, kept only ``id`` on
+headings, and dropped both on everything else (#142). There were no tiers -- three copy sites
+written at different times -- and the writer mirrored them, so read-then-write silently
+destroyed attributes the source had.
+
+- ``capture_attributes := 'default' | 'classes' | '*' | true | false | [...]`` on
+  ``html_to_duck_blocks``, ``read_html_blocks`` and ``parse_html_blocks`` governs which source
+  attributes are copied onto **every** element, block and inline. Default:
+  ``['id', 'name', 'href', 'src']``.
+- ``<a name="...">`` -- the pre-HTML5 anchor -- is now captured as ``name``. It was dropped
+  outright before, so a legacy anchor was indistinguishable from a bare ``<a>``.
+- ``duck_blocks_to_html`` renders captured attributes back on every element, and an anchor
+  with no ``href`` no longer renders ``href=""``.
+- **``class`` is no longer captured by default** -- it is opt-in via ``'classes'``. This
+  changes ``div``, ``section`` and ``span``, which captured it unconditionally before.
+  Downstream, **HTML → Pandoc AST conversion through** ``duck_block_utils`` **loses class
+  unless requested**, because Pandoc encodes semantic structure in classes.
+- Vocabulary keys (``role``, ``heading_level``, ...) are reserved: never copied from the
+  source, so ``'*'`` cannot forge them.
+
+**``filename`` on** ``read_html_blocks`` **is now trailing, and takes core's forms.**
+
+- The column now comes **after** ``element_order``, not first. duck_block spec 6.4 keys
+  8-field acceptance on the exact type -- seven canonical fields, then ``filename VARCHAR`` --
+  so the old leading position (``STRUCT(filename, kind, ...)``) did not bind against
+  ``duck_block_utils`` at all. The emitted type string is now asserted in the suite.
+- ``filename := true`` adds a ``filename`` column. ``filename := 'src_path'`` adds it under
+  that name, as ``read_csv``/``read_json``/``read_parquet`` do -- **but a renamed column is
+  not the accepted 8-field type and will not bind as duck_blocks** (``list(b)`` into any
+  ``duck_block_utils`` function fails). This is the one place matching core diverges from
+  the vocabulary, which prefers the boolean form; use ``true`` when the rows feed
+  ``duck_block_utils``.
+- ``include_filepath`` and ``file_path`` are deprecated aliases, kept for one release.
+
+**Consumers accept the 8-field duck_block** (spec 6.4). ``duck_blocks_to_html`` and every
+other consumer now bind the widened shape -- the canonical seven fields, then
+``filename VARCHAR`` -- so ``list(r)`` of ``read_html_blocks(..., filename := true)`` rows
+feeds a consumer directly. Acceptance is a registered implicit cast to the 7-field type
+(the same mechanism as ``duck_block_utils``); functions keep returning the 7-field shape.
+The source type is exact on purpose: a leading, renamed, ninth or wrongly-typed extra
+field is still a binder error, because every consumer reads the struct by index and a
+lenient match would have read a misplaced ``filename`` as ``kind``, silently.
+
+v2.8.2
+------
 
 A bugfix release for the ``duck_block`` reader and writer. Behavioural
 corrections against a spec that moved -- no new public surface, so the function

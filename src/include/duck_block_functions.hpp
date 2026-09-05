@@ -5,6 +5,9 @@
 
 namespace duckdb {
 
+struct CaptureSpec; // defined in duck_block_functions.cpp; see capture_attributes
+
+
 /**
  * DuckBlockFunctions provides scalar functions for converting between HTML/XML and duck_blocks.
  *
@@ -20,7 +23,7 @@ public:
 	static void Register(ExtensionLoader &loader);
 
 	// Core parsing helper
-	static vector<Value> HtmlToDuckBlocks(const std::string &html_str);
+	static vector<Value> HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec);
 
 private:
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)

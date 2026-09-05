@@ -152,7 +152,7 @@ query I
 SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'figure','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
   {'kind':'block','element_type':'caption','content':'Cap','level':2,'encoding':'text','attributes':MAP{},'element_order':1}
-])), x -> x.element_type);
+])), lambda x: x.element_type);
 ----
 [figure, caption]
 
@@ -201,7 +201,7 @@ plain
 query I
 SELECT list_transform(html_to_duck_blocks(duck_blocks_to_html([
   {'kind':'block','element_type':'figure','content':'Some text','level':1,'encoding':'text','attributes':MAP{},'element_order':0}
-])), x -> x.element_type);
+])), lambda x: x.element_type);
 ----
 [figure]
 

@@ -186,10 +186,43 @@ Convert HTML content into a list of structured document blocks. This function pa
 .. code-block:: sql
 
    html_to_duck_blocks(html)
+   html_to_duck_blocks(html, capture_attributes := ...)
 
 **Parameters:**
 
 - ``html`` (HTML/VARCHAR): The HTML content to parse
+- ``capture_attributes`` (optional, constant): which of the source's own attributes are copied
+  verbatim onto every element, block and inline, when present. One of:
+
+  .. list-table::
+     :widths: 30 70
+
+     * - ``'default'`` *(or omitted)*
+       - ``['id', 'name', 'href', 'src']`` -- identity and references
+     * - ``'classes'``
+       - the default plus ``'class'``
+     * - ``'*'`` or ``true``
+       - every source attribute
+     * - ``false``
+       - none; only the semantic attributes below
+     * - ``['id', 'class', 'data-x', ...]``
+       - an explicit list
+
+  ``class`` is not in the default on purpose: on real-world HTML it is mostly framework
+  styling noise. Pass ``'classes'`` when you want it -- notably for HTML → Pandoc conversion,
+  where Pandoc encodes semantic structure in classes, or for HTML → blocks → HTML round trips
+  that must keep their styling hooks. The same parameter is accepted by ``read_html_blocks``
+  and ``parse_html_blocks``.
+
+  Attribute keys the vocabulary gives a meaning to (``role``, ``heading_level``, ``list_type``,
+  ...) are reserved and never copied from the source in any mode, so a document cannot forge
+  them: ``<section role="banner">`` keeps the vocabulary's ``role = 'section'``.
+
+- ``filename`` (``read_html_blocks`` only): ``true`` appends a ``filename`` column **after**
+  ``element_order`` -- the exact 8-field shape duck_block spec 6.4 accepts, so ``list(b)`` of
+  the rows still binds as duck_blocks. A string (``filename := 'src_path'``) names the column
+  instead, as DuckDB's core readers allow, **but that shape is not the accepted type and will
+  not bind as duck_blocks**; use ``true`` when the rows feed ``duck_block_utils``.
 
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 
@@ -245,7 +278,11 @@ listed first for that reason.
        (e.g. tables), ``'yaml'`` for frontmatter metadata, among other format tags.
    * - ``attributes``
      - MAP(VARCHAR, VARCHAR)
-     - Additional attributes (id, class, language, src, alt, role, etc.)
+     - Two kinds of key. **Source attributes** copied from the element per
+       ``capture_attributes`` -- by default ``id``, ``name``, ``href`` and ``src``, on every
+       element type -- which ``duck_blocks_to_html`` renders back. And **semantic attributes**
+       the reader sets unconditionally: ``heading_level``, ``list_type``, ``start``, ``role``
+       (section, metadata), ``key`` (metadata), ``language`` (code), ``alt`` (image).
    * - ``element_order``
      - INTEGER
      - Zero-based position of the element in the document's flattened element list.
@@ -498,7 +535,7 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
    SELECT duck_blocks_to_html(
        list_filter(
            html_to_duck_blocks(html),
-           block -> block.kind = 'block' AND block.element_type IN ('heading', 'paragraph')
+           lambda block: block.kind = 'block' AND block.element_type IN ('heading', 'paragraph')
        )
    ) FROM documents;
 
@@ -572,7 +609,7 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
    SELECT duck_blocks_to_markdown(
        list_filter(
            html_to_duck_blocks(html_content),
-           b -> b.kind = 'block' AND b.element_type IN ('heading', 'paragraph')
+           lambda b: b.kind = 'block' AND b.element_type IN ('heading', 'paragraph')
        )
    ) as simplified_markdown
    FROM web_pages;
@@ -591,7 +628,7 @@ When combined with the `duck_block_utils <https://github.com/teaguesterling/duck
    SELECT duck_blocks_to_html(
        list_transform(
            html_to_duck_blocks(html),
-           b -> CASE
+           lambda b: CASE
                WHEN b.kind = 'block' AND b.element_type = 'code'
                THEN {'kind': 'block', 'element_type': 'code', 'content': b.content, 'level': b.level,
                      'encoding': b.encoding, 'element_order': b.element_order,

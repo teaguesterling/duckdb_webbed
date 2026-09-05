@@ -1,0 +1,98 @@
+# name: test/sql/duck_block_filename_acceptance.test
+# description: consumers accept the 8-field duck_block (canonical seven, then filename) -- spec 6.4
+# group: [webbed]
+
+require webbed
+
+# ============================================================================
+# duck_block spec 6.4: consumers MUST accept both the 7-field duck_block and
+# the ONE widened shape -- the seven canonical fields, then `filename VARCHAR`.
+# Producers MAY emit it (read_html_blocks does, behind filename := true).
+#
+# Acceptance is a registered implicit cast from the exact 8-field type to the
+# 7-field type, bound to DuckDB's own default struct cast, which matches
+# children by name and drops the extra. Only the binder's child-count-mismatch
+# cost rule ever blocked that; a registered cast wins over the rule. Functions
+# keep returning the 7-field shape.
+#
+# The source type is EXACT on purpose. Every consumer reads the struct by
+# index, so a lenient (by-arity) acceptance would have read a leading or
+# interior `filename` as `kind`, silently. Exactness is what makes the wrong
+# shapes below binder errors instead of corrupt data.
+# ============================================================================
+
+# --- The accepted shape binds -----------------------------------------------
+# Literals type their attributes explicitly. An untyped MAP{} is
+# MAP("NULL", "NULL"), which is not the exact 8-field type and does not match
+# the registration -- the NULL-ambiguity the spec records as a caution. Real
+# producers emit MAP(VARCHAR, VARCHAR); see the read_html_blocks case below,
+# which is the junction this exists for.
+
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':0,'filename':'a.html'}
+])::VARCHAR;
+----
+<p>x</p>
+
+# The real junction, inside webbed: rows from read_html_blocks(filename := true)
+# gathered with list(r) feed a consumer. This is the idiom that broke across
+# repos when the column was leading.
+query I
+SELECT duck_blocks_to_html(list(r ORDER BY r.element_order))::VARCHAR
+FROM read_html_blocks('test/html/simple.html', filename := true) r;
+----
+<h1>Welcome</h1><p>This is a test page.</p>
+
+# A mix of 7- and 8-field values in one expression resolves too.
+query I
+SELECT duck_blocks_to_html(list_concat(
+  html_to_duck_blocks('<h2>a</h2>'),
+  [{'kind':'block','element_type':'paragraph','content':'b','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':1,'filename':'f'}]
+))::VARCHAR;
+----
+<h2>a</h2><p>b</p>
+
+# --- Everything near the accepted shape is still refused ---------------------
+# Not tolerance for "an extra column"; acceptance of one exact type.
+
+# filename LEADING (the shape webbed itself emitted before 60318d8)
+statement error
+SELECT duck_blocks_to_html([
+  {'filename':'a.html','kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':0}
+]);
+----
+No function matches
+
+# a different trailing name (the rename form's output)
+statement error
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':0,'src_path':'a.html'}
+]);
+----
+No function matches
+
+# a ninth field
+statement error
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':0,'filename':'a','extra':'b'}
+]);
+----
+No function matches
+
+# the right name, the wrong type
+statement error
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'x','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':0,'filename':42}
+]);
+----
+No function matches
+
+# --- The explicit cast drops filename and yields the 7-field type -------------
+
+query I
+SELECT typeof(list(r)::STRUCT(kind VARCHAR, element_type VARCHAR, content VARCHAR, level INTEGER, encoding VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER)[])
+       = typeof(html_to_duck_blocks('<p>x</p>'))
+FROM read_html_blocks('test/html/simple.html', filename := true) r;
+----
+true
