@@ -1,3 +1,5 @@
+#include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duck_block_functions.hpp"
 #include "duck_block_types.hpp"
 #include "duckdb_compat.hpp"
@@ -66,26 +68,6 @@ static std::string GetVarcharField(const Value &val) {
 }
 
 // Helper to extract attributes MAP into std::map
-// GitHub #142, writer half. Render the source identity a block carries, so
-// read-then-write no longer silently drops id/class the user's source had.
-// One helper on every block open tag, for the same reason the reader copies
-// in one place: three sites that each rendered independently (section and
-// div both, heading id only, nothing else) is how the loss happened, and
-// nothing about the output looked wrong. Empty string when the block carries
-// neither, so a bare element renders bare -- never ` id=""`.
-static std::string IdentityAttrs(const std::map<std::string, std::string> &attrs) {
-	std::string out;
-	auto it = attrs.find("id");
-	if (it != attrs.end() && !it->second.empty()) {
-		out += " id=\"" + XMLUtils::HTMLEscape(it->second) + "\"";
-	}
-	it = attrs.find("class");
-	if (it != attrs.end() && !it->second.empty()) {
-		out += " class=\"" + XMLUtils::HTMLEscape(it->second) + "\"";
-	}
-	return out;
-}
-
 static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_val) {
 	std::map<std::string, std::string> attrs;
 	if (!attrs_val.IsNull()) {
@@ -105,20 +87,66 @@ static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_v
 }
 
 // Render inline element to HTML
+static bool IsReservedAttr(const std::string &key);
+
+// GitHub #142, writer half. Render the source attributes a block or inline
+// carries back onto its open tag, so read-then-write no longer silently drops
+// what the user's source had. Skips the vocabulary's semantic keys (never HTML
+// attributes) and any key the calling site renders itself (href on <a>, src/alt
+// on <img>, start on <ol>), so nothing is emitted twice. Canonical order --
+// id, name, class, then the rest alphabetically -- because the writer's attrs
+// are a std::map and source order is not recoverable from it. Empty when the
+// element carries nothing renderable, so a bare element renders bare.
+static std::string PassthroughAttrs(const std::map<std::string, std::string> &attrs,
+                                    std::initializer_list<const char *> exclude = {}) {
+	auto excluded = [&](const std::string &k) {
+		for (auto e : exclude) {
+			if (k == e) {
+				return true;
+			}
+		}
+		return false;
+	};
+	std::string out;
+	std::vector<std::string> done;
+	auto emit = [&](const std::string &k) {
+		auto it = attrs.find(k);
+		if (it == attrs.end() || it->second.empty() || IsReservedAttr(k) || excluded(k)) {
+			return;
+		}
+		if (std::find(done.begin(), done.end(), k) != done.end()) {
+			return;
+		}
+		out += " " + k + "=\"" + XMLUtils::HTMLEscape(it->second) + "\"";
+		done.push_back(k);
+	};
+	emit("id");
+	emit("name");
+	emit("class");
+	for (auto &kv : attrs) {
+		emit(kv.first);
+	}
+	return out;
+}
+
 static std::string RenderInlineElementToHtml(const std::string &element_type, const std::string &content,
                                              const std::map<std::string, std::string> &attrs) {
 	if (element_type == DuckBlockTypes::INLINE_TEXT) {
 		return XMLUtils::HTMLEscape(content);
 	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
-		return "<strong>" + XMLUtils::HTMLEscape(content) + "</strong>";
+		return "<strong" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</strong>";
 	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
-		return "<em>" + XMLUtils::HTMLEscape(content) + "</em>";
+		return "<em" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</em>";
 	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
-		return "<code>" + XMLUtils::HTMLEscape(content) + "</code>";
+		return "<code" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</code>";
 	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
 		std::string href = attrs.count("href") ? attrs.at("href") : "";
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
-		std::string result = "<a href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		std::string result = "<a" + PassthroughAttrs(attrs, {"href", "title"});
+		// An anchor (<a name=...>) has no href; rendering href="" would invent one.
+		if (!href.empty()) {
+			result += " href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		}
 		if (!title.empty()) {
 			result += " title=\"" + XMLUtils::HTMLEscape(title) + "\"";
 		}
@@ -136,7 +164,7 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 		// by test/sql/duck_block_writer_contract.test using distinct values.
 		std::string alt = content.empty() && attrs.count("alt") ? attrs.at("alt") : content;
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
-		std::string result = "<img src=\"" + XMLUtils::HTMLEscape(src) + "\"";
+		std::string result = "<img" + PassthroughAttrs(attrs, {"src", "alt", "title"}) + " src=\"" + XMLUtils::HTMLEscape(src) + "\"";
 		if (!alt.empty()) {
 			result += " alt=\"" + XMLUtils::HTMLEscape(alt) + "\"";
 		}
@@ -152,25 +180,17 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	} else if (element_type == DuckBlockTypes::INLINE_LINEBREAK || element_type == "br") {
 		return "<br>";
 	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
-		return "<del>" + XMLUtils::HTMLEscape(content) + "</del>";
+		return "<del" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</del>";
 	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
-		return "<sup>" + XMLUtils::HTMLEscape(content) + "</sup>";
+		return "<sup" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</sup>";
 	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
-		return "<sub>" + XMLUtils::HTMLEscape(content) + "</sub>";
+		return "<sub" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</sub>";
 	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
-		return "<u>" + XMLUtils::HTMLEscape(content) + "</u>";
+		return "<u" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</u>";
 	} else if (element_type == DuckBlockTypes::INLINE_SMALLCAPS) {
-		return "<span style=\"font-variant: small-caps\">" + XMLUtils::HTMLEscape(content) + "</span>";
+		return "<span" + PassthroughAttrs(attrs) + " style=\"font-variant: small-caps\">" + XMLUtils::HTMLEscape(content) + "</span>";
 	} else if (element_type == DuckBlockTypes::INLINE_SPAN) {
-		std::string id = attrs.count("id") ? attrs.at("id") : "";
-		std::string cls = attrs.count("class") ? attrs.at("class") : "";
-		std::string result = "<span";
-		if (!id.empty()) {
-			result += " id=\"" + XMLUtils::HTMLEscape(id) + "\"";
-		}
-		if (!cls.empty()) {
-			result += " class=\"" + XMLUtils::HTMLEscape(cls) + "\"";
-		}
+		std::string result = "<span" + PassthroughAttrs(attrs);
 		result += ">" + XMLUtils::HTMLEscape(content) + "</span>";
 		return result;
 	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
@@ -226,40 +246,36 @@ static std::string RenderInlineOpenTag(const std::string &element_type,
 	if (element_type.empty()) {
 		return "";
 	} else if (element_type == DuckBlockTypes::INLINE_BOLD || element_type == "strong") {
-		return "<strong>";
+		return "<strong" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_ITALIC || element_type == "em" || element_type == "emphasis") {
-		return "<em>";
+		return "<em" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_CODE) {
-		return "<code>";
+		return "<code" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_LINK) {
 		std::string href = attrs.count("href") ? attrs.at("href") : "";
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
-		std::string result = "<a href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		std::string result = "<a" + PassthroughAttrs(attrs, {"href", "title"});
+		// An anchor (<a name=...>) has no href; rendering href="" would invent one.
+		if (!href.empty()) {
+			result += " href=\"" + XMLUtils::HTMLEscape(href) + "\"";
+		}
 		if (!title.empty()) {
 			result += " title=\"" + XMLUtils::HTMLEscape(title) + "\"";
 		}
 		result += ">";
 		return result;
 	} else if (element_type == DuckBlockTypes::INLINE_STRIKETHROUGH || element_type == "del") {
-		return "<del>";
+		return "<del" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_SUPERSCRIPT || element_type == "sup") {
-		return "<sup>";
+		return "<sup" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_SUBSCRIPT || element_type == "sub") {
-		return "<sub>";
+		return "<sub" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
-		return "<u>";
+		return "<u" + PassthroughAttrs(attrs) + ">";
 	} else if (element_type == DuckBlockTypes::INLINE_SMALLCAPS) {
-		return "<span style=\"font-variant: small-caps\">";
+		return "<span" + PassthroughAttrs(attrs) + " style=\"font-variant: small-caps\">";
 	} else if (element_type == DuckBlockTypes::INLINE_SPAN) {
-		std::string id = attrs.count("id") ? attrs.at("id") : "";
-		std::string cls = attrs.count("class") ? attrs.at("class") : "";
-		std::string result = "<span";
-		if (!id.empty()) {
-			result += " id=\"" + XMLUtils::HTMLEscape(id) + "\"";
-		}
-		if (!cls.empty()) {
-			result += " class=\"" + XMLUtils::HTMLEscape(cls) + "\"";
-		}
+		std::string result = "<span" + PassthroughAttrs(attrs);
 		result += ">";
 		return result;
 	} else if (element_type == DuckBlockTypes::INLINE_RAW) {
@@ -511,10 +527,139 @@ static bool HasBlockChildren(xmlNodePtr node) {
 // the insertion order below.
 using OrderedAttrs = std::vector<std::pair<std::string, std::string>>;
 
+// GitHub #142. Which SOURCE attributes are copied verbatim onto every element,
+// block and inline, when present. Governs passthrough of the source's own
+// attributes only; the semantic attributes the vocabulary defines (heading_level,
+// list_type, role, key, ...) are set by the emit sites unconditionally and are
+// not affected by this.
+struct CaptureSpec {
+	bool all = false;
+	std::vector<std::string> keys;
+
+	bool Wants(const std::string &key) const {
+		if (all) {
+			return true;
+		}
+		return std::find(keys.begin(), keys.end(), key) != keys.end();
+	}
+	// Identity (id, name) and references (href, src). class is deliberately not
+	// here: on real-world HTML it is mostly framework noise, so it is opt-in via
+	// the 'classes' preset or an explicit list.
+	// Written as assignments rather than brace-init: this file builds as C++11,
+	// where a struct with default member initialisers is not an aggregate.
+	static CaptureSpec Default() {
+		CaptureSpec s;
+		s.keys = {"id", "name", "href", "src"};
+		return s;
+	}
+	static CaptureSpec Classes() {
+		auto s = Default();
+		s.keys.push_back("class");
+		return s;
+	}
+	static CaptureSpec All() {
+		CaptureSpec s;
+		s.all = true;
+		return s;
+	}
+	static CaptureSpec None() {
+		return CaptureSpec();
+	}
+};
+
+// capture_attributes := 'default' | 'classes' | '*' | true | false | ['id', ...]
+static CaptureSpec ParseCaptureSpec(const Value &v) {
+	if (v.IsNull()) {
+		return CaptureSpec::Default();
+	}
+	switch (v.type().id()) {
+	case LogicalTypeId::BOOLEAN:
+		return v.GetValue<bool>() ? CaptureSpec::All() : CaptureSpec::None();
+	case LogicalTypeId::VARCHAR: {
+		auto s = StringValue::Get(v);
+		if (s == "*") {
+			return CaptureSpec::All();
+		}
+		if (s == "default") {
+			return CaptureSpec::Default();
+		}
+		if (s == "classes") {
+			return CaptureSpec::Classes();
+		}
+		throw BinderException("capture_attributes: unknown preset '%s'. Use 'default', 'classes', '*', true, false, "
+		                      "or a list such as ['id', 'name', 'class']",
+		                      s);
+	}
+	case LogicalTypeId::LIST: {
+		CaptureSpec spec;
+		for (auto &item : ListValue::GetChildren(v)) {
+			if (item.IsNull()) {
+				throw BinderException("capture_attributes: list may not contain NULL");
+			}
+			spec.keys.push_back(StringValue::Get(item.DefaultCastAs(LogicalType::VARCHAR)));
+		}
+		return spec;
+	}
+	default:
+		throw BinderException("capture_attributes must be a boolean, a preset name, or a list of attribute names");
+	}
+}
+
+// Attribute keys the vocabulary gives a meaning to. Never copied from the
+// source, in any capture mode: under '*' a document could otherwise forge the
+// vocabulary's own semantics -- <section role="banner"> (ARIA) overwriting
+// role=section. `language` is derived from a code block's class, not read from
+// an attribute of that name, and is reserved for the same reason.
+static bool IsReservedAttr(const std::string &key) {
+	return key == DuckBlockTypes::ATTR_ROLE || key == DuckBlockTypes::ATTR_KEY ||
+	       key == DuckBlockTypes::ATTR_HEADING_LEVEL || key == DuckBlockTypes::ATTR_LIST_TYPE ||
+	       key == DuckBlockTypes::ATTR_SOURCE_TYPE || key == DuckBlockTypes::ATTR_PANDOC_AST ||
+	       key == DuckBlockTypes::ATTR_ORDERED_LEGACY || key == "language";
+}
+
+// Replace-or-append, so a key set by the passthrough copy and again by a
+// type-specific site (href on <a>, src on <img>, start on <ol>) is stored once.
+static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::string &value) {
+	for (auto &kv : attrs) {
+		if (kv.first == key) {
+			kv.second = value;
+			return;
+		}
+	}
+	attrs.emplace_back(key, value);
+}
+
+// Copy the source element's own attributes, in document order, per the spec.
+// One call at each loop's single attrs declaration, for every element -- three
+// sites that each remembered independently is how #142 happened.
+static void CopySourceAttributes(xmlNodePtr node, OrderedAttrs &attrs, const CaptureSpec &spec) {
+	if (!spec.all && spec.keys.empty()) {
+		return;
+	}
+	for (xmlAttrPtr a = node->properties; a; a = a->next) {
+		if (!a->name) {
+			continue;
+		}
+		std::string key(reinterpret_cast<const char *>(a->name));
+		if (IsReservedAttr(key) || !spec.Wants(key)) {
+			continue;
+		}
+		xmlChar *raw = xmlNodeListGetString(node->doc, a->children, 1);
+		if (!raw) {
+			continue;
+		}
+		std::string value(reinterpret_cast<const char *>(raw));
+		xmlFree(raw);
+		if (!value.empty()) {
+			PutAttr(attrs, key, value);
+		}
+	}
+}
+
 // Forward declaration: ExtractInlineElementsRange recurses into a parent's
 // full child list (e.g. a nested formatting wrapper) via this convenience
 // form, defined just after it below.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order);
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order, const CaptureSpec &spec);
 
 // Extract inline elements from an explicit sibling range [start, stop) as
 // structured kind='inline' duck_blocks. Nested formatting (e.g. <b>x
@@ -527,7 +672,7 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 // hand it a run of loose inline nodes (text plus inline elements) that sit
 // among block siblings, not gathered under a dedicated inline parent.
 static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level,
-                                                      int32_t &element_order) {
+                                                      int32_t &element_order, const CaptureSpec &spec) {
 	std::vector<Value> inlines;
 
 	for (xmlNodePtr child = start; child && child != stop; child = child->next) {
@@ -552,6 +697,7 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 		}
 
 		OrderedAttrs attrs;
+		CopySourceAttributes(child, attrs, spec);
 
 		// Void inline elements (no children to recurse).
 		if (tag == "img") {
@@ -562,11 +708,11 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			// handling in WalkBlockNode, so attribute order is a property of the
 			// reader rather than of whether the image sits at block or inline level.
 			if (!src.empty())
-				attrs.emplace_back("src", src);
+				PutAttr(attrs, "src", src);
 			if (!alt.empty())
-				attrs.emplace_back("alt", alt);
+				PutAttr(attrs, "alt", alt);
 			if (!title.empty())
-				attrs.emplace_back("title", title);
+				PutAttr(attrs, "title", title);
 			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
 			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
 			                                               attrs, element_order++));
@@ -584,23 +730,17 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			if (tag == "a") {
 				std::string href = GetNodeAttribute(child, "href");
 				if (!href.empty())
-					attrs.emplace_back("href", href);
+					PutAttr(attrs, "href", href);
 				std::string title = GetNodeAttribute(child, "title");
 				if (!title.empty())
-					attrs.emplace_back("title", title);
-			} else if (tag == "span") {
-				std::string id = GetNodeAttribute(child, "id");
-				std::string cls = GetNodeAttribute(child, "class");
-				if (!id.empty())
-					attrs.emplace_back("id", id);
-				if (!cls.empty())
-					attrs.emplace_back("class", cls);
+					PutAttr(attrs, "title", title);
 			}
+			// (span's id/class copy lived here; CopySourceAttributes above covers it)
 			if (HasElementChildren(child)) {
 				// Container: empty content, then recurse children one level deeper.
 				inlines.push_back(DuckBlockTypes::CreateInline(etype, "", Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-				auto nested = ExtractInlineElements(child, base_level + 1, element_order);
+				auto nested = ExtractInlineElements(child, base_level + 1, element_order, spec);
 				inlines.insert(inlines.end(), nested.begin(), nested.end());
 			} else {
 				// Leaf: carries its text content.
@@ -614,7 +754,7 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 		// Unknown inline element: preserve any nested formatting by recursing at
 		// the same level (the unknown wrapper is dropped); text-only becomes text.
 		if (HasElementChildren(child)) {
-			auto nested = ExtractInlineElements(child, base_level, element_order);
+			auto nested = ExtractInlineElements(child, base_level, element_order, spec);
 			inlines.insert(inlines.end(), nested.begin(), nested.end());
 		} else {
 			std::string content = GetNodeTextContent(child);
@@ -631,8 +771,8 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 // Convenience form of ExtractInlineElementsRange over ALL of a parent's
 // children -- the common case; WalkBlockNode is the only caller that needs
 // the explicit-range form above.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order) {
-	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order);
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order, const CaptureSpec &spec) {
+	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order, spec);
 }
 
 // True when `node` is the start of a loose-inline run inside a container's
@@ -695,28 +835,10 @@ static bool IsLooseInlineStart(xmlNodePtr node) {
 }
 
 // Emit a container block, then recurse into its children one level deeper.
-// GitHub #142. Every block that came from a source element carries that
-// element's id and class in `attributes` when present. Copied in ONE place,
-// for every block, rather than at each emit site: three sites that each
-// remembered independently (div/section both, heading id only, everything
-// else nothing) is exactly how the gap happened, and per-site copying is a
-// gap that reopens with every new element type. Identity keys come first in
-// the map, ahead of type-specific keys, so the shape is uniform across types.
-static void CopySourceIdentity(xmlNodePtr node, OrderedAttrs &attrs) {
-	std::string id = GetNodeAttribute(node, "id");
-	if (!id.empty()) {
-		attrs.emplace_back("id", id);
-	}
-	std::string cls = GetNodeAttribute(node, "class");
-	if (!cls.empty()) {
-		attrs.emplace_back("class", cls);
-	}
-}
-
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
-                                    vector<Value> &blocks, OrderedAttrs &attrs);
+                                    vector<Value> &blocks, OrderedAttrs &attrs, const CaptureSpec &spec);
 static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
-                                vector<Value> &blocks, OrderedAttrs &attrs);
+                                vector<Value> &blocks, OrderedAttrs &attrs, const CaptureSpec &spec);
 
 // Walk `node`'s children depth-first, emitting blocks in document order.
 //
@@ -738,7 +860,7 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 // unchanged so it stays off for the whole unmapped subtree, not just its
 // immediate children.
 static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector<Value> &blocks,
-                          bool detect_loose_inline = true) {
+                          const CaptureSpec &spec, bool detect_loose_inline = true) {
 	for (xmlNodePtr child = node->children; child; child = child->next) {
 		// Loose inline content interleaved with block siblings -- bare text, or
 		// an inline-only element -- has nowhere else to live (no container of
@@ -768,7 +890,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			} else {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, "", Value::INTEGER(level),
 				                                             DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
-				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order);
+				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order, spec);
 				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
 			}
 			if (!run_end) {
@@ -791,7 +913,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		}
 
 		OrderedAttrs attrs;
-		CopySourceIdentity(child, attrs);
+		CopySourceAttributes(child, attrs, spec);
 
 		// --- Headings ---------------------------------------------------
 		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
@@ -799,7 +921,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			if (HasElementChildren(child)) {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
 				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-				auto inlines = ExtractInlineElements(child, level + 1, order);
+				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
 				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
 			} else {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, GetNodeTextContent(child),
@@ -814,7 +936,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			if (HasElementChildren(child)) {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(level),
 				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-				auto inlines = ExtractInlineElements(child, level + 1, order);
+				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
 				blocks.insert(blocks.end(), inlines.begin(), inlines.end());
 			} else {
 				blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, GetNodeTextContent(child),
@@ -845,7 +967,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 
 		// --- Blockquote: container when it holds blocks, leaf otherwise ---
 		if (tag == "blockquote") {
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_BLOCKQUOTE, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_BLOCKQUOTE, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -877,10 +999,10 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			if (is_ordered) {
 				std::string start = GetNodeAttribute(child, "start");
 				if (!start.empty()) {
-					attrs.emplace_back("start", start);
+					PutAttr(attrs, "start", start);
 				}
 			}
-			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -890,7 +1012,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		// (Pandoc's loose Para, or a nested list). Reuses EmitContainerOrLeaf
 		// rather than writing a fourth copy of that decision.
 		if (tag == "li") {
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -904,7 +1026,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		if (tag == "dl") {
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_LIST_TYPE),
 			                   std::string(DuckBlockTypes::LIST_TYPE_DEFINITION));
-			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs);
+			EmitContainerAndRecurse(child, DuckBlockTypes::TYPE_LIST, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -920,7 +1042,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE),
 			                   tag == "dt" ? std::string(DuckBlockTypes::ROLE_TERM)
 			                               : std::string(DuckBlockTypes::ROLE_DEFINITION));
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_LIST_ITEM, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -936,14 +1058,14 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			std::string src = GetNodeAttribute(child, "src");
 			std::string alt = GetNodeAttribute(child, "alt");
 			std::string title = GetNodeAttribute(child, "title");
-			attrs.emplace_back("src", src);
+			PutAttr(attrs, "src", src);
 			std::string content;
 			if (!alt.empty()) {
-				attrs.emplace_back("alt", alt);
+				PutAttr(attrs, "alt", alt);
 				content = alt;
 			}
 			if (!title.empty()) {
-				attrs.emplace_back("title", title);
+				PutAttr(attrs, "title", title);
 			}
 			blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_IMAGE, content, Value::INTEGER(level),
 			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
@@ -959,7 +1081,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			// still takes the container path because img is block-level, so
 			// HasBlockChildren is true and EmitContainerOrLeaf recurses exactly
 			// as EmitContainerAndRecurse always did.
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_FIGURE, level, order, blocks, attrs, spec);
 			continue;
 		}
 		if (tag == "figcaption") {
@@ -969,7 +1091,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			if (!HasElementChildren(child) && GetNodeTextContent(child).empty()) {
 				continue;
 			}
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -982,7 +1104,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 				continue;
 			}
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_ROLE), "summary");
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_CAPTION, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -995,14 +1117,14 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			// own `content` (single-text-child rule) rather than always
 			// recursing into WalkBlockNode. HasBlockChildren containers still
 			// take the same recurse path EmitContainerAndRecurse always did.
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_SECTION, level, order, blocks, attrs, spec);
 			continue;
 		}
 
 		// --- <details>: semantic, but not a sectioning container -----------
 		if (tag == "details") {
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_SOURCE_TYPE), tag);
-			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs);
+			EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_GENERIC, level, order, blocks, attrs, spec);
 			continue;
 		}
 
@@ -1015,7 +1137,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 				// text</div>) carries it in the div's own `content` instead of
 				// unconditionally opening a container and recursing into a
 				// same-level `plain` sibling.
-				EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs);
+				EmitContainerOrLeaf(child, DuckBlockTypes::TYPE_DIV, level, order, blocks, attrs, spec);
 				continue;
 			}
 			// A bare <div>/<span> (no id, no class) stays transparent -- no
@@ -1026,7 +1148,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 			// so that content surfaces as a `plain` at the parent's level
 			// (WalkBlockNode's loose-inline-run handling above) instead of
 			// being silently dropped.
-			WalkBlockNode(child, level, order, blocks, true);
+			WalkBlockNode(child, level, order, blocks, spec, true);
 			continue;
 		}
 
@@ -1037,15 +1159,15 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 		// detection is OFF for this call: it exists only to find nested BLOCKS,
 		// not to harvest the wrapper's own bare text (see WalkBlockNode's
 		// detect_loose_inline doc comment).
-		WalkBlockNode(child, level, order, blocks, false);
+		WalkBlockNode(child, level, order, blocks, spec, false);
 	}
 }
 
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
-                                    vector<Value> &blocks, OrderedAttrs &attrs) {
+                                    vector<Value> &blocks, OrderedAttrs &attrs, const CaptureSpec &spec) {
 	blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
 	                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-	WalkBlockNode(node, level + 1, order, blocks);
+	WalkBlockNode(node, level + 1, order, blocks, spec);
 }
 
 // Emit a container three ways, depending on what it actually holds:
@@ -1054,13 +1176,13 @@ static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_ty
 //                      would transparently recurse past a <b> and emit nothing)
 //   text only       -> a leaf carrying its text
 static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
-                                vector<Value> &blocks, OrderedAttrs &attrs) {
+                                vector<Value> &blocks, OrderedAttrs &attrs, const CaptureSpec &spec) {
 	if (HasBlockChildren(node)) {
-		EmitContainerAndRecurse(node, block_type, level, order, blocks, attrs);
+		EmitContainerAndRecurse(node, block_type, level, order, blocks, attrs, spec);
 	} else if (HasElementChildren(node)) {
 		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
 		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-		auto inlines = ExtractInlineElements(node, level + 1, order);
+		auto inlines = ExtractInlineElements(node, level + 1, order, spec);
 		blocks.insert(blocks.end(), inlines.begin(), inlines.end());
 	} else {
 		blocks.push_back(DuckBlockTypes::CreateBlock(block_type, GetNodeTextContent(node), Value::INTEGER(level),
@@ -1068,7 +1190,7 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 	}
 }
 
-vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) {
+vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec) {
 	if (html_str.empty()) {
 		return vector<Value>();
 	}
@@ -1196,9 +1318,9 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	}
 
 	if (body) {
-		WalkBlockNode(body, 1, block_order, blocks);
+		WalkBlockNode(body, 1, block_order, blocks, spec);
 	} else if (root) {
-		WalkBlockNode(root, 1, block_order, blocks);
+		WalkBlockNode(root, 1, block_order, blocks, spec);
 	}
 
 	// Now emit the metadata, AFTER the document's blocks, continuing
@@ -1248,7 +1370,61 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str) 
 	return blocks;
 }
 
+// Bind data for html_to_duck_blocks(html, capture_attributes := ...).
+struct HtmlToDuckBlocksBindData : public FunctionData {
+	CaptureSpec spec;
+
+	explicit HtmlToDuckBlocksBindData(CaptureSpec s) : spec(std::move(s)) {
+	}
+	unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<HtmlToDuckBlocksBindData>(spec);
+	}
+	bool Equals(const FunctionData &other_p) const override {
+		auto &o = other_p.Cast<HtmlToDuckBlocksBindData>();
+		return spec.all == o.spec.all && spec.keys == o.spec.keys;
+	}
+};
+
+// Named parameters on a scalar: same mechanism as xml_to_json -- varargs ANY,
+// each extra argument must be aliased and constant.
+static unique_ptr<FunctionData> HtmlToDuckBlocksBind(DUCKDB_SCALAR_BIND_PARAMS) {
+	auto &bind_args = DUCKDB_SCALAR_BIND_ARGS;
+	auto &bind_ctx = DUCKDB_SCALAR_BIND_CONTEXT;
+	CaptureSpec spec = CaptureSpec::Default();
+	for (idx_t i = 1; i < bind_args.size(); i++) {
+		auto &arg = bind_args[i];
+		std::string name = CompatIdentifierName(arg->GetAlias());
+		if (name.empty()) {
+			throw BinderException("html_to_duck_blocks: arguments after the first must be named, e.g. "
+			                      "capture_attributes := ['id', 'class']");
+		}
+		if (arg->HasParameter()) {
+			throw ParameterNotResolvedException();
+		}
+		if (!arg->IsFoldable()) {
+			throw BinderException("Parameter '%s' must be a constant value", name);
+		}
+		Value v = ExpressionExecutor::EvaluateScalar(bind_ctx, *arg);
+		if (name == "capture_attributes") {
+			spec = ParseCaptureSpec(v);
+		} else {
+			throw BinderException("Unknown parameter '%s' for html_to_duck_blocks", name);
+		}
+	}
+	return make_uniq<HtmlToDuckBlocksBindData>(std::move(spec));
+}
+
 void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
+	CaptureSpec spec = CaptureSpec::Default();
+#ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
+	auto &bind_info = func_expr.BindInfo();
+#else
+	auto &bind_info = func_expr.bind_info;
+#endif
+	if (bind_info) {
+		spec = bind_info->Cast<HtmlToDuckBlocksBindData>().spec;
+	}
 	auto &html_vector = args.data[0];
 	auto count = args.size();
 
@@ -1261,7 +1437,7 @@ void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionSta
 		}
 
 		std::string html_str = html_value.GetValue<string>();
-		auto blocks = HtmlToDuckBlocks(html_str);
+		auto blocks = HtmlToDuckBlocks(html_str, spec);
 		result.SetValue(i, Value::LIST(DuckBlockTypes::DuckBlockType(), blocks));
 	}
 }
@@ -1440,7 +1616,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					lvl = 1;
 				if (lvl > 6)
 					lvl = 6;
-				html << "<h" << lvl << IdentityAttrs(attrs) << ">";
+				html << "<h" << lvl << PassthroughAttrs(attrs) << ">";
 
 				// Render block's own content if present
 				if (!content.empty()) {
@@ -1455,7 +1631,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 
 				html << "</h" << lvl << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_PARAGRAPH) {
-				html << "<p" << IdentityAttrs(attrs) << ">";
+				html << "<p" << PassthroughAttrs(attrs) << ">";
 
 				// Render block's own content if present
 				if (!content.empty()) {
@@ -1474,9 +1650,9 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (attrs.count("language")) {
 					lang_class = " class=\"language-" + XMLUtils::HTMLEscape(attrs["language"]) + "\"";
 				}
-				html << "<pre" << IdentityAttrs(attrs) << "><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
+				html << "<pre" << PassthroughAttrs(attrs) << "><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
-				html << "<blockquote" << IdentityAttrs(attrs) << ">";
+				html << "<blockquote" << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1512,7 +1688,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					ordered = attrs.count("ordered") && attrs["ordered"] == "true";
 				}
 				std::string tag = is_definition ? "dl" : (ordered ? "ol" : "ul");
-				html << "<" << tag << IdentityAttrs(attrs);
+				html << "<" << tag << PassthroughAttrs(attrs, {"start"});
 				if (ordered && attrs.count("start")) {
 					html << " start=\"" << XMLUtils::HTMLEscape(attrs["start"]) << "\"";
 				}
@@ -1570,7 +1746,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// interpolated.
 				std::string item_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string item_tag = ListItemTagForRole(item_role);
-				html << "<" << item_tag << IdentityAttrs(attrs) << ">";
+				html << "<" << item_tag << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					if (encoding == DuckBlockTypes::ENCODING_HTML) {
 						html << content;
@@ -1586,12 +1762,12 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
-					html << TableJsonToHtml(content, IdentityAttrs(attrs));
+					html << TableJsonToHtml(content, PassthroughAttrs(attrs));
 				} else {
-					html << "<table" << IdentityAttrs(attrs) << "></table>";
+					html << "<table" << PassthroughAttrs(attrs) << "></table>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_HR) {
-				html << "<hr" << IdentityAttrs(attrs) << ">";
+				html << "<hr" << PassthroughAttrs(attrs) << ">";
 			} else if (element_type == DuckBlockTypes::TYPE_IMAGE) {
 				std::string src = attrs.count("src") ? attrs["src"] : "";
 				std::string alt = attrs.count("alt") ? attrs["alt"] : "";
@@ -1619,7 +1795,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					alt = content;
 				}
 				std::string title = attrs.count("title") ? attrs["title"] : "";
-				html << "<img" << IdentityAttrs(attrs) << " src=\"" << XMLUtils::HTMLEscape(src) << "\"";
+				html << "<img" << PassthroughAttrs(attrs, {"src", "alt", "title"}) << " src=\"" << XMLUtils::HTMLEscape(src) << "\"";
 				if (!alt.empty()) {
 					html << " alt=\"" << XMLUtils::HTMLEscape(alt) << "\"";
 				}
@@ -1633,7 +1809,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_SECTION) {
 				std::string role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string tag = SectionTagForRole(role);
-				html << "<" << tag << IdentityAttrs(attrs) << ">";
+				html << "<" << tag << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1644,7 +1820,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</" << tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_FIGURE) {
-				html << "<figure" << IdentityAttrs(attrs) << ">";
+				html << "<figure" << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1657,7 +1833,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
 				std::string caption_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string caption_tag = CaptionTagForRole(caption_role);
-				html << "<" << caption_tag << IdentityAttrs(attrs) << ">";
+				html << "<" << caption_tag << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1668,7 +1844,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</" << caption_tag << ">";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
-				html << "<dl" << IdentityAttrs(attrs) << ">";
+				html << "<dl" << PassthroughAttrs(attrs) << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					yyjson_doc *doc = yyjson_read(content.c_str(), content.size(), 0);
 					if (doc) {
@@ -1724,7 +1900,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						continue;
 					}
 				}
-				html << "<" << tag << IdentityAttrs(attrs) << ">";
+				html << "<" << tag << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
@@ -1817,6 +1993,9 @@ static void ReadFileFully(duckdb::FileHandle &handle, char *data, duckdb::idx_t 
 struct HTMLBlocksReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool include_filename = false;
+	// filename := 'src_path' names the column, as read_csv/read_json/read_parquet do.
+	std::string filename_column = "filename";
+	CaptureSpec capture = CaptureSpec::Default();
 	bool ignore_errors = false;
 	idx_t max_file_size = 2147483648ULL; // 2GB default
 };
@@ -1900,8 +2079,21 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	}
 
 	for (auto &kv : input.named_parameters) {
-		if (kv.first == "filename" || kv.first == "file_path" || kv.first == "include_filepath") {
+		if (kv.first == "filename") {
+			// Same contract as DuckDB core's readers: a boolean adds a column named
+			// `filename`; a string adds it under that name.
+			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
+				result->include_filename = true;
+				result->filename_column = StringValue::Get(kv.second);
+			} else {
+				result->include_filename = kv.second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+			}
+		} else if (kv.first == "file_path" || kv.first == "include_filepath") {
+			// Deprecated spellings, kept for one release; `filename` is the name
+			// shared with core and with every sibling duck_block extension.
 			result->include_filename = kv.second.GetValue<bool>();
+		} else if (kv.first == "capture_attributes") {
+			result->capture = ParseCaptureSpec(kv.second);
 		} else if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
@@ -1910,7 +2102,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	}
 
 	if (result->include_filename) {
-		names.push_back("filename");
+		names.push_back(result->filename_column);
 		return_types.push_back(LogicalType::VARCHAR);
 	}
 
@@ -1993,7 +2185,7 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 				string content;
 				content.resize(file_size);
 				ReadFileFully(*file_handle, (char *)content.data(), file_size);
-				lstate.current_blocks = HtmlToDuckBlocks(content);
+				lstate.current_blocks = HtmlToDuckBlocks(content, bind_data.capture);
 			} catch (const std::exception &e) {
 				if (!bind_data.ignore_errors) {
 					throw;
@@ -2039,6 +2231,7 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 struct HTMLBlocksParseFunctionData : public TableFunctionData {
 	vector<string> html_contents;
 	bool ignore_errors = false;
+	CaptureSpec capture = CaptureSpec::Default();
 };
 
 struct HTMLBlocksParseGlobalState : public GlobalTableFunctionState {
@@ -2089,7 +2282,9 @@ unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &
 	}
 
 	for (auto &kv : input.named_parameters) {
-		if (kv.first == "ignore_errors") {
+		if (kv.first == "capture_attributes") {
+			result->capture = ParseCaptureSpec(kv.second);
+		} else if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		}
 	}
@@ -2147,7 +2342,7 @@ void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFu
 				break;
 			}
 			lstate.have_item = true;
-			lstate.current_blocks = HtmlToDuckBlocks(gstate.html_contents[claimed]);
+			lstate.current_blocks = HtmlToDuckBlocks(gstate.html_contents[claimed], bind_data.capture);
 			lstate.current_block_index = 0;
 		}
 
@@ -2181,10 +2376,14 @@ void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFu
 void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)
 	ScalarFunctionSet html_to_duck_blocks_set("html_to_duck_blocks");
-	html_to_duck_blocks_set.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
-	html_to_duck_blocks_set.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction));
+	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),
+	                                        HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
+	SetScalarFunctionVarArgs(html_to_duck_blocks_html, LogicalType::ANY); // capture_attributes := ...
+	html_to_duck_blocks_set.AddFunction(html_to_duck_blocks_html);
+	ScalarFunction html_to_duck_blocks_varchar({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(),
+	                                           HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
+	SetScalarFunctionVarArgs(html_to_duck_blocks_varchar, LogicalType::ANY);
+	html_to_duck_blocks_set.AddFunction(html_to_duck_blocks_varchar);
 	PreventStructConstantFolding(html_to_duck_blocks_set);
 	loader.RegisterFunction(html_to_duck_blocks_set);
 
@@ -2200,7 +2399,8 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	                                      ReadHTMLBlocksBind, ReadHTMLBlocksInit);
 	read_html_blocks_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_blocks_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_blocks_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_blocks_single.named_parameters["filename"] = LogicalType::ANY; // BOOLEAN or VARCHAR (column name)
+	read_html_blocks_single.named_parameters["capture_attributes"] = LogicalType::ANY;
 	read_html_blocks_single.named_parameters["file_path"] = LogicalType::BOOLEAN;
 	read_html_blocks_single.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
 	read_html_blocks_single.init_local = ReadHTMLBlocksInitLocal;
@@ -2211,7 +2411,8 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	                                     ReadHTMLBlocksFunction, ReadHTMLBlocksBind, ReadHTMLBlocksInit);
 	read_html_blocks_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
 	read_html_blocks_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_blocks_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	read_html_blocks_array.named_parameters["filename"] = LogicalType::ANY; // BOOLEAN or VARCHAR (column name)
+	read_html_blocks_array.named_parameters["capture_attributes"] = LogicalType::ANY;
 	read_html_blocks_array.named_parameters["file_path"] = LogicalType::BOOLEAN;
 	read_html_blocks_array.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
 	read_html_blocks_array.init_local = ReadHTMLBlocksInitLocal;
@@ -2226,24 +2427,28 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	TableFunction parse_html_blocks_varchar("parse_html_blocks", {LogicalType::VARCHAR}, ParseHTMLBlocksFunction,
 	                                        ParseHTMLBlocksBind, ParseHTMLBlocksInit);
 	parse_html_blocks_varchar.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_varchar.named_parameters["capture_attributes"] = LogicalType::ANY;
 	parse_html_blocks_varchar.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar);
 
 	TableFunction parse_html_blocks_html("parse_html_blocks", {XMLTypes::HTMLType()}, ParseHTMLBlocksFunction,
 	                                     ParseHTMLBlocksBind, ParseHTMLBlocksInit);
 	parse_html_blocks_html.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_html.named_parameters["capture_attributes"] = LogicalType::ANY;
 	parse_html_blocks_html.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_html);
 
 	TableFunction parse_html_blocks_varchar_list("parse_html_blocks", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                                             ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
 	parse_html_blocks_varchar_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_varchar_list.named_parameters["capture_attributes"] = LogicalType::ANY;
 	parse_html_blocks_varchar_list.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar_list);
 
 	TableFunction parse_html_blocks_html_list("parse_html_blocks", {LogicalType::LIST(XMLTypes::HTMLType())},
 	                                          ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
 	parse_html_blocks_html_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	parse_html_blocks_html_list.named_parameters["capture_attributes"] = LogicalType::ANY;
 	parse_html_blocks_html_list.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_html_list);
 

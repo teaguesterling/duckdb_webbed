@@ -1,8 +1,38 @@
 Changelog
 =========
 
-v2.8.2 (Current)
-----------------
+Unreleased
+----------
+
+**Behaviour change: attribute capture is now a parameter, and** ``class`` **is opt-in.**
+
+``read_html_blocks`` kept ``id`` and ``class`` on ``div``/``section``, kept only ``id`` on
+headings, and dropped both on everything else (#142). There were no tiers -- three copy sites
+written at different times -- and the writer mirrored them, so read-then-write silently
+destroyed attributes the source had.
+
+- ``capture_attributes := 'default' | 'classes' | '*' | true | false | [...]`` on
+  ``html_to_duck_blocks``, ``read_html_blocks`` and ``parse_html_blocks`` governs which source
+  attributes are copied onto **every** element, block and inline. Default:
+  ``['id', 'name', 'href', 'src']``.
+- ``<a name="...">`` -- the pre-HTML5 anchor -- is now captured as ``name``. It was dropped
+  outright before, so a legacy anchor was indistinguishable from a bare ``<a>``.
+- ``duck_blocks_to_html`` renders captured attributes back on every element, and an anchor
+  with no ``href`` no longer renders ``href=""``.
+- **``class`` is no longer captured by default** -- it is opt-in via ``'classes'``. This
+  changes ``div``, ``section`` and ``span``, which captured it unconditionally before.
+  Downstream, **HTML → Pandoc AST conversion through** ``duck_block_utils`` **loses class
+  unless requested**, because Pandoc encodes semantic structure in classes.
+- Vocabulary keys (``role``, ``heading_level``, ...) are reserved: never copied from the
+  source, so ``'*'`` cannot forge them.
+
+**``filename`` on** ``read_html_blocks`` **now matches DuckDB core.** ``filename := true`` adds
+a ``filename`` column; ``filename := 'src_path'`` adds it under that name, as ``read_csv``,
+``read_json`` and ``read_parquet`` do. ``include_filepath`` and ``file_path`` are deprecated
+aliases, kept for one release.
+
+v2.8.2
+------
 
 A bugfix release for the ``duck_block`` reader and writer. Behavioural
 corrections against a spec that moved -- no new public surface, so the function

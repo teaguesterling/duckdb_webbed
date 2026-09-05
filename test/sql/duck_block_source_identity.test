@@ -1,5 +1,5 @@
 # name: test/sql/duck_block_source_identity.test
-# description: id and class survive html -> duck_blocks -> html on EVERY block element (#142)
+# description: capture_attributes -- source attributes on every element, read and write (#142)
 # group: [webbed]
 
 require webbed
@@ -7,18 +7,24 @@ require webbed
 # ============================================================================
 # GitHub #142. read_html_blocks kept id and class on div/section, kept only id
 # on heading, and dropped both on everything else. There were no tiers -- three
-# independent copy sites written at different times, and the writer mirrored the
-# same asymmetry, so read-then-write silently destroyed attributes present in
-# the user's source while every test stayed green.
+# independent copy sites written at different times -- and the writer mirrored
+# the same asymmetry, so read-then-write silently destroyed attributes present
+# in the user's source while every test stayed green.
 #
-# The rule now: every block element that came from a source element carries
-# that element's id and class in `attributes` when present, and the writer
-# renders them back. Where one block stands for a nested pair (<pre><code>),
-# the OUTER element is the block and its identity is the one kept.
+# Now: capture_attributes := 'default' | 'classes' | '*' | true | false | [...]
+# governs which SOURCE attributes are copied verbatim onto EVERY element, block
+# and inline, and the writer renders them back. Default is identity and
+# references -- ['id', 'name', 'href', 'src']. class is opt-in: on real-world
+# HTML it is mostly framework noise. The semantic attributes the vocabulary
+# defines (heading_level, list_type, role, ...) are set unconditionally and are
+# not governed by this. Where one block stands for a nested pair (<pre><code>),
+# the OUTER element is the block and its attributes are the ones kept.
 # ============================================================================
 
-# --- Reader: id and class captured on every block type ----------------------
-# The issue's own reproduction, verbatim.
+# --- Default: id everywhere, class nowhere -----------------------------------
+# The issue's own reproduction, verbatim. Every source element carries an id;
+# all but ol/figure/img/hr carry a class. id is captured on all fourteen; class
+# on none, by default.
 
 query III
 SELECT b.element_type, b.attributes['id'], b.attributes['class']
@@ -35,68 +41,210 @@ FROM (SELECT unnest(html_to_duck_blocks('<div id="d1" class="c1">x</div>
 <hr id="hr1">')) AS b) t
 WHERE b.kind = 'block' ORDER BY b.element_order;
 ----
-div	d1	c1
-section	s1	c2
-heading	h1	c3
-paragraph	p1	c4
-list	u1	c5
-list_item	l1	c6
+div	d1	NULL
+section	s1	NULL
+heading	h1	NULL
+paragraph	p1	NULL
+list	u1	NULL
+list_item	l1	NULL
 list	o1	NULL
 list_item	NULL	NULL
-blockquote	b1	c7
-code	pre1	c8
-table	t1	c9
+blockquote	b1	NULL
+code	pre1	NULL
+table	t1	NULL
 figure	f1	NULL
 image	i1	NULL
 hr	hr1	NULL
 
-# --- Writer: byte-exact round trip for each element carrying both -----------
-# One row per element type. `exact` is input == output: if the writer dropped
-# either attribute, rendered them in the wrong order, or quoted them wrongly,
-# that row reads false. (A foreach would split these on whitespace.)
+# --- The presets, on one element carrying identity, class, data-* and ARIA --
+# 'default' == omitted. '*' == true. false leaves only the semantic key.
+# role="banner" is ABSENT under '*': vocabulary keys are reserved, so a source
+# attribute of that name cannot forge the vocabulary's own role.
+
+# (Named scalar parameters are bind-time constants, as with xml_to_json, so
+# each preset is its own query rather than a column fed through VALUES.)
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := 'default'))[1].attributes;
+----
+{id=h, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := 'classes'))[1].attributes;
+----
+{id=h, class=c, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := '*'))[1].attributes;
+----
+{id=h, class=c, data-x=1, heading_level=2}
+
+statement error
+SELECT html_to_duck_blocks('<p>x</p>', capture_attributes := lower('DEFAULT') || random()::VARCHAR);
+----
+must be a constant value
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>'))[1].attributes;
+----
+{id=h, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := true))[1].attributes;
+----
+{id=h, class=c, data-x=1, heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := false))[1].attributes;
+----
+{heading_level=2}
+
+query I
+SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1">T</h2>', capture_attributes := ['class', 'data-x']))[1].attributes;
+----
+{class=c, data-x=1, heading_level=2}
+
+statement error
+SELECT html_to_duck_blocks('<p>x</p>', capture_attributes := 'bogus');
+----
+Binder Error: capture_attributes: unknown preset 'bogus'
+
+# --- Inline elements are covered too, including <a name> --------------------
+# <a name="top"> is the pre-HTML5 anchor -- a link target sharing the fragment
+# namespace with id. It was dropped outright before, so a legacy anchor was
+# indistinguishable from a bare <a>. Kept faithful as `name`, not folded into
+# id: rewriting a user's markup on the way through is the #142 shape again.
+
+query III
+SELECT b.element_type, b.attributes['name'], b.attributes['href']
+FROM (SELECT unnest(html_to_duck_blocks('<p><a name="top"></a><a href="#top" name="both">up</a><strong id="s">b</strong></p>')) AS b) t
+WHERE b.kind = 'inline' AND b.element_type <> 'text' ORDER BY b.element_order;
+----
+link	top	NULL
+link	both	#top
+bold	NULL	NULL
+
+query I
+SELECT (html_to_duck_blocks('<p><strong id="s" class="k">b</strong></p>', capture_attributes := 'classes'))[2].attributes;
+----
+{id=s, class=k}
+
+# --- href and src are in the default set AND set by their type sites --------
+# Stored once, not twice, whichever path adds them first.
+
+query I
+SELECT (html_to_duck_blocks('<p><a href="/x">l</a></p>'))[2].attributes;
+----
+{href=/x}
+
+query I
+SELECT (html_to_duck_blocks('<p><a href="/x">l</a></p>', capture_attributes := false))[2].attributes;
+----
+{href=/x}
+
+query I
+SELECT (html_to_duck_blocks('<ol start="3" id="o"><li>x</li></ol>', capture_attributes := '*'))[1].attributes;
+----
+{start=3, id=o, list_type=ordered, ordered=true}
+
+# --- Writer: byte-exact round trip, default set --------------------------------
+# One row per element type. input == output means nothing was dropped and the
+# attribute was rendered in place. Table is asserted by containment below: its
+# first-row -> <thead>/<th> rewrite predates this and is unrelated.
 
 query II
 SELECT h, duck_blocks_to_html(html_to_duck_blocks(h))::VARCHAR = h AS exact
 FROM (VALUES
+  ('<h2 id="h">t</h2>'),
+  ('<p id="p">y</p>'),
+  ('<ul id="u"><li id="l">i</li></ul>'),
+  ('<ol id="o"><li>n</li></ol>'),
+  ('<blockquote id="b">q</blockquote>'),
+  ('<pre id="c"><code>x</code></pre>'),
+  ('<hr id="r">'),
+  ('<section id="s">z</section>'),
+  ('<div id="d">w</div>'),
+  ('<figure id="f"><figcaption id="g">cap</figcaption></figure>'),
+  ('<figure id="f"><img id="i" src="a.png" alt="a"></figure>'),
+  ('<p><a name="top"></a><a name="n" href="#top">up</a></p>'),
+  ('<p><strong id="s">b</strong></p>')
+) t(h);
+----
+<h2 id="h">t</h2>	true
+<p id="p">y</p>	true
+<ul id="u"><li id="l">i</li></ul>	true
+<ol id="o"><li>n</li></ol>	true
+<blockquote id="b">q</blockquote>	true
+<pre id="c"><code>x</code></pre>	true
+<hr id="r">	true
+<section id="s">z</section>	true
+<div id="d">w</div>	true
+<figure id="f"><figcaption id="g">cap</figcaption></figure>	true
+<figure id="f"><img id="i" src="a.png" alt="a"></figure>	true
+<p><a name="top"></a><a name="n" href="#top">up</a></p>	true
+<p><strong id="s">b</strong></p>	true
+
+# An anchor with no href renders without one: href="" would invent a link.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><a name="top"></a></p>'))::VARCHAR;
+----
+<p><a name="top"></a></p>
+
+# --- Writer with 'classes': id then class, canonical order --------------------
+# The writer's attributes are a map, so source order is not recoverable; it
+# renders id, name, class, then the rest alphabetically. Inputs here use that
+# order so the row reads exact.
+
+query II
+SELECT h, duck_blocks_to_html(html_to_duck_blocks(h, capture_attributes := 'classes'))::VARCHAR = h AS exact
+FROM (VALUES
   ('<h2 id="h" class="k">t</h2>'),
   ('<p id="p" class="k">y</p>'),
   ('<ul id="u" class="k"><li id="l" class="m">i</li></ul>'),
-  ('<ol id="o" class="k"><li>n</li></ol>'),
   ('<blockquote id="b" class="k">q</blockquote>'),
-  ('<pre id="c" class="k"><code>x</code></pre>'),
   ('<hr id="r" class="k">'),
-  ('<section id="s" class="k">z</section>'),
   ('<div id="d" class="k">w</div>'),
-  ('<figure id="f" class="k"><figcaption id="g" class="m">cap</figcaption></figure>'),
-  ('<figure id="f"><img id="i" src="a.png" alt="a"></figure>')
+  ('<p><span id="s" class="k">x</span></p>')
 ) t(h);
 ----
 <h2 id="h" class="k">t</h2>	true
 <p id="p" class="k">y</p>	true
 <ul id="u" class="k"><li id="l" class="m">i</li></ul>	true
-<ol id="o" class="k"><li>n</li></ol>	true
 <blockquote id="b" class="k">q</blockquote>	true
-<pre id="c" class="k"><code>x</code></pre>	true
 <hr id="r" class="k">	true
-<section id="s" class="k">z</section>	true
 <div id="d" class="k">w</div>	true
-<figure id="f" class="k"><figcaption id="g" class="m">cap</figcaption></figure>	true
-<figure id="f"><img id="i" src="a.png" alt="a"></figure>	true
-
-# table is not byte-exact for a pre-existing, unrelated reason (the writer
-# promotes the first row to <thead>/<th>), so assert the identity survives
-# rather than the whole string.
+<p><span id="s" class="k">x</span></p>	true
 
 query I
-SELECT duck_blocks_to_html(html_to_duck_blocks('<table id="t" class="k"><tr><td>x</td></tr></table>'))::VARCHAR
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table id="t" class="k"><tr><td>x</td></tr></table>', capture_attributes := 'classes'))::VARCHAR
        LIKE '<table id="t" class="k">%';
 ----
 true
 
-# --- An element with NO id/class must still render without empty attributes -
-# i.e. the fix adds attributes only when present, never ` id=""`.
+# --- The default round trip DROPS class, and says so ----------------------------
+# The one fidelity loss the opt-in default accepts. Asserted rather than left
+# implicit: a silent loss here would be #142 one layer up.
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<h2 id="h" class="k">t</h2>'))::VARCHAR;
+----
+<h2 id="h">t</h2>
+
+# --- Elements with nothing to carry render bare, never ` id=""` ---------------
 
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>t</h2><p>y</p><hr>'))::VARCHAR;
 ----
 <h2>t</h2><p>y</p><hr>
+
+# --- The table functions take the same parameter ---------------------------
+
+query I
+SELECT attributes FROM parse_html_blocks('<h2 id="h" class="c">T</h2>', capture_attributes := 'classes');
+----
+{id=h, class=c, heading_level=2}
+
+query I
+SELECT attributes FROM parse_html_blocks('<h2 id="h" class="c">T</h2>');
+----
+{id=h, heading_level=2}

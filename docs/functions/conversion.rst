@@ -186,10 +186,37 @@ Convert HTML content into a list of structured document blocks. This function pa
 .. code-block:: sql
 
    html_to_duck_blocks(html)
+   html_to_duck_blocks(html, capture_attributes := ...)
 
 **Parameters:**
 
 - ``html`` (HTML/VARCHAR): The HTML content to parse
+- ``capture_attributes`` (optional, constant): which of the source's own attributes are copied
+  verbatim onto every element, block and inline, when present. One of:
+
+  .. list-table::
+     :widths: 30 70
+
+     * - ``'default'`` *(or omitted)*
+       - ``['id', 'name', 'href', 'src']`` -- identity and references
+     * - ``'classes'``
+       - the default plus ``'class'``
+     * - ``'*'`` or ``true``
+       - every source attribute
+     * - ``false``
+       - none; only the semantic attributes below
+     * - ``['id', 'class', 'data-x', ...]``
+       - an explicit list
+
+  ``class`` is not in the default on purpose: on real-world HTML it is mostly framework
+  styling noise. Pass ``'classes'`` when you want it -- notably for HTML → Pandoc conversion,
+  where Pandoc encodes semantic structure in classes, or for HTML → blocks → HTML round trips
+  that must keep their styling hooks. The same parameter is accepted by ``read_html_blocks``
+  and ``parse_html_blocks``.
+
+  Attribute keys the vocabulary gives a meaning to (``role``, ``heading_level``, ``list_type``,
+  ...) are reserved and never copied from the source in any mode, so a document cannot forge
+  them: ``<section role="banner">`` keeps the vocabulary's ``role = 'section'``.
 
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 
@@ -245,11 +272,11 @@ listed first for that reason.
        (e.g. tables), ``'yaml'`` for frontmatter metadata, among other format tags.
    * - ``attributes``
      - MAP(VARCHAR, VARCHAR)
-     - Additional attributes. **Every block that came from a source element carries that
-       element's** ``id`` **and** ``class`` **when present** -- on any element type, not only
-       containers -- and ``duck_blocks_to_html`` renders them back. Type-specific keys follow:
-       ``language`` (code), ``src``/``alt`` (image), ``role`` (section, metadata),
-       ``heading_level``, ``list_type``, ``start``, ``key`` (metadata).
+     - Two kinds of key. **Source attributes** copied from the element per
+       ``capture_attributes`` -- by default ``id``, ``name``, ``href`` and ``src``, on every
+       element type -- which ``duck_blocks_to_html`` renders back. And **semantic attributes**
+       the reader sets unconditionally: ``heading_level``, ``list_type``, ``start``, ``role``
+       (section, metadata), ``key`` (metadata), ``language`` (code), ``alt`` (image).
    * - ``element_order``
      - INTEGER
      - Zero-based position of the element in the document's flattened element list.

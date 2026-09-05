@@ -53,12 +53,12 @@ Some text
 
 # Test code block extraction
 query I
-SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>'))[1].element_type;
+SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>', capture_attributes := 'classes'))[1].element_type;
 ----
 code
 
 query I
-SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>'))[1].attributes['language'];
+SELECT (html_to_duck_blocks('<pre><code class="language-python">print("hello")</code></pre>', capture_attributes := 'classes'))[1].attributes['language'];
 ----
 python
 
@@ -175,7 +175,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Some text content</p>'));
 
 # Test duck_blocks_to_html with code block
 query I
-SELECT duck_blocks_to_html(html_to_duck_blocks('<pre><code class="language-sql">SELECT 1</code></pre>'));
+SELECT duck_blocks_to_html(html_to_duck_blocks('<pre><code class="language-sql">SELECT 1</code></pre>', capture_attributes := 'classes'));
 ----
 <pre><code class="language-sql">SELECT 1</code></pre>
 
@@ -1288,14 +1288,21 @@ underline
 
 # Extract span with class
 query I
-SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>'))[3].element_type;
+SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>', capture_attributes := 'classes'))[3].element_type;
 ----
 span
 
+# class is opt-in since #142; the span is still EMITTED (presence of id or class
+# on the source element is the gate), but its class is only captured on request.
 query I
-SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>'))[3].attributes['class'];
+SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>', capture_attributes := 'classes'))[3].attributes['class'];
 ----
 highlight
+
+query I
+SELECT (html_to_duck_blocks('<p>Text <span class="highlight">highlighted</span></p>'))[3].attributes['class'] IS NULL;
+----
+true
 
 # -----------------------------------------------------------------------------
 # Heading inline extraction
