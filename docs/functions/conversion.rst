@@ -218,6 +218,12 @@ Convert HTML content into a list of structured document blocks. This function pa
   ...) are reserved and never copied from the source in any mode, so a document cannot forge
   them: ``<section role="banner">`` keeps the vocabulary's ``role = 'section'``.
 
+- ``filename`` (``read_html_blocks`` only): ``true`` appends a ``filename`` column **after**
+  ``element_order`` -- the exact 8-field shape duck_block spec 6.4 accepts, so ``list(b)`` of
+  the rows still binds as duck_blocks. A string (``filename := 'src_path'``) names the column
+  instead, as DuckDB's core readers allow, **but that shape is not the accepted type and will
+  not bind as duck_blocks**; use ``true`` when the rows feed ``duck_block_utils``.
+
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 
 **The duck_block Type:**

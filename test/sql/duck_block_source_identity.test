@@ -248,3 +248,33 @@ query I
 SELECT attributes FROM parse_html_blocks('<h2 id="h" class="c">T</h2>');
 ----
 {id=h, heading_level=2}
+
+# --- filename is TRAILING, and the emitted type is asserted exactly ------------
+# duck_block spec 6.4 keys 8-field acceptance on the exact type: the seven
+# canonical fields, then filename VARCHAR. The column sat FIRST before this
+# (STRUCT(filename, kind, ...)), a different type that refused to bind against
+# duck_block_utils -- which, since every consumer reads the struct by index,
+# is the only reason it never put a file path where each expected `kind`.
+# The full type string is asserted, not just the column list, so a reordering
+# fails HERE, in the producer, rather than three repos away.
+
+query I
+SELECT typeof(list(r)) FROM read_html_blocks('test/html/simple.html', filename := true) r;
+----
+STRUCT(kind VARCHAR, element_type VARCHAR, "content" VARCHAR, "level" INTEGER, "encoding" VARCHAR, attributes MAP(VARCHAR, VARCHAR), element_order INTEGER, filename VARCHAR)[]
+
+# Without the flag, list(r) IS the scalar's type -- the `list(b)` idiom holds.
+query I
+SELECT (SELECT typeof(list(r)) FROM read_html_blocks('test/html/simple.html') r) = typeof(html_to_duck_blocks('<p>x</p>'));
+----
+true
+
+# filename := 'src_path' renames the column, as read_csv/read_json do. That
+# yields STRUCT(..., src_path VARCHAR), which is NOT the accepted 8-field type
+# and will not bind as duck_blocks under duck_block_utils. Documented as such;
+# a caller who wants the list(b) idiom uses the boolean form.
+query I
+SELECT typeof(list(r)) LIKE '%element_order INTEGER, src_path VARCHAR)[]'
+FROM read_html_blocks('test/html/simple.html', filename := 'src_path') r;
+----
+true

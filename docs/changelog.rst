@@ -26,10 +26,19 @@ destroyed attributes the source had.
 - Vocabulary keys (``role``, ``heading_level``, ...) are reserved: never copied from the
   source, so ``'*'`` cannot forge them.
 
-**``filename`` on** ``read_html_blocks`` **now matches DuckDB core.** ``filename := true`` adds
-a ``filename`` column; ``filename := 'src_path'`` adds it under that name, as ``read_csv``,
-``read_json`` and ``read_parquet`` do. ``include_filepath`` and ``file_path`` are deprecated
-aliases, kept for one release.
+**``filename`` on** ``read_html_blocks`` **is now trailing, and takes core's forms.**
+
+- The column now comes **after** ``element_order``, not first. duck_block spec 6.4 keys
+  8-field acceptance on the exact type -- seven canonical fields, then ``filename VARCHAR`` --
+  so the old leading position (``STRUCT(filename, kind, ...)``) did not bind against
+  ``duck_block_utils`` at all. The emitted type string is now asserted in the suite.
+- ``filename := true`` adds a ``filename`` column. ``filename := 'src_path'`` adds it under
+  that name, as ``read_csv``/``read_json``/``read_parquet`` do -- **but a renamed column is
+  not the accepted 8-field type and will not bind as duck_blocks** (``list(b)`` into any
+  ``duck_block_utils`` function fails). This is the one place matching core diverges from
+  the vocabulary, which prefers the boolean form; use ``true`` when the rows feed
+  ``duck_block_utils``.
+- ``include_filepath`` and ``file_path`` are deprecated aliases, kept for one release.
 
 v2.8.2
 ------

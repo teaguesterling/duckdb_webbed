@@ -2101,11 +2101,6 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 		}
 	}
 
-	if (result->include_filename) {
-		names.push_back(result->filename_column);
-		return_types.push_back(LogicalType::VARCHAR);
-	}
-
 	names.push_back("kind");
 	return_types.push_back(LogicalType::VARCHAR);
 
@@ -2126,6 +2121,17 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 
 	names.push_back("element_order");
 	return_types.push_back(LogicalType::INTEGER);
+
+	// TRAILING, after the seven canonical fields -- not first, where it sat
+	// before. duck_block spec 6.4 keys 8-field acceptance on the exact type
+	// (seven canonical fields, then filename VARCHAR), and every consumer reads
+	// the struct by index, so a leading column would put the file path where
+	// each of them expects `kind`. Leading refused to bind at all -- a loud
+	// error -- which is the only reason it never became silent misreads.
+	if (result->include_filename) {
+		names.push_back(result->filename_column);
+		return_types.push_back(LogicalType::VARCHAR);
+	}
 
 	return std::move(result);
 }
@@ -2201,9 +2207,6 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 			auto &children = StructValue::GetChildren(block);
 
 			idx_t col_idx = 0;
-			if (bind_data.include_filename) {
-				output.data[col_idx++].SetValue(output_idx, Value(lstate.current_filename));
-			}
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::KIND_IDX]);
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_TYPE_IDX]);
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::CONTENT_IDX]);
@@ -2211,6 +2214,9 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ENCODING_IDX]);
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ATTRIBUTES_IDX]);
 			output.data[col_idx++].SetValue(output_idx, children[DuckBlockTypes::ELEMENT_ORDER_IDX]);
+			if (bind_data.include_filename) {
+				output.data[col_idx++].SetValue(output_idx, Value(lstate.current_filename)); // trailing (spec 6.4)
+			}
 
 			output_idx++;
 			lstate.current_block_index++;
