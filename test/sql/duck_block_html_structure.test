@@ -135,9 +135,11 @@ inline	text	.	3
 # --- Finding 4: <section> flattened, id and class discarded ------------------
 # Attributes are asserted by key, not by the printed MAP string: MAP iteration
 # order is an internal-structure detail, not a contract.
+# capture_attributes := 'classes' because class is opt-in since #142 (framework
+# class soup made it noise by default); id is in the default set.
 query IIIIII
 SELECT b.element_type, b.content, b.level, b.attributes['role'], b.attributes['id'], b.attributes['class']
-FROM (SELECT unnest(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>')) AS b) x;
+FROM (SELECT unnest(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>', capture_attributes := 'classes')) AS b) x;
 ----
 section	NULL	1	section	s1	intro
 paragraph	x	2	NULL	NULL	NULL
@@ -152,9 +154,10 @@ heading	2	1
 
 # A <div> carrying id/class becomes a `div` block; a bare one stays transparent.
 # Attributes are asserted by key, not by the printed MAP string (see above).
+# 'classes' because class is opt-in since #142; the div is emitted either way.
 query IIIII
 SELECT b.element_type, b.content, b.level, b.attributes['id'], b.attributes['class']
-FROM (SELECT unnest(html_to_duck_blocks('<div id="w" class="row"><p>x</p></div>')) AS b) x;
+FROM (SELECT unnest(html_to_duck_blocks('<div id="w" class="row"><p>x</p></div>', capture_attributes := 'classes')) AS b) x;
 ----
 div	NULL	1	w	row
 paragraph	x	2	NULL	NULL
@@ -287,10 +290,18 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote><p>Quote.</p></block
 ----
 <blockquote><p>Quote.</p></blockquote>
 
+# Byte-exact with 'classes'. With the DEFAULT capture set the round trip drops
+# class -- asserted explicitly below, since it is the one fidelity loss the
+# opt-in default accepts, and a silent one would be the #142 shape again.
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>', capture_attributes := 'classes'));
+----
+<section id="s1" class="intro"><p>x</p></section>
+
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s1" class="intro"><p>x</p></section>'));
 ----
-<section id="s1" class="intro"><p>x</p></section>
+<section id="s1"><p>x</p></section>
 
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<dl><dt>Term</dt><dd>Def.</dd></dl>'));
@@ -328,7 +339,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<details><summary>Sum</summary><
 
 # An unmapped semantic element survives as generic rather than vanishing.
 query I
-SELECT duck_blocks_to_html(html_to_duck_blocks('<aside class="note"><p>n</p></aside>'));
+SELECT duck_blocks_to_html(html_to_duck_blocks('<aside class="note"><p>n</p></aside>', capture_attributes := 'classes'));
 ----
 <aside class="note"><p>n</p></aside>
 

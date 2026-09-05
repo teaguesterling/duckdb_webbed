@@ -57,6 +57,21 @@ public:
 		return DuckBlockType();
 	}
 
+	// The ONE widened shape duck_block spec 6.4 accepts: the canonical seven,
+	// then a trailing `filename VARCHAR`. Derived from DuckBlockType() rather
+	// than restated, so the two cannot drift. Consumers accept this shape via a
+	// registered implicit cast (see DuckBlockFunctions::Register); producers may
+	// emit it (read_html_blocks does, behind filename := true).
+	//
+	// The bare "filename" literal becomes FIELD_FILENAME once the vendored
+	// vocabulary is re-pinned to 6.4, which publishes it; the value is ruled and
+	// will not change, only the spelling of where it comes from.
+	static LogicalType DuckBlockWithFilenameType() {
+		auto children = StructType::GetChildTypes(DuckBlockType());
+		children.push_back(make_pair("filename", LogicalType::VARCHAR));
+		return LogicalType::STRUCT(std::move(children));
+	}
+
 	// Create a LIST(doc_element) type
 	static LogicalType DuckBlockListType() {
 		return LogicalType::LIST(DuckBlockType());
