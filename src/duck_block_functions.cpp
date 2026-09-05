@@ -2130,7 +2130,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	// each of them expects `kind`. Leading refused to bind at all -- a loud
 	// error -- which is the only reason it never became silent misreads.
 	if (result->include_filename) {
-		names.push_back(result->filename_column);
+		names.push_back(CompatMakeName(result->filename_column)); // runtime string -> Identifier on v2.0
 		return_types.push_back(LogicalType::VARCHAR);
 	}
 
