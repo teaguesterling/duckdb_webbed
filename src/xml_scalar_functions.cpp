@@ -1191,8 +1191,12 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// execute function then delegates to its namespace-aware sibling when a third column is present.
 	// Required for forward-compat with DuckDB main, which (unlike <=v1.5.3) no longer silently
 	// ignores argument labels on scalar functions. (GitHub Issue #78 follow-up / DuckDB main drift.)
+	// Everything routed through these helpers takes an XPath, and a malformed
+	// XPath raises (the #134 contract) -- so every member is fallible. Marked
+	// here, before AddFunction, for the same v2.0 reason the varargs are.
 	auto add_ns_aware = [](ScalarFunctionSet &set, ScalarFunction fn) {
 		SetScalarFunctionVarArgs(fn, LogicalType::ANY);
+		fn.SetFallible();
 		set.AddFunction(std::move(fn));
 	};
 	// Same, for sets whose functions return a STRUCT-containing type and therefore have to be
@@ -1202,6 +1206,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	auto add_ns_aware_volatile = [](ScalarFunctionSet &set, ScalarFunction fn) {
 		SetScalarFunctionVarArgs(fn, LogicalType::ANY);
 		PreventStructConstantFolding(fn);
+		fn.SetFallible();
 		set.AddFunction(std::move(fn));
 	};
 
