@@ -111,6 +111,10 @@ jobs:
   # format only, no tidy: tidy configures CMake without vcpkg, so this extension's
   # libxml2 dependency is not found and the check cannot even configure. Same reason
   # the sibling zim extension runs format only.
+  # @main, not @v1.5.4: _extension_code_quality.yml does not exist at the v1.5.4
+  # tag of extension-ci-tools (it is newer than that tag), so this job cannot be
+  # pinned the way the stable build is. It is the CI tooling ref; duckdb_version
+  # below is still the build target.
   code-quality-check:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
