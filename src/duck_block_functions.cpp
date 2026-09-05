@@ -2410,17 +2410,19 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// per-function PreventStructConstantFoldingAndAdd replaced the set-level call.
 	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),
 	                                        HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
+	html_to_duck_blocks_html.SetFallible(); // v2.0: HTML parsing can throw
 	SetScalarFunctionVarArgs(html_to_duck_blocks_html, LogicalType::ANY); // capture_attributes := ...
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_html);
 	ScalarFunction html_to_duck_blocks_varchar({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(),
 	                                           HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
+	html_to_duck_blocks_varchar.SetFallible(); // v2.0: HTML parsing can throw
 	SetScalarFunctionVarArgs(html_to_duck_blocks_varchar, LogicalType::ANY);
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_varchar);
 	loader.RegisterFunction(html_to_duck_blocks_set);
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML
-	auto duck_blocks_to_html_func = ScalarFunction("duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()},
-	                                               XMLTypes::HTMLType(), DuckBlocksToHtmlFunction);
+	auto duck_blocks_to_html_func = Fallible(ScalarFunction("duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()},
+	                                               XMLTypes::HTMLType(), DuckBlocksToHtmlFunction));
 	loader.RegisterFunction(duck_blocks_to_html_func);
 
 	// read_html_blocks table function
