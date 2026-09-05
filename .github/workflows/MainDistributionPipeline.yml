@@ -4,11 +4,19 @@
 name: Main Extension Distribution Pipeline
 on:
   push:
+    # main only. A branch push and its pull_request run built the same commit
+    # twice, doubling queue time; the PR run is the one whose status matters.
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
+# event_name is part of the group on purpose. Without it a workflow_dispatch on a
+# branch (used to run the canary against a PR) lands in the SAME group as that
+# branch's push run -- same ref, same sha -- and cancel-in-progress kills the
+# push run, whose cancelled jobs then show on the commit as failures. That made
+# a PR read red three times while everything real about it was green.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: true
 
 jobs:
