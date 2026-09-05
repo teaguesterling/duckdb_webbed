@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: b3b1e26 (SPEC_VERSION 6.3)
+// Vendored at upstream commit: ff5b146 (SPEC_VERSION 6.4)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -179,9 +179,16 @@ struct DuckBlockVocabulary {
 	static constexpr uint64_t ATTRIBUTES_IDX = 5;
 	static constexpr uint64_t ELEMENT_ORDER_IDX = 6;
 
-	// Additional field indices for duck_block_ext
-	static constexpr uint64_t SOURCE_FORMAT_IDX = 7;
-	static constexpr uint64_t FILE_PATH_IDX = 8;
+	// The one OPTIONAL trailing field. A reader that emits a `filename` column makes
+	// `list(b)` an 8-field struct; consumers accept exactly that shape -- the seven
+	// canonical fields, then this -- and nothing else. Optional fields append in
+	// ADOPTION order: a later one takes index 8. Reserving slots ahead of adoption is
+	// what put `source_format` at 7 and `file_path` at 8 for a type nothing ever
+	// produced, and that reservation is why the first real optional field could not
+	// simply take the next index. Those two constants are gone; `duck_block_ext`
+	// itself stays registered, deprecated, for one release.
+	static constexpr uint64_t FILENAME_IDX = 7;
+	static constexpr const char *FIELD_FILENAME = "filename";
 
 	// Kind values
 	static constexpr const char *KIND_BLOCK = "block";
@@ -309,8 +316,35 @@ struct DuckBlockVocabulary {
 	//
 	//               Nothing renamed, nothing removed; a consumer on 6.1 is unaffected.
 	//
+	//   6.3 -> 6.4  ADDITIVE for the shape, with ONE REMOVAL and ONE DEPRECATION.
+	//               duck_block gains an optional trailing 8th field, `filename VARCHAR`,
+	//               so a reader can say which file each row came from without breaking
+	//               the `list(b)` idiom. Consumers MUST accept both the 7-field and the
+	//               8-field shape; producers MAY emit the 8th, opt-in behind
+	//               `filename := true`, DuckDB core's own convention. It is TRAILING
+	//               ONLY and the widened shape is exactly one type: a differently
+	//               named or differently placed extra field stays a binder error.
+	//               Functions that RETURN blocks return the 7-field shape: provenance
+	//               lives on the reader's rows and survives GROUP BY filename, not
+	//               duck_blocks_merge.
+	//
+	//               ROLLOUT ORDER, which is why the rule is stated: land acceptance in
+	//               every consumer BEFORE any reader emits, or every
+	//               `duck_blocks_toc(list(b))` in the field breaks with the binder
+	//               error the day the reader ships.
+	//
+	//               REMOVED: SOURCE_FORMAT_IDX (7) and FILE_PATH_IDX (8), the offsets
+	//               of a `duck_block_ext` type no function ever produced or consumed.
+	//               `filename` at 7 would otherwise contradict a published constant.
+	//               DEPRECATED: the `duck_block_ext` catalog type stays registered
+	//               for one release because a user's own `CAST(x AS duck_block_ext)`
+	//               is invisible to any grep of ours; it goes in 6.5.
+	//
+	//               A consumer on 6.3 that never referenced the two offsets is
+	//               unaffected until a reader it depends on starts emitting.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "6.3";
+	static constexpr const char *SPEC_VERSION = "6.4";
 
 	// ========================================================================
 	// Block type names
@@ -452,7 +486,7 @@ struct DuckBlockVocabulary {
 	// Without it, a blob the author deliberately placed last is indistinguishable from
 	// metadata the FORMAT supplied with no position at all: both appended, both roleless.
 	static constexpr const char *ROLE_TAILMATTER = "tailmatter";
-	static constexpr const char *ROLE_DOCUMENT = "document";       // the blob IS the whole document
+	static constexpr const char *ROLE_DOCUMENT = "document"; // the blob IS the whole document
 
 	// ========================================================================
 	// `list_type` values -- the attribute is ATTR_LIST_TYPE

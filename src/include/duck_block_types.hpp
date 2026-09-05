@@ -63,12 +63,13 @@ public:
 	// registered implicit cast (see DuckBlockFunctions::Register); producers may
 	// emit it (read_html_blocks does, behind filename := true).
 	//
-	// The bare "filename" literal becomes FIELD_FILENAME once the vendored
-	// vocabulary is re-pinned to 6.4, which publishes it; the value is ruled and
-	// will not change, only the spelling of where it comes from.
+	// FIELD_FILENAME comes from the vendored vocabulary (6.4), so the name is
+	// shared with every sibling by construction; FILENAME_IDX (7) is its
+	// position, and the assert below is the trailing rule stated in code.
 	static LogicalType DuckBlockWithFilenameType() {
 		auto children = StructType::GetChildTypes(DuckBlockType());
-		children.push_back(make_pair("filename", LogicalType::VARCHAR));
+		static_assert(FILENAME_IDX == 7, "filename is the trailing eighth field (spec 6.4)");
+		children.push_back(make_pair(FIELD_FILENAME, LogicalType::VARCHAR));
 		return LogicalType::STRUCT(std::move(children));
 	}
 
