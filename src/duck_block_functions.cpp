@@ -2034,7 +2034,7 @@ struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
 
 unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
                                                                 vector<LogicalType> &return_types,
-                                                                vector<string> &names) {
+                                                                vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksReadFunctionData>();
 
 	if (input.inputs.empty()) {
@@ -2267,7 +2267,7 @@ struct HTMLBlocksParseLocalState : public LocalTableFunctionState {
 
 unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksParseFunctionData>();
 
 	if (input.inputs.empty()) {
@@ -2404,15 +2404,18 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	}
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)
 	ScalarFunctionSet html_to_duck_blocks_set("html_to_duck_blocks");
+	// Configure each function fully (bind for capture_attributes, varargs for the
+	// named parameter) BEFORE adding it: on DuckDB v2.0 a set member is
+	// shared_ptr<const T> and cannot be changed once added, which is why the
+	// per-function PreventStructConstantFoldingAndAdd replaced the set-level call.
 	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),
 	                                        HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
 	SetScalarFunctionVarArgs(html_to_duck_blocks_html, LogicalType::ANY); // capture_attributes := ...
-	html_to_duck_blocks_set.AddFunction(html_to_duck_blocks_html);
+	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_html);
 	ScalarFunction html_to_duck_blocks_varchar({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(),
 	                                           HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
 	SetScalarFunctionVarArgs(html_to_duck_blocks_varchar, LogicalType::ANY);
-	html_to_duck_blocks_set.AddFunction(html_to_duck_blocks_varchar);
-	PreventStructConstantFolding(html_to_duck_blocks_set);
+	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_varchar);
 	loader.RegisterFunction(html_to_duck_blocks_set);
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML

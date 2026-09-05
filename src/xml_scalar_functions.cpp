@@ -1195,6 +1195,15 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 		SetScalarFunctionVarArgs(fn, LogicalType::ANY);
 		set.AddFunction(std::move(fn));
 	};
+	// Same, for sets whose functions return a STRUCT-containing type and therefore have to be
+	// VOLATILE (see PreventStructConstantFolding). The stability must be set BEFORE the function
+	// enters the set -- DuckDB v2.0's FunctionSet::functions yields shared_ptr<const T>, so there
+	// is no longer any way to configure a member after the fact.
+	auto add_ns_aware_volatile = [](ScalarFunctionSet &set, ScalarFunction fn) {
+		SetScalarFunctionVarArgs(fn, LogicalType::ANY);
+		PreventStructConstantFolding(fn);
+		set.AddFunction(std::move(fn));
+	};
 
 	// Register xml function (same as to_xml for now) - using VARCHAR for now, will enhance type system later
 	auto xml_function = ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction);
@@ -1394,36 +1403,41 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("line_number", LogicalType::BIGINT)});
 	// Register xml_extract_attributes function as a function set
 	ScalarFunctionSet xml_extract_attributes_functions("xml_extract_attributes");
-	add_ns_aware(xml_extract_attributes_functions,
-	             ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                            XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions,
-	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                            XMLExtractAttributesFunction));
-	add_ns_aware(xml_extract_attributes_functions,
-	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(attr_struct_type),
-	                            XMLExtractAttributesFunction));
+	add_ns_aware_volatile(xml_extract_attributes_functions,
+	                      ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR},
+	                                     LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
+	add_ns_aware_volatile(xml_extract_attributes_functions,
+	                      ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
+	                                     LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
+	add_ns_aware_volatile(xml_extract_attributes_functions,
+	                      ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                     LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	// Add 3-argument variants with namespace map
-	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
-	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
-	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::LIST(attr_struct_type),
-	                   XMLExtractAttributesWithNamespacesFunction));
+	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
+	                                   ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
+	                                                  LogicalType::LIST(attr_struct_type),
+	                                                  XMLExtractAttributesWithNamespacesFunction));
+	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
+	                                   ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type},
+	                                                  LogicalType::LIST(attr_struct_type),
+	                                                  XMLExtractAttributesWithNamespacesFunction));
+	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
+	                                   ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
+	                                                  LogicalType::LIST(attr_struct_type),
+	                                                  XMLExtractAttributesWithNamespacesFunction));
 	// Add 3-argument variants with namespace mode VARCHAR
-	xml_extract_attributes_functions.AddFunction(
-	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
-	xml_extract_attributes_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
+	                                   ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                  LogicalType::LIST(attr_struct_type),
+	                                                  XMLExtractAttributesWithNamespacesFunction));
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
 	    ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
-	xml_extract_attributes_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
 	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction));
-	PreventStructConstantFolding(xml_extract_attributes_functions);
 	loader.RegisterFunction(xml_extract_attributes_functions);
 
 	// Register xml_pretty_print function
@@ -1611,38 +1625,46 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register html_extract_links function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_links_functions("html_extract_links");
-	html_extract_links_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_links_functions,
 	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
-	html_extract_links_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_links_functions,
 	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction));
-	PreventStructConstantFolding(html_extract_links_functions);
 	loader.RegisterFunction(html_extract_links_functions);
 
 	// Register html_extract_images function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_images_functions("html_extract_images");
-	html_extract_images_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_images_functions,
 	    ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
-	html_extract_images_functions.AddFunction(
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_images_functions,
 	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction));
-	PreventStructConstantFolding(html_extract_images_functions);
 	loader.RegisterFunction(html_extract_images_functions);
 
 	// Register html_extract_table_rows function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_table_rows_functions("html_extract_table_rows");
-	html_extract_table_rows_functions.AddFunction(ScalarFunction(
-	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
-	html_extract_table_rows_functions.AddFunction(ScalarFunction(
-	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_row_struct_type), HTMLExtractTableRowsFunction));
-	PreventStructConstantFolding(html_extract_table_rows_functions);
+	PreventStructConstantFoldingAndAdd(html_extract_table_rows_functions,
+	                                   ScalarFunction({XMLTypes::HTMLType()},
+	                                                  LogicalType::LIST(html_table_row_struct_type),
+	                                                  HTMLExtractTableRowsFunction));
+	PreventStructConstantFoldingAndAdd(html_extract_table_rows_functions,
+	                                   ScalarFunction({LogicalType::VARCHAR},
+	                                                  LogicalType::LIST(html_table_row_struct_type),
+	                                                  HTMLExtractTableRowsFunction));
 	loader.RegisterFunction(html_extract_table_rows_functions);
 
 	// Register html_extract_tables_json function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_tables_json_functions("html_extract_tables_json");
-	html_extract_tables_json_functions.AddFunction(ScalarFunction(
-	    {XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
-	html_extract_tables_json_functions.AddFunction(ScalarFunction(
-	    {LogicalType::VARCHAR}, LogicalType::LIST(html_table_json_struct_type), HTMLExtractTablesJSONFunction));
-	PreventStructConstantFolding(html_extract_tables_json_functions);
+	PreventStructConstantFoldingAndAdd(html_extract_tables_json_functions,
+	                                   ScalarFunction({XMLTypes::HTMLType()},
+	                                                  LogicalType::LIST(html_table_json_struct_type),
+	                                                  HTMLExtractTablesJSONFunction));
+	PreventStructConstantFoldingAndAdd(html_extract_tables_json_functions,
+	                                   ScalarFunction({LogicalType::VARCHAR},
+	                                                  LogicalType::LIST(html_table_json_struct_type),
+	                                                  HTMLExtractTablesJSONFunction));
 	loader.RegisterFunction(html_extract_tables_json_functions);
 
 	// Register parse_html scalar function for parsing HTML content directly

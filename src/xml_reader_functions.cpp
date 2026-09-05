@@ -220,7 +220,7 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientContext &context,
                                                                      TableFunctionBindInput &input,
                                                                      vector<LogicalType> &return_types,
-                                                                     vector<string> &names, ParseMode mode) {
+                                                                     vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
 	result->parse_mode = mode;
 
@@ -334,8 +334,8 @@ OperatorPartitionData XMLReaderFunctions::ReadDocumentGetPartitionData(ClientCon
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-                                                              vector<LogicalType> &return_types, vector<string> &names,
-                                                              ParseMode mode) {
+                                                              vector<LogicalType> &return_types,
+                                                              vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
 	result->parse_mode = mode;
 
@@ -552,7 +552,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(CompatIdentifierName(name));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -561,7 +561,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 			// Store explicit schema in function data
 			result->has_explicit_schema = true;
-			result->column_names = names;
+			result->column_names = CompatNamesToStrings(names);
 			result->column_types = return_types;
 
 			has_explicit_columns = true;
@@ -671,19 +671,19 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Convert union schema to return types
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
-					names.push_back(col_name);
+					names.push_back(CompatMakeName(col_name));
 					return_types.push_back(union_schema[col_name]);
 				}
 
 				// Always store schema for execution to ensure consistent column ordering
 				// across multiple files (fixes non-determinism from unordered_map iteration)
 				result->has_explicit_schema = true;
-				result->column_names = names;
+				result->column_names = CompatNamesToStrings(names);
 				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(names.size());
 				for (size_t i = 0; i < names.size(); i++) {
-					auto fmt_it = union_formats.find(names[i]);
+					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
 			} else {
@@ -1134,7 +1134,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
                                                                 vector<LogicalType> &return_types,
-                                                                vector<string> &names) {
+                                                                vector<CompatName> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 
 	// Get file pattern(s) from first argument
@@ -1313,7 +1313,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                                         vector<LogicalType> &return_types, vector<CompatName> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
 	result->parse_mode = ParseMode::XML;
 
@@ -1526,7 +1526,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 
 				return_types.push_back(logical_type);
-				names.push_back(CompatIdentifierName(name));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -1535,7 +1535,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 			// Store explicit schema in function data
 			result->has_explicit_schema = true;
-			result->column_names = names;
+			result->column_names = CompatNamesToStrings(names);
 			result->column_types = return_types;
 
 			has_explicit_columns = true;
@@ -1635,19 +1635,19 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Convert union schema to return types
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
-					names.push_back(col_name);
+					names.push_back(CompatMakeName(col_name));
 					return_types.push_back(union_schema[col_name]);
 				}
 
 				// Always store schema for execution to ensure consistent column ordering
 				// across multiple files (fixes non-determinism from unordered_map iteration)
 				result->has_explicit_schema = true;
-				result->column_names = names;
+				result->column_names = CompatNamesToStrings(names);
 				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(names.size());
 				for (size_t i = 0; i < names.size(); i++) {
-					auto fmt_it = union_formats.find(names[i]);
+					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
 			} else {
@@ -1712,7 +1712,7 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	// Set alias for non-glob patterns
 	if (!FileSystem::HasGlob(table_name)) {
 		auto &fs = FileSystem::GetFileSystem(context);
-		table_function->alias = CompatMakeIdentifier(fs.ExtractBaseName(table_name));
+		table_function->alias = CompatMakeAlias(fs.ExtractBaseName(table_name));
 	}
 
 	return std::move(table_function);
@@ -1724,7 +1724,7 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<CompatName> &names) {
 	return ReadDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
 }
 
@@ -1739,7 +1739,8 @@ void XMLReaderFunctions::ReadHTMLObjectsFunction(ClientContext &context, TableFu
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types,
+                                                          vector<CompatName> &names) {
 	return ReadDocumentBind(context, input, return_types, names, ParseMode::HTML);
 }
 
@@ -1759,7 +1760,7 @@ void XMLReaderFunctions::ReadHTMLFunction(ClientContext &context, TableFunctionI
 unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentObjectsBind(ClientContext &context,
                                                                       TableFunctionBindInput &input,
                                                                       vector<LogicalType> &return_types,
-                                                                      vector<string> &names, ParseMode mode) {
+                                                                      vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
 	result->parse_mode = mode;
 
@@ -1848,8 +1849,8 @@ void XMLReaderFunctions::ParseDocumentObjectsFunction(ClientContext &context, Ta
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-                                                               vector<LogicalType> &return_types, vector<string> &names,
-                                                               ParseMode mode) {
+                                                               vector<LogicalType> &return_types,
+                                                               vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
 	result->parse_mode = mode;
 
@@ -1995,7 +1996,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 				auto logical_type = TransformStringToLogicalType(StringValue::Get(val), context);
 				return_types.push_back(logical_type);
-				names.push_back(CompatIdentifierName(name));
+				names.push_back(CompatMakeName(CompatIdentifierName(name)));
 			}
 
 			if (return_types.empty()) {
@@ -2003,7 +2004,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 
 			result->has_explicit_schema = true;
-			result->column_names = names;
+			result->column_names = CompatNamesToStrings(names);
 			result->column_types = return_types;
 			has_explicit_columns = true;
 		}
@@ -2040,12 +2041,12 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 			if (!inferred_columns.empty()) {
 				for (const auto &col_info : inferred_columns) {
-					names.push_back(col_info.name);
+					names.push_back(CompatMakeName(col_info.name));
 					return_types.push_back(col_info.type);
 				}
 
 				result->has_explicit_schema = true;
-				result->column_names = names;
+				result->column_names = CompatNamesToStrings(names);
 				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(inferred_columns.size());
@@ -2145,24 +2146,26 @@ void XMLReaderFunctions::ParseDocumentFunction(ClientContext &context, TableFunc
 // Public parse_xml functions (delegate to internal functions)
 unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
                                                                  vector<LogicalType> &return_types,
-                                                                 vector<string> &names) {
+                                                                 vector<CompatName> &names) {
 	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::XML);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseXMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types,
+                                                          vector<CompatName> &names) {
 	return ParseDocumentBind(context, input, return_types, names, ParseMode::XML);
 }
 
 // Public parse_html functions (delegate to internal functions)
 unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
                                                                   vector<LogicalType> &return_types,
-                                                                  vector<string> &names) {
+                                                                  vector<CompatName> &names) {
 	return ParseDocumentObjectsBind(context, input, return_types, names, ParseMode::HTML);
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-                                                           vector<LogicalType> &return_types, vector<string> &names) {
+                                                           vector<LogicalType> &return_types,
+                                                           vector<CompatName> &names) {
 	return ParseDocumentBind(context, input, return_types, names, ParseMode::HTML);
 }
 
@@ -2438,7 +2441,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context,
                                                                    TableFunctionBindInput &input,
                                                                    vector<LogicalType> &return_types,
-                                                                   vector<string> &names) {
+                                                                   vector<CompatName> &names) {
 	auto result = make_uniq<HTMLTableExtractionData>();
 
 	// Get HTML content from first argument

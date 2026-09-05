@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb_compat.hpp"
 #include "xml_sax_reader.hpp"
 #include "xml_schema_inference.hpp"
 
@@ -25,10 +26,10 @@ public:
 private:
 	// Internal unified functions (used by both XML and HTML)
 	static unique_ptr<FunctionData> ReadDocumentObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                        vector<LogicalType> &return_types, vector<string> &names,
-	                                                        ParseMode mode);
+	                                                        vector<LogicalType> &return_types,
+	                                                        vector<CompatName> &names, ParseMode mode);
 	static unique_ptr<FunctionData> ReadDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                 vector<LogicalType> &return_types, vector<string> &names,
+	                                                 vector<LogicalType> &return_types, vector<CompatName> &names,
 	                                                 ParseMode mode);
 	static void ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static void ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
@@ -44,61 +45,61 @@ private:
 	// Public XML functions (delegate to internal functions)
 	static void ReadXMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                   vector<LogicalType> &return_types, vector<string> &names);
+	                                                   vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadXMLObjectsInit(ClientContext &context,
 	                                                               TableFunctionInitInput &input);
 
 	static void ReadXMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
-	                                            vector<LogicalType> &return_types, vector<string> &names);
+	                                            vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadXMLInit(ClientContext &context, TableFunctionInitInput &input);
 
 	// Public HTML functions (delegate to internal functions)
 	static void ReadHTMLObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                    vector<LogicalType> &return_types, vector<string> &names);
+	                                                    vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadHTMLObjectsInit(ClientContext &context,
 	                                                                TableFunctionInitInput &input);
 
 	static void ReadHTMLFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ReadHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-	                                             vector<LogicalType> &return_types, vector<string> &names);
+	                                             vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadHTMLInit(ClientContext &context, TableFunctionInitInput &input);
 
 	// HTML table extraction functions
 	static void HTMLExtractTablesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> HTMLExtractTablesBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                      vector<LogicalType> &return_types, vector<string> &names);
+	                                                      vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> HTMLExtractTablesInit(ClientContext &context,
 	                                                                  TableFunctionInitInput &input);
 
 	// parse_xml_objects / parse_html_objects - parse XML/HTML strings and return raw content
 	static void ParseDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ParseDocumentObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                         vector<LogicalType> &return_types, vector<string> &names,
-	                                                         ParseMode mode);
+	                                                         vector<LogicalType> &return_types,
+	                                                         vector<CompatName> &names, ParseMode mode);
 	static unique_ptr<GlobalTableFunctionState> ParseDocumentObjectsInit(ClientContext &context,
 	                                                                     TableFunctionInitInput &input);
 
 	// parse_xml / parse_html - parse XML/HTML strings with schema inference
 	static void ParseDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 	static unique_ptr<FunctionData> ParseDocumentBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                  vector<LogicalType> &return_types, vector<string> &names,
+	                                                  vector<LogicalType> &return_types, vector<CompatName> &names,
 	                                                  ParseMode mode);
 	static unique_ptr<GlobalTableFunctionState> ParseDocumentInit(ClientContext &context,
 	                                                              TableFunctionInitInput &input);
 
 	// Public parse_xml functions (delegate to internal functions)
 	static unique_ptr<FunctionData> ParseXMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                    vector<LogicalType> &return_types, vector<string> &names);
+	                                                    vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<FunctionData> ParseXMLBind(ClientContext &context, TableFunctionBindInput &input,
-	                                             vector<LogicalType> &return_types, vector<string> &names);
+	                                             vector<LogicalType> &return_types, vector<CompatName> &names);
 
 	// Public parse_html functions (delegate to internal functions)
 	static unique_ptr<FunctionData> ParseHTMLObjectsBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                     vector<LogicalType> &return_types, vector<string> &names);
+	                                                     vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<FunctionData> ParseHTMLBind(ClientContext &context, TableFunctionBindInput &input,
-	                                              vector<LogicalType> &return_types, vector<string> &names);
+	                                              vector<LogicalType> &return_types, vector<CompatName> &names);
 };
 
 // Function data structures

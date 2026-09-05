@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb_compat.hpp"
 
 namespace duckdb {
 
@@ -33,7 +34,7 @@ private:
 
 	// read_html_blocks(path VARCHAR / LIST(VARCHAR) [, filename=false, ignore_errors=false, maximum_file_size=...])
 	static unique_ptr<FunctionData> ReadHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                   vector<LogicalType> &return_types, vector<string> &names);
+	                                                   vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ReadHTMLBlocksInit(ClientContext &context,
 	                                                               TableFunctionInitInput &input);
 	static unique_ptr<LocalTableFunctionState> ReadHTMLBlocksInitLocal(ExecutionContext &context,
@@ -45,7 +46,7 @@ private:
 
 	// parse_html_blocks(html VARCHAR / HTML / LIST(VARCHAR) / LIST(HTML) [, ignore_errors=false])
 	static unique_ptr<FunctionData> ParseHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
-	                                                    vector<LogicalType> &return_types, vector<string> &names);
+	                                                    vector<LogicalType> &return_types, vector<CompatName> &names);
 	static unique_ptr<GlobalTableFunctionState> ParseHTMLBlocksInit(ClientContext &context,
 	                                                                TableFunctionInitInput &input);
 	static unique_ptr<LocalTableFunctionState> ParseHTMLBlocksInitLocal(ExecutionContext &context,
