@@ -1,5 +1,6 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include "duck_block_functions.hpp"
 #include "duck_block_types.hpp"
 #include "duckdb_compat.hpp"
@@ -2379,7 +2380,28 @@ void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFu
 	CompatSetOutputCardinality(output, output_idx);
 }
 
+// duck_block spec 6.4 acceptance. DuckDB's own STRUCT-to-STRUCT cast already
+// matches children BY NAME and drops the extra one, so an explicit
+// `::duck_block[]` of an 8-field list has always worked. What refused the
+// IMPLICIT cast was a single rule in the binder: a child-count mismatch costs
+// -1. The binder consults REGISTERED casts before that rule, so registering the
+// pair with a cost is the whole mechanism -- the bound cast is DuckDB's default,
+// unchanged. Same approach as duck_block_utils, so the two agree by construction.
+//
+// The source type is EXACT. Every consumer reads the struct by index; had this
+// been widened by arity, a leading `filename` would have been read as `kind`
+// by all of them, silently. Exactness is what makes that a binder error.
+static BoundCastInfo BindDefaultCast(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	return DefaultCasts::GetDefaultCastFunction(input, source, target);
+}
+
 void DuckBlockFunctions::Register(ExtensionLoader &loader) {
+	{
+		auto with_filename = DuckBlockTypes::DuckBlockWithFilenameType();
+		loader.RegisterCastFunction(with_filename, DuckBlockTypes::DuckBlockType(), BindDefaultCast, 10);
+		loader.RegisterCastFunction(LogicalType::LIST(with_filename), DuckBlockTypes::DuckBlockListType(),
+		                            BindDefaultCast, 10);
+	}
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)
 	ScalarFunctionSet html_to_duck_blocks_set("html_to_duck_blocks");
 	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),

@@ -40,6 +40,15 @@ destroyed attributes the source had.
   ``duck_block_utils``.
 - ``include_filepath`` and ``file_path`` are deprecated aliases, kept for one release.
 
+**Consumers accept the 8-field duck_block** (spec 6.4). ``duck_blocks_to_html`` and every
+other consumer now bind the widened shape -- the canonical seven fields, then
+``filename VARCHAR`` -- so ``list(r)`` of ``read_html_blocks(..., filename := true)`` rows
+feeds a consumer directly. Acceptance is a registered implicit cast to the 7-field type
+(the same mechanism as ``duck_block_utils``); functions keep returning the 7-field shape.
+The source type is exact on purpose: a leading, renamed, ninth or wrongly-typed extra
+field is still a binder error, because every consumer reads the struct by index and a
+lenient match would have read a misplaced ``filename`` as ``kind``, silently.
+
 v2.8.2
 ------
 
