@@ -47,15 +47,17 @@ jobs:
     name: Build extension binaries
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
     with:
-      # Build target is the v1.5.4 release TAG (loadable/shippable artifacts),
+      # Build target is the v1.5.5 release TAG (loadable/shippable artifacts),
       # even though the duckdb/extension-ci-tools submodule pointers track the
       # v1.5-variegata branch tip. Branch-tip (-dev) builds produce
       # non-loadable extensions; the shippable stable build stays on the tag.
-      duckdb_version: v1.5.4
+      duckdb_version: v1.5.5
+      # ci-tools stays on its v1.5.4 tag: extension-ci-tools has no v1.5.5 tag, and this
+      # pins the CI TOOLING, not DuckDB. duckdb_version above is what the build targets.
       ci_tools_version: v1.5.4
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # windows_amd64_mingw excluded on the v1.5.4 stable job: duckdb's
+      # windows_amd64_mingw excluded on the v1.5.5 stable job: duckdb's
       # scripts/ci/run_tests.py prints a U+274C ❌ glyph on test-batch failure,
       # which Windows' default cp1252 stdout can't encode (UnicodeEncodeError),
       # masking the underlying test result. mingw-specific (see duckdb_urlpattern's
@@ -69,8 +71,10 @@ jobs:
   # Two layers (see test/wasm/):
   #   1. static symbol check (hard gate) — no duckdb-wasm runtime needed.
   #   2. live load+query in duckdb-wasm (informational / continue-on-error) —
-  #      expected-red until official duckdb-wasm ships v1.5.4 (the only public
-  #      v1.5.4 engine, haybarn, uses a newer emscripten -> lseek ABI skew).
+  #      expected-red until official duckdb-wasm ships a 1.5.x engine matching
+  #      the build target (when this was written the only public 1.5 engine,
+  #      haybarn, used a newer emscripten -> lseek ABI skew). Whether that has
+  #      changed for v1.5.5 is not known here; the step stays informational.
   wasm-load-test:
     name: WASM load test
     needs: [duckdb-stable-build]
@@ -83,20 +87,20 @@ jobs:
       - name: Download WASM artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: webbed-v1.5.4-extension-wasm_*
+          pattern: webbed-v1.5.5-extension-wasm_*
           path: wasm-artifacts
       - name: Static symbol check (libxml2/zlib must be linked, not unresolved)
         run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
-      - name: Live load test in duckdb-wasm (informational until official v1.5.4)
+      - name: Live load test in duckdb-wasm (informational until official v1.5.5)
         continue-on-error: true
         timeout-minutes: 10
         working-directory: test/wasm
         run: |
           set -uo pipefail
           timeout 300 npm install --no-save
-          mkdir -p repo/v1.5.4/wasm_eh
-          cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.4-extension-wasm_eh/webbed.duckdb_extension.wasm" \
-             repo/v1.5.4/wasm_eh/
+          mkdir -p repo/v1.5.5/wasm_eh
+          cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v1.5.5-extension-wasm_eh/webbed.duckdb_extension.wasm" \
+             repo/v1.5.5/wasm_eh/
           timeout 240 node load_test.cjs --repo repo --name webbed --platform eh \
             --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 
@@ -111,7 +115,7 @@ jobs:
     name: Code Quality Check
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@main
     with:
-      duckdb_version: v1.5.4
+      duckdb_version: v1.5.5
       ci_tools_version: main
       extension_name: webbed
       format_checks: 'format'
