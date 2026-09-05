@@ -1507,22 +1507,22 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
-	    Fallible(ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
-	                   XMLDetectPrefixesFunction));
+	    ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                   XMLDetectPrefixesFunction);
 	loader.RegisterFunction(xml_detect_prefixes_function);
 
 	// Register xml_mock_namespaces function (returns MAP<VARCHAR, VARCHAR> with mock URIs for prefixes)
 	auto xml_mock_namespaces_function =
-	    Fallible(ScalarFunction("xml_mock_namespaces", {LogicalType::LIST(LogicalType::VARCHAR)},
-	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction));
+	    ScalarFunction("xml_mock_namespaces", {LogicalType::LIST(LogicalType::VARCHAR)},
+	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction);
 	PreventStructConstantFolding(xml_mock_namespaces_function);
 	loader.RegisterFunction(xml_mock_namespaces_function);
 
 	// Register xml_find_undefined_prefixes function
 	// Finds namespace prefixes used in an XPath expression that are not declared in the XML document
 	auto xml_find_undefined_prefixes_function =
-	    Fallible(ScalarFunction("xml_find_undefined_prefixes", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLFindUndefinedPrefixesFunction));
+	    ScalarFunction("xml_find_undefined_prefixes", {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                   LogicalType::LIST(LogicalType::VARCHAR), XMLFindUndefinedPrefixesFunction);
 	loader.RegisterFunction(xml_find_undefined_prefixes_function);
 
 	// Register xml_add_namespace_declarations function
