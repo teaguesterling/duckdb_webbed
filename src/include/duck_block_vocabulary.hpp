@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: ff5b146 (SPEC_VERSION 6.4)
+// Vendored at upstream commit: cfd8e28 (SPEC_VERSION 6.5)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -343,8 +343,44 @@ struct DuckBlockVocabulary {
 	//               A consumer on 6.3 that never referenced the two offsets is
 	//               unaffected until a reader it depends on starts emitting.
 	//
+	//   6.4 -> 6.5  BREAKING on the FUNCTION SURFACE, nothing in the struct shape.
+	//               Retrieval returns blocks, and a suffix names what the ORIGINAL
+	//               returned, so nobody is stranded:
+	//
+	//               * duck_blocks_get_section and duck_blocks_get_pages return
+	//                 LIST(duck_block) instead of VARCHAR; duck_blocks_sections_like's
+	//                 third column is `blocks` LIST(duck_block) instead of `content`
+	//                 VARCHAR, rows unchanged; named parameters removed entirely
+	//                 (output_format was the only one, on all three); page_rows gains
+	//                 a `blocks` column beside its existing four. The originals live
+	//                 on as duck_blocks_get_section_text, duck_blocks_get_pages_text,
+	//                 duck_blocks_sections_like_text -- defined as duck_blocks_to_text
+	//                 over the blocks form, which is byte-identical to the old default
+	//                 because that is literally what the old default computed.
+	//               * duck_blocks_headings, _toc, _code_blocks, _links return
+	//                 LIST(duck_block); today's projections live on, byte-for-byte and
+	//                 permanently, as duck_blocks_headings_structs, _toc_structs,
+	//                 _code_blocks_structs, _links_structs. toc_rows and page_rows keep
+	//                 their row shapes.
+	//               * ATTR_OUTLINE and ATTR_INDENT: the first attributes a function here
+	//                 COMPUTES rather than copies. Only on the output of the heading
+	//                 constructions.
+	//               * RECOVERY CONTRACT, now normative: element_order is dense from 0
+	//                 over the list a reader EMITS, synthetic markers included. Every
+	//                 projection or construction FROM a document carries it through
+	//                 unrenumbered, with gaps -- it is the join key back to the source
+	//                 and between the blocks and _structs forms. Only functions that
+	//                 build a standalone document (assemble, merge, reorder) renumber.
+	//               * Restated, because producers asked: `level` is never NULL (a flat
+	//                 format emits 1 everywhere); `filename` is opt-in and boolean-only.
+	//
+	//               Migration: a caller reading a projection field off duck_blocks_toc
+	//               (panduck's doc_toc) renames to duck_blocks_toc_structs; a caller
+	//               wanting text renames to the _text sibling. Failure to migrate is a
+	//               binder error, never a wrong answer.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "6.4";
+	static constexpr const char *SPEC_VERSION = "6.5";
 
 	// ========================================================================
 	// Block type names
@@ -471,6 +507,13 @@ struct DuckBlockVocabulary {
 	static constexpr const char *ATTR_LIST_TYPE = "list_type";
 	static constexpr const char *ATTR_SOURCE_TYPE = "source_type";
 	static constexpr const char *ATTR_PANDOC_AST = "pandoc_ast";
+	// COMPUTED attributes -- set only by duck_block_utils' heading constructions
+	// (duck_blocks_headings / duck_blocks_toc), never emitted by a reader as if
+	// sourced. `outline` is the heading's position in the outline ("1.2.1"):
+	// positions, not the heading's own digit, so h1 -> h3 -> h2 reads 1, 1.1, 1.2.
+	// `indent` is heading level minus the document's minimum heading level.
+	static constexpr const char *ATTR_OUTLINE = "outline";
+	static constexpr const char *ATTR_INDENT = "indent";
 
 	// ========================================================================
 	// Role values, per the type that carries them
