@@ -335,6 +335,15 @@ def branched_on(root):
     return named, literal
 
 
+def pinned_sha(local_path):
+    """The commit the vendored header says it was taken from, or None."""
+    for line in open(local_path, encoding="utf-8"):
+        m = re.search(r"Vendored at upstream commit:\s*([0-9a-f]{7,40})", line)
+        if m:
+            return m.group(1)
+    return None
+
+
 def report(local, upstream, root, show_gaps=True, verified=True, strict=False):
     """Compare two constant maps. Returns (exit_code, headline)."""
     removed = sorted(set(local) - set(upstream))
@@ -561,6 +570,31 @@ def main():
     print()
 
     code, _ = report(local, upstream, root, verified=verified, strict=args.strict)
+    if code != 0 and args.upstream:
+        # A copy vendored from a commit that upstream main has not merged yet
+        # reads as DRIFT against main, and it is not: it is AHEAD. Tell the two
+        # apart by re-checking against the sha the header says it came from. If
+        # the copy matches that sha exactly, the state is correct and temporary
+        # -- it clears when upstream merges -- and a FAILED here would only
+        # train people to ignore the check. If it matches neither, that is
+        # drift, and the failure above stands.
+        pinned = pinned_sha(local_path)
+        if pinned and pinned != args.ref:
+            try:
+                pinned_text = read_upstream_git(args.upstream, pinned)
+            except SystemExit:
+                pinned_text = None
+            if pinned_text is not None:
+                pinned_code, _ = report(local, parse_constants(pinned_text), root,
+                                        show_gaps=False, verified=verified, strict=args.strict)
+                if pinned_code == 0:
+                    print()
+                    print(f"AHEAD: the copy matches its pinned upstream commit {pinned} exactly, "
+                          f"which {args.ref} does not yet contain.")
+                    print(f"       Not drift. Clears when upstream merges {pinned}; until then the "
+                          f"DRIFT above describes main being behind this copy, not this copy being "
+                          f"behind main.")
+                    return 0
     return code
 
 

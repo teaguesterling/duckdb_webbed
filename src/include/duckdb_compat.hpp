@@ -259,6 +259,20 @@ inline LogicalType CompatForceMaxLogicalType(const LogicalType &left, const Logi
 // shared_ptr<const T> and a set member can no longer be configured after it has been added.
 // Defined outside the #ifdef because it delegates to whichever PreventStructConstantFolding
 // overload the branch above selected (a no-op on the old API).
+// DuckDB v2.0 enforces a scalar function's declared error mode at runtime: a
+// function that throws without having called SetFallible() surfaces as
+//   INTERNAL Error: Scalar function "x" threw an execution error, but the
+//   function is not marked as fallible
+// rather than as the error it threw. Applied at CONSTRUCTION, wrapping the
+// ScalarFunction expression, so it is set before the function is added to a
+// set -- on v2.0 a set member is shared_ptr<const T> and cannot be configured
+// after AddFunction. SetFallible() exists on the pinned 1.5 too, where it only
+// informs the optimizer, so there is nothing to guard.
+inline ScalarFunction Fallible(ScalarFunction fn) {
+	fn.SetFallible();
+	return fn;
+}
+
 template <typename T>
 inline void PreventStructConstantFoldingAndAdd(FunctionSet<T> &func_set, T func) {
 	PreventStructConstantFolding(func);
