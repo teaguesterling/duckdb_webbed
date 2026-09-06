@@ -1,8 +1,8 @@
 Changelog
 =========
 
-Unreleased
-----------
+v2.9.0 (Current)
+----------------
 
 **Behaviour change: attribute capture is now a parameter, and** ``class`` **is opt-in.**
 
@@ -25,6 +25,18 @@ destroyed attributes the source had.
   unless requested**, because Pandoc encodes semantic structure in classes.
 - Vocabulary keys (``role``, ``heading_level``, ...) are reserved: never copied from the
   source, so ``'*'`` cannot forge them.
+
+**DuckDB 2.0 ready.** Every scalar that can throw now declares it (``SetFallible``), which
+DuckDB 2.0 enforces at runtime; the port that builds against both 1.5 and 2.0 (#139) is in; and
+the canary against DuckDB ``main`` is green on every platform, with tests passing on Linux,
+Windows and macOS. Community-extensions builds every release against 2.0, so this is what makes
+the release possible rather than a feature of it.
+
+**DuckDB submodule at v1.5.5**, up from v1.5.4; CI builds against ``v1.5.5``.
+
+**duck_block vocabulary at spec 6.5**, vendored from upstream ``cfd8e28``. ``FIELD_FILENAME``
+and ``FILENAME_IDX`` come from the header rather than local literals. The drift check learned a
+third state, AHEAD, for a copy vendored from a commit upstream has not merged yet.
 
 **``filename`` on** ``read_html_blocks`` **is now trailing, and takes core's forms.**
 
