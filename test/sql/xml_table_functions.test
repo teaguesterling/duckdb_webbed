@@ -28,6 +28,36 @@ SELECT count(*) FROM read_xml_objects('test/invalid/invalid.xml', ignore_errors 
 ----
 0
 
+# Test malformed XML fails in streaming mode (strict parser, no recover without ignore_errors)
+statement error
+SELECT * FROM read_xml('test/invalid/invalid.xml', streaming := true, maximum_file_size := 1);
+----
+SAX parsing error
+
+# malformed XML should be skipped when ignore_errors := true in streaming mode
+query I
+SELECT count(*) FROM read_xml('test/invalid/invalid.xml', streaming := true, maximum_file_size := 1, ignore_errors := true);
+----
+0
+
+# Nested STRUCT parity: DOM and SAX must extract the same nested fields
+# (person.address.city / zip). Forces SAX via maximum_file_size := 1.
+query IIII
+SELECT id, person.name AS name, person.address.city AS city, person.address.zip AS zip
+FROM read_xml('test/xml/sax_nested_struct_parity.xml', record_element := 'item')
+ORDER BY id;
+----
+1	Alice	NYC	10001
+2	Bob	SF	94105
+
+query IIII
+SELECT id, person.name AS name, person.address.city AS city, person.address.zip AS zip
+FROM read_xml('test/xml/sax_nested_struct_parity.xml', record_element := 'item', maximum_file_size := 1)
+ORDER BY id;
+----
+1	Alice	NYC	10001
+2	Bob	SF	94105
+
 # Test read_xml_objects function for raw content access
 query II
 SELECT filename, length(xml::VARCHAR) > 0 as has_content FROM read_xml_objects('test/xml/simple.xml', filename=true);

@@ -945,8 +945,10 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					if (!lstate.sax_parser_ctx) {
 						throw IOException("Could not create SAX push parser for '%s'", filename);
 					}
+					// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
+					// via ignore_errors), not silently recover into partial/corrupt rows.
 					xmlCtxtUseOptions(lstate.sax_parser_ctx,
-					                  XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+					                  XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
 					lstate.sax_file_handle = std::move(file_handle);
 					lstate.sax_pending_records.clear();
@@ -1033,14 +1035,17 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					auto bytes_read = lstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
 					if (bytes_read == 0) {
 						// EOF — finalize parser
-						xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
+						int final_result = xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
+						if (final_result != 0) {
+							throw IOException("SAX parsing error in file '%s'", filename);
+						}
 						file_exhausted = true;
 						break;
 					}
 
 					int parse_result =
 					    xmlParseChunk(lstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
-					if (parse_result != 0 && !bind_data.ignore_errors) {
+					if (parse_result != 0) {
 						throw IOException("SAX parsing error in file '%s'", filename);
 					}
 				}
