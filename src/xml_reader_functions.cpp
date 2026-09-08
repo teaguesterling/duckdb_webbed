@@ -952,6 +952,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 					lstate.sax_file_handle = std::move(file_handle);
 					lstate.sax_pending_records.clear();
+					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
 				} else {
 					// DOM mode: read file content and build DOM
@@ -1009,62 +1010,55 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				// SAX streaming: feed chunks until we have enough records or EOF
 				constexpr idx_t SAX_CHUNK_SIZE = 65536;
 				char sax_buffer[SAX_CHUNK_SIZE];
-				bool file_exhausted = false;
 
-				while (output_idx < STANDARD_VECTOR_SIZE) {
-					// First, emit any pending completed records
+				auto emit_pending_sax_rows = [&]() {
 					while (!lstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
 						auto &record = lstate.sax_pending_records.front();
-
 						auto row = SAXStreamReader::AccumulatorToRow(
 						    record, bind_data.column_names, bind_data.column_types, schema_options,
 						    bind_data.column_datetime_formats, bind_data.inferred_schema);
-
 						EmitRow(output, output_idx, row, bind_data.include_filename, filename);
-
 						output_idx++;
 						lstate.sax_pending_records.erase(lstate.sax_pending_records.begin());
 					}
+				};
 
-					// If we've filled the output, stop
-					if (output_idx >= STANDARD_VECTOR_SIZE) {
-						break;
-					}
+				if (!lstate.sax_parse_complete) {
+					while (true) {
+						// Fail-closed (ignore_errors=false): emit as records complete. A later parse
+						// error aborts the query, so prefix rows never become a result.
+						// ignore_errors: withhold until the whole file is well-formed so a truncated
+						// or trailing-garbage file matches DOM (skip the file, no prefix rows).
+						if (!bind_data.ignore_errors) {
+							emit_pending_sax_rows();
+							if (output_idx >= STANDARD_VECTOR_SIZE) {
+								break;
+							}
+						}
 
-					// Feed another chunk to the parser
-					auto bytes_read = lstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
-					if (bytes_read == 0) {
-						// EOF — finalize parser
-						int final_result = xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
-						if (final_result != 0) {
+						auto bytes_read = lstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
+						if (bytes_read == 0) {
+							int final_result = xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
+							if (final_result != 0) {
+								throw IOException("SAX parsing error in file '%s'", filename);
+							}
+							lstate.sax_parse_complete = true;
+							break;
+						}
+
+						int parse_result =
+						    xmlParseChunk(lstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
+						if (parse_result != 0) {
 							throw IOException("SAX parsing error in file '%s'", filename);
 						}
-						file_exhausted = true;
-						break;
-					}
-
-					int parse_result =
-					    xmlParseChunk(lstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
-					if (parse_result != 0) {
-						throw IOException("SAX parsing error in file '%s'", filename);
 					}
 				}
 
-				// Emit any remaining pending records after EOF
-				while (!lstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
-					auto &record = lstate.sax_pending_records.front();
-					auto row = SAXStreamReader::AccumulatorToRow(record, bind_data.column_names, bind_data.column_types,
-					                                             schema_options, bind_data.column_datetime_formats,
-					                                             bind_data.inferred_schema);
-
-					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
-					output_idx++;
-					lstate.sax_pending_records.erase(lstate.sax_pending_records.begin());
-				}
-
-				// Check if file is done and all records emitted
-				if (file_exhausted && lstate.sax_pending_records.empty()) {
-					file_done = true;
+				if (lstate.sax_parse_complete) {
+					emit_pending_sax_rows();
+					if (lstate.sax_pending_records.empty()) {
+						file_done = true;
+					}
 				}
 			} else {
 				// DOM extraction: extract records one at a time
