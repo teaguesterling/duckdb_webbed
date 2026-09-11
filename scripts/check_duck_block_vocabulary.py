@@ -132,7 +132,9 @@ UPSTREAM_API = f"https://api.github.com/repos/{UPSTREAM_REPO}/commits/main"
 # indirection exists: raw.githubusercontent.com serves BRANCH urls from a cache that
 # lags, so a branch fetch can hand back a superseded header and the check then reports
 # "in sync" against content upstream has already replaced. Observed live: the API had
-# main at 26bfe05 with SPEC_VERSION 2.0 while the branch url was still serving 1.2.
+# main at 26bfe05 with SPEC_VERSION 2.0 while the branch url was still serving 1.2
+# (both on the retired INTERNAL numbering line; the public 1.2 of 2026-09-10 is newer
+# than either).
 # Resolving main to a sha first and fetching THAT is immune -- a sha url is immutable,
 # so it is cached correctly by construction.
 UPSTREAM_RAW = "https://raw.githubusercontent.com/" + UPSTREAM_REPO + "/{ref}/" + HEADER_REL
