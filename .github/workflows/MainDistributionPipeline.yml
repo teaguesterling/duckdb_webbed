@@ -20,6 +20,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE PIN EQUALS THE SHIPPED TAG. Fleet rule (Teague, 2026-09-13): the duckdb
+  # submodule is pinned at exactly the commit of the tag the stable build ships
+  # against, which is also the version the community registry builds every
+  # extension with. Otherwise local builds and each repo's own CI artifacts carry a
+  # different DuckDB than the served one, and extensions built in different repos
+  # cannot co-load locally (the ABI is exact-version). Measured 2026-09-13: five
+  # sibling repos were on a July dev commit, one on a v1.5.6-dev commit, one on
+  # DuckDB main. Nothing but a check keeps this true. The second assertion keeps
+  # this job's constant from drifting away from the `duckdb_version:` the build
+  # jobs above actually use.
+  duckdb-pin:
+    name: DuckDB submodule pin equals the shipped tag
+    runs-on: ubuntu-latest
+    env:
+      DUCKDB_VERSION: v1.5.5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the submodule pin with the tag's commit
+        run: |
+          set -eu
+          want=$(git ls-remote --tags https://github.com/duckdb/duckdb "refs/tags/${DUCKDB_VERSION}^{}" | cut -f1)
+          [ -n "$want" ] || want=$(git ls-remote --tags https://github.com/duckdb/duckdb "refs/tags/${DUCKDB_VERSION}" | cut -f1)
+          have=$(git ls-tree HEAD duckdb | awk '{print $3}')
+          echo "shipped tag ${DUCKDB_VERSION} -> ${want}"
+          echo "submodule pin          -> ${have}"
+          [ -n "$want" ] || { echo "::error::could not resolve tag ${DUCKDB_VERSION} upstream"; exit 1; }
+          [ "$want" = "$have" ] || { echo "::error::duckdb submodule pin ${have} is not the ${DUCKDB_VERSION} tag ${want}; run: git -C duckdb fetch --tags && git -C duckdb checkout ${DUCKDB_VERSION}"; exit 1; }
+          n=$(grep -c "duckdb_version: ${DUCKDB_VERSION}$" .github/workflows/MainDistributionPipeline.yml)
+          [ "$n" -ge 1 ] || { echo "::error::no build job in this workflow ships duckdb_version: ${DUCKDB_VERSION}; this job's constant has drifted"; exit 1; }
+          # The AUTHORITY is the registry's own default, not this job's constant: a
+          # constant checked only against itself passes for a year after the registry
+          # moves (panduck, 2026-09-13). Resolve main to a sha first so the raw fetch is
+          # not served from the branch cache. TWO degraded paths, deliberately different:
+          # UNREACHABLE is the world being unavailable -> a NOTE, and the summary says
+          # the assertion was not made; REACHABLE BUT UNPARSEABLE is this check being
+          # wrong about the file (renamed input, moved default) -> a FAILURE, because
+          # only the check can fix that and a green run measuring nothing is the way
+          # this class of check rots (panduck again).
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          sha=$(curl -sf https://api.github.com/repos/duckdb/community-extensions/commits/main | grep -m1 -o '"sha": *"[0-9a-f]*"' | grep -o '[0-9a-f]\{40\}' || true)
+          if body=$(curl -sf "https://raw.githubusercontent.com/duckdb/community-extensions/${sha:-main}/.github/workflows/build.yml"); then
+            registry=$(printf '%s' "$body" | grep -m1 -o "inputs.duckdb_version || 'v[0-9][0-9.]*'" | grep -o "'v[0-9][0-9.]*'" | tr -d "'" || true)
+            if [ -z "$registry" ]; then
+              echo "::error::community-extensions build.yml at ${sha:-main} was fetched but has no \"inputs.duckdb_version || 'vX.Y.Z'\" default; this check's parse is wrong about the registry, fix the check"
+              echo "duckdb-pin: FAILED, registry file fetched but unparseable" >> "$summary"; exit 1
+            elif [ "$registry" != "$DUCKDB_VERSION" ]; then
+              echo "::error::the community registry builds at ${registry} (build.yml default at ${sha:-main}) but this repo ships and pins ${DUCKDB_VERSION}; the served artifact and the local build differ"
+              echo "duckdb-pin: FAILED, registry builds ${registry}, repo pins ${DUCKDB_VERSION}" >> "$summary"; exit 1
+            fi
+            mode="checked against the registry (${registry} at ${sha:-main})"
+          else
+            echo "::notice::could not reach the community registry; the pin was checked against the local constant only"
+            mode="NOT checked against the registry (unreachable); local constant ${DUCKDB_VERSION} only"
+          fi
+          echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_VERSION}; ${n} build job(s) ship it; ${mode}" | tee -a "$summary"
+
   # Forward-compatibility canary: builds against DuckDB main to give advance warning
   # of upstream API changes. It is EXPECTED to go red whenever main breaks an API this
   # extension uses -- the shippable build is the stable job below.
@@ -39,7 +95,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: main
+      duckdb_version: v2.0-cyanoptera
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
@@ -53,7 +109,7 @@ jobs:
 
   duckdb-stable-build:
     name: Build extension binaries
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5.4
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
     with:
       # Build target is the v1.5.5 release TAG (loadable/shippable artifacts),
       # even though the duckdb/extension-ci-tools submodule pointers track the
@@ -62,7 +118,7 @@ jobs:
       duckdb_version: v1.5.5
       # ci-tools stays on its v1.5.4 tag: extension-ci-tools has no v1.5.5 tag, and this
       # pins the CI TOOLING, not DuckDB. duckdb_version above is what the build targets.
-      ci_tools_version: v1.5.4
+      ci_tools_version: v1.5-variegata
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       # windows_amd64_mingw excluded on the v1.5.5 stable job: duckdb's
