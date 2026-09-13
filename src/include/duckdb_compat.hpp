@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -278,5 +279,41 @@ inline void PreventStructConstantFoldingAndAdd(FunctionSet<T> &func_set, T func)
 	PreventStructConstantFolding(func);
 	func_set.AddFunction(std::move(func));
 }
+
+// --- ConstantExpression from a Value ---------------------------------------
+// v2.0 deletes ConstantExpression(const Value &) ("Values are not literals -- use
+// ConstantExpression::FromValue"); v1.5 has the constructor and no FromValue.
+// Probe FromValue, the thing that changed. From duckdb_markdown c86abc0.
+template <class T, class = void>
+struct CompatHasFromValue : std::false_type {};
+template <class T>
+struct CompatHasFromValue<T, decltype(void(T::FromValue(std::declval<const Value &>())))> : std::true_type {};
+
+template <class CE>
+inline unique_ptr<ParsedExpression> CompatConstantImpl(Value value, std::true_type) {
+	return CE::FromValue(value);
+}
+template <class CE>
+inline unique_ptr<ParsedExpression> CompatConstantImpl(Value value, std::false_type) {
+	return make_uniq<CE>(std::move(value));
+}
+//! A parsed expression for a literal value, on either DuckDB line.
+template <class CE = ConstantExpression>
+inline unique_ptr<ParsedExpression> CompatConstant(Value value) {
+	return CompatConstantImpl<CE>(std::move(value), CompatHasFromValue<CE>());
+}
+
+namespace compat_detail {
+struct HasFromValueProbe {
+	explicit HasFromValueProbe(const Value &) = delete;
+	static unique_ptr<ParsedExpression> FromValue(const Value &);
+};
+struct NoFromValueProbe {
+	explicit NoFromValueProbe(Value);
+};
+static_assert(CompatHasFromValue<HasFromValueProbe>::value, "CompatHasFromValue must detect FromValue (v2.0 shape)");
+static_assert(!CompatHasFromValue<NoFromValueProbe>::value,
+              "CompatHasFromValue must not fire without FromValue (v1.5 shape)");
+} // namespace compat_detail
 
 } // namespace duckdb

@@ -1706,7 +1706,7 @@ unique_ptr<TableRef> XMLReaderFunctions::ReadXMLReplacement(ClientContext &conte
 	// Create table function reference that calls read_xml
 	auto table_function = make_uniq<TableFunctionRef>();
 	vector<unique_ptr<ParsedExpression>> children;
-	children.push_back(make_uniq<ConstantExpression>(Value(table_name)));
+	children.push_back(CompatConstant(Value(table_name)));
 	table_function->function = make_uniq<FunctionExpression>("read_xml", std::move(children));
 
 	// Set alias for non-glob patterns
