@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: 1c5f2a6 (SPEC_VERSION 1.2)
+// Vendored at upstream commit: 079123d (SPEC_VERSION 1.3)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -195,7 +195,9 @@ struct DuckBlockVocabulary {
 	static constexpr const char *KIND_INLINE = "inline";
 	// Non-prose data attached to a document -- currently its metadata. Consumers that
 	// walk document content filter on KIND_BLOCK and ignore these automatically, which
-	// is what makes the kind additive rather than breaking.
+	// is what makes the kind additive rather than breaking. The converse is NOT true:
+	// filtering on kind does not give you the body, because the verbatim `metadata`
+	// blob is a block. IsBody() below is the body predicate (1.3).
 	static constexpr const char *KIND_VALUE = "value";
 
 	// ========================================================================
@@ -431,8 +433,18 @@ struct DuckBlockVocabulary {
 	//               major-equality constant from 6 to 1 once and is done. The next
 	//               breaking change is 2.0; the next additive one is 1.3.
 	//
+	//   1.2 -> 1.3  `IsBody(kind, element_type)`: the document's BODY is kind IN
+	//               (block, inline) AND element_type <> metadata. Additive: a new
+	//               predicate stating a rule the prose implied but never wrote down,
+	//               so every consumer wrote its own. It changes duck_blocks_to_text's
+	//               OUTPUT for a document carrying a frontmatter or tailmatter blob:
+	//               the blob no longer renders as prose. That is a fix to the
+	//               reference tool, not a shape change; a consumer that copied
+	//               to_text's behaviour was reproducing a leak (duckeye and markdown
+	//               sessions, 2026-09-11).
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "1.2";
+	static constexpr const char *SPEC_VERSION = "1.3";
 	// The last number of the internal 6.x line that 1.2 replaces. A consumer check
 	// that reads MAJOR from SPEC_VERSION treats this line's major as equivalent to
 	// the current one for the one release it takes to re-vendor. Removed at 2.0.
@@ -524,6 +536,20 @@ struct DuckBlockVocabulary {
 		       : SameName(element_type, TYPE_CAPTION)
 		           ? (SameName(ancestor_type, TYPE_FIGURE) || SameName(ancestor_type, TYPE_TABLE))
 		           : false;
+	}
+
+	// Is this element part of the document's BODY -- what a text renderer, an indexer
+	// or an embedder should see? NOT expressible as a kind filter: the verbatim
+	// `metadata` blob is kind='block' because it is content-shaped (it has a source
+	// position and a level), but it is no more body than the kind='value' tree is.
+	// Found when duckeye's text renderer printed a markdown file's frontmatter above
+	// its first heading while the same metadata from a .docx (kind='value') stayed
+	// out, and duck_blocks_to_text did the same (markdown and duckeye sessions,
+	// 2026-09-11): two conformant producers, consumers diverging, the #29 shape again.
+	// `raw` IS body -- document content in its source format -- and merely has no
+	// text rendering, which is a renderer's decision, not this predicate's.
+	static constexpr bool IsBody(const char *kind, const char *element_type) {
+		return (SameName(kind, KIND_BLOCK) || SameName(kind, KIND_INLINE)) && !SameName(element_type, TYPE_METADATA);
 	}
 	// A structurally-valid element whose type is not in the standard vocabulary.
 	// Distinct from TYPE_RAW, which is literal content in a *named* format; this is a
