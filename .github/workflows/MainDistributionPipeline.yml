@@ -34,15 +34,27 @@ jobs:
   # above actually use.
   duckdb-pin:
     name: DuckDB submodule pin equals the shipped tag
+    # Name kept as-is even though the rule is now "pin equals the registry default":
+    # required-check configuration may key on this job name.
     runs-on: ubuntu-latest
     env:
       DUCKDB_VERSION: v1.5.5
       DUCKDB_NEXT: v2.0-cyanoptera
+      # Flip day (spec §3 step 3) keeps a duckdb-legacy-build at the outgoing version
+      # for one release; set this to that version then so the stray-literal scan below
+      # exempts it instead of flagging it. Empty the rest of the time.
+      DUCKDB_LEGACY: ''
     steps:
       - uses: actions/checkout@v4
       - name: Compare the submodule pin with the tag's commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          # One variable, one edit point: every sibling repo copies this job
+          # verbatim, and the greps and the stray-literal scan below all read
+          # this same file.
+          wf=.github/workflows/MainDistributionPipeline.yml
           want=$(git ls-remote --tags https://github.com/duckdb/duckdb "refs/tags/${DUCKDB_VERSION}^{}" | cut -f1)
           [ -n "$want" ] || want=$(git ls-remote --tags https://github.com/duckdb/duckdb "refs/tags/${DUCKDB_VERSION}" | cut -f1)
           have=$(git ls-tree HEAD duckdb | awk '{print $3}')
@@ -50,40 +62,81 @@ jobs:
           echo "submodule pin          -> ${have}"
           [ -n "$want" ] || { echo "::error::could not resolve tag ${DUCKDB_VERSION} upstream"; exit 1; }
           [ "$want" = "$have" ] || { echo "::error::duckdb submodule pin ${have} is not the ${DUCKDB_VERSION} tag ${want}; run: git -C duckdb fetch --tags && git -C duckdb checkout ${DUCKDB_VERSION}"; exit 1; }
-          n=$(grep -c "duckdb_version: ${DUCKDB_VERSION}$" .github/workflows/MainDistributionPipeline.yml || true)
+          n=$(grep -c "duckdb_version: ${DUCKDB_VERSION}$" "$wf" || true)
           [ "$n" -ge 1 ] || { echo "::error::no build job in this workflow ships duckdb_version: ${DUCKDB_VERSION}; this job's constant has drifted"; exit 1; }
-          m=$(grep -c "duckdb_version: ${DUCKDB_NEXT}$" .github/workflows/MainDistributionPipeline.yml || true)
+          m=$(grep -c "duckdb_version: ${DUCKDB_NEXT}$" "$wf" || true)
           [ "$m" -ge 1 ] || { echo "::error::no build job in this workflow builds the next line duckdb_version: ${DUCKDB_NEXT}"; exit 1; }
           # NO OTHER DuckDB PATCH VERSION may drift from the shipped ${DUCKDB_VERSION}
           # anywhere else in this file: sibling workflows (yaml, mcp) embed a version
           # in artifact NAMES and CLI download URLs (e.g. `yaml-v1.5.4-extension-wasm_*`,
           # `releases/download/v1.5.4/duckdb_cli`) that the `duckdb_version:` greps above
           # cannot see, so a bump left them stale and this job went green over a red
-          # build. Comment lines (first non-space char `#`) are exempt. Branch/tag names
-          # like `v2.0-cyanoptera` and `v1.5-variegata` have no third numeric component
-          # and so never match this pattern.
+          # build. Comment lines (first non-space char `#`) are exempt, and so are
+          # `uses:` lines (a `- uses:` list item too): a third-party action pin like
+          # `@v2.0.4` is not a DuckDB version. Branch/tag names like `v2.0-cyanoptera`
+          # and `v1.5-variegata` have no third numeric component and so never match
+          # this pattern. DUCKDB_LEGACY, when set (flip day, see above), is exempt too.
           bad=0
           while IFS=: read -r lineno line; do
             printf '%s\n' "$line" | grep -qE '^[[:space:]]*#' && continue
+            printf '%s\n' "$line" | grep -qE '^[[:space:]]*-?[[:space:]]*uses:' && continue
             for v in $(printf '%s\n' "$line" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true); do
               if [ "$v" != "$DUCKDB_VERSION" ]; then
-                echo "::error::line ${lineno}: ${line} — a DuckDB version literal that is not the shipped ${DUCKDB_VERSION}: derive it from the shipped version or bump it"
+                if [ -n "$DUCKDB_LEGACY" ] && [ "$v" = "$DUCKDB_LEGACY" ]; then
+                  continue
+                fi
+                echo "::error::line ${lineno}: ${line} -- a DuckDB version literal that is not the shipped ${DUCKDB_VERSION}: derive it from the shipped version or bump it"
                 bad=1
               fi
             done
-          done < <(grep -nE 'v[0-9]+\.[0-9]+\.[0-9]+' .github/workflows/MainDistributionPipeline.yml || true)
+          done < <(grep -nE 'v[0-9]+\.[0-9]+\.[0-9]+' "$wf" || true)
           [ "$bad" -eq 0 ] || exit 1
           # THE AUTHORITY is the registry's own files, not this job's constants: a
           # constant checked only against itself passes for a year after the registry
           # moves (panduck, 2026-09-13). Resolve main to a sha first so the raw fetches
-          # are not served from the branch cache. TWO degraded paths, deliberately
-          # different: UNREACHABLE is the world being unavailable -> a NOTE, and the
-          # summary says the registry assertions were not made; REACHABLE BUT
-          # UNPARSEABLE is this check being wrong about the file -> a FAILURE.
+          # are not served from the branch cache. THREE degraded paths, deliberately
+          # different: UNREACHABLE (curl itself failed, HTTP code 000) is the world
+          # being unavailable -> a NOTE, and the summary says the registry assertions
+          # were not made, with only the local-constant assertions above run; a
+          # non-2xx HTTP code (e.g. a renamed/removed registry file) is this check
+          # asking the world a well-formed question and getting told no -> a FAILURE
+          # naming the code and URL (a bare `curl -sf` would have mistaken this for
+          # UNREACHABLE and measured nothing); REACHABLE, 2xx, BUT UNPARSEABLE is this
+          # check being wrong about the file's content -> also a FAILURE.
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
           base="https://raw.githubusercontent.com/duckdb/community-extensions"
-          sha=$(curl -sf https://api.github.com/repos/duckdb/community-extensions/commits/main | grep -m1 -o '"sha": *"[0-9a-f]*"' | grep -o '[0-9a-f]\{40\}' || true)
-          if body=$(curl -sf "${base}/${sha:-main}/.github/workflows/build.yml") && next_body=$(curl -sf "${base}/${sha:-main}/.github/workflows/build_next.yml"); then
+          # An Authorization: Bearer header with an EMPTY token is not "no header": GitHub
+          # answers 401 to it, worse than sending no header at all (confirmed empirically).
+          # An unauthenticated local run (no GITHUB_TOKEN, which the docs tell maintainers
+          # to run) would then always miss sha resolution and fall back to the `main` REF
+          # NAME, comparing against whatever the branch URL's cache happens to be serving --
+          # the exact staleness this sha-resolution step exists to avoid. So the header is
+          # added only when a token is actually present; CI always has one.
+          auth=(); [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+          sha=$(curl -sf "${auth[@]}" https://api.github.com/repos/duckdb/community-extensions/commits/main | grep -m1 -o '"sha": *"[0-9a-f]*"' | grep -o '[0-9a-f]\{40\}' || true)
+          f1=$(mktemp); f2=$(mktemp)
+          # curl itself writes 000 to -w's %{http_code} when no HTTP response was
+          # received at all (DNS failure, connection refused, timeout); `|| echo 000`
+          # would DOUBLE that to "000000" (curl's own "000" plus the fallback's),
+          # which then fails the equality check below and misreads UNREACHABLE as a
+          # non-2xx code. `|| true` only stops `set -e` from killing the script on
+          # curl's nonzero exit; the "000" already captured is curl's, unaltered.
+          code1=$(curl -s -o "$f1" -w '%{http_code}' "${base}/${sha:-main}/.github/workflows/build.yml" || true)
+          code2=$(curl -s -o "$f2" -w '%{http_code}' "${base}/${sha:-main}/.github/workflows/build_next.yml" || true)
+          if [ "$code1" = "000" ] || [ "$code2" = "000" ]; then
+            echo "::notice::could not reach the community registry; the pin was checked against the local constants only"
+            mode="NOT checked against the registry (unreachable); local constants ${DUCKDB_VERSION}/${DUCKDB_NEXT} only"
+          elif [ "${code1#2}" = "$code1" ]; then
+            url="${base}/${sha:-main}/.github/workflows/build.yml"
+            echo "::error::community registry returned HTTP ${code1} for ${url}"
+            echo "duckdb-pin: FAILED, registry returned ${code1} for ${url}" >> "$summary"; exit 1
+          elif [ "${code2#2}" = "$code2" ]; then
+            url="${base}/${sha:-main}/.github/workflows/build_next.yml"
+            echo "::error::community registry returned HTTP ${code2} for ${url}"
+            echo "duckdb-pin: FAILED, registry returned ${code2} for ${url}" >> "$summary"; exit 1
+          else
+            body=$(cat "$f1")
+            next_body=$(cat "$f2")
             registry=$(printf '%s' "$body" | grep -m1 -o "inputs.duckdb_version || 'v[0-9][0-9.]*'" | grep -o "'v[0-9][0-9.]*'" | tr -d "'" || true)
             registry_next=$(printf '%s' "$next_body" | grep -m1 -o "duckdb_version: *'v[0-9][0-9.]*-[a-z]*'" | grep -o "'v[^']*'" | tr -d "'" || true)
             if [ -z "$registry" ] || [ -z "$registry_next" ]; then
@@ -95,11 +148,8 @@ jobs:
               echo "duckdb-pin: FAILED, registry ${registry}/${registry_next} vs repo ${DUCKDB_VERSION}/${DUCKDB_NEXT}" >> "$summary"; exit 1
             fi
             mode="checked against the registry (default ${registry}, next ${registry_next}, at ${sha:-main})"
-          else
-            echo "::notice::could not reach the community registry; the pin was checked against the local constants only"
-            mode="NOT checked against the registry (unreachable); local constants ${DUCKDB_VERSION}/${DUCKDB_NEXT} only"
           fi
-          echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_VERSION}; ${n} stable and ${m} next build job(s); ${mode}" | tee -a "$summary"
+          echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_VERSION}; ${n} job(s) shipping ${DUCKDB_VERSION} and ${m} job(s) shipping ${DUCKDB_NEXT}; ${mode}" | tee -a "$summary"
 
   # Forward-compatibility canary: builds against DuckDB main to give advance warning
   # of upstream API changes. It is EXPECTED to go red whenever main breaks an API this
