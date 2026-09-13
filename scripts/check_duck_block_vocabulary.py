@@ -346,6 +346,98 @@ def pinned_sha(local_path):
     return None
 
 
+PROVENANCE_RE = re.compile(
+    r"^//\s*Vendored at upstream commit:\s*([0-9a-f]{7,40})\s*\(SPEC_VERSION\s+([0-9.]+)\)\s*$",
+    re.MULTILINE)
+
+
+def parse_provenance(text):
+    """(sha, claimed_version) from the vendored copy's stamp, or (None, None)."""
+    m = PROVENANCE_RE.search(text)
+    return (m.group(1), m.group(2)) if m else (None, None)
+
+
+def classify(local, upstream):
+    """removed / changed / added, by name AND value -- the same split report() prints."""
+    removed = sorted(set(local) - set(upstream))
+    added = sorted(set(upstream) - set(local))
+    changed = sorted(k for k in set(local) & set(upstream) if local[k] != upstream[k])
+    return removed, changed, added
+
+
+def check_provenance(local_text, local_constants, fetch_at_sha, verified):
+    """Is this copy's provenance stamp present, well-formed, and TRUE?
+
+    Ported from duckdb_markdown (40b0136) at duck_block_utils' direction so the three
+    consumers share one design rather than three judgement calls. The stamp exists
+    because provenance has to travel WITH the file: a fork, a copy, a grep or a squash
+    sees the header and not the commit that introduced it. That is only worth anything
+    if the stamp is CHECKED -- upstream states the convention in prose, and until this
+    landed nothing enforced it anywhere.
+
+    FOUR REFUSED CASES, three local and one that needs the network:
+
+      1. no stamp at all
+      2. a stamp that does not parse
+      3. the SPEC_VERSION it claims differs from the one in this very file
+      4. the header AT the claimed sha differs from this copy   [verified only]
+
+    (4) is the STALE STAMP -- a sha upstream knows, whose header no longer matches what
+    we vendored -- the one failure a provenance line can have, and invisible to a check
+    that only asks whether the sha resolves. Mismatch when verified fails hard, because
+    it was verified. It degrades to a NOTE when the upstream read was itself unverified:
+    a check that reddens a PR because GitHub blinked asserts a falsehood about a file
+    that has not changed, which is how a check earns being muted. It rides on the SAME
+    verified status as the drift comparison rather than opening a second network
+    dependency: one outage, one verdict. Fetching AT a sha, never a branch, is what
+    makes this cache-safe by construction (see UPSTREAM_RAW above).
+    """
+    problems, notes = [], []
+    sha, claimed = parse_provenance(local_text)
+    file_version = local_constants.get("SPEC_VERSION")
+
+    if sha is None:
+        if "Vendored at upstream commit" in local_text:
+            problems.append(
+                "provenance stamp is present but malformed. Expected exactly: "
+                "// Vendored at upstream commit: <sha> (SPEC_VERSION <x.y>)")
+        else:
+            problems.append(
+                "no provenance stamp. The vendored copy must carry "
+                "'// Vendored at upstream commit: <sha> (SPEC_VERSION <x.y>)' -- "
+                "step 1 of upstream's own re-vendoring guidance")
+        return problems, notes
+
+    if claimed != file_version:
+        problems.append(
+            f"provenance stamp claims SPEC_VERSION {claimed}, but this file declares "
+            f"{file_version}. The stamp was not updated with the copy")
+
+    if not verified:
+        notes.append(
+            f"provenance sha {sha} NOT checked against upstream -- the upstream read was "
+            f"itself unverified. The stamp's local properties hold")
+        return problems, notes
+
+    try:
+        at_sha = fetch_at_sha(sha)
+    except Exception as exc:  # noqa: BLE001 -- any read failure is a note, never a verdict
+        notes.append(f"provenance sha {sha} could not be read upstream ({exc}); local properties hold")
+        return problems, notes
+
+    if not at_sha:
+        problems.append(f"provenance names {sha}, which upstream does not have")
+        return problems, notes
+
+    r, c, a = classify(local_constants, parse_constants(at_sha))
+    if r or c or a:
+        detail = ", ".join([f"-{k}" for k in r] + [f"~{k}" for k in c] + [f"+{k}" for k in a][:6])
+        problems.append(
+            f"STALE STAMP: the header at {sha} does not match this copy ({detail}). "
+            f"Either the copy was edited after vendoring, or the stamp names the wrong commit")
+    return problems, notes
+
+
 def report(local, upstream, root, show_gaps=True, verified=True, strict=False):
     """Compare two constant maps. Returns (exit_code, headline)."""
     removed = sorted(set(local) - set(upstream))
@@ -498,13 +590,51 @@ def test_count_blindness():
         if spec_compatible(lo, up) != want:
             failures.append(f"spec_compatible({lo!r}, {up!r}) -- {why}")
 
+    # PROVENANCE: the four refused cases and the one accepted one, plus offline
+    # degradation in both directions. A property test that cannot fail is the same
+    # false comfort as a round trip that cannot separate two inverse defects, so
+    # gut check_provenance to `return [], []` and watch these go red before trusting them.
+    HDR = ('#pragma once\n'
+           '// Vendored at upstream commit: {sha} (SPEC_VERSION {claim})\n'
+           'static constexpr const char *SPEC_VERSION = "{file}";\n'
+           'static constexpr const char *TYPE_HR = "hr";\n')
+
+    def prov(sha="abc1234", claim="1.3", file="1.3", upstream_hdr=None, verified=True, stamp=True):
+        text = HDR.format(sha=sha, claim=claim, file=file)
+        if not stamp:
+            text = text.replace(f'// Vendored at upstream commit: {sha} (SPEC_VERSION {claim})\n', '')
+        return check_provenance(text, parse_constants(text), lambda s: upstream_hdr, verified)
+
+    good = HDR.format(sha="abc1234", claim="1.3", file="1.3")
+    stale = good.replace('"hr"', '"horizontal_rule"')
+    for label, (probs, notes), want_fail in (
+        ("stamp matches upstream at the sha",  prov(upstream_hdr=good), False),
+        ("no stamp at all",                    prov(stamp=False, upstream_hdr=good), True),
+        ("malformed stamp",                    check_provenance(
+            "// Vendored at upstream commit: not-a-sha\n"
+            'static constexpr const char *SPEC_VERSION = "1.3";\n',
+            {"SPEC_VERSION": "1.3"}, lambda s: good, True), True),
+        ("claimed version != file's",          prov(claim="1.2", file="1.3", upstream_hdr=good), True),
+        ("STALE STAMP: header at sha differs", prov(upstream_hdr=stale), True),
+        ("sha upstream does not have",         prov(upstream_hdr=None), True),
+    ):
+        if bool(probs) != want_fail:
+            failures.append(f"provenance {label!r}: expected fail={want_fail}, got {probs}")
+    probs, notes = prov(verified=False, upstream_hdr=stale)
+    if probs or not notes:
+        failures.append(f"provenance offline: stale stamp must be a note, not a failure; got {probs} / {notes}")
+    probs, _ = prov(claim="1.2", file="1.3", verified=False)
+    if not probs:
+        failures.append("provenance offline: a local property (version mismatch) must still fail")
+
     for f in failures:
         print(f"SELF-TEST FAILED: {f}")
     if failures:
         return 1
     print("self-test OK: rename, value change and cosmetic churn classified correctly "
           "with the count held constant;")
-    print("              field offsets excluded; an undated read never reports OK")
+    print("              field offsets excluded; an undated read never reports OK;")
+    print("              provenance: four refused cases, offline degrades to a note")
     return 0
 
 
@@ -572,6 +702,29 @@ def main():
     print()
 
     code, _ = report(local, upstream, root, verified=verified, strict=args.strict)
+
+    # PROVENANCE rides on the same `verified` as the drift comparison above.
+    if args.upstream:
+        def fetch_at_sha(sha):
+            try:
+                return read_upstream_git(args.upstream, sha)
+            except SystemExit:
+                return None
+    else:
+        def fetch_at_sha(sha):
+            return _get(UPSTREAM_RAW.format(ref=sha), args.timeout)
+    local_text = open(local_path, encoding="utf-8").read()
+    prov_problems, prov_notes = check_provenance(local_text, local, fetch_at_sha, verified)
+    for n in prov_notes:
+        print(f"NOTE   {n}")
+    for p in prov_problems:
+        print(f"PROV   {p}")
+    if prov_problems:
+        code = 1
+        print("FAILED: provenance stamp does not hold (see PROV above)")
+    elif not prov_notes:
+        print("       provenance stamp verified against the header at its sha")
+
     if code != 0 and args.upstream:
         # A copy vendored from a commit that upstream main has not merged yet
         # reads as DRIFT against main, and it is not: it is AHEAD. Tell the two
