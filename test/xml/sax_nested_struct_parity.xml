@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <item>
+    <id>1</id>
+    <person>
+      <name>Alice</name>
+      <address>
+        <city>NYC</city>
+        <zip>10001</zip>
+      </address>
+    </person>
+  </item>
+  <item>
+    <id>2</id>
+    <person>
+      <name>Bob</name>
+      <address>
+        <city>SF</city>
+        <zip>94105</zip>
+      </address>
+    </person>
+  </item>
+</root>

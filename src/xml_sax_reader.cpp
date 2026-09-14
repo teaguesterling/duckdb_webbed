@@ -432,8 +432,9 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 		throw IOException("Could not create SAX push parser context for '%s'", filename);
 	}
 
-	// Configure parser options (thread-safe, no global state modification)
-	xmlCtxtUseOptions(parser_ctx, XML_PARSE_RECOVER | XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+	// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
+	// via ignore_errors by the caller), not silently recover into partial rows.
+	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
 	char buffer[SAX_CHUNK_SIZE];
 
@@ -444,14 +445,18 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 		}
 
 		int result = xmlParseChunk(parser_ctx, buffer, static_cast<int>(bytes_read), 0);
-		if (result != 0 && !options.ignore_errors) {
+		if (result != 0) {
 			xmlFreeParserCtxt(parser_ctx);
 			throw IOException("SAX parsing error in file '%s'", filename);
 		}
 	}
 
 	// Finalize parsing
-	xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
+	int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
+	if (final_result != 0) {
+		xmlFreeParserCtxt(parser_ctx);
+		throw IOException("SAX parsing error in file '%s'", filename);
+	}
 	xmlFreeParserCtxt(parser_ctx);
 
 	return results;
