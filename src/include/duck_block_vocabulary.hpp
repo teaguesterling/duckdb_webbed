@@ -4,7 +4,7 @@
 // VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 //
 // Source: teaguesterling/duckdb_duck_block_utils, src/include/duck_block_vocabulary.hpp
-// Vendored at upstream commit: 079123d (SPEC_VERSION 1.3)
+// Vendored at upstream commit: 95a84e6 (SPEC_VERSION 1.4)
 //
 // Taken from a pinned git object (`git show <sha>:<path>`) against a local
 // clone of upstream, NOT from a `raw.githubusercontent.com/.../main/...` URL.
@@ -443,12 +443,35 @@ struct DuckBlockVocabulary {
 	//               to_text's behaviour was reproducing a leak (duckeye and markdown
 	//               sessions, 2026-09-11).
 	//
+	//   1.3 -> 1.4  BODY IS A SUBTREE PROPERTY. 1.3's per-row IsBody() said a value
+	//               container is not body and then said its inline child text IS:
+	//               Pandoc-derived readers (docx, odt, org, epub, rtf, tex) emit
+	//               metadata as kind='value' rows whose text lives in kind='inline'
+	//               children, so a row filter leaked "Test Author" into body while
+	//               duck_blocks_to_text, which walks the tree, stayed clean (panduck
+	//               #54 fixture, 2026-09-14). The definition is now: a row is body iff
+	//               kind IN (block, inline), element_type <> metadata, AND no ancestor
+	//               by level is a value or metadata row. IsBody() is kept, unchanged,
+	//               as the NECESSARY per-row test; duck_blocks_body(blocks) applies the
+	//               subtree rule to a list. The value-tree level contract is stated
+	//               (descendants strictly deeper than their root) and validated (L6).
+	//               PREDICATE_REVISION added (see below). Additive.
+	//
 	// The rule above is what will be followed from here.
-	static constexpr const char *SPEC_VERSION = "1.3";
+	static constexpr const char *SPEC_VERSION = "1.4";
 	// The last number of the internal 6.x line that 1.2 replaces. A consumer check
 	// that reads MAJOR from SPEC_VERSION treats this line's major as equivalent to
 	// the current one for the one release it takes to re-vendor. Removed at 2.0.
 	static constexpr const char *SPEC_VERSION_SUPERSEDES = "6.6";
+	// The SPEC_VERSION at which any constexpr PREDICATE in this header (ImplicitParentOf,
+	// RequiresAncestor, IsBody) last changed its answers. Consumer drift checks compare
+	// constants by name and value and cannot see a predicate's body (markdown measured
+	// 95 constants before and after IsBody landed), so a predicate edit would read as
+	// "in sync" everywhere. This constant changes value when a predicate does, which is
+	// the one kind of change those checks are built to see. Rules: a predicate body
+	// change is at least a MINOR bump with a history entry naming the predicate and its
+	// old and new rule; a change that flips an existing answer is MAJOR.
+	static constexpr const char *PREDICATE_REVISION = "1.3";
 
 	// ========================================================================
 	// Block type names
@@ -548,6 +571,14 @@ struct DuckBlockVocabulary {
 	// 2026-09-11): two conformant producers, consumers diverging, the #29 shape again.
 	// `raw` IS body -- document content in its source format -- and merely has no
 	// text rendering, which is a renderer's decision, not this predicate's.
+	//
+	// NECESSARY, NOT SUFFICIENT (1.4). This is a per-row test and cannot see an ancestor:
+	// the inline leaves of a kind='value' metadata tree answer TRUE here. Body is a
+	// SUBTREE property: a row is body iff this predicate holds AND no ancestor by level
+	// is a value or metadata row. Filter a LIST with duck_blocks_body(blocks), which
+	// applies both; use this alone only where the row is already known to be under a
+	// block. The value-tree contract that makes the walk correct: a value tree's
+	// descendants sit strictly deeper than their root (validated as L6).
 	static constexpr bool IsBody(const char *kind, const char *element_type) {
 		return (SameName(kind, KIND_BLOCK) || SameName(kind, KIND_INLINE)) && !SameName(element_type, TYPE_METADATA);
 	}
