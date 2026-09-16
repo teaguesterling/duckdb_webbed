@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <doc id="cdata"><s><k><![CDATA[a < b & c]]></k></s><t><![CDATA[a < b & c]]></t></doc>
+  <doc id="comment"><s><k>x<!-- note -->y</k></s><t>x<!-- note -->y</t></doc>
+  <doc id="entity"><s><k>a &lt; b &amp; c</k></s><t>a &lt; b &amp; c</t></doc>
+  <doc id="mixed"><s><k>pre<![CDATA[mid & more]]>post</k></s><t>pre<![CDATA[mid & more]]>post</t></doc>
+  <doc id="pi"><s><k><?target data?>y</k></s><t><?target data?>y</t></doc>
+</root>

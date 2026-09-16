@@ -1,0 +1,82 @@
+# name: test/sql/github_issue_158_dom_sax_parity.test
+# description: Issue 158 - the same document read through SAX streaming and through the DOM path must produce the same bytes. SAX reconstructs nested XML from callbacks, and it registered no comment or processingInstruction handler and folded cdataBlock into characters, so CDATA framing, comments and PIs were silently lost.
+# group: [sql]
+
+require webbed
+
+# The DOM serializer is the reference for this extension: the SAX path already
+# mirrors it deliberately for CR and for attribute-value escaping (see
+# XmlEscapeText / XmlEscapeAttr). CDATA, comments and PIs are the same contract.
+#
+# streaming := false forces DOM; maximum_file_size := 1 puts the file over the
+# streaming threshold and forces SAX. Each <doc> carries the same content twice:
+# once wrapped in <s><k>...</k></s>, which the reader captures as a nested XML
+# fragment, and once as the leaf <t>, which it captures as scalar text. The two
+# are affected differently and both are checked.
+#
+# There is no vacuous-pass risk in the nested query below: before this fix four
+# of its five rows compared false.
+
+# =============================================================================
+# Nested XML fragments: the reported CDATA case, plus the rest of the class.
+# A fragment must round-trip through streaming with its CDATA sections, its
+# comments and its processing instructions intact.
+# =============================================================================
+
+query III
+WITH dom AS (
+    SELECT id, s::VARCHAR AS v
+    FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                  columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'}, streaming := false)
+), sax AS (
+    SELECT id, s::VARCHAR AS v
+    FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                  columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'}, maximum_file_size := 1)
+)
+SELECT dom.id, dom.v = sax.v, dom.v FROM dom JOIN sax USING (id) ORDER BY dom.id;
+----
+cdata	true	<k><![CDATA[a < b & c]]></k>
+comment	true	<k>x<!-- note -->y</k>
+entity	true	<k>a &lt; b &amp; c</k>
+mixed	true	<k>pre<![CDATA[mid & more]]>post</k>
+pi	true	<k><?target data?>y</k>
+
+# =============================================================================
+# Controls: scalar text columns already agreed under both modes and must keep
+# agreeing. In scalar text a CDATA section contributes its unwrapped content
+# (xmlNodeGetContent semantics) and comments and PIs contribute nothing -- so
+# preserving CDATA framing in the nested case must not leak markers into scalar
+# text, and adding comment/PI handlers must not start injecting them here.
+# =============================================================================
+
+query III
+WITH dom AS (
+    SELECT id, t::VARCHAR AS v
+    FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                  columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'}, streaming := false)
+), sax AS (
+    SELECT id, t::VARCHAR AS v
+    FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                  columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'}, maximum_file_size := 1)
+)
+SELECT dom.id, dom.v = sax.v, dom.v FROM dom JOIN sax USING (id) ORDER BY dom.id;
+----
+cdata	true	a < b & c
+comment	true	xy
+entity	true	a < b & c
+mixed	true	premid & morepost
+pi	true	y
+
+# A document carrying none of these node kinds was already byte-identical under
+# both modes, and stays so.
+query I
+SELECT (SELECT s::VARCHAR FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                                        columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'},
+                                        streaming := false)
+        WHERE id = 'entity')
+     = (SELECT s::VARCHAR FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                                        columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'},
+                                        maximum_file_size := 1)
+        WHERE id = 'entity');
+----
+true
