@@ -15,12 +15,16 @@ require webbed
 # are affected differently and both are checked.
 #
 # There is no vacuous-pass risk in the nested query below: before this fix four
-# of its five rows compared false.
+# of its rows compared false.
 
 # =============================================================================
 # Nested XML fragments: the reported CDATA case, plus the rest of the class.
 # A fragment must round-trip through streaming with its CDATA sections, its
 # comments and its processing instructions intact.
+#
+# 'cdataclose' is the one case the splitting logic exists for: a payload that
+# itself contains "]]>". A CDATA section cannot hold that sequence, so both
+# serializers must close and reopen the section around it.
 # =============================================================================
 
 query III
@@ -36,10 +40,24 @@ WITH dom AS (
 SELECT dom.id, dom.v = sax.v, dom.v FROM dom JOIN sax USING (id) ORDER BY dom.id;
 ----
 cdata	true	<k><![CDATA[a < b & c]]></k>
+cdataclose	true	<k><![CDATA[before]]]]><![CDATA[>after]]></k>
 comment	true	<k>x<!-- note -->y</k>
 entity	true	<k>a &lt; b &amp; c</k>
 mixed	true	<k>pre<![CDATA[mid & more]]>post</k>
 pi	true	<k><?target data?>y</k>
+
+# Byte equality is the contract, but it is worth pinning the reason it matters:
+# the reconstructed fragment must still parse back to the original text. If the
+# "]]>" split were wrong, the fragment would either be malformed or decode to
+# something else.
+query I
+SELECT xml_extract_text('<w>' || (SELECT s::VARCHAR
+                                  FROM read_xml('test/xml/dom_sax_parity.xml', record_element := 'doc',
+                                                columns := {'id': 'VARCHAR', 's': 'VARCHAR', 't': 'VARCHAR'},
+                                                maximum_file_size := 1)
+                                  WHERE id = 'cdataclose') || '</w>', '//k')[1];
+----
+before]]>after
 
 # =============================================================================
 # Controls: scalar text columns already agreed under both modes and must keep
@@ -62,6 +80,7 @@ WITH dom AS (
 SELECT dom.id, dom.v = sax.v, dom.v FROM dom JOIN sax USING (id) ORDER BY dom.id;
 ----
 cdata	true	a < b & c
+cdataclose	true	before]]>after
 comment	true	xy
 entity	true	a < b & c
 mixed	true	premid & morepost
