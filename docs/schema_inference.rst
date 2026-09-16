@@ -106,7 +106,7 @@ The extension automatically detects these types:
      - Examples
    * - BOOLEAN
      - true/false, yes/no, on/off
-     - ``true``, ``false``, ``yes``, ``no``
+     - ``true``, ``false``, ``yes``, ``no``, ``on``, ``off``
    * - INTEGER/BIGINT
      - Whole numbers
      - ``42``, ``-100``, ``999999``
