@@ -1,8 +1,72 @@
 Changelog
 =========
 
-v2.9.0 (Current)
+v2.9.1 (Current)
 ----------------
+
+Bug-fix release: four reported defects, one external contribution, and the vendored
+duck_block vocabulary moved to spec 1.4. **Three of these change behaviour** -- unusual for a
+patch release, so they are named first.
+
+**Behaviour change: SAX streaming now preserves CDATA sections, comments and processing
+instructions.** A nested XML fragment captured through streaming lost all three, while the
+same document read through the DOM path kept them -- four of five cases diverged (#158).
+libxml2 discards callbacks that are not registered, so comments and processing instructions
+never reached the reader at all, and ``cdataBlock`` delegated to ``characters``, flattening
+the section framing. The DOM serializer is this extension's reference, so SAX now matches it.
+**Anything matching streamed fragment output byte-for-byte will see different bytes.** Scalar
+text columns are unchanged: a CDATA section still contributes its unwrapped content there, and
+comments and processing instructions still contribute nothing.
+
+**Behaviour change: malformed XML now fails closed under SAX.** The streaming path recovered
+into partial data where the DOM path raised; it now raises as well, and with
+``ignore_errors := true`` an invalid file contributes no rows rather than a truncated prefix
+(#152, external contribution).
+
+**Behaviour change: a column mixing boolean and numeric text now infers VARCHAR.** ``1`` and
+``true`` in the same column inferred INTEGER and then failed the scan on ``true`` (#160).
+Sample types were unified on DuckDB's *value* cast lattice, where BOOLEAN casts to INTEGER --
+but the samples are *text*, and no integer lexeme spells ``true``, so inference produced a
+type that could not read the data it was inferred from. A boolean lexeme mixed with anything
+else now widens to VARCHAR and keeps both spellings, which is what DuckDB's own CSV sniffer
+answers for the same input. Numeric promotion (``INTEGER`` -> ``BIGINT`` -> ``DOUBLE``),
+homogeneous boolean columns, and ``0``/``1`` as integer lexemes are all unchanged.
+
+**Fix: datetime formats now reach nested and repeated values.** ``datetime_format`` was
+applied only to top-level scalar columns, so a date inside a STRUCT field or a repeated
+element was *typed* temporal by inference and then parsed with default ISO rules, yielding
+NULL or aborting the scan (#159). The column's format is now threaded through nested
+extraction, and where no format was ever recorded the conversion retries against the same
+candidate list inference used. Nothing that previously parsed changes meaning.
+
+On an ambiguous value, extraction declines rather than guesses. Inference eliminates
+candidates across every sample in a column, so one unambiguous ``25/12/2024`` settles that
+column as day-first; a single nested value cannot repeat that elimination, and the built-in
+list holds both ``%m/%d/%Y`` and ``%d/%m/%Y``. Rather than read ``01/02/2024`` as 2 January
+while the same extension reads identical data as 1 February at top level, an ambiguous nested
+value raises the conversion error it already raised before this release. Naming a format
+resolves it -- the presets are single-candidate (``'us'`` is ``%m/%d/%Y``, ``'eu'`` is
+``%d/%m/%Y``).
+
+**Tests: the DuckDB 2.0 fallible contract is now guarded by error class, not message.** No
+function was mismarked (#156): every scalar that can throw an execution error already declared
+it. But DuckDB 2.0 rewrites an unmarked function's throw into an ``INTERNAL Error`` that
+*quotes the original message*, so an expectation matching only message text passed either way
+and could not detect a lost ``SetFallible()``. Expectations now pin the
+``Invalid Input Error:`` class prefix on all five reachable throw sites. The technique has a
+limit worth recording: ``IOException`` and ``BinderException`` are never rewritten, so no
+expectation can guard an IO-throwing function's declaration however it is written.
+
+**Vendored duck_block vocabulary at spec 1.4** (upstream ``95a84e6``), up from the 6.5-era
+numbering vendored for v2.9.0, and adding ``PREDICATE_REVISION``. Verified in sync with
+upstream by name and value.
+
+**Build: the duckdb submodule is pinned at the v1.5.5 tag** (``d8cdaa33fd``). v2.9.0 was built
+against an untagged development commit. CI now asserts that the pin equals the shipped tag,
+treats the v2.0 line as a gate, and runs an advisory canary against DuckDB ``main``.
+
+v2.9.0
+------
 
 **Behaviour change: attribute capture is now a parameter, and** ``class`` **is opt-in.**
 
