@@ -1293,6 +1293,27 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 		return LogicalType::VARCHAR;
 	}
 
+	// Every type here was detected from one sample's TEXT, so the answer has to be a type
+	// each sample's LEXEME can be read as -- not merely a type each detected type can be
+	// cast to. Those differ for BOOLEAN: it implicitly casts to every numeric type, so
+	// ForceMaxLogicalType answers INTEGER for {INTEGER, BOOLEAN}. But no integer lexeme
+	// spells 'true', so the column bound INTEGER and the scan then failed on that value
+	// (issue #160). A boolean lexeme mixed with anything else has no common lexical type:
+	// widen to VARCHAR and keep both spellings, which is also what DuckDB's own CSV
+	// sniffer answers for {1, true}.
+	bool has_boolean = false;
+	bool has_other = false;
+	for (const auto &type : types) {
+		if (type.id() == LogicalTypeId::BOOLEAN) {
+			has_boolean = true;
+		} else {
+			has_other = true;
+		}
+	}
+	if (has_boolean && has_other) {
+		return LogicalType::VARCHAR;
+	}
+
 	// Use DuckDB's built-in type resolution which handles all type promotions
 	// (INTEGER->DOUBLE, DATE->TIMESTAMP, etc.)
 	LogicalType result = types[0];
