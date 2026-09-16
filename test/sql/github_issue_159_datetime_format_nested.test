@@ -106,3 +106,56 @@ SELECT typeof(meta), meta.date
 FROM parse_xml('<events><event><meta><date>03/15/2024</date></meta></event></events>', datetime_format := 'us', all_varchar := true);
 ----
 STRUCT(date VARCHAR)	03/15/2024
+
+# =============================================================================
+# Ambiguity: the fallback must decline rather than guess.
+#
+# A nested field has no recorded format, so extraction consults the candidate
+# list -- and the auto list holds both %m/%d/%Y and %d/%m/%Y. Inference settles
+# a column by eliminating candidates across EVERY sample, so a single
+# unambiguous '25/12/2024' makes the whole column day-first. One value cannot
+# repeat that elimination. Taking the first candidate that parses would read
+# '01/02/2024' as 2 January while the same extension reads the same data as
+# 1 February at top level -- a silently transposed date, which is worse than
+# the NULL this fix set out to remove.
+# =============================================================================
+
+# The reference. At top level the column's winning format IS threaded through,
+# so the ambiguous value reads day-first. Nothing below may contradict this.
+query I
+SELECT date FROM parse_xml('<events><event><date>25/12/2024</date></event><event><date>01/02/2024</date></event></events>');
+----
+2024-12-25
+2024-02-01
+
+# Nested, same data, auto mode: the unambiguous value parses, the ambiguous one
+# is declined -- not transposed.
+query I
+SELECT meta.date FROM parse_xml('<events><event><meta><date>25/12/2024</date></meta></event><event><meta><date>01/02/2024</date></meta></event></events>', ignore_errors := true);
+----
+2024-12-25
+NULL
+
+# Without ignore_errors a declined value surfaces as the conversion error the
+# reader would have raised anyway. The point is not that this is pleasant; it is
+# that it is never a wrong date.
+statement error
+SELECT meta.date FROM parse_xml('<events><event><meta><date>25/12/2024</date></meta></event><event><meta><date>01/02/2024</date></meta></event></events>');
+----
+Conversion Error
+
+# The escape hatch: naming the format removes the ambiguity, because a preset
+# resolves to exactly one candidate ('eu' is {%d/%m/%Y}). The nested value then
+# agrees with the top-level reference above.
+query I
+SELECT meta.date FROM parse_xml('<events><event><meta><date>25/12/2024</date></meta></event><event><meta><date>01/02/2024</date></meta></event></events>', datetime_format := 'eu');
+----
+2024-12-25
+2024-02-01
+
+# Declining stays narrow: an unambiguous day-first value on its own is still
+# parsed by the fallback, so this is not a retreat to NULL for nested dates.
+query I
+SELECT meta.date FROM parse_xml('<events><event><meta><date>25/12/2024</date></meta></event></events>');
+----
+2024-12-25

@@ -1042,69 +1042,93 @@ static const std::vector<std::string> &EffectiveDatetimeCandidates(const XMLSche
 }
 
 // Parse text into a temporal target using the candidate list inference used, returning false
-// when no candidate matches. Candidates are tried in list order, so the winner is the same one
-// inference would have picked ("first surviving candidate wins").
+// when no candidate matches, and -- importantly -- also when two candidates disagree about what
+// the value means.
 //
-// A value arrives at extraction with no format whenever none was ever recorded: InferColumnType
-// computes a nested field's winning format and discards it, and LIST elements never carried one.
-// Default ISO parsing then contradicts the decision inference already made from these same
-// candidates, and the value became NULL or aborted the scan (issue #159). Only consulted after
-// default parsing has failed, so a value that already parsed keeps its meaning.
+// The disagreement rule is what keeps this honest. Inference eliminates candidates using EVERY
+// sample in a column, so a single unambiguous "25/12/2024" settles that column on %d/%m/%Y for
+// good. This function sees one value and cannot repeat that elimination, while the auto list holds
+// both %m/%d/%Y and %d/%m/%Y. Taking the first candidate that parses would read "01/02/2024" as
+// 2 January, while the very same extension reads the very same data as 1 February at top level,
+// where the column's winning format IS threaded through. A silently transposed date is worse than
+// the NULL this fix set out to remove, so when candidates disagree we decline and let the original
+// conversion error stand. An explicit datetime_format resolves to a single format ('us' is exactly
+// {%m/%d/%Y}), so the rule cannot fire for a user who declared one.
+//
+// A value arrives here with no format whenever none was ever recorded: InferColumnType computes a
+// nested field's winning format and discards it, and LIST elements never carried one. Only
+// consulted after default parsing has failed, so a value that already parsed keeps its meaning.
 static bool TryParseTemporalWithCandidates(const std::string &text, const LogicalType &target_type,
                                            const XMLSchemaOptions &options, Value &result) {
+	bool found = false;
+	Value agreed;
 	for (const auto &format : EffectiveDatetimeCandidates(options)) {
 		StrpTimeFormat strp_format;
 		if (!StrTimeFormat::ParseFormatSpecifier(format, strp_format).empty()) {
 			continue; // not a usable format string
 		}
+		Value parsed;
 		switch (target_type.id()) {
 		case LogicalTypeId::DATE: {
 			date_t date_result;
-			if (strp_format.TryParseDate(text.c_str(), text.size(), date_result)) {
-				result = Value::DATE(date_result);
-				return true;
+			if (!strp_format.TryParseDate(text.c_str(), text.size(), date_result)) {
+				continue;
 			}
+			parsed = Value::DATE(date_result);
 			break;
 		}
 		case LogicalTypeId::TIMESTAMP: {
 			timestamp_t ts_result;
-			if (strp_format.TryParseTimestamp(text.c_str(), text.size(), ts_result)) {
-				result = Value::TIMESTAMP(ts_result);
-				return true;
+			if (!strp_format.TryParseTimestamp(text.c_str(), text.size(), ts_result)) {
+				continue;
 			}
+			parsed = Value::TIMESTAMP(ts_result);
 			break;
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
 			timestamp_t ts_result;
-			if (strp_format.TryParseTimestamp(text.c_str(), text.size(), ts_result)) {
-				result = Value::TIMESTAMPTZ(timestamp_tz_t(ts_result));
-				return true;
+			if (!strp_format.TryParseTimestamp(text.c_str(), text.size(), ts_result)) {
+				continue;
 			}
+			parsed = Value::TIMESTAMPTZ(timestamp_tz_t(ts_result));
 			break;
 		}
 		case LogicalTypeId::TIME: {
 			StrpTimeFormat::ParseResult parse_result;
 			dtime_t time_result;
-			if (strp_format.Parse(text.c_str(), text.size(), parse_result) && parse_result.TryToTime(time_result)) {
-				result = Value::TIME(time_result);
-				return true;
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) || !parse_result.TryToTime(time_result)) {
+				continue;
 			}
+			parsed = Value::TIME(time_result);
 			break;
 		}
 		case LogicalTypeId::TIME_TZ: {
 			StrpTimeFormat::ParseResult parse_result;
 			dtime_t time_result;
-			if (strp_format.Parse(text.c_str(), text.size(), parse_result) && parse_result.TryToTime(time_result)) {
-				result = Value::TIMETZ(dtime_tz_t(time_result, parse_result.data[7]));
-				return true;
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) || !parse_result.TryToTime(time_result)) {
+				continue;
 			}
+			parsed = Value::TIMETZ(dtime_tz_t(time_result, parse_result.data[7]));
 			break;
 		}
 		default:
 			return false;
 		}
+
+		if (!found) {
+			agreed = parsed;
+			found = true;
+		} else if (!(agreed == parsed)) {
+			// Two candidates read the same text as different instants. Inference could settle this
+			// by eliminating across the whole column; from a single value we cannot. Decline rather
+			// than guess, so the caller surfaces its conversion error instead of a wrong date.
+			return false;
+		}
 	}
-	return false;
+	if (found) {
+		result = agreed;
+	}
+	return found;
 }
 
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
