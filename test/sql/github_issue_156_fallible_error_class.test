@@ -1,0 +1,109 @@
+# name: test/sql/github_issue_156_fallible_error_class.test
+# description: Issue 156 - pin the error CLASS, not just the message, for every scalar function that can throw an execution error. DuckDB 2.0 rewrites a throw from a scalar function that never called SetFallible() into an INTERNAL Error that quotes the original message, so an expectation matching only the message text passes either way and cannot detect an unmarked function.
+# group: [sql]
+
+require webbed
+
+# Why the class prefix is spelled out in every expectation below:
+#
+# On DuckDB 2.0 (v2.0-cyanoptera) an unmarked scalar function that throws
+# InvalidInputException / OutOfRangeException / ConversionException surfaces as
+#   INTERNAL Error: Scalar function "x" threw an execution error, but the
+#   function is not marked as fallible ...
+# and that rewritten message QUOTES the original text. So an expectation of
+# 'Invalid XPath expression' -- which is what github_issue_134_xpath_errors.test
+# asserts -- matches the rewritten form too, and the 2.0 leg stays green with the
+# function unmarked. Only the 'Invalid Input Error: ' prefix discriminates.
+#
+# These are the complete set of execution-error throws reachable from a scalar
+# function in this extension: the XPath compile error, the two element-name
+# validators, and the two namespace-parameter errors. Every registration that
+# reaches one of them is marked fallible today; this file is what notices if one
+# stops being marked.
+
+# =============================================================================
+# Invalid XPath -- xml_utils.cpp ValidateXPath. Reached by every function in the
+# extract family. Both the STRING_LITERAL and the runtime-VARCHAR overloads are
+# covered: they are separate registrations, marked in different places (a bare
+# Fallible(...) wrapper vs the add_ns_aware helper).
+# =============================================================================
+
+statement error
+SELECT xml_extract_text('<a>x</a>'::XML, '//a[');
+----
+Invalid Input Error: Invalid XPath expression
+
+statement error
+SELECT xml_extract_text('<a>x</a>'::XML, '//a['::VARCHAR);
+----
+Invalid Input Error: Invalid XPath expression
+
+statement error
+SELECT xml_extract_elements('<a>x</a>'::XML, '//a[');
+----
+Invalid Input Error: Invalid XPath expression
+
+statement error
+SELECT xml_extract_elements_string('<a>x</a>'::XML, '//a[');
+----
+Invalid Input Error: Invalid XPath expression
+
+statement error
+SELECT xml_extract_attributes('<a>x</a>'::XML, '//a[');
+----
+Invalid Input Error: Invalid XPath expression
+
+statement error
+SELECT html_extract_text('<p>x</p>'::HTML, '//p[');
+----
+Invalid Input Error: Invalid XPath expression
+
+# =============================================================================
+# Element-name validators. Two distinct throw sites with two distinct messages.
+# =============================================================================
+
+statement error
+SELECT to_xml(1, 'a><evil');
+----
+Invalid Input Error: Invalid XML element name
+
+statement error
+SELECT xml_wrap_fragment('<a/>', 'a><evil');
+----
+Invalid Input Error: xml_wrap_fragment
+
+# =============================================================================
+# Namespace parameter errors -- the three-argument overloads, whose callbacks
+# call ParseNamespacesParam at execution time.
+# =============================================================================
+
+statement error
+SELECT xml_extract_text('<a>x</a>'::XML, '//a', 'bogus_mode');
+----
+Invalid Input Error: Invalid namespace mode
+
+statement error
+SELECT xml_extract_text('<a>x</a>'::XML, '//a', 42);
+----
+Invalid Input Error: Invalid namespace parameter type
+
+# =============================================================================
+# Controls: the same functions on valid input must still succeed, so the
+# expectations above are pinning an input-dependent throw rather than a function
+# that always fails.
+# =============================================================================
+
+query I
+SELECT xml_extract_text('<a>x</a>'::XML, '//a');
+----
+[x]
+
+query I
+SELECT to_xml(1, 'ok') IS NOT NULL;
+----
+true
+
+query I
+SELECT xml_extract_text('<a>x</a>'::XML, '//a', 'strict') IS NOT NULL;
+----
+true
