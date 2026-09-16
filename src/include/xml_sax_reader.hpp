@@ -114,6 +114,14 @@ void SAXCharacters(void *ctx, const xmlChar *ch, int len);
 
 void SAXCdataBlock(void *ctx, const xmlChar *ch, int len);
 
+// Comments and processing instructions are preserved when reconstructing a nested XML
+// fragment, so streamed output matches the DOM serializer byte for byte (issue #158).
+// Declared here with the other callbacks rather than given internal linkage: these are
+// libxml2 callbacks, not file-local helpers like XmlEscapeText or ResolveElementName.
+void SAXComment(void *ctx, const xmlChar *value);
+
+void SAXProcessingInstruction(void *ctx, const xmlChar *target, const xmlChar *data);
+
 // Main SAX streaming reader class
 class SAXStreamReader {
 public:
