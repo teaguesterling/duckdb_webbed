@@ -151,25 +151,23 @@ jobs:
           fi
           echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_VERSION}; ${n} job(s) shipping ${DUCKDB_VERSION} and ${m} job(s) shipping ${DUCKDB_NEXT}; ${mode}" | tee -a "$summary"
 
-  # Forward-compatibility canary: builds against DuckDB main to give advance warning
-  # of upstream API changes. It is EXPECTED to go red whenever main breaks an API this
-  # extension uses -- the shippable build is the stable job below.
+  # THE NEXT LINE, first-class. duckdb/community-extensions builds every descriptor
+  # that carries ref_next against `v2.0-cyanoptera` (build_next.yml), so a PR is not
+  # green here until it builds and tests there too. Not a canary and not advisory:
+  # it gates. Named for what it builds (the old "Canary ... (advisory)"
+  # name read a gating 2.0 failure as ignorable).
   #
-  # Promoted 2026-09-13 (Teague's dual-line ruling): now runs on pull_request
-  # too (once per PR, see the gate comment on `if:` below), not just
-  # push-to-main or dispatch.
+  # ONCE PER PR, ONCE PER MERGE: a push to a PR branch fires both a push run and a
+  # pull_request run for the same commit, so an ungated job would build twice. The
+  # one case not covered is a branch with no PR open. `if` rather than
+  # `continue-on-error`: a job calling a REUSABLE WORKFLOW accepts only a fixed set
+  # of keys, and continue-on-error makes the whole workflow fail to parse.
   #
-  # `if` rather than `continue-on-error`: a job calling a REUSABLE WORKFLOW accepts only
-  # name/needs/if/permissions/uses/with/secrets/strategy/concurrency, and adding
-  # continue-on-error makes the whole workflow fail to PARSE.
-  #
-  # Currently red on the DuckDB main bind-signature change
-  # (unique_ptr<FunctionData> conversions in xml_reader_functions.cpp).
+  # MATRIX WIDTH: the reusable workflow's reduced_ci_mode defaults to `auto`, which
+  # builds three arches on pull requests and the full matrix on pushes to main and
+  # on dispatch. Kept on purpose; `reduced_ci_mode: disabled` widens PRs.
   duckdb-next-build:
-    name: Canary — build against DuckDB main (advisory)
-    # Gated to run once, not twice, per PR: a push to a PR branch fires both a
-    # push run and a pull_request run for the same commit, so an ungated job
-    # would build it twice. Runs on PRs, on push to main, and on dispatch.
+    name: Build extension binaries (duckdb next, v2.0 line)
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
@@ -183,6 +181,23 @@ jobs:
       # masking the actual test result. Only windows_amd64_mingw is
       # affected; windows_amd64 (MSVC) is re-enabled. Excluded until
       # upstream sets PYTHONIOENCODING / utf8_mode on the mingw runner.
+      exclude_archs: 'windows_amd64_mingw'
+
+  # ADVISORY canary on DuckDB main, the line beyond 2.0. Pushes to main and on
+  # demand only; it never gates a PR. DuckDB main and v2.0-cyanoptera have
+  # diverged both ways (main still has the ConstantExpression(const Value &)
+  # constructor cyanoptera deleted), so green here is not evidence for the line
+  # the registry ships, and red here is a preview, not a verdict.
+  #   gh workflow run MainDistributionPipeline.yml --ref <branch>
+  duckdb-main-canary:
+    name: Build extension binaries (duckdb main canary)
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: main
+      ci_tools_version: main
+      extension_name: webbed
+      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
 
   duckdb-stable-build:
