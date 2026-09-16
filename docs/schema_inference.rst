@@ -105,8 +105,8 @@ The extension automatically detects these types:
      - Detection Pattern
      - Examples
    * - BOOLEAN
-     - true/false, 1/0
-     - ``true``, ``false``, ``1``, ``0``
+     - true/false, yes/no, on/off
+     - ``true``, ``false``, ``yes``, ``no``
    * - INTEGER/BIGINT
      - Whole numbers
      - ``42``, ``-100``, ``999999``
@@ -139,6 +139,16 @@ Temporal type detection uses DuckDB's ``StrpTimeFormat`` with a candidate elimin
 A list of format candidates is tested against all sample values; candidates that fail on any
 sample are eliminated. The first surviving candidate determines the column type. By default,
 auto-detection prioritizes ISO formats, then US, then EU for ambiguous dates.
+
+Elimination runs per column, across every sample. Nested STRUCT fields and repeated (LIST)
+elements are typed the same way, but no per-field format is recorded — so when extracting an
+*ambiguous* nested value the reader declines rather than guessing. See the note in
+:doc:`parameters`.
+
+Numbers and booleans are detected from the text itself, so the answer has to be a type every
+sampled lexeme can be read as. ``0`` and ``1`` are read as integers, not booleans, when they
+make up the column; and a column mixing a boolean lexeme with a numeric one has no common
+lexical type, so it widens to VARCHAR and keeps both spellings.
 
 Use the ``datetime_format`` parameter to control this behavior — see :doc:`parameters` for details.
 

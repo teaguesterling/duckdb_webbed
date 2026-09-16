@@ -232,7 +232,19 @@ When an explicit format or preset is specified, only those formats are tried. If
 
 .. note::
 
-   When auto-detecting, ambiguous date formats (e.g., ``03/04/2024``) default to US (month-first) ordering, consistent with DuckDB conventions. Use ``datetime_format='eu'`` to override.
+   When auto-detecting, an ambiguous date (e.g., ``03/04/2024``) resolves to US (month-first)
+   ordering for a **top-level column**, consistent with DuckDB conventions. The column's format
+   is settled by eliminating candidates across all of its sampled values, so a single
+   unambiguous day-first value elsewhere in the column will make the whole column day-first.
+
+   Inside a nested STRUCT field or a repeated (LIST) element, no per-field format is recorded,
+   so extraction cannot repeat that elimination from one value. There an ambiguous date is
+   **declined** rather than guessed: it surfaces as a conversion error, or NULL under
+   ``ignore_errors``. Guessing would read ``01/02/2024`` as 2 January while the same document's
+   top-level column reads it as 1 February. Unambiguous nested values parse normally.
+
+   Naming a format removes the ambiguity entirely -- the presets resolve to a single candidate
+   (``'us'`` is ``%m/%d/%Y``, ``'eu'`` is ``%d/%m/%Y``).
 
 **Interactions with other parameters:**
 
