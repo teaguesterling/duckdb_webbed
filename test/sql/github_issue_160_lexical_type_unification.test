@@ -1,0 +1,111 @@
+# name: test/sql/github_issue_160_lexical_type_unification.test
+# description: Issue 160 - sample types are unified with the VALUE cast lattice, where BOOLEAN implicitly casts to INTEGER. Text is not a value: no integer lexeme spells 'true', so a column mixing them must widen to VARCHAR, not to INTEGER.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# The reported case. {1, true} has no lexical type that holds both, so the
+# lossless schema is VARCHAR and both lexemes survive.
+#
+# Before this fix inference bound the column INTEGER -- BOOLEAN implicitly
+# casts to INTEGER, so ForceMaxLogicalType answered INTEGER -- and the scan
+# then failed on 'true' with the #102 "does not match column type" error.
+# DuckDB's own CSV sniffer answers VARCHAR for the same two lexemes.
+# =============================================================================
+
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1</value></item><item><value>true</value></item></root>') LIMIT 1;
+----
+VARCHAR
+
+query I
+SELECT value FROM parse_xml('<root><item><value>1</value></item><item><value>true</value></item></root>') ORDER BY value;
+----
+1
+true
+
+# =============================================================================
+# The class: every boolean-vs-numeric mix has the same defect, because every
+# numeric type is an implicit-cast target of BOOLEAN. Order of appearance must
+# not matter either -- the unification is pairwise, so 'true' first exercises
+# the other argument order.
+# =============================================================================
+
+# BOOLEAN + DOUBLE (was DOUBLE)
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1.5</value></item><item><value>true</value></item></root>') LIMIT 1;
+----
+VARCHAR
+
+# BOOLEAN + BIGINT, via a word-form boolean (was BIGINT)
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>9999999999</value></item><item><value>yes</value></item></root>') LIMIT 1;
+----
+VARCHAR
+
+# boolean first, numeric second (was INTEGER)
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>true</value></item><item><value>1</value></item></root>') LIMIT 1;
+----
+VARCHAR
+
+# 'on'/'off' are boolean lexemes too (was INTEGER)
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>on</value></item><item><value>0</value></item></root>') LIMIT 1;
+----
+VARCHAR
+
+# The widened column keeps every lexeme verbatim, which is the point of widening.
+query I
+SELECT value FROM parse_xml('<root><item><value>on</value></item><item><value>0</value></item></root>') ORDER BY value;
+----
+0
+on
+
+# =============================================================================
+# Controls. Widening must not become "VARCHAR whenever types differ" -- these
+# are genuine lexical promotions and must keep their narrow types.
+# =============================================================================
+
+# homogeneous integers
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1</value></item><item><value>2</value></item></root>') LIMIT 1;
+----
+INTEGER
+
+# INTEGER + DOUBLE promotes on the numeric ladder
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1</value></item><item><value>2.5</value></item></root>') LIMIT 1;
+----
+DOUBLE
+
+# INTEGER + BIGINT widens to the type that holds both
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1</value></item><item><value>9999999999</value></item></root>') LIMIT 1;
+----
+BIGINT
+
+# homogeneous booleans stay BOOLEAN
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>true</value></item><item><value>false</value></item></root>') LIMIT 1;
+----
+BOOLEAN
+
+# '0'/'1' are integer lexemes before they are boolean ones, and stay INTEGER
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>0</value></item><item><value>1</value></item></root>') LIMIT 1;
+----
+INTEGER
+
+# The reporter's control: the explicit safety option was already lossless and stays so.
+query I
+SELECT typeof(value) FROM parse_xml('<root><item><value>1</value></item><item><value>true</value></item></root>', all_varchar := true) LIMIT 1;
+----
+VARCHAR
+
+query I
+SELECT value FROM parse_xml('<root><item><value>1</value></item><item><value>true</value></item></root>', all_varchar := true) ORDER BY value;
+----
+1
+true
