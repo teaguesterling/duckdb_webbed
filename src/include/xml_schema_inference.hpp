@@ -292,11 +292,17 @@ private:
 	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,
 	                            const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
-	// Recursive extraction helpers for complex types
-	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options);
+	// Recursive extraction helpers for complex types.
+	// datetime_format is the column's winning format, threaded down so nested STRUCT fields and
+	// LIST elements convert with the same format as the column's own scalar values (issue #159).
+	// Empty means none was recorded, in which case the conversion falls back to the candidate
+	// list inference used.
+	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
+	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
-	                                   const XMLSchemaOptions &options);
-	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options);
+	                                   const XMLSchemaOptions &options, const std::string &datetime_format = "");
+	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options,
+	                                 const std::string &datetime_format = "");
 	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
 };
 
