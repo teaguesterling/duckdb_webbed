@@ -1,0 +1,108 @@
+# name: test/sql/github_issue_159_datetime_format_nested.test
+# description: Issue 159 - a datetime format reached only top-level scalar columns. Inference typed nested STRUCT fields and LIST elements as temporal using the candidate list, but extraction converted them with default ISO parsing, so every such value came back NULL (or aborted the scan). Inference and extraction must use the same candidates.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# The control from the report: a top-level DATE column already honoured the
+# format. This is the one path that threaded the column's winning format into
+# the conversion.
+# =============================================================================
+
+query II
+SELECT typeof(date), date
+FROM parse_xml('<events><event><date>03/15/2024</date></event></events>', datetime_format := 'us');
+----
+DATE	2024-03-15
+
+# =============================================================================
+# The two reported failures. Inference types both as DATE -- it used the 'us'
+# candidates to decide that -- so extraction has to parse them with the same
+# candidates. Before this fix: {'date': NULL} and [NULL, NULL] under
+# ignore_errors, and a Conversion Error without it.
+# =============================================================================
+
+# nested STRUCT field
+query II
+SELECT typeof(meta), meta
+FROM parse_xml('<events><event><meta><date>03/15/2024</date></meta></event></events>', datetime_format := 'us');
+----
+STRUCT(date DATE)	{'date': 2024-03-15}
+
+# repeated element, inferred as a LIST
+query II
+SELECT typeof(date), date
+FROM parse_xml('<events><event><date>03/15/2024</date><date>12/25/2024</date></event></events>', datetime_format := 'us');
+----
+DATE[]	[2024-03-15, 2024-12-25]
+
+# =============================================================================
+# The class. The format was dropped by every recursive extraction path, and the
+# defect is not limited to an explicitly supplied format: in auto mode the
+# candidate list is what typed the field temporal in the first place, so the
+# same asymmetry NULLs it out.
+# =============================================================================
+
+# STRUCT nested inside a STRUCT
+query I
+SELECT outer_.inner_.date
+FROM parse_xml('<events><event><outer_><inner_><date>03/15/2024</date></inner_></outer_></event></events>', datetime_format := 'us');
+----
+2024-03-15
+
+# LIST inside a STRUCT
+query II
+SELECT typeof(meta), meta.date
+FROM parse_xml('<events><event><meta><date>03/15/2024</date><date>12/25/2024</date></meta></event></events>', datetime_format := 'us');
+----
+STRUCT(date DATE[])	[2024-03-15, 2024-12-25]
+
+# a nested TIMESTAMP, so the fix is not DATE-only
+query II
+SELECT typeof(meta), meta.ts
+FROM parse_xml('<events><event><meta><ts>03/15/2024 14:30:00</ts></meta></event></events>', datetime_format := '%m/%d/%Y %H:%M:%S');
+----
+STRUCT(ts TIMESTAMP)	2024-03-15 14:30:00
+
+# an explicit format string rather than a preset name
+query I
+SELECT meta.date
+FROM parse_xml('<events><event><meta><date>15-03-2024</date></meta></event></events>', datetime_format := '%d-%m-%Y');
+----
+2024-03-15
+
+# no datetime_format at all: the built-in auto candidates include %m/%d/%Y, which
+# is why inference types this DATE. Extraction must agree with that decision.
+query II
+SELECT typeof(meta), meta.date
+FROM parse_xml('<events><event><meta><date>03/15/2024</date></meta></event></events>');
+----
+STRUCT(date DATE)	2024-03-15
+
+# =============================================================================
+# Controls. The fallback must not invent temporal values where inference did not
+# ask for them, and must not disturb values that already parsed.
+# =============================================================================
+
+# ISO input under a custom format still parses: default parsing is tried first
+# and only a failure consults the candidate list.
+query II
+SELECT typeof(meta), meta.date
+FROM parse_xml('<events><event><meta><date>2024-03-15</date></meta></event></events>', datetime_format := 'auto');
+----
+STRUCT(date DATE)	2024-03-15
+
+# a nested field that is not temporal stays VARCHAR and is untouched
+query II
+SELECT typeof(meta), meta.label
+FROM parse_xml('<events><event><meta><label>not a date</label></meta></event></events>', datetime_format := 'us');
+----
+STRUCT("label" VARCHAR)	not a date
+
+# all_varchar still wins over temporal typing, nested included: no parsing at all
+query II
+SELECT typeof(meta), meta.date
+FROM parse_xml('<events><event><meta><date>03/15/2024</date></meta></event></events>', datetime_format := 'us', all_varchar := true);
+----
+STRUCT(date VARCHAR)	03/15/2024
