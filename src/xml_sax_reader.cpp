@@ -368,9 +368,76 @@ void SAXCharacters(void *ctx, const xmlChar *ch, int len) {
 	// relative_depth == 0 means text directly in the record element (whitespace usually), ignore
 }
 
+// A CDATA section is a lexical device rather than content: its text IS the element's text, which
+// is why scalar columns unwrap it. But when SAX is reconstructing a nested XML fragment it has to
+// match the DOM serializer byte for byte, and xmlNodeDump keeps the section framing -- so preserve
+// it there (issue #158). At relative_depth <= 1 the value is plain text and the markers must not
+// appear, matching xmlNodeGetContent on the DOM side.
 void SAXCdataBlock(void *ctx, const xmlChar *ch, int len) {
-	// Delegate to Characters handler
-	SAXCharacters(ctx, ch, len);
+	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
+	auto *acc = sax_ctx->accumulator;
+
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD) {
+		return;
+	}
+
+	if (acc->current_depth - acc->record_depth <= 1) {
+		// Direct child (or record-level) text: the section contributes its content, unwrapped.
+		SAXCharacters(ctx, ch, len);
+		return;
+	}
+
+	std::string text(reinterpret_cast<const char *>(ch), static_cast<size_t>(len));
+	// A CDATA section cannot contain "]]>": close and reopen around it, as libxml2's serializer
+	// does, so the reconstructed fragment still parses back to this same text.
+	std::string framed;
+	framed.reserve(text.size());
+	for (size_t i = 0; i < text.size(); i++) {
+		if (text[i] == ']' && i + 2 < text.size() && text[i + 1] == ']' && text[i + 2] == '>') {
+			framed += "]]]]><![CDATA[>";
+			i += 2;
+		} else {
+			framed += text[i];
+		}
+	}
+	acc->nested_xml += "<![CDATA[" + framed + "]]>";
+}
+
+// libxml2 hands the comment text without its delimiters. DOM keeps comments inside a serialized
+// fragment, so SAX must too; in scalar text a comment contributes nothing (xmlNodeGetContent skips
+// it), which is what both paths already did. Registering this handler is what stops comments from
+// disappearing from streamed fragments entirely (issue #158).
+void SAXComment(void *ctx, const xmlChar *value) {
+	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
+	auto *acc = sax_ctx->accumulator;
+
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || !value) {
+		return;
+	}
+	if (acc->current_depth - acc->record_depth <= 1) {
+		return;
+	}
+	acc->nested_xml += "<!--" + std::string(reinterpret_cast<const char *>(value)) + "-->";
+}
+
+// Same contract for processing instructions: preserved inside a nested fragment, ignored in scalar
+// text (issue #158). A PI with no data serializes as "<?target?>".
+void SAXProcessingInstruction(void *ctx, const xmlChar *target, const xmlChar *data) {
+	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
+	auto *acc = sax_ctx->accumulator;
+
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || !target) {
+		return;
+	}
+	if (acc->current_depth - acc->record_depth <= 1) {
+		return;
+	}
+	std::string pi = "<?" + std::string(reinterpret_cast<const char *>(target));
+	if (data && *data) {
+		pi += " " + std::string(reinterpret_cast<const char *>(data));
+	}
+	pi += "?>";
+	acc->nested_xml += pi;
 }
 
 // ─── SAXStreamReader ────────────────────────────────────────────────────────
@@ -383,6 +450,10 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 	handler.endElementNs = SAXEndElementNs;
 	handler.characters = SAXCharacters;
 	handler.cdataBlock = SAXCdataBlock;
+	// Without these two, libxml2 simply drops comments and processing instructions, and a nested
+	// fragment reconstructed from SAX loses nodes the DOM path keeps (issue #158).
+	handler.comment = SAXComment;
+	handler.processingInstruction = SAXProcessingInstruction;
 
 	return handler;
 }
