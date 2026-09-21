@@ -1249,9 +1249,24 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	to_xml_set.AddFunction(Fallible(ScalarFunction({LogicalType::ANY}, XMLTypes::XMLType(), ValueToXMLFunction)));
 	to_xml_set.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::ANY, LogicalType::VARCHAR}, XMLTypes::XMLType(), ValueToXMLFunction)));
-	register_scalar_set(loader, to_xml_set, {"value", "node_name"},
-	                    "Convert a DuckDB value or struct to an XML string.",
-	                    {"to_xml({'a': 1, 'b': 2})", "to_xml({'a': 1}, 'root')"});
+	CreateScalarFunctionInfo to_xml_info(std::move(to_xml_set));
+	to_xml_info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+
+	FunctionDescription to_xml_desc_single;
+	to_xml_desc_single.parameter_names = {"value"};
+	to_xml_desc_single.description = "Convert a DuckDB value or struct to an XML string.";
+	to_xml_desc_single.examples = {"to_xml({'a': 1, 'b': 2})"};
+	to_xml_desc_single.categories = {"webbed"};
+	to_xml_info.descriptions.push_back(to_xml_desc_single);
+
+	FunctionDescription to_xml_desc_with_node_name;
+	to_xml_desc_with_node_name.parameter_names = {"value", "node_name"};
+	to_xml_desc_with_node_name.description = "Convert a DuckDB value or struct to an XML string.";
+	to_xml_desc_with_node_name.examples = {"to_xml({'a': 1}, 'root')"};
+	to_xml_desc_with_node_name.categories = {"webbed"};
+	to_xml_info.descriptions.push_back(to_xml_desc_with_node_name);
+
+	loader.RegisterFunction(std::move(to_xml_info));
 
 	// Register xml_libxml2_version function
 	auto xml_libxml2_version_function = ScalarFunction(
