@@ -4,6 +4,7 @@
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/execution/partition_info.hpp" // OperatorPartitionData (batch-index tagging, issue #72)
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/helper.hpp"
@@ -947,8 +948,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					}
 					// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
 					// via ignore_errors), not silently recover into partial/corrupt rows.
-					xmlCtxtUseOptions(lstate.sax_parser_ctx,
-					                  XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+					xmlCtxtUseOptions(lstate.sax_parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 
 					lstate.sax_file_handle = std::move(file_handle);
 					lstate.sax_pending_records.clear();
@@ -2192,7 +2192,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_objects_set.AddFunction(read_xml_objects_array);
 
-	loader.RegisterFunction(read_xml_objects_set);
+	{
+		CreateTableFunctionInfo info(std::move(read_xml_objects_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"file_path"};
+		desc.description = "Read an XML file and return raw XML object content.";
+		desc.examples = {"SELECT * FROM read_xml_objects('data.xml')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// Register read_xml table function with schema inference (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_xml_set("read_xml");
@@ -2266,7 +2276,18 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_xml_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_set.AddFunction(read_xml_array);
 
-	loader.RegisterFunction(read_xml_set);
+	{
+		CreateTableFunctionInfo info(std::move(read_xml_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"file_path"};
+		desc.description = "Read an XML file with automatic schema inference and return tabular data.";
+		desc.examples = {"SELECT * FROM read_xml('data.xml')",
+		                 "SELECT * FROM read_xml('data.xml', record_element := '//item')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// Register read_html table function for reading HTML files (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_html_set("read_html");
@@ -2338,7 +2359,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_set.AddFunction(read_html_array);
 
-	loader.RegisterFunction(read_html_set);
+	{
+		CreateTableFunctionInfo info(std::move(read_html_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"file_path"};
+		desc.description = "Read an HTML file with automatic schema inference and return tabular data.";
+		desc.examples = {"SELECT * FROM read_html('page.html')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// Register read_html_objects table function for batch HTML processing (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_html_objects_set("read_html_objects");
@@ -2363,12 +2394,32 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	read_html_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_objects_set.AddFunction(read_html_objects_array);
 
-	loader.RegisterFunction(read_html_objects_set);
+	{
+		CreateTableFunctionInfo info(std::move(read_html_objects_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"file_path"};
+		desc.description = "Read an HTML file and return raw HTML object content.";
+		desc.examples = {"SELECT * FROM read_html_objects('page.html')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// Register html_extract_tables table function
 	TableFunction html_extract_tables_function("html_extract_tables", {LogicalType::VARCHAR}, HTMLExtractTablesFunction,
 	                                           HTMLExtractTablesBind, HTMLExtractTablesInit);
-	loader.RegisterFunction(html_extract_tables_function);
+	{
+		CreateTableFunctionInfo info(std::move(html_extract_tables_function));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"html"};
+		desc.description = "Extract all HTML tables from an HTML string as structured rows.";
+		desc.examples = {"SELECT * FROM html_extract_tables('<table><tr><td>A</td></tr></table>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// =============================================================================
 	// Register parse_xml_objects table function (parses XML string, returns raw content)
@@ -2376,7 +2427,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunction parse_xml_objects("parse_xml_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
 	                                ParseXMLObjectsBind, ParseDocumentObjectsInit);
 	parse_xml_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(parse_xml_objects);
+	{
+		CreateTableFunctionInfo info(std::move(parse_xml_objects));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"xml"};
+		desc.description = "Parse an XML string and return raw XML object content.";
+		desc.examples = {"SELECT * FROM parse_xml_objects('<root><item>1</item></root>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// =============================================================================
 	// Register parse_html_objects table function (parses HTML string, returns raw content)
@@ -2384,7 +2445,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	TableFunction parse_html_objects("parse_html_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
 	                                 ParseHTMLObjectsBind, ParseDocumentObjectsInit);
 	parse_html_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(parse_html_objects);
+	{
+		CreateTableFunctionInfo info(std::move(parse_html_objects));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"html"};
+		desc.description = "Parse an HTML string and return raw HTML object content.";
+		desc.examples = {"SELECT * FROM parse_html_objects('<div><span>A</span></div>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// =============================================================================
 	// Register parse_xml table function (parses XML string with schema inference)
@@ -2409,7 +2480,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_xml.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	parse_xml.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_xml.named_parameters["columns"] = LogicalType::ANY;
-	loader.RegisterFunction(parse_xml);
+	{
+		CreateTableFunctionInfo info(std::move(parse_xml));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"xml"};
+		desc.description = "Parse an XML string with automatic schema inference and return tabular data.";
+		desc.examples = {"SELECT * FROM parse_xml('<root><item id=\"1\">A</item></root>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// =============================================================================
 	// Register parse_html table function (parses HTML string with schema inference)
@@ -2434,7 +2515,17 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	parse_html.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
 	parse_html.named_parameters["nullstr"] = LogicalType::ANY;
 	parse_html.named_parameters["columns"] = LogicalType::ANY;
-	loader.RegisterFunction(parse_html);
+	{
+		CreateTableFunctionInfo info(std::move(parse_html));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"html"};
+		desc.description = "Parse an HTML string with automatic schema inference and return tabular data.";
+		desc.examples = {"SELECT * FROM parse_html('<div><p>Paragraph</p></div>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 }
 
 unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext &context,

@@ -1,6 +1,8 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/cast/default_casts.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duck_block_functions.hpp"
 #include "duck_block_types.hpp"
 #include "duckdb_compat.hpp"
@@ -35,8 +37,7 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
-                                  std::set<size_t> &consumed_indices, std::stringstream &html,
-                                  int32_t parent_level);
+                                  std::set<size_t> &consumed_indices, std::stringstream &html, int32_t parent_level);
 
 // XPath query for frontmatter script blocks
 static const char *FRONTMATTER_XPATH = "//script[@type='application/vnd.frontmatter+yaml']";
@@ -165,7 +166,8 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 		// by test/sql/duck_block_writer_contract.test using distinct values.
 		std::string alt = content.empty() && attrs.count("alt") ? attrs.at("alt") : content;
 		std::string title = attrs.count("title") ? attrs.at("title") : "";
-		std::string result = "<img" + PassthroughAttrs(attrs, {"src", "alt", "title"}) + " src=\"" + XMLUtils::HTMLEscape(src) + "\"";
+		std::string result =
+		    "<img" + PassthroughAttrs(attrs, {"src", "alt", "title"}) + " src=\"" + XMLUtils::HTMLEscape(src) + "\"";
 		if (!alt.empty()) {
 			result += " alt=\"" + XMLUtils::HTMLEscape(alt) + "\"";
 		}
@@ -189,7 +191,8 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	} else if (element_type == DuckBlockTypes::INLINE_UNDERLINE || element_type == "u") {
 		return "<u" + PassthroughAttrs(attrs) + ">" + XMLUtils::HTMLEscape(content) + "</u>";
 	} else if (element_type == DuckBlockTypes::INLINE_SMALLCAPS) {
-		return "<span" + PassthroughAttrs(attrs) + " style=\"font-variant: small-caps\">" + XMLUtils::HTMLEscape(content) + "</span>";
+		return "<span" + PassthroughAttrs(attrs) + " style=\"font-variant: small-caps\">" +
+		       XMLUtils::HTMLEscape(content) + "</span>";
 	} else if (element_type == DuckBlockTypes::INLINE_SPAN) {
 		std::string result = "<span" + PassthroughAttrs(attrs);
 		result += ">" + XMLUtils::HTMLEscape(content) + "</span>";
@@ -342,8 +345,7 @@ static std::string RenderInlineCloseTag(const std::string &element_type) {
 // stack's own pop rule (`open_containers.back().level >= cur_level`), or
 // containment and inline consumption disagree about which blocks are whose.
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
-                                  std::set<size_t> &consumed_indices, std::stringstream &html,
-                                  int32_t parent_level) {
+                                  std::set<size_t> &consumed_indices, std::stringstream &html, int32_t parent_level) {
 	vector<OpenInline> open_inlines;
 
 	for (size_t next_idx = parent_idx + 1; next_idx < blocks_list.size(); next_idx++) {
@@ -476,8 +478,8 @@ static bool IsJsonLeafTag(const std::string &tag) {
 // following the heading+heading_level and list+list_type convention rather than
 // minting one type per variant. Returns "" for non-sectioning tags.
 static std::string SectionRoleForTag(const std::string &tag) {
-	if (tag == "section" || tag == "article" || tag == "aside" || tag == "nav" || tag == "header" ||
-	    tag == "footer" || tag == "main") {
+	if (tag == "section" || tag == "article" || tag == "aside" || tag == "nav" || tag == "header" || tag == "footer" ||
+	    tag == "main") {
 		return tag;
 	}
 	return "";
@@ -490,10 +492,9 @@ static bool IsBlockLevelTag(const std::string &tag) {
 	if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
 		return true;
 	}
-	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" ||
-	       tag == "figure" || tag == "figcaption" || tag == "summary" || tag == "details" ||
-	       tag == "ul" || tag == "ol" || tag == "li" || tag == "dl" || tag == "dt" || tag == "dd" ||
-	       IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
+	return tag == "p" || tag == "pre" || tag == "blockquote" || tag == "hr" || tag == "img" || tag == "figure" ||
+	       tag == "figcaption" || tag == "summary" || tag == "details" || tag == "ul" || tag == "ol" || tag == "li" ||
+	       tag == "dl" || tag == "dt" || tag == "dd" || IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
 }
 
 // True when `node` has at least one BLOCK-level element child, ignoring
@@ -660,7 +661,8 @@ static void CopySourceAttributes(xmlNodePtr node, OrderedAttrs &attrs, const Cap
 // Forward declaration: ExtractInlineElementsRange recurses into a parent's
 // full child list (e.g. a nested formatting wrapper) via this convenience
 // form, defined just after it below.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order, const CaptureSpec &spec);
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
+                                                const CaptureSpec &spec);
 
 // Extract inline elements from an explicit sibling range [start, stop) as
 // structured kind='inline' duck_blocks. Nested formatting (e.g. <b>x
@@ -673,7 +675,7 @@ static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t 
 // hand it a run of loose inline nodes (text plus inline elements) that sit
 // among block siblings, not gathered under a dedicated inline parent.
 static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level,
-                                                      int32_t &element_order, const CaptureSpec &spec) {
+                                                     int32_t &element_order, const CaptureSpec &spec) {
 	std::vector<Value> inlines;
 
 	for (xmlNodePtr child = start; child && child != stop; child = child->next) {
@@ -772,7 +774,8 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 // Convenience form of ExtractInlineElementsRange over ALL of a parent's
 // children -- the common case; WalkBlockNode is the only caller that needs
 // the explicit-range form above.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order, const CaptureSpec &spec) {
+static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
+                                                const CaptureSpec &spec) {
 	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order, spec);
 }
 
@@ -1166,8 +1169,8 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, vector
 
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
                                     vector<Value> &blocks, OrderedAttrs &attrs, const CaptureSpec &spec) {
-	blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
-	                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+	blocks.push_back(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+	                                             attrs, order++));
 	WalkBlockNode(node, level + 1, order, blocks, spec);
 }
 
@@ -1339,8 +1342,8 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 		child_list_t<Value> struct_values;
 		struct_values.push_back(make_pair("kind", Value(DuckBlockTypes::KIND_VALUE)));
 		struct_values.push_back(make_pair("element_type", Value(DuckBlockTypes::VALUE_STRING)));
-		struct_values.push_back(make_pair(
-		    "content", field.second.empty() ? Value(LogicalType::VARCHAR) : Value(field.second)));
+		struct_values.push_back(
+		    make_pair("content", field.second.empty() ? Value(LogicalType::VARCHAR) : Value(field.second)));
 		struct_values.push_back(make_pair("level", Value::INTEGER(1)));
 		struct_values.push_back(make_pair("encoding", Value(DuckBlockTypes::ENCODING_TEXT)));
 		struct_values.push_back(make_pair("attributes", DuckBlockTypes::CreateAttributesMap(attrs)));
@@ -1651,7 +1654,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				if (attrs.count("language")) {
 					lang_class = " class=\"language-" + XMLUtils::HTMLEscape(attrs["language"]) + "\"";
 				}
-				html << "<pre" << PassthroughAttrs(attrs) << "><code" << lang_class << ">" << XMLUtils::HTMLEscape(content) << "</code></pre>";
+				html << "<pre" << PassthroughAttrs(attrs) << "><code" << lang_class << ">"
+				     << XMLUtils::HTMLEscape(content) << "</code></pre>";
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
 				html << "<blockquote" << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
@@ -1796,7 +1800,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					alt = content;
 				}
 				std::string title = attrs.count("title") ? attrs["title"] : "";
-				html << "<img" << PassthroughAttrs(attrs, {"src", "alt", "title"}) << " src=\"" << XMLUtils::HTMLEscape(src) << "\"";
+				html << "<img" << PassthroughAttrs(attrs, {"src", "alt", "title"}) << " src=\""
+				     << XMLUtils::HTMLEscape(src) << "\"";
 				if (!alt.empty()) {
 					html << " alt=\"" << XMLUtils::HTMLEscape(alt) << "\"";
 				}
@@ -1832,7 +1837,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << "</figure>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
-				std::string caption_role = attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
+				std::string caption_role =
+				    attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
 				std::string caption_tag = CaptionTagForRole(caption_role);
 				html << "<" << caption_tag << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
@@ -1892,8 +1898,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 						// leaf, not a new open container -- no push onto open_containers.
 						html << "<div data-duck-block-type=\"" << XMLUtils::HTMLEscape(element_type) << "\"";
 						if (attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE)) {
-							html << " data-source-type=\"" << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE])
-							     << "\"";
+							html << " data-source-type=\""
+							     << XMLUtils::HTMLEscape(attrs[DuckBlockTypes::ATTR_SOURCE_TYPE]) << "\"";
 						}
 						html << ">" << XMLUtils::HTMLEscape(content);
 						ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
@@ -2410,7 +2416,7 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// per-function PreventStructConstantFoldingAndAdd replaced the set-level call.
 	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),
 	                                        HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
-	html_to_duck_blocks_html.SetFallible(); // v2.0: HTML parsing can throw
+	html_to_duck_blocks_html.SetFallible();                               // v2.0: HTML parsing can throw
 	SetScalarFunctionVarArgs(html_to_duck_blocks_html, LogicalType::ANY); // capture_attributes := ...
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_html);
 	ScalarFunction html_to_duck_blocks_varchar({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(),
@@ -2418,12 +2424,33 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	html_to_duck_blocks_varchar.SetFallible(); // v2.0: HTML parsing can throw
 	SetScalarFunctionVarArgs(html_to_duck_blocks_varchar, LogicalType::ANY);
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_varchar);
-	loader.RegisterFunction(html_to_duck_blocks_set);
+	{
+		CreateScalarFunctionInfo info(std::move(html_to_duck_blocks_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"html", "capture_attributes"};
+		desc.description = "Parse an HTML document into a list of duck_block structures.";
+		desc.examples = {"html_to_duck_blocks('<h1>Title</h1><p>Text</p>')",
+		                 "html_to_duck_blocks('<table>...</table>', capture_attributes := true)"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// duck_blocks_to_html(blocks LIST(duck_block)) -> HTML
-	auto duck_blocks_to_html_func = Fallible(ScalarFunction("duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()},
-	                                               XMLTypes::HTMLType(), DuckBlocksToHtmlFunction));
-	loader.RegisterFunction(duck_blocks_to_html_func);
+	auto duck_blocks_to_html_func = Fallible(ScalarFunction(
+	    "duck_blocks_to_html", {DuckBlockTypes::DuckBlockListType()}, XMLTypes::HTMLType(), DuckBlocksToHtmlFunction));
+	{
+		CreateScalarFunctionInfo info(std::move(duck_blocks_to_html_func));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"blocks"};
+		desc.description = "Convert a list of duck_block structures back into an HTML document string.";
+		desc.examples = {"duck_blocks_to_html(html_to_duck_blocks('<h1>Title</h1>'))"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// read_html_blocks table function
 	TableFunctionSet read_html_blocks_set("read_html_blocks");
@@ -2452,7 +2479,17 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	read_html_blocks_array.get_partition_data = ReadHTMLBlocksGetPartitionData;
 	read_html_blocks_set.AddFunction(read_html_blocks_array);
 
-	loader.RegisterFunction(read_html_blocks_set);
+	{
+		CreateTableFunctionInfo info(std::move(read_html_blocks_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"file_path"};
+		desc.description = "Read an HTML file and return each element as a duck_block row.";
+		desc.examples = {"SELECT * FROM read_html_blocks('page.html')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 
 	// parse_html_blocks table function
 	TableFunctionSet parse_html_blocks_set("parse_html_blocks");
@@ -2485,7 +2522,17 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	parse_html_blocks_html_list.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_html_list);
 
-	loader.RegisterFunction(parse_html_blocks_set);
+	{
+		CreateTableFunctionInfo info(std::move(parse_html_blocks_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = {"html"};
+		desc.description = "Parse an HTML string and return each element as a duck_block row.";
+		desc.examples = {"SELECT * FROM parse_html_blocks('<h1>Hello</h1><p>World</p>')"};
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	}
 }
 
 // ============================================================================

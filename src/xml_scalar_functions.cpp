@@ -3,6 +3,7 @@
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -1210,18 +1211,62 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 		set.AddFunction(std::move(fn));
 	};
 
+	auto register_scalar = [](ExtensionLoader &loader, ScalarFunction func, const vector<string> &param_names,
+	                          const string &description, const vector<string> &examples) {
+		CreateScalarFunctionInfo info(std::move(func));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = param_names;
+		desc.description = description;
+		desc.examples = examples;
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	};
+
+	auto register_scalar_set = [](ExtensionLoader &loader, ScalarFunctionSet func_set,
+	                              const vector<string> &param_names, const string &description,
+	                              const vector<string> &examples) {
+		CreateScalarFunctionInfo info(std::move(func_set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		FunctionDescription desc;
+		desc.parameter_names = param_names;
+		desc.description = description;
+		desc.examples = examples;
+		desc.categories = {"webbed"};
+		info.descriptions.push_back(desc);
+		loader.RegisterFunction(std::move(info));
+	};
+
 	// Register xml function (same as to_xml for now) - using VARCHAR for now, will enhance type system later
-	auto xml_function = Fallible(ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction));
-	loader.RegisterFunction(xml_function);
+	auto xml_function =
+	    Fallible(ScalarFunction("xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, ValueToXMLFunction));
+	register_scalar(loader, xml_function, {"xml_str"}, "Cast or convert a string to XML.",
+	                {"xml('<root>value</root>')"});
 
-	// Register to_xml function (single argument) - ANY type variant (unified path)
-	auto to_xml_any_function = Fallible(ScalarFunction("to_xml", {LogicalType::ANY}, XMLTypes::XMLType(), ValueToXMLFunction));
-	loader.RegisterFunction(to_xml_any_function);
+	// Register to_xml function (single argument & two argument variants)
+	ScalarFunctionSet to_xml_set("to_xml");
+	to_xml_set.AddFunction(Fallible(ScalarFunction({LogicalType::ANY}, XMLTypes::XMLType(), ValueToXMLFunction)));
+	to_xml_set.AddFunction(
+	    Fallible(ScalarFunction({LogicalType::ANY, LogicalType::VARCHAR}, XMLTypes::XMLType(), ValueToXMLFunction)));
+	CreateScalarFunctionInfo to_xml_info(std::move(to_xml_set));
+	to_xml_info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
 
-	// Register to_xml function (two arguments: value, node_name) - ANY type variant (unified path)
-	auto to_xml_any_with_name_function =
-	    Fallible(ScalarFunction("to_xml", {LogicalType::ANY, LogicalType::VARCHAR}, XMLTypes::XMLType(), ValueToXMLFunction));
-	loader.RegisterFunction(to_xml_any_with_name_function);
+	FunctionDescription to_xml_desc_single;
+	to_xml_desc_single.parameter_names = {"value"};
+	to_xml_desc_single.description = "Convert a DuckDB value or struct to an XML string.";
+	to_xml_desc_single.examples = {"to_xml({'a': 1, 'b': 2})"};
+	to_xml_desc_single.categories = {"webbed"};
+	to_xml_info.descriptions.push_back(to_xml_desc_single);
+
+	FunctionDescription to_xml_desc_with_node_name;
+	to_xml_desc_with_node_name.parameter_names = {"value", "node_name"};
+	to_xml_desc_with_node_name.description = "Convert a DuckDB value or struct to an XML string.";
+	to_xml_desc_with_node_name.examples = {"to_xml({'a': 1}, 'root')"};
+	to_xml_desc_with_node_name.categories = {"webbed"};
+	to_xml_info.descriptions.push_back(to_xml_desc_with_node_name);
+
+	loader.RegisterFunction(std::move(to_xml_info));
 
 	// Register xml_libxml2_version function
 	auto xml_libxml2_version_function = ScalarFunction(
@@ -1233,23 +1278,23 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 			                                   "Xml " + name.GetString() + ", my linked libxml2 version is 2.13.8");
 		    });
 	    });
-	loader.RegisterFunction(xml_libxml2_version_function);
+	register_scalar(loader, xml_libxml2_version_function, {"name"}, "Return the linked libxml2 version.",
+	                {"xml_libxml2_version('test')"});
 
 	// Register xml_valid function - both XML and VARCHAR overloads
-	auto xml_valid_function =
-	    ScalarFunction("xml_valid", {XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLValidFunction);
-	loader.RegisterFunction(xml_valid_function);
-	auto xml_valid_varchar_function =
-	    ScalarFunction("xml_valid", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidFunction);
-	loader.RegisterFunction(xml_valid_varchar_function);
+	ScalarFunctionSet xml_valid_set("xml_valid");
+	xml_valid_set.AddFunction(ScalarFunction({XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLValidFunction));
+	xml_valid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidFunction));
+	register_scalar_set(loader, xml_valid_set, {"xml"}, "Check if an XML string or document is well-formed.",
+	                    {"xml_valid('<root></root>')", "xml_valid('<unclosed>')"});
 
 	// Register xml_well_formed function - both XML and VARCHAR overloads
-	auto xml_well_formed_function =
-	    ScalarFunction("xml_well_formed", {XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLWellFormedFunction);
-	loader.RegisterFunction(xml_well_formed_function);
-	auto xml_well_formed_varchar_function =
-	    ScalarFunction("xml_well_formed", {LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLWellFormedFunction);
-	loader.RegisterFunction(xml_well_formed_varchar_function);
+	ScalarFunctionSet xml_well_formed_set("xml_well_formed");
+	xml_well_formed_set.AddFunction(ScalarFunction({XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLWellFormedFunction));
+	xml_well_formed_set.AddFunction(
+	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLWellFormedFunction));
+	register_scalar_set(loader, xml_well_formed_set, {"xml"}, "Check if an XML string or document is well-formed.",
+	                    {"xml_well_formed('<root><child/></root>')"});
 
 	// Register xml_extract_text function - returns LIST(VARCHAR) (PostgreSQL-compatible)
 	// Use list[1] or list_extract(list, 1) to get single value
@@ -1265,7 +1310,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	//  overload below, with the literal xpath implicitly cast to VARCHAR.)
 	xml_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
 	// XMLFragment + VARCHAR -> LIST(VARCHAR)
 	add_ns_aware(xml_extract_text_functions,
 	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
@@ -1273,7 +1318,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// XMLFragment + STRING_LITERAL -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
 	// VARCHAR + VARCHAR -> LIST(VARCHAR) (compatibility)
 	add_ns_aware(xml_extract_text_functions,
 	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
@@ -1281,38 +1326,44 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// VARCHAR + STRING_LITERAL -> LIST(VARCHAR) (compatibility)
 	xml_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListFunction)));
 
 	// 3-argument variants with namespaces MAP
 	auto ns_map_type = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 	// XML + VARCHAR + MAP -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListWithNamespacesFunction)));
+	xml_extract_text_functions.AddFunction(
+	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
 	// VARCHAR + VARCHAR + MAP -> LIST(VARCHAR)
-	xml_extract_text_functions.AddFunction(Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
-	                                                      LogicalType::LIST(LogicalType::VARCHAR),
-	                                                      XMLExtractTextListWithNamespacesFunction)));
+	xml_extract_text_functions.AddFunction(
+	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
 
 	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
 	// XML + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
 	// VARCHAR + VARCHAR + VARCHAR (mode) -> LIST(VARCHAR)
 	xml_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextListWithNamespacesFunction)));
 
-	loader.RegisterFunction(xml_extract_text_functions);
+	register_scalar_set(
+	    loader, xml_extract_text_functions, {"xml", "xpath", "namespaces"},
+	    "Extract text content matching an XPath expression from XML as a list of strings.",
+	    {"xml_extract_text('<root><item>Hello</item></root>', '//item')",
+	     "xml_extract_text('<root xmlns:ns=\"uri\"><ns:item>A</ns:item></root>', '//ns:item', map(['ns'], ['uri']))"});
 
 	// Register xml_extract_all_text function - both XML and VARCHAR overloads
-	auto xml_extract_all_text_function =
-	    Fallible(ScalarFunction("xml_extract_all_text", {XMLTypes::XMLType()}, LogicalType::VARCHAR, XMLExtractAllTextFunction));
-	loader.RegisterFunction(xml_extract_all_text_function);
-	auto xml_extract_all_text_varchar_function =
-	    Fallible(ScalarFunction("xml_extract_all_text", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractAllTextFunction));
-	loader.RegisterFunction(xml_extract_all_text_varchar_function);
+	ScalarFunctionSet xml_extract_all_text_set("xml_extract_all_text");
+	xml_extract_all_text_set.AddFunction(
+	    Fallible(ScalarFunction({XMLTypes::XMLType()}, LogicalType::VARCHAR, XMLExtractAllTextFunction)));
+	xml_extract_all_text_set.AddFunction(
+	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLExtractAllTextFunction)));
+	register_scalar_set(loader, xml_extract_all_text_set, {"xml"},
+	                    "Extract all concatenated text content from an XML document or fragment.",
+	                    {"xml_extract_all_text('<root><a/><b/></root>')"});
 
 	// Register xml_extract_elements function - returns LIST(XMLFragment) (PostgreSQL-compatible)
 	// Use list[1] or list_extract(list, 1) to get single value
@@ -1326,7 +1377,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// (STRING_LITERAL overloads stay varargs-free; see note on xml_extract_text above.)
 	xml_extract_elements_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
 	// HTML + VARCHAR -> LIST(XMLFragment)
 	add_ns_aware(xml_extract_elements_functions,
 	             ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
@@ -1334,7 +1385,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// HTML + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
 	// XMLFragment + VARCHAR -> LIST(XMLFragment) (for nested extraction)
 	add_ns_aware(xml_extract_elements_functions,
 	             ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType::VARCHAR},
@@ -1342,7 +1393,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// XMLFragment + STRING_LITERAL -> LIST(XMLFragment)
 	xml_extract_elements_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLFragmentType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
 	// VARCHAR + VARCHAR -> LIST(XMLFragment) (compatibility)
 	add_ns_aware(xml_extract_elements_functions,
 	             ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
@@ -1350,27 +1401,29 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// VARCHAR + STRING_LITERAL -> LIST(XMLFragment) (compatibility)
 	xml_extract_elements_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
+	                            LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListFunction)));
 
 	// 3-argument variants with namespaces MAP
 	// XML + VARCHAR + MAP -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListWithNamespacesFunction)));
+	xml_extract_elements_functions.AddFunction(Fallible(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction)));
 	// VARCHAR + VARCHAR + MAP -> LIST(XMLFragment)
-	xml_extract_elements_functions.AddFunction(Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
-	                                                          LogicalType::LIST(XMLTypes::XMLFragmentType()),
-	                                                          XMLExtractElementsListWithNamespacesFunction)));
+	xml_extract_elements_functions.AddFunction(Fallible(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
+	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction)));
 
 	// 3-argument variants with namespace mode VARCHAR ('auto', 'strict', 'ignore')
-	xml_extract_elements_functions.AddFunction(
-	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	xml_extract_elements_functions.AddFunction(Fallible(
+	    ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction)));
-	xml_extract_elements_functions.AddFunction(
-	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	xml_extract_elements_functions.AddFunction(Fallible(
+	    ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(XMLTypes::XMLFragmentType()), XMLExtractElementsListWithNamespacesFunction)));
 
-	loader.RegisterFunction(xml_extract_elements_functions);
+	register_scalar_set(loader, xml_extract_elements_functions, {"xml", "xpath", "namespaces"},
+	                    "Extract XML fragments matching an XPath expression as a list of XML fragments.",
+	                    {"xml_extract_elements('<root><item>A</item><item>B</item></root>', '//item')"});
 
 	// Register xml_extract_elements_string function as a function set
 	ScalarFunctionSet xml_extract_elements_string_functions("xml_extract_elements_string");
@@ -1383,23 +1436,28 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	// 3-argument variants with namespaces MAP
 	xml_extract_elements_string_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
-	                   XMLExtractElementsStringWithNamespacesFunction)));
+	                            XMLExtractElementsStringWithNamespacesFunction)));
 	xml_extract_elements_string_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type}, LogicalType::VARCHAR,
-	                   XMLExtractElementsStringWithNamespacesFunction)));
+	                            XMLExtractElementsStringWithNamespacesFunction)));
 	// 3-argument variants with namespace mode VARCHAR
 	xml_extract_elements_string_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                   XMLExtractElementsStringWithNamespacesFunction)));
+	                            XMLExtractElementsStringWithNamespacesFunction)));
 	xml_extract_elements_string_functions.AddFunction(
-	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
-	                   XMLExtractElementsStringWithNamespacesFunction)));
-	loader.RegisterFunction(xml_extract_elements_string_functions);
+	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                            LogicalType::VARCHAR, XMLExtractElementsStringWithNamespacesFunction)));
+	register_scalar_set(loader, xml_extract_elements_string_functions, {"xml", "xpath", "namespaces"},
+	                    "Extract XML elements matching an XPath expression as a single concatenated string.",
+	                    {"xml_extract_elements_string('<root><item>A</item></root>', '//item')"});
 
 	// Register xml_wrap_fragment function (returns XML)
-	auto xml_wrap_fragment_function = Fallible(ScalarFunction("xml_wrap_fragment", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                 XMLTypes::XMLType(), XMLWrapFragmentFunction));
-	loader.RegisterFunction(xml_wrap_fragment_function);
+	auto xml_wrap_fragment_function =
+	    Fallible(ScalarFunction("xml_wrap_fragment", {LogicalType::VARCHAR, LogicalType::VARCHAR}, XMLTypes::XMLType(),
+	                            XMLWrapFragmentFunction));
+	register_scalar(loader, xml_wrap_fragment_function, {"fragment", "root_tag"},
+	                "Wrap XML fragment content in an enclosing root tag.",
+	                {"xml_wrap_fragment('<a>1</a><b>2</b>', 'root')"});
 
 	// Register xml_extract_attributes function (returns LIST<STRUCT>)
 	auto attr_struct_type = LogicalType::STRUCT(
@@ -1418,63 +1476,73 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	                      ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                                     LogicalType::LIST(attr_struct_type), XMLExtractAttributesFunction));
 	// Add 3-argument variants with namespace map
-	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
-	                                   Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
-	                                                  LogicalType::LIST(attr_struct_type),
-	                                                  XMLExtractAttributesWithNamespacesFunction)));
-	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
-	                                   Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type},
-	                                                  LogicalType::LIST(attr_struct_type),
-	                                                  XMLExtractAttributesWithNamespacesFunction)));
-	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
-	                                   Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
-	                                                  LogicalType::LIST(attr_struct_type),
-	                                                  XMLExtractAttributesWithNamespacesFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
+	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, ns_map_type},
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
+	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, ns_map_type},
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
+	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, ns_map_type},
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
 	// Add 3-argument variants with namespace mode VARCHAR
-	PreventStructConstantFoldingAndAdd(xml_extract_attributes_functions,
-	                                   Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                  LogicalType::LIST(attr_struct_type),
-	                                                  XMLExtractAttributesWithNamespacesFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    xml_extract_attributes_functions,
+	    Fallible(ScalarFunction({XMLTypes::XMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
 	PreventStructConstantFoldingAndAdd(
 	    xml_extract_attributes_functions,
 	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
 	PreventStructConstantFoldingAndAdd(
 	    xml_extract_attributes_functions,
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                   LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
-	loader.RegisterFunction(xml_extract_attributes_functions);
+	                            LogicalType::LIST(attr_struct_type), XMLExtractAttributesWithNamespacesFunction)));
+	register_scalar_set(loader, xml_extract_attributes_functions, {"xml", "xpath", "namespaces"},
+	                    "Extract attributes from elements matching an XPath expression as a list of structs.",
+	                    {"xml_extract_attributes('<root><item id=\"1\" val=\"a\"/></root>', '//item')"});
 
 	// Register xml_pretty_print function
 	auto xml_pretty_print_function =
 	    ScalarFunction("xml_pretty_print", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLPrettyPrintFunction);
-	loader.RegisterFunction(xml_pretty_print_function);
+	register_scalar(loader, xml_pretty_print_function, {"xml"}, "Format and indent an XML string.",
+	                {"xml_pretty_print('<root><child>value</child></root>')"});
 
 	// Register xml_minify function
 	auto xml_minify_function =
 	    ScalarFunction("xml_minify", {LogicalType::VARCHAR}, LogicalType::VARCHAR, XMLMinifyFunction);
-	loader.RegisterFunction(xml_minify_function);
+	register_scalar(loader, xml_minify_function, {"xml"}, "Minify an XML string by removing unnecessary whitespace.",
+	                {"xml_minify('<root>\\n  <child>value</child>\\n</root>')"});
 
 	// Register xml_validate_schema function
 	auto xml_validate_schema_function =
 	    ScalarFunction("xml_validate_schema", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
 	                   XMLValidateSchemaFunction);
-	loader.RegisterFunction(xml_validate_schema_function);
+	register_scalar(loader, xml_validate_schema_function, {"xml", "schema_xsd"},
+	                "Validate an XML string against an XSD schema string.",
+	                {"xml_validate_schema(xml_doc, xsd_schema)"});
 
 	// Register xml_extract_comments function (returns LIST<STRUCT>)
 	auto comment_struct_type = LogicalType::STRUCT(
 	    {make_pair("content", LogicalType::VARCHAR), make_pair("line_number", LogicalType::BIGINT)});
 	auto xml_extract_comments_function =
 	    Fallible(ScalarFunction("xml_extract_comments", {XMLTypes::XMLType()}, LogicalType::LIST(comment_struct_type),
-	                   XMLExtractCommentsFunction));
+	                            XMLExtractCommentsFunction));
 	PreventStructConstantFolding(xml_extract_comments_function);
-	loader.RegisterFunction(xml_extract_comments_function);
+	register_scalar(loader, xml_extract_comments_function, {"xml"},
+	                "Extract comments from an XML document as a list of structs with content and line numbers.",
+	                {"xml_extract_comments('<!-- a comment --><root/>')"});
 
 	// Register xml_extract_cdata function (returns LIST<STRUCT>)
-	auto xml_extract_cdata_function = Fallible(ScalarFunction("xml_extract_cdata", {XMLTypes::XMLType()},
-	                                                 LogicalType::LIST(comment_struct_type), XMLExtractCDataFunction));
+	auto xml_extract_cdata_function = Fallible(ScalarFunction(
+	    "xml_extract_cdata", {XMLTypes::XMLType()}, LogicalType::LIST(comment_struct_type), XMLExtractCDataFunction));
 	PreventStructConstantFolding(xml_extract_cdata_function);
-	loader.RegisterFunction(xml_extract_cdata_function);
+	register_scalar(loader, xml_extract_cdata_function, {"xml"},
+	                "Extract CDATA sections from an XML document as a list of structs with content and line numbers.",
+	                {"xml_extract_cdata('<root><![CDATA[some raw content]]></root>')"});
 
 	// Register xml_stats function (returns STRUCT)
 	auto stats_struct_type = LogicalType::STRUCT(
@@ -1483,14 +1551,19 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	     make_pair("namespace_count", LogicalType::BIGINT)});
 	auto xml_stats_function = ScalarFunction("xml_stats", {LogicalType::VARCHAR}, stats_struct_type, XMLStatsFunction);
 	PreventStructConstantFolding(xml_stats_function);
-	loader.RegisterFunction(xml_stats_function);
+	register_scalar(
+	    loader, xml_stats_function, {"xml"},
+	    "Compute statistics (element count, attribute count, max depth, size, namespace count) for an XML document.",
+	    {"xml_stats('<root><item a=\"1\"/></root>')"});
 
 	// Register xml_namespaces function (returns MAP<VARCHAR, VARCHAR> with prefix -> uri mappings)
 	auto xml_namespaces_function =
 	    ScalarFunction("xml_namespaces", {LogicalType::VARCHAR},
 	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLNamespacesFunction);
 	PreventStructConstantFolding(xml_namespaces_function);
-	loader.RegisterFunction(xml_namespaces_function);
+	register_scalar(loader, xml_namespaces_function, {"xml"},
+	                "Extract all declared namespace prefixes and URIs from an XML document as a MAP.",
+	                {"xml_namespaces('<root xmlns:a=\"http://example.com\"/>')"});
 
 	// Register xml_common_namespaces function (returns MAP<VARCHAR, VARCHAR> of well-known namespace prefixes)
 	// This is a constant function that takes no arguments
@@ -1498,59 +1571,74 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    ScalarFunction("xml_common_namespaces", {}, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR),
 	                   XMLCommonNamespacesFunction);
 	PreventStructConstantFolding(xml_common_namespaces_function);
-	loader.RegisterFunction(xml_common_namespaces_function);
+	register_scalar(loader, xml_common_namespaces_function, {},
+	                "Return a map of common, well-known namespace prefixes and their URIs.",
+	                {"xml_common_namespaces()"});
 
 	// Internal regression self-test for the libxml2 out-of-memory path (see OOMSelfTestFunction).
 	// Returns 'OK' (or 'OK (oom check skipped...)' where the allocator can't be injected); any other
 	// value indicates a regression. Result is deterministic, so default stability is fine.
-	loader.RegisterFunction(ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction));
+	register_scalar(loader, ScalarFunction("xml_oom_selftest", {}, LogicalType::VARCHAR, OOMSelfTestFunction), {},
+	                "Internal regression self-test for libxml2 memory handling.", {"xml_oom_selftest()"});
 
 	// Register xml_detect_prefixes function (returns LIST<VARCHAR> of namespace prefixes in XPath expression)
 	auto xml_detect_prefixes_function =
 	    ScalarFunction("xml_detect_prefixes", {LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
 	                   XMLDetectPrefixesFunction);
-	loader.RegisterFunction(xml_detect_prefixes_function);
+	register_scalar(loader, xml_detect_prefixes_function, {"xpath"},
+	                "Detect namespace prefixes used within an XPath expression.",
+	                {"xml_detect_prefixes('//ns:item/other:tag')"});
 
 	// Register xml_mock_namespaces function (returns MAP<VARCHAR, VARCHAR> with mock URIs for prefixes)
 	auto xml_mock_namespaces_function =
 	    ScalarFunction("xml_mock_namespaces", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                   LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR), XMLMockNamespacesFunction);
 	PreventStructConstantFolding(xml_mock_namespaces_function);
-	loader.RegisterFunction(xml_mock_namespaces_function);
+	register_scalar(loader, xml_mock_namespaces_function, {"prefixes"},
+	                "Generate mock namespace URI mappings for a list of prefixes.",
+	                {"xml_mock_namespaces(['ns', 'other'])"});
 
 	// Register xml_find_undefined_prefixes function
 	// Finds namespace prefixes used in an XPath expression that are not declared in the XML document
 	auto xml_find_undefined_prefixes_function =
 	    ScalarFunction("xml_find_undefined_prefixes", {LogicalType::VARCHAR, LogicalType::VARCHAR},
 	                   LogicalType::LIST(LogicalType::VARCHAR), XMLFindUndefinedPrefixesFunction);
-	loader.RegisterFunction(xml_find_undefined_prefixes_function);
+	register_scalar(loader, xml_find_undefined_prefixes_function, {"xml", "xpath"},
+	                "Find namespace prefixes used in an XPath expression that are not declared in the XML document.",
+	                {"xml_find_undefined_prefixes('<root/>', '//ns:item')"});
 
 	// Register xml_add_namespace_declarations function
 	// Injects xmlns declarations into an XML document's root element
 	auto xml_add_namespace_declarations_function =
 	    Fallible(ScalarFunction("xml_add_namespace_declarations",
-	                   {LogicalType::VARCHAR, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)},
-	                   LogicalType::VARCHAR, XMLAddNamespaceDeclarationsFunction));
-	loader.RegisterFunction(xml_add_namespace_declarations_function);
+	                            {LogicalType::VARCHAR, LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)},
+	                            LogicalType::VARCHAR, XMLAddNamespaceDeclarationsFunction));
+	register_scalar(loader, xml_add_namespace_declarations_function, {"xml", "namespaces"},
+	                "Inject xmlns namespace declarations into an XML document root element.",
+	                {"xml_add_namespace_declarations('<root/>', map(['ns'], ['http://example.com']))"});
 
 	// Register xml_lookup_namespace function
 	// Looks up a namespace prefix in the common namespaces table
 	auto xml_lookup_namespace_function = ScalarFunction("xml_lookup_namespace", {LogicalType::VARCHAR},
 	                                                    LogicalType::VARCHAR, XMLLookupNamespaceFunction);
 	SetScalarFunctionNullHandling(xml_lookup_namespace_function, FunctionNullHandling::SPECIAL_HANDLING);
-	loader.RegisterFunction(xml_lookup_namespace_function);
+	register_scalar(loader, xml_lookup_namespace_function, {"prefix"}, "Lookup URI for a well-known namespace prefix.",
+	                {"xml_lookup_namespace('soap')"});
 
 	// Register xml_to_json function with optional named parameters
 	ScalarFunction xml_to_json_function("xml_to_json", {LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                    XMLToJSONWithSchemaFunction, XMLToJSONWithSchemaBind);
 	SetScalarFunctionVarArgs(xml_to_json_function, LogicalType::ANY);
 	SetScalarFunctionNullHandling(xml_to_json_function, FunctionNullHandling::SPECIAL_HANDLING);
-	loader.RegisterFunction(xml_to_json_function);
+	register_scalar(loader, xml_to_json_function, {"xml"}, "Convert an XML string to JSON.",
+	                {"xml_to_json('<root><item>Hello</item></root>')",
+	                 "xml_to_json('<root a=\"1\"><item>Hello</item></root>', attr_mode := 'prefixed')"});
 
 	// Register json_to_xml function
 	auto json_to_xml_function =
 	    ScalarFunction("json_to_xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction);
-	loader.RegisterFunction(json_to_xml_function);
+	register_scalar(loader, json_to_xml_function, {"json"}, "Convert a JSON string to XML.",
+	                {"json_to_xml('{\"root\": {\"item\": \"Hello\"}}')"});
 
 	// Register HTML extraction functions following markdown extension patterns
 
@@ -1596,13 +1684,13 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::VARCHAR, HTMLExtractTextFunction)));
 
 	// HTML + VARCHAR XPath -> LIST(VARCHAR)
-	html_extract_text_functions.AddFunction(Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR},
-	                                                       LogicalType::LIST(LogicalType::VARCHAR),
-	                                                       HTMLExtractTextListFunction)));
+	html_extract_text_functions.AddFunction(
+	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            HTMLExtractTextListFunction)));
 	// HTML + STRING_LITERAL XPath -> LIST(VARCHAR)
 	html_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
 	// NOTE: Namespace parameter overloads intentionally omitted for html_extract_text.
 	// HTML5 parsing (htmlReadMemory) doesn't support XML namespace declarations -
 	// prefixed elements like "svg:circle" are treated as literal names with colons.
@@ -1618,74 +1706,106 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	html_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextFunction)));
 	// VARCHAR + VARCHAR XPath -> LIST(VARCHAR)
-	html_extract_text_functions.AddFunction(Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-	                                                       LogicalType::LIST(LogicalType::VARCHAR),
-	                                                       HTMLExtractTextListFunction)));
+	html_extract_text_functions.AddFunction(
+	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::LIST(LogicalType::VARCHAR),
+	                            HTMLExtractTextListFunction)));
 	// VARCHAR + STRING_LITERAL XPath -> LIST(VARCHAR)
 	html_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
-	                   LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
+	                            LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
 
-	loader.RegisterFunction(html_extract_text_functions);
+	CreateScalarFunctionInfo html_extract_text_info(std::move(html_extract_text_functions));
+	html_extract_text_info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+
+	FunctionDescription html_extract_text_desc_single;
+	html_extract_text_desc_single.parameter_names = {"html"};
+	html_extract_text_desc_single.description = "Extract text content from HTML.";
+	html_extract_text_desc_single.examples = {"html_extract_text('<h1>Title</h1><p>Text</p>')"};
+	html_extract_text_desc_single.categories = {"webbed"};
+	html_extract_text_info.descriptions.push_back(html_extract_text_desc_single);
+
+	FunctionDescription html_extract_text_desc_with_xpath;
+	html_extract_text_desc_with_xpath.parameter_names = {"html", "xpath"};
+	html_extract_text_desc_with_xpath.description = "Extract text content from HTML matching an XPath expression.";
+	html_extract_text_desc_with_xpath.examples = {"html_extract_text('<h1>Title</h1><p>Text</p>', '//p')"};
+	html_extract_text_desc_with_xpath.categories = {"webbed"};
+	html_extract_text_info.descriptions.push_back(html_extract_text_desc_with_xpath);
+
+	loader.RegisterFunction(std::move(html_extract_text_info));
 
 	// Register html_extract_links function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_links_functions("html_extract_links");
 	PreventStructConstantFoldingAndAdd(
 	    html_extract_links_functions,
-	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction)));
+	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_link_struct_type),
+	                            HTMLExtractLinksFunction)));
 	PreventStructConstantFoldingAndAdd(
 	    html_extract_links_functions,
-	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_link_struct_type), HTMLExtractLinksFunction)));
-	loader.RegisterFunction(html_extract_links_functions);
+	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_link_struct_type),
+	                            HTMLExtractLinksFunction)));
+	register_scalar_set(loader, html_extract_links_functions, {"html"},
+	                    "Extract all hyperlink tags (<a>) from HTML as a list of structs.",
+	                    {"html_extract_links('<a href=\"https://duckdb.org\">DuckDB</a>')"});
 
 	// Register html_extract_images function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_images_functions("html_extract_images");
 	PreventStructConstantFoldingAndAdd(
 	    html_extract_images_functions,
-	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction)));
+	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_image_struct_type),
+	                            HTMLExtractImagesFunction)));
 	PreventStructConstantFoldingAndAdd(
 	    html_extract_images_functions,
-	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_image_struct_type), HTMLExtractImagesFunction)));
-	loader.RegisterFunction(html_extract_images_functions);
+	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_image_struct_type),
+	                            HTMLExtractImagesFunction)));
+	register_scalar_set(loader, html_extract_images_functions, {"html"},
+	                    "Extract all image tags (<img>) from HTML as a list of structs.",
+	                    {"html_extract_images('<img src=\"logo.png\" alt=\"Logo\" />')"});
 
 	// Register html_extract_table_rows function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_table_rows_functions("html_extract_table_rows");
-	PreventStructConstantFoldingAndAdd(html_extract_table_rows_functions,
-	                                   Fallible(ScalarFunction({XMLTypes::HTMLType()},
-	                                                  LogicalType::LIST(html_table_row_struct_type),
-	                                                  HTMLExtractTableRowsFunction)));
-	PreventStructConstantFoldingAndAdd(html_extract_table_rows_functions,
-	                                   Fallible(ScalarFunction({LogicalType::VARCHAR},
-	                                                  LogicalType::LIST(html_table_row_struct_type),
-	                                                  HTMLExtractTableRowsFunction)));
-	loader.RegisterFunction(html_extract_table_rows_functions);
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_table_rows_functions,
+	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_table_row_struct_type),
+	                            HTMLExtractTableRowsFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_table_rows_functions,
+	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_table_row_struct_type),
+	                            HTMLExtractTableRowsFunction)));
+	register_scalar_set(loader, html_extract_table_rows_functions, {"html"},
+	                    "Extract rows and cells from all tables in HTML as a list of structs.",
+	                    {"html_extract_table_rows('<table><tr><td>A</td></tr></table>')"});
 
 	// Register html_extract_tables_json function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_tables_json_functions("html_extract_tables_json");
-	PreventStructConstantFoldingAndAdd(html_extract_tables_json_functions,
-	                                   Fallible(ScalarFunction({XMLTypes::HTMLType()},
-	                                                  LogicalType::LIST(html_table_json_struct_type),
-	                                                  HTMLExtractTablesJSONFunction)));
-	PreventStructConstantFoldingAndAdd(html_extract_tables_json_functions,
-	                                   Fallible(ScalarFunction({LogicalType::VARCHAR},
-	                                                  LogicalType::LIST(html_table_json_struct_type),
-	                                                  HTMLExtractTablesJSONFunction)));
-	loader.RegisterFunction(html_extract_tables_json_functions);
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_tables_json_functions,
+	    Fallible(ScalarFunction({XMLTypes::HTMLType()}, LogicalType::LIST(html_table_json_struct_type),
+	                            HTMLExtractTablesJSONFunction)));
+	PreventStructConstantFoldingAndAdd(
+	    html_extract_tables_json_functions,
+	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::LIST(html_table_json_struct_type),
+	                            HTMLExtractTablesJSONFunction)));
+	register_scalar_set(loader, html_extract_tables_json_functions, {"html"},
+	                    "Extract all tables from HTML as JSON structures.",
+	                    {"html_extract_tables_json('<table><tr><th>H</th></tr><tr><td>V</td></tr></table>')"});
 
 	// Register parse_html scalar function for parsing HTML content directly
 	auto parse_html_function =
 	    ScalarFunction("parse_html", {LogicalType::VARCHAR}, XMLTypes::HTMLType(), ReadHTMLFunction);
-	loader.RegisterFunction(parse_html_function);
+	register_scalar(loader, parse_html_function, {"html"}, "Parse an HTML string into an HTML type.",
+	                {"parse_html('<div>Hello</div>')"});
 
 	// Register html_unescape function
 	auto html_unescape_function =
 	    ScalarFunction("html_unescape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLUnescapeFunction);
-	loader.RegisterFunction(html_unescape_function);
+	register_scalar(loader, html_unescape_function, {"text"}, "Decode HTML entities in a string.",
+	                {"html_unescape('&lt;hello&amp;world&gt;')"});
 
 	// Register html_escape function
 	auto html_escape_function =
 	    ScalarFunction("html_escape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLEscapeFunction);
-	loader.RegisterFunction(html_escape_function);
+	register_scalar(loader, html_escape_function, {"text"}, "Escape special characters for HTML embedding.",
+	                {"html_escape('<hello & world>')"});
 }
 
 // HTML-specific extraction function implementations
