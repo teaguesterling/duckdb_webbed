@@ -1285,7 +1285,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	ScalarFunctionSet xml_valid_set("xml_valid");
 	xml_valid_set.AddFunction(ScalarFunction({XMLTypes::XMLType()}, LogicalType::BOOLEAN, XMLValidFunction));
 	xml_valid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::BOOLEAN, XMLValidFunction));
-	register_scalar_set(loader, xml_valid_set, {"xml"}, "Check if an XML string or document is valid and well-formed.",
+	register_scalar_set(loader, xml_valid_set, {"xml"}, "Check if an XML string or document is well-formed.",
 	                    {"xml_valid('<root></root>')", "xml_valid('<unclosed>')"});
 
 	// Register xml_well_formed function - both XML and VARCHAR overloads
@@ -1691,8 +1691,17 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	html_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({XMLTypes::HTMLType(), LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                            LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
+	// NOTE: Namespace parameter overloads intentionally omitted for html_extract_text.
+	// HTML5 parsing (htmlReadMemory) doesn't support XML namespace declarations -
+	// prefixed elements like "svg:circle" are treated as literal names with colons.
+	// Users should use name()="prefix:element" XPath predicates for HTML content.
 
-	// VARCHAR overloads (compatibility)
+	// VARCHAR overloads (compatibility): the natural sources of HTML content - read_text(),
+	// httpfs, zim:// entries, ordinary table columns - are all typed VARCHAR, and
+	// VARCHAR -> HTML is registered as an explicit-only cast (see XMLTypes::Register).
+	// Without these, every such pipeline needs a manual ::HTML cast. String literals bind
+	// today only because DuckDB special-cases STRING_LITERAL to reach any type, which hides
+	// the gap in doc examples. Mirrors the VARCHAR overloads xml_extract_text already has.
 	// VARCHAR only (no XPath) -> VARCHAR
 	html_extract_text_functions.AddFunction(
 	    Fallible(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLExtractTextFunction)));
@@ -1705,10 +1714,24 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    Fallible(ScalarFunction({LogicalType::VARCHAR, LogicalType(LogicalTypeId::STRING_LITERAL)},
 	                            LogicalType::LIST(LogicalType::VARCHAR), HTMLExtractTextListFunction)));
 
-	register_scalar_set(
-	    loader, html_extract_text_functions, {"html", "xpath"},
-	    "Extract text content from HTML, optionally matching an XPath expression.",
-	    {"html_extract_text('<h1>Title</h1><p>Text</p>')", "html_extract_text('<h1>Title</h1><p>Text</p>', '//p')"});
+	CreateScalarFunctionInfo html_extract_text_info(std::move(html_extract_text_functions));
+	html_extract_text_info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+
+	FunctionDescription html_extract_text_desc_single;
+	html_extract_text_desc_single.parameter_names = {"html"};
+	html_extract_text_desc_single.description = "Extract text content from HTML.";
+	html_extract_text_desc_single.examples = {"html_extract_text('<h1>Title</h1><p>Text</p>')"};
+	html_extract_text_desc_single.categories = {"webbed"};
+	html_extract_text_info.descriptions.push_back(html_extract_text_desc_single);
+
+	FunctionDescription html_extract_text_desc_with_xpath;
+	html_extract_text_desc_with_xpath.parameter_names = {"html", "xpath"};
+	html_extract_text_desc_with_xpath.description = "Extract text content from HTML matching an XPath expression.";
+	html_extract_text_desc_with_xpath.examples = {"html_extract_text('<h1>Title</h1><p>Text</p>', '//p')"};
+	html_extract_text_desc_with_xpath.categories = {"webbed"};
+	html_extract_text_info.descriptions.push_back(html_extract_text_desc_with_xpath);
+
+	loader.RegisterFunction(std::move(html_extract_text_info));
 
 	// Register html_extract_links function (HTML + VARCHAR compatibility overload)
 	ScalarFunctionSet html_extract_links_functions("html_extract_links");
