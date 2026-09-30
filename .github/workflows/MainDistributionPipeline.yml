@@ -214,13 +214,6 @@ jobs:
       ci_tools_version: v1.5-variegata
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # windows_amd64_mingw excluded on the v1.5.6 stable job: duckdb's
-      # scripts/ci/run_tests.py prints a U+274C ❌ glyph on test-batch failure,
-      # which Windows' default cp1252 stdout can't encode (UnicodeEncodeError),
-      # masking the underlying test result. mingw-specific (see duckdb_urlpattern's
-      # exclude list); windows_amd64 (MSVC) is re-enabled here.
-      # Revisit once upstream sets PYTHONIOENCODING / utf8_mode in the runner.
-      exclude_archs: 'windows_amd64_mingw'
 
   # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
   # distribution workflow builds and uploads the .wasm but never inspects or
