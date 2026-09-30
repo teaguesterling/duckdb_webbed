@@ -82,7 +82,7 @@
       },
       "original": {
         "owner": "cachix",
-        "ref": "rolling",
+        "rev": "207a4cb0e1253c7658c6736becc6eb9cace1f25f",
         "repo": "devenv-nixpkgs",
         "type": "github"
       }

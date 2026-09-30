@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
 inputs:
   nixpkgs:
-    url: github:cachix/devenv-nixpkgs/rolling
+    url: github:cachix/devenv-nixpkgs/207a4cb0e1253c7658c6736becc6eb9cace1f25f
   git-hooks:
     url: github:cachix/git-hooks.nix
     inputs:
