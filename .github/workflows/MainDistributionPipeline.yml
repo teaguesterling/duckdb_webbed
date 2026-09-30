@@ -209,8 +209,9 @@ jobs:
       # v1.5-variegata branch tip. Branch-tip (-dev) builds produce
       # non-loadable extensions; the shippable stable build stays on the tag.
       duckdb_version: v1.5.6
-      # ci-tools stays on its v1.5.4 tag: extension-ci-tools has no v1.5.6 tag, and this
-      # pins the CI TOOLING, not DuckDB. duckdb_version above is what the build targets.
+      # ci-tools pins the v1.5-variegata BRANCH: extension-ci-tools has no v1.5.6 tag,
+      # and v1.5-variegata tracks the v1.5.x line (identical to its v1.5.6 branch today).
+      # This pins the CI TOOLING, not DuckDB. duckdb_version above is what the build targets.
       ci_tools_version: v1.5-variegata
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
