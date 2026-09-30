@@ -166,8 +166,49 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 inline void SetScalarFunctionNullHandling(ScalarFunction &func, FunctionNullHandling handling) {
 	func.SetNullHandling(handling);
 }
-inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
+// The two lines that reach THIS branch disagree about how a function declares varargs, so
+// `#ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS` cannot tell them apart -- the disagreement is inside it.
+// Measured on src/include/duckdb/function/function.hpp at each ref (2026-09-30):
+//
+//   ref                reaches this branch?   SetVarArgs            AddArgs / VAR_POSITIONAL
+//   v1.5.6             NO (sentinel absent)   yes, + public field   no  / no
+//   duckdb main        yes                    yes (wrapper)         no  / no
+//   v2.0-cyanoptera    yes                    NONE                  yes / yes
+//
+// Both post-1.5 lines moved varargs INTO the (protected) FunctionSignature; they differ only in what
+// they left behind on the function. DuckDB main kept a SimpleFunction::SetVarArgs wrapper that
+// delegates to FunctionSignature::SetVarArgs. v2.0-cyanoptera deleted the wrapper outright -- there is
+// no SetVarArgs anywhere on that ref, not on ScalarFunction and not on SimpleFunction -- and `varargs = T`
+// there became a single FunctionParameter of kind VAR_POSITIONAL, appended via the mutable
+// SimpleFunction::GetSignature(). So this is a genuine API removal, not a renamed setter, and a fix
+// written for either line alone breaks the other: exactly the both-ways divergence the canary job in
+// MainDistributionPipeline.yml warns about.
+//
+// Note that v2.0-cyanoptera is a BRANCH, not a tag. This code compiled against it until at least
+// 2026-09-21 (duckdb_yaml's identical shim built green that day); the removal landed after. Expect
+// this branch to keep moving under us -- which is the argument for detecting rather than #ifdef'ing.
+//
+// Detected, not #ifdef'd, and by the same C++11 tag-dispatch idiom as CompatWithAlias above (this TU
+// is C++11 on purpose -- see the CompatHasWithAlias comment): the detector IS the check, so there is
+// no new sentinel left to mis-select, and a third line that moves varargs again fails to compile here
+// rather than silently picking a branch that does nothing.
+template <class T, class = void>
+struct CompatHasSetVarArgs : std::false_type {};
+template <class T>
+struct CompatHasSetVarArgs<T, decltype(void(std::declval<T &>().SetVarArgs(std::declval<LogicalType>())))>
+    : std::true_type {};
+
+inline void SetScalarFunctionVarArgsImpl(ScalarFunction &func, LogicalType varargs, std::true_type) {
+	// duckdb main: the wrapper survives and forwards to FunctionSignature::SetVarArgs.
 	func.SetVarArgs(std::move(varargs));
+}
+inline void SetScalarFunctionVarArgsImpl(ScalarFunction &func, LogicalType varargs, std::false_type) {
+	// v2.0-cyanoptera. The parameter name is never referenced by callers -- a VAR_POSITIONAL
+	// parameter is matched by position -- and "args" is the name AddArgs' own callers use.
+	func.GetSignature().AddArgs("args", std::move(varargs));
+}
+inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
+	SetScalarFunctionVarArgsImpl(func, std::move(varargs), CompatHasSetVarArgs<ScalarFunction>());
 }
 
 // --- Vector helpers ---
