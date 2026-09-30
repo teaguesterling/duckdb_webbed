@@ -166,8 +166,15 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 inline void SetScalarFunctionNullHandling(ScalarFunction &func, FunctionNullHandling handling) {
 	func.SetNullHandling(handling);
 }
-inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
-	func.SetVarArgs(std::move(varargs));
+// v2.0-cyanoptera removed the post-construction SetVarArgs setter AND dropped the
+// bind_extended constructor parameter, so varargs must be passed at construction as
+// the 7th positional arg (after init_local_state). Construct via this helper instead
+// of `ScalarFunction f(...); SetScalarFunctionVarArgs(f, ...)`.
+inline ScalarFunction MakeScalarFunctionWithVarArgs(vector<LogicalType> arguments, LogicalType return_type,
+                                                    scalar_function_t function, bind_scalar_function_t bind,
+                                                    LogicalType varargs) {
+	return ScalarFunction(std::move(arguments), std::move(return_type), function, bind,
+	                      nullptr /*statistics*/, nullptr /*init_local_state*/, std::move(varargs));
 }
 
 // --- Vector helpers ---
@@ -227,8 +234,14 @@ inline LogicalType CompatForceMaxLogicalType(const LogicalType &left, const Logi
 inline void SetScalarFunctionNullHandling(ScalarFunction &func, FunctionNullHandling handling) {
 	func.null_handling = handling;
 }
-inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
-	func.varargs = std::move(varargs);
+// v1.5: varargs is the 8th constructor arg (after bind_extended, statistics, init_local_state).
+// Same shape as the v2.0 helper so call sites are identical on both lines.
+inline ScalarFunction MakeScalarFunctionWithVarArgs(vector<LogicalType> arguments, LogicalType return_type,
+                                                    scalar_function_t function, bind_scalar_function_t bind,
+                                                    LogicalType varargs) {
+	return ScalarFunction(std::move(arguments), std::move(return_type), function, bind,
+	                      nullptr /*bind_extended*/, nullptr /*statistics*/, nullptr /*init_local_state*/,
+	                      std::move(varargs));
 }
 
 inline Vector &CompatListGetChild(Vector &v) {

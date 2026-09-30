@@ -2415,15 +2415,16 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 	// named parameter) BEFORE adding it: on DuckDB v2.0 a set member is
 	// shared_ptr<const T> and cannot be changed once added, which is why the
 	// per-function PreventStructConstantFoldingAndAdd replaced the set-level call.
-	ScalarFunction html_to_duck_blocks_html({XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(),
-	                                        HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
-	html_to_duck_blocks_html.SetFallible();                               // v2.0: HTML parsing can throw
-	SetScalarFunctionVarArgs(html_to_duck_blocks_html, LogicalType::ANY); // capture_attributes := ...
+	// varargs (capture_attributes := ...) must be set at construction on v2.0 (see compat helper).
+	ScalarFunction html_to_duck_blocks_html = MakeScalarFunctionWithVarArgs(
+	    {XMLTypes::HTMLType()}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind,
+	    LogicalType::ANY);
+	html_to_duck_blocks_html.SetFallible(); // v2.0: HTML parsing can throw
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_html);
-	ScalarFunction html_to_duck_blocks_varchar({LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(),
-	                                           HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind);
+	ScalarFunction html_to_duck_blocks_varchar = MakeScalarFunctionWithVarArgs(
+	    {LogicalType::VARCHAR}, DuckBlockTypes::DuckBlockListType(), HtmlToDuckBlocksFunction, HtmlToDuckBlocksBind,
+	    LogicalType::ANY);
 	html_to_duck_blocks_varchar.SetFallible(); // v2.0: HTML parsing can throw
-	SetScalarFunctionVarArgs(html_to_duck_blocks_varchar, LogicalType::ANY);
 	PreventStructConstantFoldingAndAdd(html_to_duck_blocks_set, html_to_duck_blocks_varchar);
 	{
 		CreateScalarFunctionInfo info(std::move(html_to_duck_blocks_set));
