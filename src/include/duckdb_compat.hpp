@@ -198,11 +198,23 @@ template <class T>
 struct CompatHasSetVarArgs<T, decltype(void(std::declval<T &>().SetVarArgs(std::declval<LogicalType>())))>
     : std::true_type {};
 
-inline void SetScalarFunctionVarArgsImpl(ScalarFunction &func, LogicalType varargs, std::true_type) {
+// BOTH overloads MUST be templates. Tag dispatch only picks which one is CALLED; a non-template
+// `inline` function is compiled whether or not it is called, so with plain overloads the
+// duckdb-main body was still type-checked against cyanoptera and failed there:
+//
+//   duckdb_compat.hpp:203: error: 'class duckdb::ScalarFunction' has no member named 'SetVarArgs'
+//   ... In function 'void duckdb::SetScalarFunctionVarArgsImpl(ScalarFunction&, LogicalType, std::true_type)'
+//
+// Note the error was inside the std::true_type overload -- the branch cyanoptera does NOT take.
+// Making them templates is what gives the "only the taken branch is instantiated" property, which
+// is exactly why CompatWithAliasImpl above is `template <class TYPE>` and not a plain overload.
+template <class FUNC>
+inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::true_type) {
 	// duckdb main: the wrapper survives and forwards to FunctionSignature::SetVarArgs.
 	func.SetVarArgs(std::move(varargs));
 }
-inline void SetScalarFunctionVarArgsImpl(ScalarFunction &func, LogicalType varargs, std::false_type) {
+template <class FUNC>
+inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::false_type) {
 	// v2.0-cyanoptera. The parameter name is never referenced by callers -- a VAR_POSITIONAL
 	// parameter is matched by position -- and "args" is the name AddArgs' own callers use.
 	func.GetSignature().AddArgs("args", std::move(varargs));
