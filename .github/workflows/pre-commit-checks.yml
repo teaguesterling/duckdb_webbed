@@ -36,12 +36,7 @@ jobs:
 
       - name: Install devenv
         run: |
-          # Pin the devenv CLI to a tagged release. Unpinned `nixpkgs#devenv`
-          # pulls a mid-rolling CLI whose bundled modules (dotenv was rewritten
-          # 2026-08-19 to compute `dotenv.resolved`) can mismatch the CLI half,
-          # failing eval with "dotenv.resolved has no value defined" on a cold
-          # cache. A tagged release is internally consistent.
-          nix profile install --accept-flake-config github:cachix/devenv/v2.4.0
+          nix profile install --accept-flake-config nixpkgs#devenv
 
       - name: Cache vcpkg
         uses: actions/cache@v3
