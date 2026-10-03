@@ -38,6 +38,26 @@ jobs:
         run: |
           nix profile install --accept-flake-config nixpkgs#devenv
 
+      # The devenv.lock pins the `devenv` MODULE-SET node (cachix/devenv,
+      # dir src/modules) to a rev from 2025-10, ~11 months stale vs the CLI
+      # installed above. That skew is what makes `devenv shell` fail with
+      # `dotenv.resolved has no value defined`. Realign JUST that node to the
+      # installed CLI (targeted `devenv update devenv`; fall back to the full
+      # update only if the CLI can't target the implicit input). Instrumented
+      # so the before/after lock rev makes the result decisive either way.
+      # Non-fatal: the Build step below is the real pass/fail signal.
+      - name: Realign stale devenv module-set lock node
+        run: |
+          echo "=== devenv version / path ==="
+          devenv version || true
+          command -v devenv || true
+          echo "=== devenv.lock 'devenv' node BEFORE ==="
+          python3 -c "import json;n=json.load(open('devenv.lock'))['nodes'].get('devenv',{}).get('locked',{});print('rev=',n.get('rev'),'lastModified=',n.get('lastModified'))" || true
+          echo "=== realign: targeted 'devenv update devenv', else full 'devenv update' ==="
+          devenv update devenv || devenv update || echo "WARN: devenv update failed (likely the same dotenv eval) — Build step will show the real state"
+          echo "=== devenv.lock 'devenv' node AFTER ==="
+          python3 -c "import json;n=json.load(open('devenv.lock'))['nodes'].get('devenv',{}).get('locked',{});print('rev=',n.get('rev'),'lastModified=',n.get('lastModified'))" || true
+
       - name: Cache vcpkg
         uses: actions/cache@v3
         with:

@@ -1,4 +1,5 @@
 #include "xml_reader_functions.hpp"
+#include "named_parameter_compat.hpp"
 #include "xml_utils.hpp"
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
@@ -2175,9 +2176,11 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 1: Single string parameter
 	TableFunction read_xml_objects_single("read_xml_objects", {LogicalType::VARCHAR}, ReadXMLObjectsFunction,
 	                                      ReadXMLObjectsBind, ReadXMLObjectsInit);
-	read_xml_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_xml_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_xml_objects_single, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	read_xml_objects_single.init_local = ReadDocumentInitLocal;
 	read_xml_objects_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_objects_set.AddFunction(read_xml_objects_single);
@@ -2185,9 +2188,11 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 2: Array of strings parameter
 	TableFunction read_xml_objects_array("read_xml_objects", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                                     ReadXMLObjectsFunction, ReadXMLObjectsBind, ReadXMLObjectsInit);
-	read_xml_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_xml_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_xml_objects_array, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	read_xml_objects_array.init_local = ReadDocumentInitLocal;
 	read_xml_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_objects_set.AddFunction(read_xml_objects_array);
@@ -2209,34 +2214,37 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 
 	// Variant 1: Single string parameter
 	TableFunction read_xml_single("read_xml", {LogicalType::VARCHAR}, ReadXMLFunction, ReadXMLBind, ReadXMLInit);
-	read_xml_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_xml_single.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_xml_single, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"union_by_name", LogicalType::BOOLEAN},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters
-	read_xml_single.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_single.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_xml_single.named_parameters["attr_prefix"] =
-	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
-	read_xml_single.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
-	read_xml_single.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
-	read_xml_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
-	read_xml_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["max_depth"] = LogicalType::INTEGER;
-	read_xml_single.named_parameters["sample_size"] = LogicalType::INTEGER;
-	read_xml_single.named_parameters["sample_files"] = LogicalType::BIGINT;
-	read_xml_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_single.named_parameters["record_element"] =
-	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_xml_single.named_parameters["force_list"] =
-	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	ExtendNamedParameters(read_xml_single, {
+		{"root_element", LogicalType::VARCHAR},
+		{"attr_mode", LogicalType::VARCHAR}, // 'columns' | 'prefixed' | 'map' | 'discard'
+		{"attr_prefix", LogicalType::VARCHAR}, // Prefix for attributes when attr_mode='prefixed'
+		{"text_key", LogicalType::VARCHAR}, // Key for mixed text content
+		{"namespaces", LogicalType::VARCHAR}, // 'strip' | 'expand' | 'keep'
+		{"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"sample_files", LogicalType::BIGINT},
+		{"unnest_as", LogicalType::VARCHAR}, // 'columns' (default) or 'struct' (future)
+		{"record_element", LogicalType::VARCHAR}, // XPath or tag name for elements that should be rows
+		{"force_list", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	});
 	// Explicit schema specification (like JSON extension)
-	read_xml_single.named_parameters["columns"] = LogicalType::ANY;
-	read_xml_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	read_xml_single.named_parameters["nullstr"] = LogicalType::ANY;
-	read_xml_single.named_parameters["streaming"] = LogicalType::BOOLEAN;
-	read_xml_single.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	ExtendNamedParameters(read_xml_single, {
+		{"columns", LogicalType::ANY},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"streaming", LogicalType::BOOLEAN},
+		{"preserve_whitespace", LogicalType::BOOLEAN},
+	});
 	read_xml_single.init_local = ReadDocumentInitLocal;
 	read_xml_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_set.AddFunction(read_xml_single);
@@ -2244,34 +2252,37 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 2: Array of strings parameter
 	TableFunction read_xml_array("read_xml", {LogicalType::LIST(LogicalType::VARCHAR)}, ReadXMLFunction, ReadXMLBind,
 	                             ReadXMLInit);
-	read_xml_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_xml_array.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_xml_array, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"union_by_name", LogicalType::BOOLEAN},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters
-	read_xml_array.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_xml_array.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_xml_array.named_parameters["attr_prefix"] =
-	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
-	read_xml_array.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
-	read_xml_array.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
-	read_xml_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
-	read_xml_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["max_depth"] = LogicalType::INTEGER;
-	read_xml_array.named_parameters["sample_size"] = LogicalType::INTEGER;
-	read_xml_array.named_parameters["sample_files"] = LogicalType::BIGINT;
-	read_xml_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_xml_array.named_parameters["record_element"] =
-	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_xml_array.named_parameters["force_list"] =
-	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	ExtendNamedParameters(read_xml_array, {
+		{"root_element", LogicalType::VARCHAR},
+		{"attr_mode", LogicalType::VARCHAR}, // 'columns' | 'prefixed' | 'map' | 'discard'
+		{"attr_prefix", LogicalType::VARCHAR}, // Prefix for attributes when attr_mode='prefixed'
+		{"text_key", LogicalType::VARCHAR}, // Key for mixed text content
+		{"namespaces", LogicalType::VARCHAR}, // 'strip' | 'expand' | 'keep'
+		{"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"sample_files", LogicalType::BIGINT},
+		{"unnest_as", LogicalType::VARCHAR}, // 'columns' (default) or 'struct' (future)
+		{"record_element", LogicalType::VARCHAR}, // XPath or tag name for elements that should be rows
+		{"force_list", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	});
 	// Explicit schema specification (like JSON extension)
-	read_xml_array.named_parameters["columns"] = LogicalType::ANY;
-	read_xml_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	read_xml_array.named_parameters["nullstr"] = LogicalType::ANY;
-	read_xml_array.named_parameters["streaming"] = LogicalType::BOOLEAN;
-	read_xml_array.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	ExtendNamedParameters(read_xml_array, {
+		{"columns", LogicalType::ANY},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"streaming", LogicalType::BOOLEAN},
+		{"preserve_whitespace", LogicalType::BOOLEAN},
+	});
 	read_xml_array.init_local = ReadDocumentInitLocal;
 	read_xml_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_xml_set.AddFunction(read_xml_array);
@@ -2294,33 +2305,36 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 
 	// Variant 1: Single string parameter
 	TableFunction read_html_single("read_html", {LogicalType::VARCHAR}, ReadHTMLFunction, ReadHTMLBind, ReadHTMLInit);
-	read_html_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_single.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_html_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_single, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"union_by_name", LogicalType::BOOLEAN},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters (same as read_xml for API consistency)
-	read_html_single.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_html_single.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_html_single.named_parameters["attr_prefix"] =
-	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
-	read_html_single.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
-	read_html_single.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
-	read_html_single.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
-	read_html_single.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_html_single.named_parameters["max_depth"] = LogicalType::INTEGER;
-	read_html_single.named_parameters["sample_size"] = LogicalType::INTEGER;
-	read_html_single.named_parameters["sample_files"] = LogicalType::BIGINT;
-	read_html_single.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_html_single.named_parameters["record_element"] =
-	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_html_single.named_parameters["force_list"] =
-	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	ExtendNamedParameters(read_html_single, {
+		{"root_element", LogicalType::VARCHAR},
+		{"attr_mode", LogicalType::VARCHAR}, // 'columns' | 'prefixed' | 'map' | 'discard'
+		{"attr_prefix", LogicalType::VARCHAR}, // Prefix for attributes when attr_mode='prefixed'
+		{"text_key", LogicalType::VARCHAR}, // Key for mixed text content
+		{"namespaces", LogicalType::VARCHAR}, // 'strip' | 'expand' | 'keep'
+		{"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"sample_files", LogicalType::BIGINT},
+		{"unnest_as", LogicalType::VARCHAR}, // 'columns' (default) or 'struct' (future)
+		{"record_element", LogicalType::VARCHAR}, // XPath or tag name for elements that should be rows
+		{"force_list", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	});
 	// Explicit schema specification (like JSON extension)
-	read_html_single.named_parameters["columns"] = LogicalType::ANY;
-	read_html_single.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	read_html_single.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	read_html_single.named_parameters["nullstr"] = LogicalType::ANY;
-	read_html_single.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	ExtendNamedParameters(read_html_single, {
+		{"columns", LogicalType::ANY},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"preserve_whitespace", LogicalType::BOOLEAN},
+	});
 	read_html_single.init_local = ReadDocumentInitLocal;
 	read_html_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_set.AddFunction(read_html_single);
@@ -2328,33 +2342,36 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 2: Array of strings parameter
 	TableFunction read_html_array("read_html", {LogicalType::LIST(LogicalType::VARCHAR)}, ReadHTMLFunction,
 	                              ReadHTMLBind, ReadHTMLInit);
-	read_html_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_array.named_parameters["union_by_name"] = LogicalType::BOOLEAN;
-	read_html_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_array, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"union_by_name", LogicalType::BOOLEAN},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters (same as read_xml for API consistency)
-	read_html_array.named_parameters["root_element"] = LogicalType::VARCHAR;
-	read_html_array.named_parameters["attr_mode"] = LogicalType::VARCHAR; // 'columns' | 'prefixed' | 'map' | 'discard'
-	read_html_array.named_parameters["attr_prefix"] =
-	    LogicalType::VARCHAR; // Prefix for attributes when attr_mode='prefixed'
-	read_html_array.named_parameters["text_key"] = LogicalType::VARCHAR;       // Key for mixed text content
-	read_html_array.named_parameters["namespaces"] = LogicalType::VARCHAR;     // 'strip' | 'expand' | 'keep'
-	read_html_array.named_parameters["empty_elements"] = LogicalType::VARCHAR; // 'null' | 'string' | 'object'
-	read_html_array.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	read_html_array.named_parameters["max_depth"] = LogicalType::INTEGER;
-	read_html_array.named_parameters["sample_size"] = LogicalType::INTEGER;
-	read_html_array.named_parameters["sample_files"] = LogicalType::BIGINT;
-	read_html_array.named_parameters["unnest_as"] = LogicalType::VARCHAR; // 'columns' (default) or 'struct' (future)
-	read_html_array.named_parameters["record_element"] =
-	    LogicalType::VARCHAR; // XPath or tag name for elements that should be rows
-	read_html_array.named_parameters["force_list"] =
-	    LogicalType::ANY; // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	ExtendNamedParameters(read_html_array, {
+		{"root_element", LogicalType::VARCHAR},
+		{"attr_mode", LogicalType::VARCHAR}, // 'columns' | 'prefixed' | 'map' | 'discard'
+		{"attr_prefix", LogicalType::VARCHAR}, // Prefix for attributes when attr_mode='prefixed'
+		{"text_key", LogicalType::VARCHAR}, // Key for mixed text content
+		{"namespaces", LogicalType::VARCHAR}, // 'strip' | 'expand' | 'keep'
+		{"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"sample_files", LogicalType::BIGINT},
+		{"unnest_as", LogicalType::VARCHAR}, // 'columns' (default) or 'struct' (future)
+		{"record_element", LogicalType::VARCHAR}, // XPath or tag name for elements that should be rows
+		{"force_list", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR): element names that should always be LIST type
+	});
 	// Explicit schema specification (like JSON extension)
-	read_html_array.named_parameters["columns"] = LogicalType::ANY;
-	read_html_array.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	read_html_array.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	read_html_array.named_parameters["nullstr"] = LogicalType::ANY;
-	read_html_array.named_parameters["preserve_whitespace"] = LogicalType::BOOLEAN;
+	ExtendNamedParameters(read_html_array, {
+		{"columns", LogicalType::ANY},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"preserve_whitespace", LogicalType::BOOLEAN},
+	});
 	read_html_array.init_local = ReadDocumentInitLocal;
 	read_html_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_set.AddFunction(read_html_array);
@@ -2377,9 +2394,11 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 1: Single string parameter
 	TableFunction read_html_objects_single("read_html_objects", {LogicalType::VARCHAR}, ReadHTMLObjectsFunction,
 	                                       ReadHTMLObjectsBind, ReadHTMLObjectsInit);
-	read_html_objects_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_objects_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_objects_single.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_objects_single, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	read_html_objects_single.init_local = ReadDocumentInitLocal;
 	read_html_objects_single.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_objects_set.AddFunction(read_html_objects_single);
@@ -2387,9 +2406,11 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// Variant 2: Array of strings parameter
 	TableFunction read_html_objects_array("read_html_objects", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                                      ReadHTMLObjectsFunction, ReadHTMLObjectsBind, ReadHTMLObjectsInit);
-	read_html_objects_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_objects_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_objects_array.named_parameters["filename"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_objects_array, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::BOOLEAN},
+	});
 	read_html_objects_array.init_local = ReadDocumentInitLocal;
 	read_html_objects_array.get_partition_data = ReadDocumentGetPartitionData;
 	read_html_objects_set.AddFunction(read_html_objects_array);
@@ -2426,7 +2447,9 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// =============================================================================
 	TableFunction parse_xml_objects("parse_xml_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
 	                                ParseXMLObjectsBind, ParseDocumentObjectsInit);
-	parse_xml_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(parse_xml_objects, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+	});
 	{
 		CreateTableFunctionInfo info(std::move(parse_xml_objects));
 		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
@@ -2444,7 +2467,9 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// =============================================================================
 	TableFunction parse_html_objects("parse_html_objects", {LogicalType::VARCHAR}, ParseDocumentObjectsFunction,
 	                                 ParseHTMLObjectsBind, ParseDocumentObjectsInit);
-	parse_html_objects.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(parse_html_objects, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+	});
 	{
 		CreateTableFunctionInfo info(std::move(parse_html_objects));
 		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
@@ -2462,24 +2487,28 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// =============================================================================
 	TableFunction parse_xml("parse_xml", {LogicalType::VARCHAR}, ParseDocumentFunction, ParseXMLBind,
 	                        ParseDocumentInit);
-	parse_xml.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(parse_xml, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters (same as read_xml)
-	parse_xml.named_parameters["root_element"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["record_element"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["force_list"] = LogicalType::ANY;
-	parse_xml.named_parameters["attr_mode"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["attr_prefix"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["text_key"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["namespaces"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["empty_elements"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	parse_xml.named_parameters["max_depth"] = LogicalType::INTEGER;
-	parse_xml.named_parameters["sample_size"] = LogicalType::INTEGER;
-	parse_xml.named_parameters["unnest_as"] = LogicalType::VARCHAR;
-	parse_xml.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	parse_xml.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	parse_xml.named_parameters["nullstr"] = LogicalType::ANY;
-	parse_xml.named_parameters["columns"] = LogicalType::ANY;
+	ExtendNamedParameters(parse_xml, {
+		{"root_element", LogicalType::VARCHAR},
+		{"record_element", LogicalType::VARCHAR},
+		{"force_list", LogicalType::ANY},
+		{"attr_mode", LogicalType::VARCHAR},
+		{"attr_prefix", LogicalType::VARCHAR},
+		{"text_key", LogicalType::VARCHAR},
+		{"namespaces", LogicalType::VARCHAR},
+		{"empty_elements", LogicalType::VARCHAR},
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"unnest_as", LogicalType::VARCHAR},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"columns", LogicalType::ANY},
+	});
 	{
 		CreateTableFunctionInfo info(std::move(parse_xml));
 		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
@@ -2497,24 +2526,28 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	// =============================================================================
 	TableFunction parse_html("parse_html", {LogicalType::VARCHAR}, ParseDocumentFunction, ParseHTMLBind,
 	                         ParseDocumentInit);
-	parse_html.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(parse_html, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+	});
 	// Schema inference parameters (same as read_html)
-	parse_html.named_parameters["root_element"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["record_element"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["force_list"] = LogicalType::ANY;
-	parse_html.named_parameters["attr_mode"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["attr_prefix"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["text_key"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["namespaces"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["empty_elements"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["auto_detect"] = LogicalType::BOOLEAN;
-	parse_html.named_parameters["max_depth"] = LogicalType::INTEGER;
-	parse_html.named_parameters["sample_size"] = LogicalType::INTEGER;
-	parse_html.named_parameters["unnest_as"] = LogicalType::VARCHAR;
-	parse_html.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
-	parse_html.named_parameters["datetime_format"] = LogicalType::ANY; // VARCHAR or LIST(VARCHAR)
-	parse_html.named_parameters["nullstr"] = LogicalType::ANY;
-	parse_html.named_parameters["columns"] = LogicalType::ANY;
+	ExtendNamedParameters(parse_html, {
+		{"root_element", LogicalType::VARCHAR},
+		{"record_element", LogicalType::VARCHAR},
+		{"force_list", LogicalType::ANY},
+		{"attr_mode", LogicalType::VARCHAR},
+		{"attr_prefix", LogicalType::VARCHAR},
+		{"text_key", LogicalType::VARCHAR},
+		{"namespaces", LogicalType::VARCHAR},
+		{"empty_elements", LogicalType::VARCHAR},
+		{"auto_detect", LogicalType::BOOLEAN},
+		{"max_depth", LogicalType::INTEGER},
+		{"sample_size", LogicalType::INTEGER},
+		{"unnest_as", LogicalType::VARCHAR},
+		{"all_varchar", LogicalType::BOOLEAN},
+		{"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+		{"nullstr", LogicalType::ANY},
+		{"columns", LogicalType::ANY},
+	});
 	{
 		CreateTableFunctionInfo info(std::move(parse_html));
 		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;

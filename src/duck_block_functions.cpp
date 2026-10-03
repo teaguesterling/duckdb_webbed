@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "named_parameter_compat.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/cast/default_casts.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
@@ -2457,24 +2458,28 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 
 	TableFunction read_html_blocks_single("read_html_blocks", {LogicalType::VARCHAR}, ReadHTMLBlocksFunction,
 	                                      ReadHTMLBlocksBind, ReadHTMLBlocksInit);
-	read_html_blocks_single.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_blocks_single.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_blocks_single.named_parameters["filename"] = LogicalType::ANY; // BOOLEAN or VARCHAR (column name)
-	read_html_blocks_single.named_parameters["capture_attributes"] = LogicalType::ANY;
-	read_html_blocks_single.named_parameters["file_path"] = LogicalType::BOOLEAN;
-	read_html_blocks_single.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_blocks_single, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::ANY}, // BOOLEAN or VARCHAR (column name)
+		{"capture_attributes", LogicalType::ANY},
+		{"file_path", LogicalType::BOOLEAN},
+		{"include_filepath", LogicalType::BOOLEAN},
+	});
 	read_html_blocks_single.init_local = ReadHTMLBlocksInitLocal;
 	read_html_blocks_single.get_partition_data = ReadHTMLBlocksGetPartitionData;
 	read_html_blocks_set.AddFunction(read_html_blocks_single);
 
 	TableFunction read_html_blocks_array("read_html_blocks", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                                     ReadHTMLBlocksFunction, ReadHTMLBlocksBind, ReadHTMLBlocksInit);
-	read_html_blocks_array.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	read_html_blocks_array.named_parameters["maximum_file_size"] = LogicalType::BIGINT;
-	read_html_blocks_array.named_parameters["filename"] = LogicalType::ANY; // BOOLEAN or VARCHAR (column name)
-	read_html_blocks_array.named_parameters["capture_attributes"] = LogicalType::ANY;
-	read_html_blocks_array.named_parameters["file_path"] = LogicalType::BOOLEAN;
-	read_html_blocks_array.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
+	DeclareNamedParameters(read_html_blocks_array, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"maximum_file_size", LogicalType::BIGINT},
+		{"filename", LogicalType::ANY}, // BOOLEAN or VARCHAR (column name)
+		{"capture_attributes", LogicalType::ANY},
+		{"file_path", LogicalType::BOOLEAN},
+		{"include_filepath", LogicalType::BOOLEAN},
+	});
 	read_html_blocks_array.init_local = ReadHTMLBlocksInitLocal;
 	read_html_blocks_array.get_partition_data = ReadHTMLBlocksGetPartitionData;
 	read_html_blocks_set.AddFunction(read_html_blocks_array);
@@ -2496,29 +2501,37 @@ void DuckBlockFunctions::Register(ExtensionLoader &loader) {
 
 	TableFunction parse_html_blocks_varchar("parse_html_blocks", {LogicalType::VARCHAR}, ParseHTMLBlocksFunction,
 	                                        ParseHTMLBlocksBind, ParseHTMLBlocksInit);
-	parse_html_blocks_varchar.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	parse_html_blocks_varchar.named_parameters["capture_attributes"] = LogicalType::ANY;
+	DeclareNamedParameters(parse_html_blocks_varchar, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"capture_attributes", LogicalType::ANY},
+	});
 	parse_html_blocks_varchar.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar);
 
 	TableFunction parse_html_blocks_html("parse_html_blocks", {XMLTypes::HTMLType()}, ParseHTMLBlocksFunction,
 	                                     ParseHTMLBlocksBind, ParseHTMLBlocksInit);
-	parse_html_blocks_html.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	parse_html_blocks_html.named_parameters["capture_attributes"] = LogicalType::ANY;
+	DeclareNamedParameters(parse_html_blocks_html, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"capture_attributes", LogicalType::ANY},
+	});
 	parse_html_blocks_html.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_html);
 
 	TableFunction parse_html_blocks_varchar_list("parse_html_blocks", {LogicalType::LIST(LogicalType::VARCHAR)},
 	                                             ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
-	parse_html_blocks_varchar_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	parse_html_blocks_varchar_list.named_parameters["capture_attributes"] = LogicalType::ANY;
+	DeclareNamedParameters(parse_html_blocks_varchar_list, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"capture_attributes", LogicalType::ANY},
+	});
 	parse_html_blocks_varchar_list.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_varchar_list);
 
 	TableFunction parse_html_blocks_html_list("parse_html_blocks", {LogicalType::LIST(XMLTypes::HTMLType())},
 	                                          ParseHTMLBlocksFunction, ParseHTMLBlocksBind, ParseHTMLBlocksInit);
-	parse_html_blocks_html_list.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
-	parse_html_blocks_html_list.named_parameters["capture_attributes"] = LogicalType::ANY;
+	DeclareNamedParameters(parse_html_blocks_html_list, {
+		{"ignore_errors", LogicalType::BOOLEAN},
+		{"capture_attributes", LogicalType::ANY},
+	});
 	parse_html_blocks_html_list.init_local = ParseHTMLBlocksInitLocal;
 	parse_html_blocks_set.AddFunction(parse_html_blocks_html_list);
 

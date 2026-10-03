@@ -166,8 +166,53 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 inline void SetScalarFunctionNullHandling(ScalarFunction &func, FunctionNullHandling handling) {
 	func.SetNullHandling(handling);
 }
-inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
+// v2.0-cyanoptera removed the ScalarFunction::SetVarArgs setter; varargs is a
+// signature parameter now. The constructor sets it internally via
+// AddArgs("args") + AddKwargs("kwargs") (function.cpp SimpleFunction ctor), and
+// GetSignature() is mutable post-construction, so do the same here — keeps the
+// existing call sites (including lambdas that receive an already-built function)
+// working without a construction rewrite.
+// GATED BY DETECTION, NOT BY DUCKDB_HAS_NEW_VECTOR_HEADERS. That sentinel is true on
+// BOTH post-1.5 lines (list_vector.hpp: 404 on v1.5.6, 200 on duckdb main AND on
+// v2.0-cyanoptera), but the lines diverged BOTH WAYS here. Measured on
+// src/include/duckdb/function/function.hpp (2026-09-30):
+//
+//   ref                AddArgs / AddKwargs   SetVarArgs
+//   duckdb main              0 / 0               4
+//   v2.0-cyanoptera          1 / 1               0
+//
+// So an #ifdef on the vector-headers sentinel compiles the cyanoptera call against
+// duckdb main, where neither AddArgs nor AddKwargs exists and the SetVarArgs it
+// replaced is still there -- turning duckdb-main-canary red. That job is if:-gated to
+// workflow_dispatch / push-on-main, so it reports SKIPPED on a PR and would only break
+// AFTER the merge landed. (WEBBED_HAS_TYPED_KWARGS would also discriminate correctly,
+// since AddArgs/AddKwargs arrived with the same signature refactor; detecting the
+// member directly needs no second sentinel to keep in sync with the first.)
+//
+// BOTH overloads MUST be templates. Tag dispatch only picks which one is CALLED; a
+// non-template `inline` function is type-checked whether or not it is called, so with
+// plain overloads the duckdb-main body is still compiled against cyanoptera and fails
+// there -- CI caught exactly that on #172, where the error named the std::true_type
+// overload, the branch cyanoptera does NOT take. Same C++11 tag-dispatch idiom as
+// CompatWithAlias above (this TU is C++11 on purpose; see that comment).
+template <class T, class = void>
+struct CompatHasSetVarArgs : std::false_type {};
+template <class T>
+struct CompatHasSetVarArgs<T, decltype(void(std::declval<T &>().SetVarArgs(std::declval<LogicalType>())))>
+    : std::true_type {};
+
+template <class FUNC>
+inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::true_type) {
+	// duckdb main: the setter survives, forwarding to FunctionSignature::SetVarArgs.
 	func.SetVarArgs(std::move(varargs));
+}
+template <class FUNC>
+inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::false_type) {
+	// v2.0-cyanoptera: mirror what the SimpleFunction ctor does internally.
+	func.GetSignature().AddArgs("args", varargs).AddKwargs("kwargs", std::move(varargs));
+}
+inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
+	SetScalarFunctionVarArgsImpl(func, std::move(varargs), CompatHasSetVarArgs<ScalarFunction>());
 }
 
 // --- Vector helpers ---
@@ -227,6 +272,7 @@ inline LogicalType CompatForceMaxLogicalType(const LogicalType &left, const Logi
 inline void SetScalarFunctionNullHandling(ScalarFunction &func, FunctionNullHandling handling) {
 	func.null_handling = handling;
 }
+// v1.5: varargs is a public member; set it directly.
 inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
 	func.varargs = std::move(varargs);
 }
