@@ -215,6 +215,44 @@ streaming instead of building a full DOM tree. This affects schema inference in 
 Set ``streaming := false`` to force DOM mode for any file (will error if the file exceeds
 ``maximum_file_size``).
 
+Out-of-Sample Values
+--------------------
+
+Schema inference types each column from a sample of the input, then casts every value to that
+type during extraction. A value that appears **beyond the sample window** and does not fit the
+inferred type raises an error such as::
+
+   Invalid Input Error: read_xml: value '24 495,40 Kč' does not match column type BIGINT,
+   which was inferred from the first N sampled values.
+
+This is most common on **large files**, where the sample necessarily covers only a prefix. Two
+ways to handle it:
+
+* ``all_varchar := true`` — skip type inference entirely; every scalar is read as ``VARCHAR`` and
+  no value can be rejected. This is the most robust choice for a large file of uncertain or mixed
+  data, and it works in both DOM and SAX mode.
+
+  .. code-block:: sql
+
+     SELECT * FROM read_xml('huge.xml', record_element := 'item', all_varchar := true);
+
+* **Widen the detection window** so the sniffer sees the outlier:
+
+  .. code-block:: sql
+
+     -- DOM path (files under maximum_file_size): sample every value, always-correct
+     -- detection at the cost of scanning the whole input.
+     SELECT * FROM read_xml('data.xml', sample_size := -1);
+
+     -- SAX path (large files): raise sample_size to a large finite value. In SAX mode a
+     -- NON-POSITIVE sample_size does NOT sample everything -- it falls back to a 50-record
+     -- prefix -- so pass an explicit large number instead of -1. Memory in SAX mode grows
+     -- roughly in proportion to sample_size, since the sampled records are buffered.
+     SELECT * FROM read_xml('huge.xml', record_element := 'item', sample_size := 1000000);
+
+``ignore_errors := true`` is a third option: it replaces each non-conforming value with ``NULL``
+and keeps the row, rather than erroring or preserving the original text.
+
 Common Patterns
 ---------------
 
