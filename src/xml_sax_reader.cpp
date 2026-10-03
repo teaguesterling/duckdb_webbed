@@ -458,6 +458,25 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 	return handler;
 }
 
+std::string SAXStreamReader::DescribeParseError(xmlParserCtxtPtr ctx) {
+	const xmlError *err = ctx ? xmlCtxtGetLastError(ctx) : nullptr;
+	if (err && err->message) {
+		std::string msg(err->message);
+		// libxml2 error messages carry a trailing newline; trim it.
+		while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
+			msg.pop_back();
+		}
+		if (err->line > 0) {
+			msg += " (libxml2, at line " + std::to_string(err->line) + ")";
+		} else {
+			msg += " (libxml2)";
+		}
+		return msg;
+	}
+	return "libxml2 reported a parse failure with no detail — the input may exceed a built-in libxml2 limit "
+	       "(element depth, text-node size, etc.) that XML_PARSE_HUGE relaxes";
+}
+
 std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, const std::string &filename,
                                                                const XMLSchemaOptions &options, idx_t max_rows) {
 	std::vector<SAXRecordAccumulator> results;
@@ -505,7 +524,10 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 
 	// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
 	// via ignore_errors by the caller), not silently recover into partial rows.
-	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+	// XML_PARSE_HUGE: lift libxml2's built-in limits (element depth, text-node
+	// length, and other accumulators) that otherwise abort a large streaming
+	// parse. Required for multi-GB inputs; harmless for small ones.
+	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_HUGE);
 
 	char buffer[SAX_CHUNK_SIZE];
 
@@ -517,16 +539,18 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 
 		int result = xmlParseChunk(parser_ctx, buffer, static_cast<int>(bytes_read), 0);
 		if (result != 0) {
+			std::string detail = DescribeParseError(parser_ctx);
 			xmlFreeParserCtxt(parser_ctx);
-			throw IOException("SAX parsing error in file '%s'", filename);
+			throw IOException("SAX parsing error in file '%s': %s", filename, detail);
 		}
 	}
 
 	// Finalize parsing
 	int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
 	if (final_result != 0) {
+		std::string detail = DescribeParseError(parser_ctx);
 		xmlFreeParserCtxt(parser_ctx);
-		throw IOException("SAX parsing error in file '%s'", filename);
+		throw IOException("SAX parsing error in file '%s': %s", filename, detail);
 	}
 	xmlFreeParserCtxt(parser_ctx);
 
