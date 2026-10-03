@@ -10,6 +10,9 @@ namespace duckdb {
 
 static const std::vector<FieldOccurrence> EMPTY_OCCURRENCES;
 
+// Forward declaration: defined later in this file, used by WidenSchemaForOutOfSampleValues above it.
+static bool IsNullString(const std::string &text, const XMLSchemaOptions &options);
+
 void SAXRecordAccumulator::Reset() {
 	state = SAXAccumulatorState::SEEKING_RECORD;
 	current_fields.clear();
@@ -629,7 +632,156 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	// Force the record element to "record" since that's what we built
 	infer_options.record_element = "record";
 
-	return XMLSchemaInference::InferSchema(xml.str(), infer_options);
+	auto columns = XMLSchemaInference::InferSchema(xml.str(), infer_options);
+
+	// sample_size <= 0 opts into a full-file verify pass that widens any column whose out-of-sample
+	// values don't fit the type inferred from the sample. (In SAX mode a non-positive sample_size
+	// otherwise just capped the window at 50 — see InferSchemaFromStream's sample_count.)
+	if (options.sample_size <= 0) {
+		WidenSchemaForOutOfSampleValues(fs, filename, options, columns);
+	}
+
+	return columns;
+}
+
+// True for the scalar types ConvertToValue can REJECT (i.e. that XmlUncastableValue guards). VARCHAR
+// accepts anything; BOOLEAN maps unknowns to NULL without erroring; STRUCT/LIST/MAP/ARRAY take a
+// different extraction path. Only these can need widening.
+//
+// EXCLUDING BOOLEAN IS LOAD-BEARING, do not "fix" it by adding BOOLEAN here: the widen test treats a
+// NULL result from ConvertToValuePublic (under ignore_errors) as a cast failure, but BOOLEAN returns
+// NULL for an unrecognized literal WITHOUT going through XmlUncastableValue — so adding BOOLEAN would
+// make every unrecognized boolean silently widen the column to VARCHAR.
+static bool IsWidenableScalar(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return true;
+	default:
+		return false;
+	}
+}
+
+void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
+                                                      const XMLSchemaOptions &options,
+                                                      std::vector<XMLColumnInfo> &columns) {
+	// Which columns could even widen? If none, skip the whole extra file read.
+	std::vector<bool> widen(columns.size(), false);
+	bool any_candidate = false;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		if (!columns[i].is_attribute && IsWidenableScalar(columns[i].type)) {
+			any_candidate = true;
+		}
+	}
+	if (!any_candidate) {
+		return;
+	}
+
+	// ignore_errors so ConvertToValuePublic returns a typed NULL on an uncastable value instead of
+	// throwing; combined with the empty/nullstr pre-filter below, a NULL result means "cast failed".
+	XMLSchemaOptions verify_opts = options;
+	verify_opts.ignore_errors = true;
+
+	SAXRecordAccumulator accumulator;
+	accumulator.namespace_mode = options.namespaces;
+	if (!options.record_element.empty()) {
+		std::string tag = options.record_element;
+		if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
+			tag = tag.substr(2);
+		}
+		accumulator.record_tag = tag;
+	}
+
+	std::vector<SAXRecordAccumulator> completed;
+	SAXCallbackContext ctx;
+	ctx.accumulator = &accumulator;
+	ctx.max_rows = 0; // unlimited: we must see every record, not just a sample
+	ctx.rows_completed = 0;
+	ctx.stop_parsing = false;
+	ctx.completed_records = &completed;
+	ctx.preserve_whitespace = options.preserve_whitespace;
+	ctx.discard_attrs = (options.attr_mode == "discard");
+
+	xmlSAXHandler handler = CreateSAXHandler();
+	auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+	XMLUtils::EnsureSecureParsing();
+	xmlParserCtxtPtr parser_ctx = xmlCreatePushParserCtxt(&handler, &ctx, nullptr, 0, filename.c_str());
+	if (!parser_ctx) {
+		throw IOException("Could not create SAX push parser context for '%s'", filename);
+	}
+	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_HUGE);
+
+	// Test each buffered record's candidate columns, then drop the batch (bounded memory).
+	auto test_and_clear = [&]() {
+		for (auto &rec : completed) {
+			for (idx_t i = 0; i < columns.size(); i++) {
+				if (widen[i] || columns[i].is_attribute || !IsWidenableScalar(columns[i].type)) {
+					continue;
+				}
+				for (const auto &occ : rec.GetOccurrences(columns[i].name)) {
+					if (occ.is_xml || occ.payload.empty() || IsNullString(occ.payload, options)) {
+						continue;
+					}
+					Value v = XMLSchemaInference::ConvertToValuePublic(occ.payload, columns[i].type, verify_opts,
+					                                                   columns[i].winning_datetime_format);
+					if (v.IsNull()) {
+						widen[i] = true;
+						break;
+					}
+				}
+			}
+		}
+		completed.clear();
+	};
+
+	char buffer[SAX_CHUNK_SIZE];
+	while (!ctx.stop_parsing) {
+		auto bytes_read = file_handle->Read(buffer, SAX_CHUNK_SIZE);
+		if (bytes_read == 0) {
+			break;
+		}
+		int result = xmlParseChunk(parser_ctx, buffer, static_cast<int>(bytes_read), 0);
+		if (result != 0) {
+			std::string detail = DescribeParseError(parser_ctx);
+			xmlFreeParserCtxt(parser_ctx);
+			throw IOException("SAX parsing error in file '%s': %s", filename, detail);
+		}
+		test_and_clear();
+	}
+	int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
+	if (final_result != 0) {
+		std::string detail = DescribeParseError(parser_ctx);
+		xmlFreeParserCtxt(parser_ctx);
+		throw IOException("SAX parsing error in file '%s': %s", filename, detail);
+	}
+	xmlFreeParserCtxt(parser_ctx);
+	test_and_clear(); // drain the final batch
+
+	for (idx_t i = 0; i < columns.size(); i++) {
+		if (widen[i]) {
+			columns[i].type = LogicalType::VARCHAR;
+			columns[i].winning_datetime_format.clear();
+		}
+	}
 }
 
 // Helper: check if a value is a null string (replicates the pattern from xml_schema_inference.cpp)

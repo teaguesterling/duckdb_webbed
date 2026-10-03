@@ -1,0 +1,39 @@
+# name: test/sql/sax_out_of_sample_widen.test
+# description: SAX out-of-sample runtime widening (#102 "C", SAX path). sample_size <= 0 triggers a
+#              full-file verify pass that widens a column to VARCHAR when a value beyond the sample
+#              window does not cast to the sampled type, preserving the value instead of erroring.
+#              Fixture: 60 integer <amount>s then a non-numeric one at record 61. The default
+#              sample_size is 10240 (NOT 50 — 50 is only the non-positive fallback at
+#              xml_sax_reader.cpp), so the default window would cover all 61 records and infer
+#              VARCHAR directly; the baseline forces a 50-record window (sample_size:=50) to put the
+#              outlier genuinely out-of-sample. Forced into SAX mode with maximum_file_size := 1.
+# group: [sql]
+
+require webbed
+
+# Baseline: with a sample window forced below the outlier (sample_size:=50) and NO verify pass, the
+# sample sees only integers and infers BIGINT; the out-of-sample non-numeric value then fails to cast
+# and errors. (sample_size:=50, not the default 10240, is what makes record 61 out-of-sample here.)
+statement error
+SELECT count(*) FROM read_xml('test/xml/schema_inference/sax_out_of_sample_widen.xml',
+                              record_element := 'record', maximum_file_size := 1, sample_size := 50);
+----
+does not match column type
+
+# With sample_size := -1 the SAX path runs the full-file verify pass, widens `amount` to VARCHAR,
+# and preserves every value: 61 rows, amount VARCHAR, the outlier kept as text.
+query III
+SELECT count(*), max(typeof(amount)), max(amount) FILTER (WHERE id = 61)
+FROM read_xml('test/xml/schema_inference/sax_out_of_sample_widen.xml',
+              record_element := 'record', maximum_file_size := 1, sample_size := -1);
+----
+61	VARCHAR	24 495,40 Kč
+
+# A column with no out-of-sample violation keeps its narrow type (id stays integer-typed).
+query I
+SELECT typeof(id) LIKE '%INT%'
+FROM read_xml('test/xml/schema_inference/sax_out_of_sample_widen.xml',
+              record_element := 'record', maximum_file_size := 1, sample_size := -1)
+LIMIT 1;
+----
+true

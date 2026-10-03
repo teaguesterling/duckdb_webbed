@@ -144,6 +144,15 @@ public:
 	static std::vector<XMLColumnInfo> InferSchemaFromStream(FileSystem &fs, const std::string &filename,
 	                                                        const XMLSchemaOptions &options);
 
+	// Opt-in second bind-time pass (triggered by sample_size <= 0, the SAX equivalent of the DOM
+	// path's "sample every value"): stream the WHOLE file once more and widen to VARCHAR any
+	// narrow-typed column whose value, somewhere beyond the sample window, does not cast to the
+	// type inferred from the sample. Records are tested and discarded per chunk, so memory stays
+	// O(1) in the file size — unlike raising sample_size, which buffers the records. `columns` is
+	// updated in place. (#102 runtime out-of-sample widening, SAX path.)
+	static void WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
+	                                            const XMLSchemaOptions &options, std::vector<XMLColumnInfo> &columns);
+
 	// Convert accumulated record data to a row of Values
 	static std::vector<Value> AccumulatorToRow(const SAXRecordAccumulator &accumulator,
 	                                           const std::vector<std::string> &column_names,
