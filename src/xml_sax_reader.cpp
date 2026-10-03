@@ -647,6 +647,11 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 // True for the scalar types ConvertToValue can REJECT (i.e. that XmlUncastableValue guards). VARCHAR
 // accepts anything; BOOLEAN maps unknowns to NULL without erroring; STRUCT/LIST/MAP/ARRAY take a
 // different extraction path. Only these can need widening.
+//
+// EXCLUDING BOOLEAN IS LOAD-BEARING, do not "fix" it by adding BOOLEAN here: the widen test treats a
+// NULL result from ConvertToValuePublic (under ignore_errors) as a cast failure, but BOOLEAN returns
+// NULL for an unrecognized literal WITHOUT going through XmlUncastableValue — so adding BOOLEAN would
+// make every unrecognized boolean silently widen the column to VARCHAR.
 static bool IsWidenableScalar(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
