@@ -208,8 +208,13 @@ inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::t
 }
 template <class FUNC>
 inline void SetScalarFunctionVarArgsImpl(FUNC &func, LogicalType varargs, std::false_type) {
-	// v2.0-cyanoptera: mirror what the SimpleFunction ctor does internally.
-	func.GetSignature().AddArgs("args", varargs).AddKwargs("kwargs", std::move(varargs));
+	// v2.0-cyanoptera: mirror what the SimpleFunction ctor does internally. Split into two
+	// statements rather than chaining: pre-C++17 the move in a chained `.AddArgs(varargs).AddKwargs(
+	// std::move(varargs))` is not guaranteed sequenced after AddArgs runs, so AddArgs could read a
+	// moved-from LogicalType and silently take the wrong type. This TU targets C++11.
+	auto &signature = func.GetSignature();
+	signature.AddArgs("args", varargs);
+	signature.AddKwargs("kwargs", std::move(varargs));
 }
 inline void SetScalarFunctionVarArgs(ScalarFunction &func, LogicalType varargs) {
 	SetScalarFunctionVarArgsImpl(func, std::move(varargs), CompatHasSetVarArgs<ScalarFunction>());
