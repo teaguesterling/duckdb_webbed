@@ -1,0 +1,20 @@
+# name: test/sql/sax_large_file_huge.test
+# description: SAX streaming must parse past libxml2's built-in limits (XML_PARSE_HUGE). A record nested ~500 deep exceeds libxml2's default element-depth cap (256); the SAX push parser only descends that far because XML_PARSE_HUGE lifts the cap. Without it the streaming parse aborts (with a now-descriptive libxml2 error). Reported via Discord: a ~13GB file failed SAX while a same-format small file worked.
+# group: [sql]
+
+require webbed
+
+# Force SAX by setting maximum_file_size:=1 (the fixture is ~6KB, well over 1).
+# test/xml/sax_deep_nesting.xml has two <record>s; the first wraps its <payload>
+# in ~500 nested elements, past libxml2's default depth limit of 256. Without
+# XML_PARSE_HUGE the push parser aborts the WHOLE parse at that limit, so this
+# query would error rather than count; returning 2 (both records) is therefore a
+# complete proof that XML_PARSE_HUGE is in effect on the SAX push parser. (Schema
+# extraction is separately capped at max_depth, so the deep payload does not
+# explode the inferred type. We assert only the row count here, not a specific
+# column: read_xml does not surface a plain `id` column for this deep-payload
+# shape, and the row count alone is what proves the parse succeeded.)
+query I
+SELECT count(*) FROM read_xml('test/xml/sax_deep_nesting.xml', record_element:='record', maximum_file_size:=1);
+----
+2

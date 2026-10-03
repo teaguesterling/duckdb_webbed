@@ -458,6 +458,40 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 	return handler;
 }
 
+std::string SAXStreamReader::DescribeParseError(xmlParserCtxtPtr ctx) {
+	if (!ctx) {
+		return "SAX parser context was null";
+	}
+	std::string msg;
+	const xmlError *err = xmlCtxtGetLastError(ctx);
+	if (err && err->message) {
+		msg.assign(err->message);
+		// libxml2 error messages carry a trailing newline; trim it.
+		while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
+			msg.pop_back();
+		}
+		// domain/code/level pin down WHICH libxml2 check fired (e.g. a size/limit
+		// guard vs. a well-formedness error) when the human message is terse.
+		msg += " (libxml2 domain=" + std::to_string(err->domain) + " code=" + std::to_string(err->code) +
+		       " level=" + std::to_string(static_cast<int>(err->level));
+		if (err->line > 0) {
+			msg += " line=" + std::to_string(err->line);
+		}
+		msg += ")";
+	} else {
+		msg = "libxml2 reported a parse failure with no detail — the input may exceed a built-in libxml2 limit "
+		      "(element depth, text-node size, etc.) that XML_PARSE_HUGE relaxes";
+	}
+	// Byte offset consumed so far: a value near a 2GiB/4GiB boundary points at a
+	// 32-bit limit; a small/specific offset points at a structural (format) issue
+	// in a particular record rather than scale.
+	long consumed = xmlByteConsumed(ctx);
+	if (consumed >= 0) {
+		msg += "; parsed ~" + std::to_string(consumed) + " bytes before failing";
+	}
+	return msg;
+}
+
 std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, const std::string &filename,
                                                                const XMLSchemaOptions &options, idx_t max_rows) {
 	std::vector<SAXRecordAccumulator> results;
@@ -505,7 +539,10 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 
 	// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
 	// via ignore_errors by the caller), not silently recover into partial rows.
-	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+	// XML_PARSE_HUGE: lift libxml2's built-in limits (element depth, text-node
+	// length, and other accumulators) that otherwise abort a large streaming
+	// parse. Required for multi-GB inputs; harmless for small ones.
+	xmlCtxtUseOptions(parser_ctx, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_HUGE);
 
 	char buffer[SAX_CHUNK_SIZE];
 
@@ -517,16 +554,18 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 
 		int result = xmlParseChunk(parser_ctx, buffer, static_cast<int>(bytes_read), 0);
 		if (result != 0) {
+			std::string detail = DescribeParseError(parser_ctx);
 			xmlFreeParserCtxt(parser_ctx);
-			throw IOException("SAX parsing error in file '%s'", filename);
+			throw IOException("SAX parsing error in file '%s': %s", filename, detail);
 		}
 	}
 
 	// Finalize parsing
 	int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
 	if (final_result != 0) {
+		std::string detail = DescribeParseError(parser_ctx);
 		xmlFreeParserCtxt(parser_ctx);
-		throw IOException("SAX parsing error in file '%s'", filename);
+		throw IOException("SAX parsing error in file '%s': %s", filename, detail);
 	}
 	xmlFreeParserCtxt(parser_ctx);
 

@@ -128,6 +128,11 @@ public:
 	// Create a SAX handler struct with our callbacks
 	static xmlSAXHandler CreateSAXHandler();
 
+	// Describe the libxml2 error on a push-parser context, for inclusion in a
+	// thrown message. XML_PARSE_NOERROR suppresses libxml2's own reporting but
+	// the context still records the last error; read it before freeing the ctx.
+	static std::string DescribeParseError(xmlParserCtxtPtr ctx);
+
 	// Read records from file using SAX push parsing via DuckDB FileSystem.
 	// Returns accumulated records as vectors of (field_name -> value) maps.
 	// Reads file in 64KB chunks.
