@@ -459,22 +459,37 @@ xmlSAXHandler SAXStreamReader::CreateSAXHandler() {
 }
 
 std::string SAXStreamReader::DescribeParseError(xmlParserCtxtPtr ctx) {
-	const xmlError *err = ctx ? xmlCtxtGetLastError(ctx) : nullptr;
+	if (!ctx) {
+		return "SAX parser context was null";
+	}
+	std::string msg;
+	const xmlError *err = xmlCtxtGetLastError(ctx);
 	if (err && err->message) {
-		std::string msg(err->message);
+		msg.assign(err->message);
 		// libxml2 error messages carry a trailing newline; trim it.
 		while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
 			msg.pop_back();
 		}
+		// domain/code/level pin down WHICH libxml2 check fired (e.g. a size/limit
+		// guard vs. a well-formedness error) when the human message is terse.
+		msg += " (libxml2 domain=" + std::to_string(err->domain) + " code=" + std::to_string(err->code) +
+		       " level=" + std::to_string(static_cast<int>(err->level));
 		if (err->line > 0) {
-			msg += " (libxml2, at line " + std::to_string(err->line) + ")";
-		} else {
-			msg += " (libxml2)";
+			msg += " line=" + std::to_string(err->line);
 		}
-		return msg;
+		msg += ")";
+	} else {
+		msg = "libxml2 reported a parse failure with no detail — the input may exceed a built-in libxml2 limit "
+		      "(element depth, text-node size, etc.) that XML_PARSE_HUGE relaxes";
 	}
-	return "libxml2 reported a parse failure with no detail — the input may exceed a built-in libxml2 limit "
-	       "(element depth, text-node size, etc.) that XML_PARSE_HUGE relaxes";
+	// Byte offset consumed so far: a value near a 2GiB/4GiB boundary points at a
+	// 32-bit limit; a small/specific offset points at a structural (format) issue
+	// in a particular record rather than scale.
+	long consumed = xmlByteConsumed(ctx);
+	if (consumed >= 0) {
+		msg += "; parsed ~" + std::to_string(consumed) + " bytes before failing";
+	}
+	return msg;
 }
 
 std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, const std::string &filename,
