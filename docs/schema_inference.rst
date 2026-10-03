@@ -196,8 +196,12 @@ streaming instead of building a full DOM tree. This affects schema inference in 
 
    The DOM path (files under ``maximum_file_size``) instead applies ``sample_size`` as a cap on the
    number of sampled *values per field*. There, ``sample_size := -1`` samples every value for
-   always-correct detection at the cost of scanning the whole input; in SAX mode a non-positive
-   ``sample_size`` falls back to a finite 50-record prefix rather than reading the entire file.
+   always-correct detection at the cost of scanning the whole input. In SAX mode ``sample_size <= 0``
+   triggers a second, memory-bounded pass: after typing from the first 50 records it streams the
+   whole file and widens to ``VARCHAR`` any column whose later values do not fit the sampled type
+   (see "Out-of-Sample Values" below). This is the SAX equivalent of the DOM path's "sample every
+   value" — records are tested and discarded per chunk, so detection is complete without buffering
+   the whole prefix in memory, at the cost of one extra read of the file.
 
 2. **Simple ``record_element`` only** — SAX mode matches record elements by simple tag name
    (e.g., ``'item'``). XPath expressions like ``'//ns:item[@type="active"]'`` or path-based
@@ -244,11 +248,12 @@ ways to handle it:
      -- detection at the cost of scanning the whole input.
      SELECT * FROM read_xml('data.xml', sample_size := -1);
 
-     -- SAX path (large files): raise sample_size to a large finite value. In SAX mode a
-     -- NON-POSITIVE sample_size does NOT sample everything -- it falls back to a 50-record
-     -- prefix -- so pass an explicit large number instead of -1. Memory in SAX mode grows
-     -- roughly in proportion to sample_size, since the sampled records are buffered.
-     SELECT * FROM read_xml('huge.xml', record_element := 'item', sample_size := 1000000);
+     -- SAX path (large files): sample_size <= 0 runs a full-file verify pass that widens any
+     -- column with an out-of-sample value to VARCHAR, preserving the value. Records are tested
+     -- and discarded per chunk, so memory stays O(1) in the file size -- unlike raising
+     -- sample_size to a large finite value, which buffers that many records. Costs one extra
+     -- read of the file at bind.
+     SELECT * FROM read_xml('huge.xml', record_element := 'item', sample_size := -1);
 
 ``ignore_errors := true`` is a third option: it replaces each non-conforming value with ``NULL``
 and keeps the row, rather than erroring or preserving the original text.
