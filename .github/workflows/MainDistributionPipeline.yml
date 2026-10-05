@@ -168,7 +168,7 @@ jobs:
   # on dispatch. Kept on purpose; `reduced_ci_mode: disabled` widens PRs.
   duckdb-next-build:
     name: Build extension binaries (duckdb next, v2.0 line)
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       duckdb_version: v2.0-cyanoptera
