@@ -151,24 +151,27 @@ jobs:
           fi
           echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_VERSION}; ${n} job(s) shipping ${DUCKDB_VERSION} and ${m} job(s) shipping ${DUCKDB_NEXT}; ${mode}" | tee -a "$summary"
 
-  # THE NEXT LINE, first-class. duckdb/community-extensions builds every descriptor
-  # that carries ref_next against `v2.0-cyanoptera` (build_next.yml), so a PR is not
-  # green here until it builds and tests there too. Not a canary and not advisory:
-  # it gates. Named for what it builds (the old "Canary ... (advisory)"
-  # name read a gating 2.0 failure as ignorable).
+  # THE NEXT LINE. duckdb/community-extensions builds every descriptor that carries
+  # ref_next against `v2.0-cyanoptera` (build_next.yml) at descriptor time -- that
+  # registry build_next is the REAL v2.0 ship-time gate. This in-repo job builds and
+  # tests the same line as an ADVISORY signal: its `if:` runs it on main-push and
+  # workflow_dispatch ONLY, never on pull_request, so it does not block PRs.
   #
-  # ONCE PER PR, ONCE PER MERGE: a push to a PR branch fires both a push run and a
-  # pull_request run for the same commit, so an ungated job would build twice. The
-  # one case not covered is a branch with no PR open. `if` rather than
-  # `continue-on-error`: a job calling a REUSABLE WORKFLOW accepts only a fixed set
-  # of keys, and continue-on-error makes the whole workflow fail to parse.
+  # WHY ADVISORY, NOT GATING: cyanoptera is a MOVING pre-release branch that
+  # periodically breaks extensions on pure upstream churn (e.g. parser-API and
+  # named_parameter lockdowns), with no source change on our side. A PR-gating leg
+  # meant that churn blocked unrelated work, so the fleet made these legs advisory
+  # (policy 2026-10-05). `if` rather than `continue-on-error`: a job calling a
+  # REUSABLE WORKFLOW accepts only a fixed set of keys and continue-on-error makes
+  # the workflow fail to parse -- so "advisory on PRs" is expressed by not triggering
+  # on pull_request (the canary pattern below), not by a non-blocking flag.
   #
-  # MATRIX WIDTH: the reusable workflow's reduced_ci_mode defaults to `auto`, which
-  # builds three arches on pull requests and the full matrix on pushes to main and
-  # on dispatch. Kept on purpose; `reduced_ci_mode: disabled` widens PRs.
+  # MATRIX WIDTH: reduced_ci_mode's `auto` default reduces only on pull_request and
+  # builds the full matrix on push-to-main and dispatch -- which is exactly where
+  # this job now runs -- so the v2.0 line is still built across all arches on main.
   duckdb-next-build:
     name: Build extension binaries (duckdb next, v2.0 line)
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       duckdb_version: v2.0-cyanoptera
