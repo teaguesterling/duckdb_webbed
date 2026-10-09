@@ -1,0 +1,129 @@
+# name: test/sql/xml_extract_text_each.test
+# description: xml_extract_text_each returns one entry per context node, NULL where the relative path misses
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# THE PROBLEM THIS SOLVES. Two xml_extract_text calls over sibling paths return
+# lists of DIFFERENT LENGTHS as soon as an element is optional, so they cannot be
+# zipped and the association between them is lost. Reported against MusicXML,
+# where most notes have no <alter> (C) and some do (C#, Bb):
+#
+#   xml_extract_text(m, '//note/pitch/step')  -> [C, B, B, D]   4 entries
+#   xml_extract_text(m, '//note/pitch/alter') -> [1, -1]         2 entries
+#
+# Nothing recovers which notes the two alters belonged to. Subscripting does not
+# help: [1] takes the first note of the measure, not one note per row.
+#
+# xml_extract_text_each evaluates the relative path against EACH context node, so
+# the result length always equals the context nodeset:
+#
+#   xml_extract_text_each(m, '//note', 'pitch/alter') -> [1, NULL, -1, NULL]
+#
+# SEPARATE FUNCTION, NOT AN OVERLOAD: xml_extract_text already claims
+# (XML, VARCHAR, VARCHAR) for its namespace-mode argument, so (xml, context,
+# relative) would be indistinguishable from (xml, xpath, 'auto').
+# =============================================================================
+
+# ---- The reported case. Note the lengths MATCH, which is the whole point; an
+# ---- assertion on the alter list alone would pass even if step were truncated.
+query II
+SELECT xml_extract_text_each(m, '//note', 'pitch/step'),
+       xml_extract_text_each(m, '//note', 'pitch/alter')
+FROM (VALUES ('<measure number="1"><note><pitch><step>C</step><alter>1</alter><octave>4</octave></pitch></note><note><pitch><step>B</step><octave>4</octave></pitch></note><note><pitch><step>B</step><alter>-1</alter><octave>4</octave></pitch></note><note><pitch><step>D</step><octave>5</octave></pitch></note></measure>')) t(m);
+----
+[C, B, B, D]	[1, NULL, -1, NULL]
+
+# ---- CONTROL: the old call still misaligns. If this ever returns four entries,
+# ---- xml_extract_text changed and the new function may be redundant.
+query II
+SELECT len(xml_extract_text(m, '//note/pitch/step')),
+       len(xml_extract_text(m, '//note/pitch/alter'))
+FROM (VALUES ('<measure><note><pitch><step>C</step><alter>1</alter></pitch></note><note><pitch><step>B</step></pitch></note></measure>')) t(m);
+----
+2	1
+
+# ---- Equal lengths mean unnest zips positionally, which is how callers use it.
+query III
+SELECT unnest(xml_extract_text_each(m, '//note', 'pitch/step'))  AS step,
+       unnest(xml_extract_text_each(m, '//note', 'pitch/alter')) AS alter,
+       unnest(xml_extract_text_each(m, '//note', 'type'))        AS rhythm
+FROM (VALUES ('<measure><note><pitch><step>C</step><alter>1</alter></pitch><type>quarter</type></note><note><pitch><step>B</step></pitch><type>eighth</type></note></measure>')) t(m);
+----
+C	1	quarter
+B	NULL	eighth
+
+# ---- ABSENT vs EMPTY are different documents and stay distinguishable: a missing
+# ---- element is NULL, an empty one is ''. Flattening both to '' would make a
+# ---- malformed note indistinguishable from a natural.
+query I
+SELECT xml_extract_text_each('<r><n><a>1</a></n><n/><n><a></a></n><n><a/></n></r>', '//n', 'a');
+----
+[1, NULL, '', '']
+
+# ---- More than one match under a context node: the FIRST is taken, matching the
+# ---- list[1] idiom. One-to-one cannot represent two, so this is documented
+# ---- rather than silently averaged; len() on xml_extract_text is the guard.
+query I
+SELECT xml_extract_text_each('<r><n><a>x</a><a>y</a></n></r>', '//n', 'a');
+----
+[x]
+
+# ---- A context path matching nothing gives an empty list, not NULL, so unnest
+# ---- produces no rows rather than one NULL row.
+query II
+SELECT xml_extract_text_each('<r><n><a>1</a></n></r>', '//nope', 'a') AS v,
+       len(xml_extract_text_each('<r><n><a>1</a></n></r>', '//nope', 'a')) AS n;
+----
+[]	0
+
+# ---- A relative path matching nothing anywhere still yields one entry per context
+# ---- node, all NULL. The length is the contract, not the content.
+query II
+SELECT xml_extract_text_each('<r><n/><n/><n/></r>', '//n', 'missing') AS v,
+       len(xml_extract_text_each('<r><n/><n/><n/></r>', '//n', 'missing')) AS n;
+----
+[NULL, NULL, NULL]	3
+
+# ---- Deeper relative paths and descendant axes work.
+query I
+SELECT xml_extract_text_each('<r><n><p><deep>d1</deep></p></n><n><p/></n></r>', '//n', './/deep');
+----
+[d1, NULL]
+
+# ---- Document order is preserved, so entries line up with the source.
+query I
+SELECT xml_extract_text_each('<r><n><a>1</a></n><n><a>2</a></n><n><a>3</a></n></r>', '//n', 'a');
+----
+[1, 2, 3]
+
+# ---- NULL propagates, as it does for xml_extract_text: NULL in, NULL out -- not an
+# ---- empty list. Typed NULLs are required because a bare NULL cannot choose between
+# ---- the XML, XMLFragment and VARCHAR overloads; xml_extract_text rejects a bare
+# ---- NULL identically, so this is the existing convention rather than a new wart.
+query III
+SELECT xml_extract_text_each(NULL::VARCHAR, '//n', 'a'),
+       xml_extract_text_each('<r><n/></r>', NULL::VARCHAR, 'a'),
+       xml_extract_text_each('<r><n/></r>', '//n', NULL::VARCHAR);
+----
+NULL	NULL	NULL
+
+# ---- And a bare NULL is ambiguous, matching xml_extract_text. Pinned so that if
+# ---- overload resolution ever changes, it changes for both or neither.
+statement error
+SELECT xml_extract_text_each(NULL, '//n', 'a');
+----
+Could not choose a best candidate function
+
+# ---- Accepts VARCHAR, XML and XMLFragment documents.
+query I
+SELECT xml_extract_text_each('<r><n><a>1</a></n></r>'::XML, '//n', 'a');
+----
+[1]
+
+# ---- An invalid XPath is a catchable user error, not a crash or a silent empty.
+statement error
+SELECT xml_extract_text_each('<r><n/></r>', '//n', '!!!not an xpath');
+----
+Invalid XPath

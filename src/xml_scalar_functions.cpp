@@ -141,6 +141,65 @@ void XMLScalarFunctions::XMLExtractTextListFunction(DataChunk &args, ExpressionS
 	}
 }
 
+// xml_extract_text_each(xml, context_xpath, relative_xpath) -> LIST(VARCHAR)
+//
+// Returns one entry per node matched by context_xpath, holding the text of the first node
+// relative_xpath matches beneath it, or NULL where it matches nothing. The length always equals
+// the context nodeset, which is the point: two xml_extract_text calls over sibling paths return
+// different lengths as soon as an element is optional, so they cannot be zipped.
+//
+//   xml_extract_text(m, '//note/pitch/step')  -> [C, B, B, D]
+//   xml_extract_text(m, '//note/pitch/alter') -> [1, -1]              <- 2 entries, 4 notes
+//   xml_extract_text_each(m, '//note', 'pitch/alter') -> [1, NULL, -1, NULL]
+//
+// NULL vs '': a missing element gives NULL, while `<alter/>` or `<alter></alter>` gives ''. They
+// are different documents and the distinction is preserved rather than flattened.
+void XMLScalarFunctions::XMLExtractTextEachFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &xml_vector = args.data[0];
+	auto &context_vector = args.data[1];
+	auto &relative_vector = args.data[2];
+	auto count = args.size();
+
+	UnifiedVectorFormat xml_data;
+	UnifiedVectorFormat context_data;
+	UnifiedVectorFormat relative_data;
+	CompatToUnifiedFormat(xml_vector, count, xml_data);
+	CompatToUnifiedFormat(context_vector, count, context_data);
+	CompatToUnifiedFormat(relative_vector, count, relative_data);
+
+	auto xml_strings = UnifiedVectorFormat::GetData<string_t>(xml_data);
+	auto context_strings = UnifiedVectorFormat::GetData<string_t>(context_data);
+	auto relative_strings = UnifiedVectorFormat::GetData<string_t>(relative_data);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto xml_idx = xml_data.sel->get_index(i);
+		auto context_idx = context_data.sel->get_index(i);
+		auto relative_idx = relative_data.sel->get_index(i);
+
+		if (!xml_data.validity.RowIsValid(xml_idx) || !context_data.validity.RowIsValid(context_idx) ||
+		    !relative_data.validity.RowIsValid(relative_idx)) {
+			// DEFENSIVE ONLY. Measured: DuckDB propagates NULL for these overloads before the
+			// body runs, so `xml_extract_text_each(NULL::VARCHAR, '//n', 'a')` returns NULL and
+			// never reaches here -- same as xml_extract_text. Kept because the validity check
+			// costs nothing and a future overload registered with a different null-handling
+			// strategy would otherwise read uninitialised string_t.
+			result.SetValue(i, Value::LIST(LogicalType::VARCHAR, vector<Value>()));
+			continue;
+		}
+
+		auto entries =
+		    XMLUtils::ExtractTextByXPathEach(xml_strings[xml_idx].GetString(), context_strings[context_idx].GetString(),
+		                                     relative_strings[relative_idx].GetString());
+		vector<Value> values;
+		values.reserve(entries.size());
+		for (const auto &entry : entries) {
+			// entry.first false means the relative path matched nothing under this context node.
+			values.push_back(entry.first ? Value(entry.second) : Value(LogicalType::VARCHAR));
+		}
+		result.SetValue(i, Value::LIST(LogicalType::VARCHAR, values));
+	}
+}
+
 // Returns LIST(VARCHAR) with custom namespace mappings
 void XMLScalarFunctions::XMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state,
                                                                   Vector &result) {
@@ -1354,6 +1413,31 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 	    "Extract text content matching an XPath expression from XML as a list of strings.",
 	    {"xml_extract_text('<root><item>Hello</item></root>', '//item')",
 	     "xml_extract_text('<root xmlns:ns=\"uri\"><ns:item>A</ns:item></root>', '//ns:item', map(['ns'], ['uri']))"});
+
+	// Register xml_extract_text_each - POSITIONALLY ALIGNED extraction.
+	//
+	// A SEPARATE NAME rather than an overload, because xml_extract_text has already claimed
+	// (XML, VARCHAR, VARCHAR) for its namespace-mode argument. A (xml, context, relative) overload
+	// would be indistinguishable from (xml, xpath, 'auto') and the two cannot coexist.
+	ScalarFunctionSet xml_extract_text_each_functions("xml_extract_text_each");
+	// Explicit vector<LogicalType>, not a braced initializer_list: LogicalType::VARCHAR is a
+	// static constexpr LogicalTypeId, not a LogicalType, so a mixed braced list cannot deduce
+	// an element type ("unable to deduce std::initializer_list<auto>&&").
+	const vector<LogicalType> each_doc_types = {XMLTypes::XMLType(), XMLTypes::XMLFragmentType(),
+	                                            LogicalType(LogicalTypeId::VARCHAR)};
+	for (const auto &doc_type : each_doc_types) {
+		xml_extract_text_each_functions.AddFunction(
+		    Fallible(ScalarFunction({doc_type, LogicalType::VARCHAR, LogicalType::VARCHAR},
+		                            LogicalType::LIST(LogicalType::VARCHAR), XMLExtractTextEachFunction)));
+	}
+	register_scalar_set(
+	    loader, xml_extract_text_each_functions, {"xml", "context_xpath", "relative_xpath"},
+	    "Extract text relative to each node matched by context_xpath, as a list with one entry per "
+	    "context node and NULL where relative_xpath matches nothing. Use it when sibling elements are "
+	    "optional: two xml_extract_text calls return different-length lists that cannot be zipped.",
+	    {"xml_extract_text_each('<m><n><p><s>C</s><a>1</a></p></n><n><p><s>B</s></p></n></m>', '//n', 'p/a')",
+	     "SELECT unnest(xml_extract_text_each(xml, '//note', 'pitch/step')) AS step, "
+	     "unnest(xml_extract_text_each(xml, '//note', 'pitch/alter')) AS alter FROM t"});
 
 	// Register xml_extract_all_text function - both XML and VARCHAR overloads
 	ScalarFunctionSet xml_extract_all_text_set("xml_extract_all_text");

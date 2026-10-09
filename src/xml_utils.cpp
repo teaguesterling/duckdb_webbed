@@ -710,6 +710,64 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 	return results;
 }
 
+std::vector<std::pair<bool, std::string>> XMLUtils::ExtractTextByXPathEach(const std::string &xml_str,
+                                                                           const std::string &context_xpath,
+                                                                           const std::string &relative_xpath) {
+	std::vector<std::pair<bool, std::string>> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	xmlXPathObjectPtr ctx_obj = EvalXPathChecked(xml_doc.xpath_ctx, context_xpath);
+	if (!ctx_obj) {
+		return results;
+	}
+
+	if (ctx_obj->nodesetval) {
+		// The relative path is evaluated with xpath_ctx->node pointing at each context node in
+		// turn, which is how libxml2 expresses "relative to this element". Saved and restored
+		// because the context is shared for the lifetime of the document, and leaving it pointed
+		// at the last match would silently change the meaning of any later evaluation.
+		xmlNodePtr saved_node = xml_doc.xpath_ctx->node;
+		for (int i = 0; i < ctx_obj->nodesetval->nodeNr; i++) {
+			xmlNodePtr node = ctx_obj->nodesetval->nodeTab[i];
+			if (!node) {
+				// Still emit an entry: the caller's alignment depends on the count matching the
+				// context nodeset exactly, so a skipped entry would shift everything after it.
+				results.emplace_back(false, std::string());
+				continue;
+			}
+			xml_doc.xpath_ctx->node = node;
+			bool found = false;
+			std::string text;
+			xmlXPathObjectPtr rel_obj = EvalXPathChecked(xml_doc.xpath_ctx, relative_xpath);
+			if (rel_obj) {
+				if (rel_obj->nodesetval && rel_obj->nodesetval->nodeNr > 0) {
+					// FIRST match only, matching the `list[1]` idiom callers already use for the
+					// single-value case. A context node with two matches is a document we cannot
+					// represent one-to-one; callers needing all of them want ExtractAllTextByXPath.
+					xmlNodePtr first = rel_obj->nodesetval->nodeTab[0];
+					if (first) {
+						xmlChar *content = xmlNodeGetContent(first);
+						if (content) {
+							text.assign(reinterpret_cast<const char *>(content));
+							xmlFree(content);
+							found = true;
+						}
+					}
+				}
+				xmlXPathFreeObject(rel_obj);
+			}
+			results.emplace_back(found, text);
+		}
+		xml_doc.xpath_ctx->node = saved_node;
+	}
+
+	xmlXPathFreeObject(ctx_obj);
+	return results;
+}
 std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
                                                          const NamespaceConfig &ns_config) {
 	std::vector<std::string> results;
