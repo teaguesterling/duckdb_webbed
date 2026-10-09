@@ -127,3 +127,23 @@ statement error
 SELECT xml_extract_text_each('<r><n/></r>', '//n', '!!!not an xpath');
 ----
 Invalid XPath
+
+# ---- AND IT MUST NOT DEPEND ON THE DATA. The first version of this function
+# ---- compiled the relative path inside the per-node loop, so an invalid
+# ---- expression was reported only when the context path happened to match
+# ---- something -- with an empty context nodeset the loop never ran and the bad
+# ---- XPath was silently accepted. The assertion above passes either way, which is
+# ---- exactly why it could not catch that; this one is the discriminating case.
+# ---- (Raised in review of #181 along with a per-node recompile and a nodeset leak
+# ---- on the throw path.)
+statement error
+SELECT xml_extract_text_each('<r><n/></r>', '//no_such_context', '!!!not an xpath');
+----
+Invalid XPath
+
+# ---- An invalid CONTEXT path raises too, and must not leak the compiled relative
+# ---- expression on the way out.
+statement error
+SELECT xml_extract_text_each('<r><n/></r>', '!!!not an xpath', 'a');
+----
+Invalid XPath
