@@ -43,7 +43,16 @@ jobs:
       # Flip day (spec §3 step 3) keeps a duckdb-legacy-build at the outgoing version
       # for one release; set this to that version then so the stray-literal scan below
       # exempts it instead of flagging it. Empty the rest of the time.
-      DUCKDB_LEGACY: ''
+      #
+      # SET to v1.5.5 because duckdb-legacy-build below targets it. Without this the
+      # stray-literal scan fails the guard on that job's own `duckdb_version:` line --
+      # which is the mechanism working as designed, not a false positive: an old
+      # version literal in this file is exactly what it exists to catch, so the
+      # exemption has to be declared deliberately rather than discovered.
+      #
+      # EMPTY THIS, and delete duckdb-legacy-build, when no supported user is still
+      # on v1.5.5. Leaving it set indefinitely re-opens the blind spot it closes.
+      DUCKDB_LEGACY: v1.5.5
     steps:
       - uses: actions/checkout@v4
       - name: Compare the submodule pin with the tag's commit
@@ -215,6 +224,45 @@ jobs:
       # ci-tools pins the v1.5-variegata BRANCH: extension-ci-tools has no v1.5.6 tag,
       # and v1.5-variegata tracks the v1.5.x line (identical to its v1.5.6 branch today).
       # This pins the CI TOOLING, not DuckDB. duckdb_version above is what the build targets.
+      ci_tools_version: v1.5-variegata
+      extension_name: webbed
+      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
+
+  # Builds loadable artifacts for the PREVIOUS stable DuckDB, for users who have not
+  # moved to the current one. Added when a user on v1.5.5 hit a usability gap
+  # (positional extraction, #181) and could not load an artifact built against
+  # v1.5.6 -- DuckDB refuses an extension built for a different version, so a fix on
+  # main is unreachable to them until they upgrade.
+  #
+  # workflow_dispatch ONLY. It is not a gate on anything: it produces an artifact on
+  # request. Running it per push or per PR would add seven platform legs to every
+  # change for a build nothing validates against, and this account's runners are
+  # already the scarce resource.
+  #
+  # Dispatch it against the BRANCH that carries the fix, not main, when the fix has
+  # not merged yet -- workflow_dispatch takes a ref, and the job builds whatever that
+  # ref contains. The artifact lands as `webbed-v1.5.5-extension-<arch>`, named from
+  # duckdb_version, so it cannot be confused with the v1.5.6 artifacts in the same run.
+  #
+  # The submodule gitlink stays on v1.5.6 and is NOT touched: the reusable workflow
+  # repoints DuckDB itself (`DUCKDB_GIT_VERSION=... make set_duckdb_version`), so the
+  # build target comes from duckdb_version below rather than from our pin. That is why
+  # this job can coexist with a v1.5.6 gitlink and why duckdb-pin above still asserts
+  # the gitlink equals v1.5.6.
+  #
+  # UNSIGNED. Artifacts from here are not signed by the community registry, so loading
+  # one needs `duckdb -unsigned` or `SET allow_unsigned_extensions=true`.
+  duckdb-legacy-build:
+    name: Build extension binaries (legacy DuckDB)
+    if: github.event_name == 'workflow_dispatch'
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    with:
+      # The previous stable release TAG. Exempted from the stray-literal scan via
+      # DUCKDB_LEGACY in duckdb-pin above; the two must be changed together.
+      duckdb_version: v1.5.5
+      # Same v1.5-variegata ci-tools as duckdb-stable-build: it tracks the whole v1.5.x
+      # line, and extension-ci-tools has no per-patch tags. This pins the TOOLING, not
+      # DuckDB -- duckdb_version above is the build target.
       ci_tools_version: v1.5-variegata
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
