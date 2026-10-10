@@ -353,6 +353,73 @@ SELECT
 FROM read_xml_objects('complex.xml');
 ```
 
+### 🎼 **Repeating Elements with Optional Children**
+
+When a document repeats an element and only *some* of those elements have a given
+child, use `record_element` to get one row per repeating element. Absent children
+come back as `NULL`, so rows stay aligned with the source.
+
+```sql
+-- MusicXML: most notes have no <alter> (C), some do (C# = 1, Bb = -1)
+SELECT number AS measure,
+       n.pitch.step   AS note,
+       n.pitch.alter  AS accidental,   -- NULL when the note has no <alter>
+       n.pitch.octave AS octave,
+       n.duration,
+       n.type         AS rhythm
+FROM read_xml('score.xml', record_element := 'measure'),
+     unnest(note) AS t(n);
+
+--  measure │ note │ accidental │ octave │ duration │ rhythm
+--  ────────┼──────┼────────────┼────────┼──────────┼────────
+--  1       │ C    │          1 │      4 │        1 │ quarter
+--  1       │ B    │       NULL │      4 │        2 │ eighth
+--  2       │ B    │         -1 │      4 │        4 │ half
+--  2       │ D    │       NULL │      5 │        8 │ whole
+```
+
+`record_element := 'measure'` keeps the measure's own attributes (`number`) as
+columns and nests its `<note>` children as a typed `STRUCT[]`. Use
+`record_element := 'note'` instead if you do not need the ancestor attributes —
+that gives one row per note directly, but the measure number is then unreachable.
+
+Note the types: `accidental`, `octave` and `duration` are `INTEGER`, not text.
+
+**Why not two extraction calls.** The tempting approach returns misaligned lists,
+because an optional child yields fewer entries than its parent:
+
+```sql
+-- DON'T: the lists have different lengths and cannot be zipped
+SELECT xml_extract_text(xml, '//note/pitch/step')  AS step,   -- [C, B, B, D]  4 entries
+       xml_extract_text(xml, '//note/pitch/alter') AS alter   -- [1, -1]       2 entries
+FROM read_xml_objects('score.xml');
+```
+
+Nothing recovers which notes those two alters belonged to. Subscripting does not
+help either: `[1]` takes the first note of the whole document, not one note per
+row. Shred with `record_element` instead. (For XML already sitting in a column
+that you cannot re-read as records, `xml_extract_text_each(xml, context_xpath,
+relative_xpath)` returns one entry per context node with `NULL` for misses.)
+
+**Large files: pin the schema.** Files above `maximum_file_size` are parsed with
+SAX streaming, and the SAX schema comes strictly from the first `sample_size`
+records (default 10240). A child element that first appears *after* the sample is
+**absent from the schema entirely** — a `Binder Error: Could not find key "alter"
+in struct`, not a `NULL` column. The DOM path does not have this limitation.
+
+```sql
+-- A field that first appears beyond the sample, under SAX
+SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note');
+-- Binder Error: Could not find key "alter" in struct
+
+-- Fixes: widen the sample, or declare the columns
+SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note',
+                                 sample_size := -1);   -- sample every record
+```
+
+This matters for documents where a child is both optional and rare — exactly the
+MusicXML accidental case, in a score long enough to exceed the sample.
+
 ### 🔄 **Format Conversions**
 
 ```sql
