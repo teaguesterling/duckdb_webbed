@@ -710,6 +710,96 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 	return results;
 }
 
+std::vector<std::pair<bool, std::string>> XMLUtils::ExtractTextByXPathEach(const std::string &xml_str,
+                                                                           const std::string &context_xpath,
+                                                                           const std::string &relative_xpath) {
+	std::vector<std::pair<bool, std::string>> results;
+
+	XMLDocRAII xml_doc(xml_str);
+	if (!xml_doc.IsValid() || !xml_doc.xpath_ctx) {
+		return results;
+	}
+
+	// COMPILE THE RELATIVE PATH ONCE, BEFORE ANYTHING ELSE IS ALLOCATED.
+	//
+	// Three reasons, all from review of the first version, which called EvalXPathChecked inside
+	// the loop:
+	//   1. that recompiles the identical expression once per context node -- a measure with
+	//      forty notes paid forty compiles per row;
+	//   2. EvalXPathChecked THROWS on an invalid expression, and a throw from inside the loop
+	//      leaked ctx_obj, since XMLDocRAII frees the doc and context but not the nodeset object.
+	//      Reachable because relative_xpath is user-supplied, unlike the constant paths at the
+	//      other nested-eval call sites;
+	//   3. worst of the three, it made the error DATA-DEPENDENT: an invalid relative path with an
+	//      empty context nodeset was silently accepted because the loop never ran, so whether a
+	//      malformed XPath was reported depended on whether the document happened to match the
+	//      context path.
+	//
+	// Compiling first fixes all three: one compile, a deterministic error, and nothing allocated
+	// yet to leak when it throws.
+	xmlXPathCompExprPtr rel_compiled = xmlXPathCtxtCompile(xml_doc.xpath_ctx, BAD_CAST relative_xpath.c_str());
+	if (!rel_compiled) {
+		throw InvalidInputException("Invalid XPath expression: '%s'", relative_xpath);
+	}
+
+	// The context path can still throw from EvalXPathChecked, and rel_compiled is live by now.
+	xmlXPathObjectPtr ctx_obj = nullptr;
+	try {
+		ctx_obj = EvalXPathChecked(xml_doc.xpath_ctx, context_xpath);
+	} catch (...) {
+		xmlXPathFreeCompExpr(rel_compiled);
+		throw;
+	}
+	if (!ctx_obj) {
+		xmlXPathFreeCompExpr(rel_compiled);
+		return results;
+	}
+
+	if (ctx_obj->nodesetval) {
+		// The relative path is evaluated with xpath_ctx->node pointing at each context node in
+		// turn, which is how libxml2 expresses "relative to this element". Saved and restored
+		// because the context is shared for the lifetime of the document, and leaving it pointed
+		// at the last match would silently change the meaning of any later evaluation.
+		xmlNodePtr saved_node = xml_doc.xpath_ctx->node;
+		for (int i = 0; i < ctx_obj->nodesetval->nodeNr; i++) {
+			xmlNodePtr node = ctx_obj->nodesetval->nodeTab[i];
+			if (!node) {
+				// Still emit an entry: the caller's alignment depends on the count matching the
+				// context nodeset exactly, so a skipped entry would shift everything after it.
+				results.emplace_back(false, std::string());
+				continue;
+			}
+			xml_doc.xpath_ctx->node = node;
+			bool found = false;
+			std::string text;
+			// Pre-compiled, so this cannot throw and the loop body needs no cleanup handler.
+			xmlXPathObjectPtr rel_obj = xmlXPathCompiledEval(rel_compiled, xml_doc.xpath_ctx);
+			if (rel_obj) {
+				if (rel_obj->nodesetval && rel_obj->nodesetval->nodeNr > 0) {
+					// FIRST match only, matching the `list[1]` idiom callers already use for the
+					// single-value case. A context node with two matches is a document we cannot
+					// represent one-to-one; callers needing all of them want ExtractAllTextByXPath.
+					xmlNodePtr first = rel_obj->nodesetval->nodeTab[0];
+					if (first) {
+						xmlChar *content = xmlNodeGetContent(first);
+						if (content) {
+							text.assign(reinterpret_cast<const char *>(content));
+							xmlFree(content);
+							found = true;
+						}
+					}
+				}
+				xmlXPathFreeObject(rel_obj);
+			}
+			results.emplace_back(found, text);
+		}
+		xml_doc.xpath_ctx->node = saved_node;
+	}
+
+	xmlXPathFreeObject(ctx_obj);
+	xmlXPathFreeCompExpr(rel_compiled);
+	return results;
+}
 std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
                                                          const NamespaceConfig &ns_config) {
 	std::vector<std::string> results;

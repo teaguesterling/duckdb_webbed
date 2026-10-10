@@ -22,6 +22,10 @@ private:
 	// Text extraction functions
 	static void XMLExtractTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractTextListFunction(DataChunk &args, ExpressionState &state, Vector &result);
+	//! xml_extract_text_each(xml, context_xpath, relative_xpath) -> LIST(VARCHAR), one entry per
+	//! context node with NULL where the relative path matches nothing. See the comment on
+	//! XMLUtils::ExtractTextByXPathEach for why positional alignment needs its own function.
+	static void XMLExtractTextEachFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractTextListWithNamespacesFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void XMLExtractAllTextFunction(DataChunk &args, ExpressionState &state, Vector &result);
 

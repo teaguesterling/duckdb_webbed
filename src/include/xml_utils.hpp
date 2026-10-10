@@ -269,6 +269,21 @@ public:
 	                                                      const case_insensitive_map_t<string> &namespaces);
 	static std::vector<std::string> ExtractAllTextByXPath(const std::string &xml_str, const std::string &xpath,
 	                                                      const NamespaceConfig &ns_config);
+	//! One result per node matched by `context_xpath`, in document order, holding the text of the
+	//! FIRST node that `relative_xpath` matches beneath it. The bool is false when the relative
+	//! path matches nothing under that context node.
+	//!
+	//! WHY THE BOOL, rather than an empty string: absent and present-but-empty are different
+	//! documents. `<alter/>` yields {true, ""} and a missing <alter> yields {false, ""}, which the
+	//! caller surfaces as '' and NULL respectively.
+	//!
+	//! The point is POSITIONAL ALIGNMENT. Two ExtractAllTextByXPath calls over sibling paths return
+	//! lists of different lengths whenever an element is optional -- `//note/pitch/step` gives four
+	//! entries and `//note/pitch/alter` gives two -- so they cannot be zipped and the association
+	//! between them is lost. Every call here returns exactly nodeNr entries.
+	static std::vector<std::pair<bool, std::string>> ExtractTextByXPathEach(const std::string &xml_str,
+	                                                                        const std::string &context_xpath,
+	                                                                        const std::string &relative_xpath);
 	static std::vector<XMLComment> ExtractComments(const std::string &xml_str);
 	static std::vector<XMLComment> ExtractCData(const std::string &xml_str);
 	static std::vector<XMLNamespace> ExtractNamespaces(const std::string &xml_str);
