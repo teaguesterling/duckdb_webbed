@@ -402,20 +402,43 @@ that you cannot re-read as records, `xml_extract_text_each(xml, context_xpath,
 relative_xpath)` returns one entry per context node with `NULL` for misses.)
 
 **Large files: pin the schema.** Files above `maximum_file_size` are parsed with
-SAX streaming, and the SAX schema comes strictly from the first `sample_size`
-records (default 10240). A child element that first appears *after* the sample is
-**absent from the schema entirely** — a `Binder Error: Could not find key "alter"
-in struct`, not a `NULL` column. The DOM path does not have this limitation.
+SAX streaming, and under SAX the **column set** comes strictly from the first
+`sample_size` records (default 10240). A child element that first appears *after*
+that window is **absent from the schema entirely** — a `Binder Error: Could not
+find key "alter" in struct`, not a `NULL` column. The DOM path discovers it
+regardless of `sample_size`.
 
 ```sql
 -- A field that first appears beyond the sample, under SAX
 SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note');
 -- Binder Error: Could not find key "alter" in struct
-
--- Fixes: widen the sample, or declare the columns
-SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note',
-                                 sample_size := -1);   -- sample every record
 ```
+
+Two things fix it, and the obvious candidates do not:
+
+```sql
+-- 1. a sample LARGE ENOUGH to reach the first occurrence (finite, not -1)
+SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note',
+                                 sample_size := 500000);
+
+-- 2. declare the columns, which skips inference entirely
+SELECT pitch.alter FROM read_xml('huge.xml', record_element := 'note',
+                                 columns := {'pitch': 'STRUCT(step VARCHAR, "alter" INTEGER, octave INTEGER)'});
+```
+
+| attempt | discovers a column first seen at record 3001 |
+|---------|----------------------------------------------|
+| `sample_size := 3000` | no |
+| `sample_size := 3001` | yes — the window is exact |
+| `sample_size := -1` | **no** — non-positive falls back to a short prefix under SAX |
+| `all_varchar := true` | **no** — affects typing, not discovery |
+| `columns := {...}` | yes |
+
+`sample_size := -1` and `all_varchar` are the natural guesses and neither works:
+both address an out-of-sample *value* that will not fit an inferred *type* (see
+the `sample_size` notes under Configuration Options), which is a different problem
+from a column that was never discovered. Widening a type cannot add a missing
+column.
 
 This matters for documents where a child is both optional and rare — exactly the
 MusicXML accidental case, in a score long enough to exceed the sample.
