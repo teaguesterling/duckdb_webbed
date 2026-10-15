@@ -393,6 +393,18 @@ bool XMLUtils::IsValidXML(const std::string &xml_str) {
 	// A shared process-global flag must never gate the result: another thread's failed
 	// parse could otherwise poison this check and mislabel a valid document as invalid
 	// under concurrent execution.
+	//
+	// A well-formed document has a root element, so it contains `<`. That is byte 0x3C in every
+	// encoding libxml2 detects without a declaration except EBCDIC, which it detects only from the
+	// leading bytes 4C 6F A7 94. Rejecting other strings without a '<' byte skips a parse (and its
+	// error formatting) for the plain values to_xml checks per field.
+	if (!memchr(xml_str.data(), '<', xml_str.size())) {
+		static const char ebcdic_decl[] = {'\x4C', '\x6F', '\xA7', '\x94'};
+		bool maybe_ebcdic = xml_str.size() >= 4 && memcmp(xml_str.data(), ebcdic_decl, 4) == 0;
+		if (!maybe_ebcdic) {
+			return false;
+		}
+	}
 	XMLDocRAII xml_doc(xml_str);
 	return xml_doc.IsValid();
 }

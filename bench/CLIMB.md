@@ -184,6 +184,28 @@ Run `tmp/climb/runs/c4`, full dev set, 8 samples per arm, against C3. Guard 56/5
 
 Rejected: starred regressions on every large-DOM case. Per-name `strdup` outweighs the saved lock on documents with many elements, and costs RSS. The lock only dominates on many tiny parses, and `to_xml_struct`'s tiny parses are `IsValidXML` probes that C5 removes outright. Patch: `bench/rejected/c4-nodict.patch`.
 
+### Accepted: C5, reject markup-free strings in `IsValidXML` without parsing
+
+Hypothesis: `to_xml` calls `IsValidXML` on every VARCHAR field to decide whether to embed it as markup. That builds a parser, fails, and formats a libxml2 error. `IsValidXML` is 66.7% of `scalar/to_xml_struct` (error formatting 19.8%, dict locking 25%). A well-formed document has a root element, so it contains `<`, which is byte 0x3C in every encoding libxml2 autodetects (UTF-8, UTF-16 with or without BOM, UCS-4) except EBCDIC, which it recognizes only by the leading bytes `4C 6F A7 94`. Returning false for strings with no `<` byte and no EBCDIC signature gives the parse's answer without parsing.
+
+```
+before: IsValidXML(s) = parse(s) != null
+after:  IsValidXML(s) = no '<' byte in s and s doesn't start 4C 6F A7 94 ? false : parse(s) != null
+```
+
+Target: wall and CPU down on `scalar/to_xml_struct`. Other `IsValidXML` callers (`xml_valid`, file content checks) see strings with `<` and stay flat. Guards: fingerprints. Equivalence: 300k hash-generated strings (189k without `<`, including BOM, NUL, `&amp;`, `L`) give identical `xml_valid`, `xml_well_formed` and `to_xml` output (`tmp/climb/fuzz/valid.sql`).
+
+Run `tmp/climb/runs/c5`, 8 samples per arm, against C3 (scalar family plus `manyfiles/orders_objects`). Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `scalar/to_xml_struct` | 0.615→0.215 -65.0%* | 4.619→1.560 -66.2%* | -4.7%* | -42.3%* |
+| `scalar/extract_elements_attributes` | -9.3%* | +2.5% | +4.3% | +1.3% |
+| `scalar/extract_text_xpaths` | -2.5% | +1.9% | +0.9% | +4.2%* |
+| other scalar cases | within ±4.2%, none starred | | | |
+
+`extract_text_xpaths` and `extract_elements_attributes` never reach `IsValidXML`, so their stars are noise. The A/A starred `validity_stats` instructions at +4.1%, and these parallel scalar cases vary most. Bound: `IsValidXML` was 66.7% of `to_xml_struct` CPU, and CPU fell 66%. Accepted.
+
 ## Where It Stands
 
 (pending)
