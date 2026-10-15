@@ -206,6 +206,28 @@ Run `tmp/climb/runs/c5`, 8 samples per arm, against C3 (scalar family plus `many
 
 `extract_text_xpaths` and `extract_elements_attributes` never reach `IsValidXML`, so their stars are noise. The A/A starred `validity_stats` instructions at +4.1%, and these parallel scalar cases vary most. Bound: `IsValidXML` was 66.7% of `to_xml_struct` CPU, and CPU fell 66%. Accepted.
 
+### Accepted: C6, release SAX inference samples before inferring
+
+Hypothesis (memory, not from a CPU profile): SAX schema inference keeps every sampled record (`sample_size` `SAXRecordAccumulator` copies), serializes them into an `ostringstream`, and passes `xml.str()`, a second full copy, to DOM inference. All three stay alive while inference parses that text into a DOM. `stream/orders_sax_infer` (`sample_size := 100000` over a 38 MB file) peaks at 742 MB. Building into a `std::string`, passing it by reference, and freeing the records before inference drops one text copy and the records from the peak.
+
+```
+before: records = sample(); ostringstream xml << records; InferSchema(xml.str())
+after:  records = sample(); string xml += records; records.clear(); InferSchema(xml)
+```
+
+Target: RSS down on `orders_sax_infer`, `tickets_stream_infer` and `claims_sax`, wall and CPU flat or slightly down. Guards: fingerprints of the SAX cases, since the inferred schema decides every column.
+
+Run `tmp/climb/runs/c6`, 8 samples per arm, against C5. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS |
+| --- | ---: | ---: | ---: |
+| `records/tickets_stream_infer` | +0.1% | -0.1% | 253.9→194.5 -23.4%* |
+| `stream/orders_sax_infer` | +0.1% | -0.4% | 743.1→636.2 -14.4%* |
+| `nested/claims_sax` | -0.9% | -0.5% | -1.0% |
+| `manyfiles/telemetry_union` | -4.3% | +0.4% | +0.1% |
+
+Accepted. The remaining 636 MB on `orders_sax_infer` is mostly the DOM of the 100k-record synthetic sample, which inference needs.
+
 ## Where It Stands
 
 (pending)

@@ -634,24 +634,30 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	// synthetic root so prefixed nested elements parse under strict (non-recovery) inference.
 	// namespace_declarations accumulates monotonically across the parse and is never reset, so the
 	// last record's snapshot is the union of every declaration seen while sampling.
-	std::ostringstream xml;
-	xml << "<root" << records.back().BuildNamespaceDeclarations() << ">";
+	std::string xml;
+	xml += "<root";
+	xml += records.back().BuildNamespaceDeclarations();
+	xml += ">";
 
 	for (const auto &record : records) {
 		// Emit record-level attributes as real attributes, in document order, so DOM inference
 		// applies the same attr_mode naming (e.g. 'prefixed') and typing as it does on real files
 		// (skip when attr_mode='discard' to match DOM behavior)
-		xml << "<record";
+		xml += "<record";
 		if (options.attr_mode != "discard") {
 			for (const auto &attr_name : record.attribute_order) {
 				// Skip child element attributes (contain a dot)
 				if (attr_name.find('.') != std::string::npos) {
 					continue;
 				}
-				xml << " " << attr_name << "=\"" << XmlEscapeAttr(record.GetAttribute(attr_name)) << "\"";
+				xml += " ";
+				xml += attr_name;
+				xml += "=\"";
+				xml += XmlEscapeAttr(record.GetAttribute(attr_name));
+				xml += "\"";
 			}
 		}
-		xml << ">";
+		xml += ">";
 
 		// Emit each field's occurrences in document order: text payloads escaped, nested-XML
 		// fragments emitted structurally so DOM inference reconstructs the STRUCT / LIST shape.
@@ -660,23 +666,36 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 				// occ.own_attrs is pre-escaped and only populated when attr_mode != 'discard', so the
 				// synthetic element carries the child's own attributes and DOM inference types it as a
 				// STRUCT (@attrs + #text/children) — matching the non-streaming path.
-				xml << "<" << field_name << occ.own_attrs << ">";
-				xml << (occ.is_xml ? occ.payload : XmlEscapeText(occ.payload));
-				xml << "</" << field_name << ">";
+				xml += "<";
+				xml += field_name;
+				xml += occ.own_attrs;
+				xml += ">";
+				if (occ.is_xml) {
+					xml += occ.payload;
+				} else {
+					xml += XmlEscapeText(occ.payload);
+				}
+				xml += "</";
+				xml += field_name;
+				xml += ">";
 			}
 		}
 
-		xml << "</record>";
+		xml += "</record>";
 	}
 
-	xml << "</root>";
+	xml += "</root>";
+	// The sampled records are fully serialized. Release them before inference parses the synthetic
+	// document, so the sample is not held twice alongside its DOM.
+	records.clear();
+	records.shrink_to_fit();
 
 	// Use existing schema inference on the synthetic XML
 	XMLSchemaOptions infer_options = options;
 	// Force the record element to "record" since that's what we built
 	infer_options.record_element = "record";
 
-	auto columns = XMLSchemaInference::InferSchemaForMerge(xml.str(), infer_options);
+	auto columns = XMLSchemaInference::InferSchemaForMerge(xml, infer_options);
 
 	// sample_size <= 0 opts into a full-file verify pass that widens any column whose out-of-sample
 	// values don't fit the type inferred from the sample. (In SAX mode a non-positive sample_size
