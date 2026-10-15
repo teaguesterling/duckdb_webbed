@@ -1,0 +1,146 @@
+# name: test/sql/xml_parallel_inference.test
+# description: Bind-time inference over many files runs in parallel but merges in file order, so the schema and the raised error match a serial read
+# group: [sql]
+
+require webbed
+
+# 40 files, each adding one column. File 30 widens `a` from INTEGER to VARCHAR, and file 20
+# adds a field to the `s` struct. Column order is first appearance in file order.
+loop i 10 50
+
+statement ok
+COPY (SELECT '<rows><row><a>' || CASE WHEN ${i} = 30 THEN 'text' ELSE '${i}' END || '</a><c${i}>x</c${i}><s><k>1</k>' || CASE WHEN ${i} = 20 THEN '<extra>y</extra>' ELSE '' END || '</s></row></rows>' AS xml) TO '__TEST_DIR__/pinf_${i}.xml' (FORMAT 'csv', HEADER false, QUOTE '');
+
+endloop
+
+# The error cases use DESCRIBE so the bind itself must raise the error. A SELECT would also
+# raise it from the scan and hide a bind that dropped it.
+
+foreach threads 1 2 4 8
+
+statement ok
+SET threads=${threads};
+
+# =============================================================================
+# DOM inference
+# =============================================================================
+
+query II
+SELECT count(*), string_agg(column_name, ',' ORDER BY rowid)
+FROM (SELECT row_number() OVER () AS rowid, column_name FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, union_by_name := true)));
+----
+42	a,c10,s,c11,c12,c13,c14,c15,c16,c17,c18,c19,c20,c21,c22,c23,c24,c25,c26,c27,c28,c29,c30,c31,c32,c33,c34,c35,c36,c37,c38,c39,c40,c41,c42,c43,c44,c45,c46,c47,c48,c49
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, union_by_name := true))
+WHERE column_name IN ('a', 's')
+ORDER BY column_name;
+----
+a	VARCHAR
+s	STRUCT(k INTEGER, extra VARCHAR)
+
+query III
+SELECT count(*), count(a), count(c49)
+FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, union_by_name := true);
+----
+40	40	1
+
+# Several files fail: the bind raises the first failing file's error in list order, whichever
+# thread finishes first.
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_10.xml', 'test/invalid/invalid.xml', '__TEST_DIR__/pinf_11.xml', 'test/invalid/trailing_garbage.xml'], streaming := false, union_by_name := true);
+----
+File test/invalid/invalid.xml contains invalid XML
+
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_10.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml', 'test/invalid/invalid.xml'], streaming := false, union_by_name := true);
+----
+File test/invalid/trailing_garbage.xml contains invalid XML
+
+# A failing first file stops the bind before any later file can contribute.
+statement error
+DESCRIBE SELECT * FROM read_xml(['test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_*.xml'], streaming := false, union_by_name := true);
+----
+File test/invalid/trailing_garbage.xml contains invalid XML
+
+# A failing last file still fails the bind after every earlier file inferred.
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_*.xml', 'test/invalid/invalid.xml'], streaming := false, union_by_name := true);
+----
+File test/invalid/invalid.xml contains invalid XML
+
+# ignore_errors skips the failing files and merges the rest in order.
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml(['test/invalid/invalid.xml', '__TEST_DIR__/pinf_12.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml'], record_element := 'row', streaming := false, union_by_name := true, ignore_errors := true));
+----
+a,c12,s,c11
+
+# Every file too large for DOM: ignore_errors skips them all and the schema falls back to `xml`.
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, maximum_file_size := 1, union_by_name := true, ignore_errors := true));
+----
+xml
+
+# sample_files (no union_by_name) infers its sampled prefix the same way.
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, sample_files := 3));
+----
+a,c10,s,c11,c12
+
+# =============================================================================
+# SAX inference (streaming, every file above maximum_file_size)
+# =============================================================================
+
+query II
+SELECT count(*), string_agg(column_name, ',' ORDER BY rowid)
+FROM (SELECT row_number() OVER () AS rowid, column_name FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true)));
+----
+42	a,c10,s,c11,c12,c13,c14,c15,c16,c17,c18,c19,c20,c21,c22,c23,c24,c25,c26,c27,c28,c29,c30,c31,c32,c33,c34,c35,c36,c37,c38,c39,c40,c41,c42,c43,c44,c45,c46,c47,c48,c49
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true))
+WHERE column_name IN ('a', 's')
+ORDER BY column_name;
+----
+a	VARCHAR
+s	STRUCT(k INTEGER, extra VARCHAR)
+
+query III
+SELECT count(*), count(a), count(c49)
+FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true);
+----
+40	40	1
+
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_10.xml', 'test/invalid/invalid.xml', '__TEST_DIR__/pinf_11.xml', 'test/invalid/trailing_garbage.xml'], record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true);
+----
+SAX parsing error in file 'test/invalid/invalid.xml'
+
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_10.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml', 'test/invalid/invalid.xml'], record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true);
+----
+SAX parsing error in file 'test/invalid/trailing_garbage.xml'
+
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_*.xml', 'test/invalid/invalid.xml'], record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true);
+----
+SAX parsing error in file 'test/invalid/invalid.xml'
+
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml(['test/invalid/invalid.xml', '__TEST_DIR__/pinf_12.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml'], record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true, ignore_errors := true));
+----
+a,c12,s,c11
+
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := true, maximum_file_size := 1, sample_files := 3));
+----
+a,c10,s,c11,c12
+
+endloop

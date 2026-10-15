@@ -16,8 +16,10 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 
 #include <algorithm>
+#include <exception>
 
 namespace {
 
@@ -295,6 +297,107 @@ static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const
 		inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
 	}
 	return true;
+}
+
+// One file's bind-time inference result. A file skipped under ignore_errors has neither columns
+// nor an error.
+struct FileInferenceResult {
+	bool inferred = false;
+	std::vector<XMLColumnInfo> columns;
+	std::exception_ptr error;
+	//! The error ends the bind even under ignore_errors (out of memory, or not a DuckDB exception)
+	bool error_is_fatal = false;
+};
+
+struct FileInferenceState {
+	FileInferenceState(FileSystem &fs, const std::vector<std::string> &files, const XMLReadFunctionData &bind_data,
+	                   const XMLSchemaOptions &schema_options, ParseMode mode)
+	    : fs(fs), files(files), bind_data(bind_data), schema_options(schema_options), mode(mode),
+	      results(files.size()), first_fatal_idx(files.size()) {
+	}
+
+	FileSystem &fs;
+	const std::vector<std::string> &files;
+	const XMLReadFunctionData &bind_data;
+	const XMLSchemaOptions &schema_options;
+	ParseMode mode;
+	std::vector<FileInferenceResult> results;
+	//! Lowest file index whose error the bind rethrows. Later files can't affect the outcome, so their
+	//! tasks return without parsing.
+	atomic<idx_t> first_fatal_idx;
+
+	void MarkFatal(idx_t file_idx) {
+		auto current = first_fatal_idx.load();
+		while (file_idx < current && !first_fatal_idx.compare_exchange_weak(current, file_idx)) {
+		}
+	}
+};
+
+class FileInferenceTask : public BaseExecutorTask {
+public:
+	FileInferenceTask(TaskExecutor &executor, FileInferenceState &state, idx_t file_idx)
+	    : BaseExecutorTask(executor), state(state), file_idx(file_idx) {
+	}
+
+	void ExecuteTask() override {
+		if (file_idx > state.first_fatal_idx.load()) {
+			return;
+		}
+		auto &result = state.results[file_idx];
+		try {
+			result.inferred = InferFileColumns(state.fs, state.files[file_idx], state.bind_data,
+			                                   state.schema_options, state.mode, result.columns);
+			return;
+		} catch (const OutOfMemoryException &) {
+			result.error = std::current_exception();
+			result.error_is_fatal = true;
+		} catch (const Exception &) {
+			result.error = std::current_exception();
+			result.error_is_fatal = !state.bind_data.ignore_errors;
+		} catch (...) {
+			result.error = std::current_exception();
+			result.error_is_fatal = true;
+		}
+		if (result.error_is_fatal) {
+			state.MarkFatal(file_idx);
+		}
+	}
+
+	string TaskType() const override {
+		return "XMLFileInferenceTask";
+	}
+
+private:
+	FileInferenceState &state;
+	idx_t file_idx;
+};
+
+// Infer every file's columns on the DuckDB task scheduler, so at most `threads` files are parsed at
+// once. Results come back in file order, and the caller consumes them in that order, so the merged
+// schema and the error a failing bind raises match a serial loop over the same files.
+static std::vector<FileInferenceResult> InferFilesColumns(ClientContext &context, FileSystem &fs,
+                                                          const std::vector<std::string> &files,
+                                                          const XMLReadFunctionData &bind_data,
+                                                          const XMLSchemaOptions &schema_options, ParseMode mode) {
+	FileInferenceState state(fs, files, bind_data, schema_options, mode);
+	TaskExecutor executor(context);
+	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
+		executor.ScheduleTask(make_uniq<FileInferenceTask>(executor, state, file_idx));
+	}
+	executor.WorkOnTasks();
+	return std::move(state.results);
+}
+
+// Rethrow a file's inference error when it ends the bind. Returns true when the file contributed
+// columns to merge.
+static bool ResolveFileInference(const FileInferenceResult &file_result) {
+	if (file_result.error) {
+		if (file_result.error_is_fatal) {
+			std::rethrow_exception(file_result.error);
+		}
+		return false;
+	}
+	return file_result.inferred;
 }
 
 // =============================================================================
@@ -687,28 +790,18 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
 			std::vector<std::string> column_order;                      // Track order of first appearance
 
-			// Scan each file for schema
-			for (const auto &file_path : files_to_scan) {
-				try {
-					std::vector<XMLColumnInfo> inferred_columns;
-					if (!InferFileColumns(fs, file_path, *result, schema_options, mode, inferred_columns)) {
-						continue;
-					}
-					// Store full inferred schema from first file (preserves is_attribute flags)
-					if (result->inferred_schema.empty()) {
-						result->inferred_schema = inferred_columns;
-						XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
-					}
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
-					                     schema_options.text_key);
-				} catch (const OutOfMemoryException &) {
-					throw;
-				} catch (const Exception &e) {
-					if (!result->ignore_errors) {
-						throw;
-					}
-					// Skip this file and continue
+			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, mode);
+			for (auto &file_result : file_results) {
+				if (!ResolveFileInference(file_result)) {
+					continue;
 				}
+				// Store full inferred schema from first file (preserves is_attribute flags)
+				if (result->inferred_schema.empty()) {
+					result->inferred_schema = file_result.columns;
+					XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
+				}
+				MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order,
+				                     schema_options.text_key);
 			}
 
 			// Convert union schema to return types
@@ -1630,21 +1723,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
 			std::vector<std::string> column_order;                      // Track order of first appearance
 
-			// Scan each file for schema
-			for (const auto &file_path : files_to_scan) {
-				try {
-					std::vector<XMLColumnInfo> inferred_columns;
-					if (InferFileColumns(fs, file_path, *result, schema_options, ParseMode::XML, inferred_columns)) {
-						MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
-						                     schema_options.text_key);
-					}
-				} catch (const OutOfMemoryException &) {
-					throw;
-				} catch (const Exception &e) {
-					if (!result->ignore_errors) {
-						throw;
-					}
-					// Skip this file and continue
+			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, ParseMode::XML);
+			for (auto &file_result : file_results) {
+				if (ResolveFileInference(file_result)) {
+					MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order,
+					                     schema_options.text_key);
 				}
 			}
 
