@@ -4,19 +4,26 @@
 
 require webbed
 
+# The Atom <link rel href/> column is attribute-only: inference now gives it a STRUCT of its
+# attributes rather than XML (ff31c5a's own sibling commit 263e717, "fix(read_xml): keep
+# attributes on nested elements" -- "An attribute-only element infers as a STRUCT of its
+# attributes"). That commit landed 18 seconds before this file was added, in the same PR, so the
+# type this test pins (XML) was already stale on arrival: typeof(link) is the STRUCT, and with
+# real href/rel values the column is not NULL. The DOM and SAX paths share InferColumnType, so
+# both read the same type and the same not-NULL result.
 query TTT
 SELECT title, typeof(link), link IS NULL
 FROM read_xml('test/xml/sax_attr_only_empty.xml', record_element := 'entry') ORDER BY title;
 ----
-a	XML	true
-b	XML	true
+a	STRUCT(href VARCHAR, rel VARCHAR)	false
+b	STRUCT(href VARCHAR, rel VARCHAR)	false
 
 query TTT
 SELECT title, typeof(link), link IS NULL
 FROM read_xml('test/xml/sax_attr_only_empty.xml', record_element := 'entry', maximum_file_size := 1) ORDER BY title;
 ----
-a	XML	true
-b	XML	true
+a	STRUCT(href VARCHAR, rel VARCHAR)	false
+b	STRUCT(href VARCHAR, rel VARCHAR)	false
 
 # Attribute-bearing elements in scalar columns read their text content, converted to the column type
 query III
