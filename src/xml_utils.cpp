@@ -2328,6 +2328,17 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	}
 }
 
+// Write a string straight into the flat result vector instead of building a Value per row. A string
+// that is not valid UTF-8 still goes through Value, which raises the same error as before.
+static void SetStringResult(Vector &result, idx_t i, const std::string &str) {
+	if (!Value::StringIsValid(str.c_str(), str.size())) {
+		result.SetValue(i, Value(str));
+		return;
+	}
+	CompatFlatData<string_t>(result)[i] = StringVector::AddString(result, str);
+	CompatFlatValidity(result).SetValid(i);
+}
+
 void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name) {
 	auto list_suffix = "_list";
 	auto element_name = node_name;
@@ -2398,7 +2409,7 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + list_suffix + "></" + node_name + list_suffix + ">";
 
-		result.SetValue(i, Value(xml_result));
+		SetStringResult(result, i, xml_result);
 	}
 }
 
@@ -2473,7 +2484,7 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + "></" + node_name + ">";
 
-		result.SetValue(i, Value(xml_result));
+		SetStringResult(result, i, xml_result);
 	}
 }
 

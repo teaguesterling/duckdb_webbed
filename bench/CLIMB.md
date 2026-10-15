@@ -437,6 +437,26 @@ Run `tmp/climb/runs/c16`, 8 samples per arm, against C15, over `to_json` and the
 
 Accepted on CPU, inside the 11.8% bound. The HTML wall stars come without a CPU or instruction change and are not credited to this candidate.
 
+### Accepted: C17, write `to_xml` results straight into the vector
+
+Hypothesis (re-profile `acc14`): in `scalar/to_xml_struct`, `Vector::SetValue` is 11.6% of the case. Each row's XML is wrapped in a `Value` (UTF-8 check, shared string info) and then copied into the result vector. Writing it with `StringVector::AddString` skips the `Value`. A string that fails the UTF-8 check still goes through `Value`, so the error is unchanged, and each written row is marked valid as `SetValue` did.
+
+```
+before: result.SetValue(i, Value(xml))
+after:  valid(xml) ? data[i] = AddString(result, xml), validity.SetValid(i) : result.SetValue(i, Value(xml))
+```
+
+Target: CPU and wall down 5 to 10% on `scalar/to_xml_struct`. RSS flat. Guards: fingerprints. Equivalence: `to_xml` over structs and lists with NULL rows, NULL fields and nested lists, compared against C16 (`tmp/climb/fuzz/to_xml.sql`, 300k rows across 147 chunks, NULL counts and hashes): identical.
+
+Run `tmp/climb/runs/c17`, 8 samples per arm, against C16. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `scalar/to_xml_struct` | 0.220→0.195 -11.6%* | 1.644→1.433 -12.8%* | -1.5% | -11.1%* |
+| `scalar/to_json` (control) | -0.4% | -2.2% | -3.4% | -3.3% |
+
+Accepted. The bound is `SetValue` (11.6%) plus the skipped `Value` construction (1.4%).
+
 ## Where It Stands
 
 (pending)

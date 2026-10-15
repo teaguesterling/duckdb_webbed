@@ -371,6 +371,42 @@ inline unique_ptr<ParsedExpression> CompatConstant(Value value) {
 	return CompatConstantImpl<CE>(std::move(value), CompatHasFromValue<CE>());
 }
 
+// --- writable flat vector data and validity --------------------------------
+// v2.0 makes FlatVector::GetData and Validity const and adds GetDataMutable and ValidityMutable;
+// v1.5 returns mutable data from GetData and Validity. Probe GetDataMutable, the thing that changed.
+template <class FV, class = void>
+struct CompatHasGetDataMutable : std::false_type {};
+template <class FV>
+struct CompatHasGetDataMutable<FV, decltype(void(FV::GetDataMutable(std::declval<Vector &>())))> : std::true_type {
+};
+
+template <class T, class FV>
+inline T *CompatFlatDataImpl(Vector &vector, std::true_type) {
+	return FV::template GetDataMutable<T>(vector);
+}
+template <class T, class FV>
+inline T *CompatFlatDataImpl(Vector &vector, std::false_type) {
+	return FV::template GetData<T>(vector);
+}
+template <class FV>
+inline ValidityMask &CompatFlatValidityImpl(Vector &vector, std::true_type) {
+	return FV::ValidityMutable(vector);
+}
+template <class FV>
+inline ValidityMask &CompatFlatValidityImpl(Vector &vector, std::false_type) {
+	return FV::Validity(vector);
+}
+//! A flat vector's data, writable, on either DuckDB line.
+template <class T, class FV = FlatVector>
+inline T *CompatFlatData(Vector &vector) {
+	return CompatFlatDataImpl<T, FV>(vector, CompatHasGetDataMutable<FV>());
+}
+//! A flat vector's validity mask, writable, on either DuckDB line.
+template <class FV = FlatVector>
+inline ValidityMask &CompatFlatValidity(Vector &vector) {
+	return CompatFlatValidityImpl<FV>(vector, CompatHasGetDataMutable<FV>());
+}
+
 namespace compat_detail {
 struct HasFromValueProbe {
 	explicit HasFromValueProbe(const Value &) = delete;
