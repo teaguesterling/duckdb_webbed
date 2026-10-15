@@ -415,6 +415,28 @@ Run `tmp/climb/runs/c15`, 8 samples per arm, against C14. Guard 56/56, `make tes
 
 Accepted. Every CPU gain is inside its profile bound. The wall gains on the two multi-threaded cases (`catalog_medium`, `atom_glob_ns_strip`) run 2 to 5 points past the bound. That excess is unexplained.
 
+### Accepted: C16, escape JSON by runs, into the output
+
+Hypothesis (re-profile `acc14`): `EscapeJSONString` owns 11.8% of `scalar/to_json`. It appends one byte at a time to a new string, which `xml_to_json` then copies into its output. Appending runs of bytes that need no escape straight into the output buffer gives the same bytes without the per-byte appends or the temporary.
+
+```
+before: out += escape(text)      escape: for c: s += map(c)
+after:  append_escaped(out, text): for run between escaped bytes: out.append(run); out += map(c)
+```
+
+Target: CPU and wall down 5 to 10% on `scalar/to_json`. RSS flat. Guards: fingerprints. Equivalence: 5M random byte strings (all 256 values, weighted toward quotes, backslashes and C0 controls) against the old function, both returned and appended to a non-empty buffer (`tmp/climb/fuzz/escape_fuzz.cpp`): 0 mismatches. Plus the C9 `xml_to_json` fuzz: identical.
+
+Run `tmp/climb/runs/c16`, 8 samples per arm, against C15, over `to_json` and the six HTML cases (other `EscapeJSONString` callers). Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `scalar/to_json` | 0.738→0.699 -5.3% | 5.360→4.784 -10.7%* | +3.4% | -8.9%* |
+| `html/extract_text` | -11.9%* | -2.5% | +0.0% | -0.8% |
+| `html/large_page_tables` | -3.8%* | -1.9% | +0.5% | +0.2% |
+| other HTML cases | within ±2.5% | within ±0.6% | within ±1.0% | within ±0.3% |
+
+Accepted on CPU, inside the 11.8% bound. The HTML wall stars come without a CPU or instruction change and are not credited to this candidate.
+
 ## Where It Stands
 
 (pending)

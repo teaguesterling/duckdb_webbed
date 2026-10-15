@@ -67,10 +67,20 @@ xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, 
 // are illegal raw inside a JSON string must be re-escaped here at emit time. Only " , \ and the
 // C0 control range (0x00-0x1F) require escaping per RFC 8259; raw UTF-8 multibyte sequences and
 // characters such as / < > & are valid unescaped and are passed through untouched.
-static std::string EscapeJSONString(const std::string &input) {
-	std::string out;
-	out.reserve(input.size() + 8);
-	for (unsigned char c : input) {
+// Append input to out as JSON string contents. Runs of bytes that need no escape are appended
+// whole.
+static void AppendJSONEscaped(std::string &out, const std::string &input) {
+	static const char *hex = "0123456789abcdef";
+	const char *p = input.data();
+	const char *end = p + input.size();
+	const char *run = p;
+	for (; p < end; p++) {
+		auto c = static_cast<unsigned char>(*p);
+		if (c >= 0x20 && c != '"' && c != '\\') {
+			continue;
+		}
+		out.append(run, static_cast<size_t>(p - run));
+		run = p + 1;
 		switch (c) {
 		case '"':
 			out += "\\\"";
@@ -94,18 +104,20 @@ static std::string EscapeJSONString(const std::string &input) {
 			out += "\\t";
 			break;
 		default:
-			if (c < 0x20) {
-				// Remaining C0 control characters: emit as \u00XX (lowercase hex).
-				static const char *hex = "0123456789abcdef";
-				out += "\\u00";
-				out += hex[(c >> 4) & 0xF];
-				out += hex[c & 0xF];
-			} else {
-				out += static_cast<char>(c);
-			}
+			// Remaining C0 control characters: emit as \u00XX (lowercase hex).
+			out += "\\u00";
+			out += hex[(c >> 4) & 0xF];
+			out += hex[c & 0xF];
 			break;
 		}
 	}
+	out.append(run, static_cast<size_t>(end - run));
+}
+
+static std::string EscapeJSONString(const std::string &input) {
+	std::string out;
+	out.reserve(input.size() + 8);
+	AppendJSONEscaped(out, input);
 	return out;
 }
 
@@ -1329,7 +1341,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 	};
 	auto append_quoted = [](std::string &out, const std::string &text) {
 		out += '"';
-		out += EscapeJSONString(text);
+		AppendJSONEscaped(out, text);
 		out += '"';
 	};
 
