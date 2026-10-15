@@ -1,6 +1,6 @@
 # name: test/sql/duck_block_filename_acceptance.test
 # description: consumers accept the 8-field duck_block (canonical seven, then filename) -- spec 6.4
-# group: [webbed]
+# group: [sql]
 
 require webbed
 

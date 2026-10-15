@@ -1,6 +1,6 @@
 # name: test/sql/duck_block_source_identity.test
 # description: capture_attributes -- source attributes on every element, read and write (#142)
-# group: [webbed]
+# group: [sql]
 
 require webbed
 

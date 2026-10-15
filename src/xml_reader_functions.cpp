@@ -687,7 +687,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 					}
 
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order, schema_options.text_key);
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
+					                     schema_options.text_key);
 
 				} catch (const OutOfMemoryException &) {
 					throw;
@@ -1656,7 +1657,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 					}
 
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order, schema_options.text_key);
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
+					                     schema_options.text_key);
 
 				} catch (const OutOfMemoryException &) {
 					throw;

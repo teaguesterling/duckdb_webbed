@@ -7,7 +7,6 @@ namespace duckdb {
 
 struct CaptureSpec; // defined in duck_block_functions.cpp; see capture_attributes
 
-
 /**
  * DuckBlockFunctions provides scalar functions for converting between HTML/XML and duck_blocks.
  *

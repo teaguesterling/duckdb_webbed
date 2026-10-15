@@ -850,7 +850,8 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 
 	for (idx_t i = 0; i < columns.size(); i++) {
 		if (widen[i]) {
-			columns[i].type = IsUnknownType(columns[i].type) ? WidenUnknownToVarchar(columns[i].type) : LogicalType::VARCHAR;
+			columns[i].type =
+			    IsUnknownType(columns[i].type) ? WidenUnknownToVarchar(columns[i].type) : LogicalType::VARCHAR;
 			columns[i].winning_datetime_format.clear();
 		}
 	}
@@ -925,8 +926,8 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
 				// shell (fields NULL), matching DOM, rather than a fully-NULL struct. An empty element
 				// takes the same path, and nullstr applies to the struct's scalar fields, as in DOM.
-				value = XMLSchemaInference::ExtractValueFromXmlFragment(
-				    col_name, XmlEscapeText(occs.front().payload), col_type, options, ns_decls);
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(occs.front().payload),
+				                                                        col_type, options, ns_decls);
 			}
 		} else if (col_type.id() == LogicalTypeId::LIST) {
 			// LIST column. Iterate the field's occurrences in document order, dispatching each to the
