@@ -46,7 +46,14 @@ SELECT ctx::VARCHAR FROM read_xml('test/xml/mixed_content/indented.xml', record_
 ----
 <a k="1"/><b>x</b>
 
+# max_depth collapses ctx into a scalar XML column, so SAX's AccumulatorToRow (xml_sax_reader.cpp)
+# reparses the hand-built "<a k="1"></a><b>x</b>" fragment via ExtractValueFromXmlFragment and
+# re-serializes it through ExtractValueFromNode's xmlNodeDump (xml_schema_inference.cpp) -- the same
+# function DOM's path dumps through. libxml2's tree has no memory of how an empty element was
+# originally closed, so xmlNodeDump renders it self-closing on both paths, deterministically, on
+# any libxml2 version: not an ambient environment difference, and not something a serializer flag
+# chooses here, but a consequence of SAX and DOM converging on one extractor (ff31c5a's point).
 query T
 SELECT ctx::VARCHAR FROM read_xml('test/xml/mixed_content/indented.xml', record_element := 'rec', max_depth := 2, streaming := true, maximum_file_size := 1);
 ----
-<a k="1"></a><b>x</b>
+<a k="1"/><b>x</b>
