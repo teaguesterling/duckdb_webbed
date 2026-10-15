@@ -1439,7 +1439,8 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	return result;
 }
 
-LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b) {
+LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b,
+                                                   const std::string &text_key) {
 	if (a == b) {
 		return a;
 	}
@@ -1469,7 +1470,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 			if (it == b_index.end()) {
 				merged.emplace_back(ac.first, ac.second);
 			} else {
-				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second));
+				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second, text_key));
 				b_index.erase(it);
 			}
 		}
@@ -1485,7 +1486,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	}
 
 	if (a.id() == LogicalTypeId::LIST && b.id() == LogicalTypeId::LIST) {
-		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b)));
+		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b), text_key));
 	}
 
 	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
@@ -1493,6 +1494,55 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST || t.id() == LogicalTypeId::MAP ||
 		       t.id() == LogicalTypeId::ARRAY;
 	};
+
+	// Text plus attributes in one file, plain text in another: the scalar is the struct's text field.
+	auto text_field_index = [&](const LogicalType &t) -> optional_idx {
+		if (t.id() != LogicalTypeId::STRUCT) {
+			return optional_idx();
+		}
+		auto &fields = StructType::GetChildTypes(t);
+		for (idx_t i = 0; i < fields.size(); i++) {
+			if (CompatIdentifierName(fields[i].first) == text_key) {
+				return optional_idx(i);
+			}
+		}
+		return optional_idx();
+	};
+	auto is_temporal = [](const LogicalType &t) {
+		switch (t.id()) {
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_SEC:
+		case LogicalTypeId::TIMESTAMP_MS:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return true;
+		default:
+			return false;
+		}
+	};
+	auto widen_text_field = [&](const LogicalType &struct_type, idx_t index, const LogicalType &scalar) {
+		child_list_t<LogicalType> fields = StructType::GetChildTypes(struct_type);
+		auto merged = MergeXMLColumnType(fields[index].second, scalar, text_key);
+		// The two files' dates may use different formats, and the union keeps no format for a field
+		// inside a struct, so a temporal text field stays VARCHAR.
+		fields[index].second = is_temporal(merged) ? LogicalType::VARCHAR : merged;
+		return LogicalType::STRUCT(std::move(fields));
+	};
+	if (!is_complex(b)) {
+		auto index = text_field_index(a);
+		if (index.IsValid()) {
+			return widen_text_field(a, index.GetIndex(), b);
+		}
+	}
+	if (!is_complex(a)) {
+		auto index = text_field_index(b);
+		if (index.IsValid()) {
+			return widen_text_field(b, index.GetIndex(), a);
+		}
+	}
 
 	// Cardinality mismatch: an element occurring once infers as a scalar T, the same element
 	// occurring 2+ times in another file infers as LIST<T>. Reconcile by treating the singleton
@@ -1505,6 +1555,12 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		if (element.id() == LogicalTypeId::SQLNULL) {
 			return true;
 		}
+		if (!is_complex(singleton) && text_field_index(element).IsValid()) {
+			return true;
+		}
+		if (!is_complex(element) && text_field_index(singleton).IsValid()) {
+			return true;
+		}
 		if (is_complex(element) || is_complex(singleton)) {
 			return element.id() == singleton.id();
 		}
@@ -1513,13 +1569,13 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	if (a.id() == LogicalTypeId::LIST && b.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(a);
 		if (reconcilable(element, b)) {
-			return LogicalType::LIST(MergeXMLColumnType(element, b));
+			return LogicalType::LIST(MergeXMLColumnType(element, b, text_key));
 		}
 	}
 	if (b.id() == LogicalTypeId::LIST && a.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(b);
 		if (reconcilable(element, a)) {
-			return LogicalType::LIST(MergeXMLColumnType(a, element));
+			return LogicalType::LIST(MergeXMLColumnType(a, element, text_key));
 		}
 	}
 

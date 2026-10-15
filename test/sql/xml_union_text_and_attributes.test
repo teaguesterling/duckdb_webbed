@@ -1,0 +1,65 @@
+# name: test/sql/xml_union_text_and_attributes.test
+# description: union_by_name widens an element that is plain text in one file and text plus attributes in another into the struct's text field
+# group: [sql]
+
+require webbed
+
+query TT
+SELECT typeof("values"), "values"
+FROM read_xml('test/xml/type_fidelity/scalar_and_attrs/*.xml', record_element='CustomMetadata', union_by_name=true)
+ORDER BY "values".field;
+----
+STRUCT(field VARCHAR, "value" STRUCT("#text" VARCHAR, "type" VARCHAR))	{'field': F1, 'value': {'#text': plain, 'type': NULL}}
+STRUCT(field VARCHAR, "value" STRUCT("#text" VARCHAR, "type" VARCHAR))	{'field': F2, 'value': {'#text': typed, 'type': 'xsd:string'}}
+
+# Struct file first, custom text_key, SAX path
+query T
+SELECT "values"
+FROM read_xml(['test/xml/type_fidelity/scalar_and_attrs/2.xml', 'test/xml/type_fidelity/scalar_and_attrs/1.xml'], record_element='CustomMetadata', union_by_name=true, text_key='_text', streaming=true, maximum_file_size=1);
+----
+{'field': F2, 'value': {'_text': typed, 'type': 'xsd:string'}}
+{'field': F1, 'value': {'_text': plain, 'type': NULL}}
+
+# Struct file first, DOM path
+query T
+SELECT "values"
+FROM read_xml(['test/xml/type_fidelity/scalar_and_attrs/2.xml', 'test/xml/type_fidelity/scalar_and_attrs/1.xml'], record_element='CustomMetadata', union_by_name=true, streaming=false);
+----
+{'field': F2, 'value': {'#text': typed, 'type': 'xsd:string'}}
+{'field': F1, 'value': {'#text': plain, 'type': NULL}}
+
+# A repeated text+attribute element in one file and a plain singleton in another
+query TT
+SELECT typeof(tag), tag
+FROM read_xml('test/xml/type_fidelity/scalar_and_attrs_list/*.xml', record_element='r', union_by_name=true, filename=true)
+ORDER BY filename;
+----
+STRUCT("#text" VARCHAR, k VARCHAR)[]	[{'#text': x, 'k': a}, {'#text': y, 'k': b}]
+STRUCT("#text" VARCHAR, k VARCHAR)[]	[{'#text': z, 'k': NULL}]
+
+# The text field widens with the scalar's type
+query TT
+SELECT typeof(amount), amount
+FROM read_xml('test/xml/type_fidelity/scalar_and_attrs_numeric/*.xml', record_element='r', union_by_name=true, filename=true)
+ORDER BY filename;
+----
+STRUCT("#text" DOUBLE, currency VARCHAR)	{'#text': 1.5, 'currency': USD}
+STRUCT("#text" DOUBLE, currency VARCHAR)	{'#text': 2.0, 'currency': NULL}
+
+# A repeated plain element in one file and a text+attribute singleton in another
+query TT
+SELECT typeof(tag), tag
+FROM read_xml('test/xml/type_fidelity/scalar_list_and_attrs/*.xml', record_element='r', union_by_name=true, filename=true)
+ORDER BY filename;
+----
+STRUCT("#text" VARCHAR, k VARCHAR)[]	[{'#text': x, 'k': NULL}, {'#text': y, 'k': NULL}]
+STRUCT("#text" VARCHAR, k VARCHAR)[]	[{'#text': z, 'k': a}]
+
+# A date text field stays VARCHAR, since each file may use a different date format
+query TT
+SELECT typeof(amount), amount
+FROM read_xml('test/xml/type_fidelity/scalar_and_attrs_date/*.xml', record_element='r', union_by_name=true, filename=true)
+ORDER BY filename;
+----
+STRUCT("#text" VARCHAR, currency VARCHAR)	{'#text': 14/10/2026, 'currency': USD}
+STRUCT("#text" VARCHAR, currency VARCHAR)	{'#text': 01/02/2026, 'currency': NULL}

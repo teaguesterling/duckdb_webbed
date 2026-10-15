@@ -266,7 +266,9 @@ public:
 	// VARCHAR so textual data is preserved.
 	// SQLNULL is the inferred type of an element that is empty in every instance (no text, children
 	// or attributes) and merges as the identity.
-	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b);
+	// A scalar merged with a STRUCT that has a text_key field (an element seen as plain text in one
+	// file and as text plus attributes in another) widens into that field.
+	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b, const std::string &text_key);
 
 	// Replace SQLNULL left over after merging (an element empty in every file) with VARCHAR,
 	// including inside nested types.

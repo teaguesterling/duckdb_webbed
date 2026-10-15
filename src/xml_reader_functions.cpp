@@ -210,7 +210,7 @@ static bool SchemaHasUnsupportedSAXType(const std::vector<LogicalType> &column_t
 static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
                                  std::unordered_map<std::string, LogicalType> &union_schema,
                                  std::unordered_map<std::string, std::string> &union_formats,
-                                 std::vector<std::string> &column_order) {
+                                 std::vector<std::string> &column_order, const std::string &text_key) {
 	for (const auto &col_info : inferred_columns) {
 		auto it = union_schema.find(col_info.name);
 		if (it == union_schema.end()) {
@@ -219,7 +219,7 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 			column_order.push_back(col_info.name);
 			continue;
 		}
-		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type);
+		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, text_key);
 		if (merged != it->second) {
 			union_formats[col_info.name] =
 			    it->second.id() == LogicalTypeId::SQLNULL ? col_info.winning_datetime_format : "";
@@ -676,7 +676,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 					}
 
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order, schema_options.text_key);
 
 				} catch (const OutOfMemoryException &) {
 					throw;
@@ -1644,7 +1644,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 					}
 
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
+					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order, schema_options.text_key);
 
 				} catch (const OutOfMemoryException &) {
 					throw;
