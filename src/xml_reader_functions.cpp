@@ -990,6 +990,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 					lstate.sax_file_handle = std::move(file_handle);
 					lstate.sax_pending_records.clear();
+					lstate.sax_pending_pos = 0;
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
 				} else {
@@ -1049,15 +1050,22 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				constexpr idx_t SAX_CHUNK_SIZE = 65536;
 				char sax_buffer[SAX_CHUNK_SIZE];
 
+				auto &pending = lstate.sax_pending_records;
 				auto emit_pending_sax_rows = [&]() {
-					while (!lstate.sax_pending_records.empty() && output_idx < STANDARD_VECTOR_SIZE) {
-						auto &record = lstate.sax_pending_records.front();
+					while (lstate.sax_pending_pos < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
+						auto &record = pending[lstate.sax_pending_pos];
 						auto row = SAXStreamReader::AccumulatorToRow(
 						    record, bind_data.column_names, bind_data.column_types, schema_options,
 						    bind_data.column_datetime_formats, bind_data.inferred_schema);
 						EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 						output_idx++;
-						lstate.sax_pending_records.erase(lstate.sax_pending_records.begin());
+						lstate.sax_pending_pos++;
+					}
+					// Erasing each emitted record from the front shifts every record behind it,
+					// which is quadratic when ignore_errors withholds a whole file.
+					if (lstate.sax_pending_pos == pending.size()) {
+						pending.clear();
+						lstate.sax_pending_pos = 0;
 					}
 				};
 

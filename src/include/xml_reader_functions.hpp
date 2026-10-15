@@ -194,6 +194,7 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 	xmlSAXHandler sax_handler;                             // SAX handler (must outlive parser context)
 	std::vector<SAXRecordAccumulator>
 	    sax_pending_records;         // Completed records (emitted only after a successful parse when ignore_errors)
+	idx_t sax_pending_pos = 0;       // Next pending record to emit; the vector is cleared once drained
 	bool sax_parse_complete = false; // Push parser reached EOF without error
 
 	~XMLReadLocalState() {
@@ -217,6 +218,7 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 		sax_ctx.reset();
 		sax_file_handle.reset();
 		sax_pending_records.clear();
+		sax_pending_pos = 0;
 		sax_parse_complete = false;
 		use_sax = false;
 		file_loaded = false;

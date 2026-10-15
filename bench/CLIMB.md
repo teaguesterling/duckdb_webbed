@@ -89,7 +89,7 @@ Peak RSS leaders: `stream/orders_sax_infer` 742 MB, `scalar/parse_xml_batch` 723
 
 ## Candidates
 
-### C1: SAX pending rows drained by cursor
+### Accepted: C1, SAX pending rows drained by cursor
 
 Hypothesis: the scan's SAX emitter removes each emitted row with `sax_pending_records.erase(begin())`, which shifts every remaining `SAXRecordAccumulator` (strings, vectors, and a hash map each). That accounts for 78% of `stream/logs_sax_ignore_errors`, where `ignore_errors` withholds the whole file, and 26% of `records/transactions_stream_large`, where each 64 KB chunk queues a few hundred records. Reading by index and clearing once drained makes the drain linear.
 
@@ -98,7 +98,21 @@ before: while pending non-empty: emit(pending.front()); pending.erase(begin)
 after:  while pos < pending.size(): emit(pending[pos++]); if pos == size: pending.clear(); pos = 0
 ```
 
-Target: CPU and wall down on the SAX scan cases (`logs_sax_ignore_errors` most, `transactions_stream_large`, `claims_sax`, `orders_sax_*`, `tickets_stream_infer`). RSS flat. Guards: fingerprints on all SAX cases, since row order must not change.
+Target: CPU and wall down on the SAX scan cases (`logs_sax_ignore_errors` most, `transactions_stream_large`, `claims_sax`, `orders_sax_*`, `tickets_stream_infer`). RSS flat. Guards: fingerprints on all SAX cases, since row order must not change. Guard check: 56/56 fingerprints match, `make test` passes (4104 assertions).
+
+Run `tmp/climb/runs/c1`, 8 samples per arm, interleaved (SAX cases only, since the change cannot reach other paths):
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `stream/logs_sax_ignore_errors` | 1.603→0.242 -84.9%* | 1.633→0.274 -83.2%* | +0.2% | -79.7%* |
+| `records/transactions_stream_large` | 2.382→1.593 -33.1%* | 2.367→1.583 -33.1%* | -0.2% | -27.8%* |
+| `nested/claims_sax` | -1.6% | -1.5% | -0.3% | -0.4% |
+| `stream/orders_sax_items_columns` | -2.1% | -1.7% | +1.1% | -2.8% |
+| `stream/orders_sax_infer` | +0.2% | +0.3% | +0.1% | -1.4% |
+| `stream/atom_glob_ns_strip` | +0.0% | -1.1% | +0.0% | -0.7% |
+| `records/tickets_stream_infer` | -0.0% | -0.2% | +0.0% | -0.1% |
+
+Bound: the erase and accumulator moves were 31% of `transactions_stream_large` inclusive and about 80% of `logs_sax_ignore_errors`, consistent with the gains. Accepted: the two predicted cases star on wall, CPU and instructions, and nothing regresses.
 
 ## Where It Stands
 

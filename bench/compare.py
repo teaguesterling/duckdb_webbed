@@ -56,7 +56,7 @@ def case_header(path):
 
 
 def find_cases(pattern, split):
-    paths = sorted(glob.glob(os.path.join(CASES_DIR, pattern)))
+    paths = sorted({p for part in pattern.split(",") for p in glob.glob(os.path.join(CASES_DIR, part))})
     cases = []
     for path in paths:
         if split and case_header(path).get("split") != split:
