@@ -138,6 +138,24 @@ static std::string ResolveElementName(const xmlChar *localname, const xmlChar *p
 	return name;
 }
 
+// ─── Helper: read an attribute value from SAX2 startElementNs ───────────────
+
+// Without entity substitution, libxml2 hands SAX2 attribute values with '&' re-encoded as "&#38;"
+// (the other predefined entities arrive decoded) and leaves decoding to the consumer, as its own
+// tree builder does. Decode it so SAX values match DOM.
+static std::string SAXAttributeValue(const xmlChar **attributes, int i) {
+	const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
+	const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
+	std::string value(value_start, value_end);
+	static const std::string encoded_amp = "&#38;";
+	size_t pos = value.find(encoded_amp);
+	while (pos != std::string::npos) {
+		value.replace(pos, encoded_amp.size(), "&");
+		pos = value.find(encoded_amp, pos + 1);
+	}
+	return value;
+}
+
 // ─── Helper: check if element matches the record tag ────────────────────────
 
 static bool MatchesRecordTag(const std::string &element_name, const std::string &record_tag) {
@@ -204,8 +222,6 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			for (int i = 0; i < nb_attributes; i++) {
 				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 				const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
-				const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
-				const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
 
 				std::string attr_name;
 				if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
@@ -214,7 +230,7 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 					attr_name = attr_localname;
 				}
 
-				std::string attr_value(value_start, value_end);
+				std::string attr_value = SAXAttributeValue(attributes, i);
 				if (acc->current_attributes.emplace(attr_name, attr_value).second) {
 					acc->attribute_order.push_back(attr_name);
 				}
@@ -240,8 +256,6 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 				for (int i = 0; i < nb_attributes; i++) {
 					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
-					const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
-					const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
 
 					std::string attr_name;
 					if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
@@ -249,7 +263,7 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 					} else {
 						attr_name = attr_localname;
 					}
-					std::string attr_value(value_start, value_end);
+					std::string attr_value = SAXAttributeValue(attributes, i);
 					acc->current_field_attrs += " " + attr_name + "=\"" + XmlEscapeAttr(attr_value) + "\"";
 				}
 			}
@@ -261,9 +275,7 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			// Add attributes to raw XML (escape attribute values)
 			for (int i = 0; i < nb_attributes; i++) {
 				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
-				const char *value_start = reinterpret_cast<const char *>(attributes[i * 5 + 3]);
-				const char *value_end = reinterpret_cast<const char *>(attributes[i * 5 + 4]);
-				std::string attr_value(value_start, value_end);
+				std::string attr_value = SAXAttributeValue(attributes, i);
 				acc->nested_xml += " " + std::string(attr_localname) + "=\"" + XmlEscapeAttr(attr_value) + "\"";
 			}
 			acc->nested_xml += ">";

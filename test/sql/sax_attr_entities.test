@@ -1,0 +1,16 @@
+# name: test/sql/sax_attr_entities.test
+# description: SAX must decode '&' in attribute values the way DOM does, on the record element, direct children (single and repeated), and nested elements. Regression for: libxml2 hands SAX2 attribute values with '&' re-encoded as "&#38;", and the SAX reader passed that through, so DBLP cite@label read 'Atzeni &#38; Parker 1982'.
+# group: [sql]
+
+require webbed
+
+query IIII
+SELECT key, cite, one, n FROM read_xml('test/xml/sax_attr_entities.xml', record_element := 'article');
+----
+a&b	[{'#text': x, 'label': Atzeni & Parker 1982}, {'#text': y, 'label': 'A < B & C "q"'}]	{'#text': z, 'label': lit &#38;}	{'m': {'#text': w, 'label': M & N}}
+
+query IIII
+SELECT key, cite, one, n FROM read_xml('test/xml/sax_attr_entities.xml', record_element := 'article',
+  maximum_file_size := 1);
+----
+a&b	[{'#text': x, 'label': Atzeni & Parker 1982}, {'#text': y, 'label': 'A < B & C "q"'}]	{'#text': z, 'label': lit &#38;}	{'m': {'#text': w, 'label': M & N}}
