@@ -390,6 +390,31 @@ Run `tmp/climb/runs/c14`, 8 samples per arm, against C13. Guard 56/56, `make tes
 
 The `extract_text_xpaths` wall star came with flat CPU and fewer instructions, so it was re-run alone (`tmp/climb/runs/c14-confirm`, 8 samples per arm): wall -2.1% p=0.49, CPU +1.2% p=0.36. No regression. Accepted on the target, within the 4.5% bound.
 
+### Accepted: C15, clean text by runs
+
+Hypothesis (re-profile `acc14`, `tmp/climb/profile/acc14`): `CleanTextContent` owns 12.7% of `tickets_stream_infer`, 9.8% of `atom_glob_ns_strip`, 10.8% of `logs_sax_ignore_errors`, 9.2% of `catalog_medium`, 8.9% of `catalog_record_element` and 6.0% of `transactions_stream_large`, almost all self time. Both of its loops append one byte at a time. Appending whole runs (up to the next `\r` in the preserve path, each non-space run plus one space in the collapse path) gives the same bytes.
+
+```
+before: for c in trimmed: result += rewrite(c)
+after:  for run between rewritten bytes: result.append(run); result += rewrite
+```
+
+Target: CPU and wall down 5 to 10% on those cases. RSS flat. Guards: fingerprints. Equivalence: 5M random strings over whitespace, CR/LF pairs, UTF-8 and ASCII bytes, both modes, against the old function (`tmp/climb/fuzz/clean_fuzz.cpp`): 0 mismatches.
+
+Run `tmp/climb/runs/c15`, 8 samples per arm, against C14. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `records/tickets_stream_infer` | 0.807→0.708 -12.4%* | -12.5%* | +0.5% | -13.4%* |
+| `stream/atom_glob_ns_strip` | 2.026→1.786 -11.9%* | -9.3%* | -0.6% | -8.8%* |
+| `manyfiles/catalog_medium` | 0.294→0.253 -14.0%* | -7.9%* | -2.0% | -11.4%* |
+| `records/catalog_record_element` | -5.4%* | -5.9%* | +0.3% | -7.5%* |
+| `stream/logs_sax_ignore_errors` | -5.7% | -7.7%* | +1.8% | -7.8%* |
+| `nested/catalog_dom_infer` | -3.9% | -2.0% | +0.4% | -2.7% |
+| `records/transactions_stream_large` | -2.2% | -2.3% | +0.1% | -3.6%* |
+
+Accepted. Every CPU gain is inside its profile bound. The wall gains on the two multi-threaded cases (`catalog_medium`, `atom_glob_ns_strip`) run 2 to 5 points past the bound. That excess is unexplained.
+
 ## Where It Stands
 
 (pending)

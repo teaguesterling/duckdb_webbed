@@ -10,6 +10,7 @@
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <regex>
 #include <unordered_set>
 #include <libxml/xpath.h>
@@ -1808,47 +1809,55 @@ std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool p
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 	};
 
-	auto lstart = std::find_if_not(text.begin(), text.end(),
-	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
-	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
-		            return is_ascii_space(static_cast<unsigned char>(c));
-	            }).base();
-	if (lstart >= rend) {
+	const char *begin = text.data();
+	const char *end = begin + text.size();
+	while (begin < end && is_ascii_space(static_cast<unsigned char>(*begin))) {
+		begin++;
+	}
+	while (end > begin && is_ascii_space(static_cast<unsigned char>(end[-1]))) {
+		end--;
+	}
+	if (begin == end) {
 		return "";
 	}
 
+	// Both paths append whole runs between the bytes they rewrite rather than one byte at a time.
+	std::string result;
+	result.reserve(static_cast<size_t>(end - begin));
 	if (preserve_whitespace) {
 		// Preserve internal whitespace, normalize CRLF/CR to LF (XML 1.0 §2.11)
-		std::string result;
-		result.reserve(static_cast<size_t>(rend - lstart));
-		for (auto it = lstart; it != rend; ++it) {
-			if (*it == '\r') {
-				result += '\n';
-				// Skip LF after CR (CRLF pair)
-				auto next = it + 1;
-				if (next != rend && *next == '\n') {
-					++it;
-				}
-			} else {
-				result += *it;
+		const char *p = begin;
+		while (p < end) {
+			auto cr = static_cast<const char *>(memchr(p, '\r', static_cast<size_t>(end - p)));
+			if (!cr) {
+				result.append(p, static_cast<size_t>(end - p));
+				break;
+			}
+			result.append(p, static_cast<size_t>(cr - p));
+			result += '\n';
+			p = cr + 1;
+			// Skip LF after CR (CRLF pair)
+			if (p < end && *p == '\n') {
+				p++;
 			}
 		}
 		return result;
 	}
 
-	// Collapse runs of ASCII whitespace to a single space (original behavior)
-	std::string result;
-	result.reserve(static_cast<size_t>(rend - lstart));
-	bool in_space = false;
-	for (auto it = lstart; it != rend; ++it) {
-		if (is_ascii_space(static_cast<unsigned char>(*it))) {
-			if (!in_space) {
-				result += ' ';
-				in_space = true;
+	// Collapse runs of ASCII whitespace to a single space (original behavior). The trimmed range
+	// starts and ends with a non-space byte.
+	const char *p = begin;
+	while (p < end) {
+		const char *run = p;
+		while (p < end && !is_ascii_space(static_cast<unsigned char>(*p))) {
+			p++;
+		}
+		result.append(run, static_cast<size_t>(p - run));
+		if (p < end) {
+			result += ' ';
+			while (p < end && is_ascii_space(static_cast<unsigned char>(*p))) {
+				p++;
 			}
-		} else {
-			result += *it;
-			in_space = false;
 		}
 	}
 	return result;
