@@ -243,6 +243,60 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 	}
 }
 
+// Infer one file's columns at bind. Returns false when ignore_errors skips the file (too large
+// for DOM, or invalid XML); throws on any other failure.
+static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const XMLReadFunctionData &bind_data,
+                             const XMLSchemaOptions &schema_options, ParseMode mode,
+                             std::vector<XMLColumnInfo> &inferred_columns) {
+	auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
+	auto file_size = fs.GetFileSize(*file_handle);
+
+	bool use_sax_inference = schema_options.streaming && mode == ParseMode::XML &&
+	                         static_cast<idx_t>(file_size) > bind_data.max_file_size &&
+	                         !HasComplexXPath(schema_options.record_element);
+	if (use_sax_inference) {
+		inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
+		return true;
+	}
+
+	// DOM-based: enforce file size limit
+	if (static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+		if (!bind_data.ignore_errors) {
+			throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
+			                            bind_data.max_file_size);
+		}
+		return false;
+	}
+
+	string content;
+	content.resize(file_size);
+	ReadFileFully(*file_handle, (char *)content.data(), file_size);
+
+	if (mode != ParseMode::XML) {
+		inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
+		return true;
+	}
+	// One parse serves both the validity check (CheckXML parses identically) and inference,
+	// instead of parsing the file twice at bind.
+	XMLDocRAII doc(content);
+	if (!doc.IsValid()) {
+		if (doc.HadResourceError()) {
+			ThrowLibxmlOutOfMemory(file_path);
+		}
+		if (!bind_data.ignore_errors) {
+			throw InvalidInputException("File %s contains invalid XML", file_path);
+		}
+		return false;
+	}
+	if (schema_options.opaque_type_name == "HTML") {
+		inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
+	} else {
+		string().swap(content);
+		inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
+	}
+	return true;
+}
+
 // =============================================================================
 // Internal Unified Functions (used by both XML and HTML)
 // =============================================================================
@@ -636,70 +690,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Scan each file for schema
 			for (const auto &file_path : files_to_scan) {
 				try {
-					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
-					auto file_size = fs.GetFileSize(*file_handle);
-
-					// Determine if SAX inference should be used
-					bool use_sax_inference = false;
-					if (schema_options.streaming && mode == ParseMode::XML &&
-					    static_cast<idx_t>(file_size) > result->max_file_size) {
-						if (!HasComplexXPath(schema_options.record_element)) {
-							use_sax_inference = true;
-						}
-					}
-
 					std::vector<XMLColumnInfo> inferred_columns;
-
-					if (use_sax_inference) {
-						// SAX-based schema inference (no DOM needed)
-						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
-					} else {
-						// DOM-based: enforce file size limit
-						if (static_cast<idx_t>(file_size) > result->max_file_size) {
-							if (!result->ignore_errors) {
-								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
-								                            file_path, result->max_file_size);
-							}
-							continue;
-						}
-
-						string content;
-						content.resize(file_size);
-						ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
-						if (mode == ParseMode::XML) {
-							// One parse serves both the validity check (CheckXML parses identically)
-							// and inference, instead of parsing the file twice at bind.
-							XMLDocRAII doc(content);
-							if (!doc.IsValid()) {
-								if (doc.HadResourceError()) {
-									ThrowLibxmlOutOfMemory(file_path);
-								}
-								if (!result->ignore_errors) {
-									throw InvalidInputException("File %s contains invalid XML", file_path);
-								}
-								continue;
-							}
-							if (schema_options.opaque_type_name == "HTML") {
-								inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
-							} else {
-								string().swap(content);
-								inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
-							}
-						} else {
-							inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
-						}
+					if (!InferFileColumns(fs, file_path, *result, schema_options, mode, inferred_columns)) {
+						continue;
 					}
-
 					// Store full inferred schema from first file (preserves is_attribute flags)
 					if (result->inferred_schema.empty()) {
 						result->inferred_schema = inferred_columns;
 						XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 					}
-
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
 					                     schema_options.text_key);
-
 				} catch (const OutOfMemoryException &) {
 					throw;
 				} catch (const Exception &e) {
@@ -1632,58 +1633,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Scan each file for schema
 			for (const auto &file_path : files_to_scan) {
 				try {
-					auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
-					auto file_size = fs.GetFileSize(*file_handle);
-
-					// Determine if SAX inference should be used
-					bool use_sax_inference = false;
-					if (schema_options.streaming && static_cast<idx_t>(file_size) > result->max_file_size) {
-						if (!HasComplexXPath(schema_options.record_element)) {
-							use_sax_inference = true;
-						}
-					}
-
 					std::vector<XMLColumnInfo> inferred_columns;
-
-					if (use_sax_inference) {
-						inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
-					} else {
-						// DOM mode: enforce file size limit
-						if (static_cast<idx_t>(file_size) > result->max_file_size) {
-							if (!result->ignore_errors) {
-								throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
-								                            file_path, result->max_file_size);
-							}
-							continue;
-						}
-
-						string content;
-						content.resize(file_size);
-						ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
-						// One parse serves both the validity check (CheckXML parses identically) and
-						// inference, instead of parsing the file twice at bind.
-						XMLDocRAII doc(content);
-						if (!doc.IsValid()) {
-							if (doc.HadResourceError()) {
-								ThrowLibxmlOutOfMemory(file_path);
-							}
-							if (!result->ignore_errors) {
-								throw InvalidInputException("File %s contains invalid XML", file_path);
-							}
-							continue;
-						}
-						if (schema_options.opaque_type_name == "HTML") {
-							inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
-						} else {
-							string().swap(content);
-							inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
-						}
+					if (InferFileColumns(fs, file_path, *result, schema_options, ParseMode::XML, inferred_columns)) {
+						MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
+						                     schema_options.text_key);
 					}
-
-					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,
-					                     schema_options.text_key);
-
 				} catch (const OutOfMemoryException &) {
 					throw;
 				} catch (const Exception &e) {
