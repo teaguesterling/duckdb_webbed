@@ -961,7 +961,10 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					// Scalar-typed list with an XML item: surface the serialized fragment.
 					list_vals.push_back(Value(frag));
 				} else {
-					list_vals.push_back(Value(child_type));
+					// A typed scalar item captured as XML is a wrapper of items (<l><i>1</i><i>2</i></l>)
+					// or an element carrying its own attributes. Reparse and extract as DOM does.
+					XMLSchemaInference::AppendListItemsFromXmlFragment(col_name, frag, child_type, options, ns_decls,
+					                                                   own_attrs, datetime_fmt, list_vals);
 				}
 			};
 

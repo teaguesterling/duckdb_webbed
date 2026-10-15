@@ -251,6 +251,13 @@ public:
 	                                         const std::string &extra_attrs = "",
 	                                         const std::string &datetime_format = "");
 
+	// Parse a captured list occurrence (the inner contents of one repeated element) and append the
+	// items it holds, by the same rule as DOM extraction (see AppendListItems).
+	static void AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+	                                           const LogicalType &element_type, const XMLSchemaOptions &options,
+	                                           const std::string &extra_ns_decls, const std::string &extra_attrs,
+	                                           const std::string &datetime_format, std::vector<Value> &items);
+
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
 
@@ -326,6 +333,8 @@ private:
 	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options,
 	                                 const std::string &datetime_format = "");
 	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
+	static void AppendListItems(xmlNodePtr node, const LogicalType &element_type, const XMLSchemaOptions &options,
+	                            const std::string &datetime_format, std::vector<Value> &items);
 };
 
 } // namespace duckdb

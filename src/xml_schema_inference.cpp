@@ -1866,9 +1866,8 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
 					if (child_iter->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
-						Value element_value =
-						    ExtractValueFromNode(child_iter, element_type, options, column.winning_datetime_format);
-						list_values.push_back(element_value);
+						AppendListItems(child_iter, element_type, options, column.winning_datetime_format,
+						                list_values);
 					}
 				}
 
@@ -2034,8 +2033,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
 					if (child_iter->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
-						Value element_value = ExtractValueFromNode(child_iter, element_type, options, col_fmt);
-						list_values.push_back(element_value);
+						AppendListItems(child_iter, element_type, options, col_fmt, list_values);
 					}
 				}
 
@@ -2329,16 +2327,13 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
-Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
-                                                      const std::string &extra_ns_decls,
-                                                      const std::string &extra_attrs,
-                                                      const std::string &datetime_format) {
-	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
-	// receives a node whose ->children are the original siblings. extra_ns_decls injects any xmlns:
-	// declarations the fragment's prefixed names depend on (the originating decls are not part of the
-	// captured fragment), without which strict parsing would fail and the value would be lost.
-	// extra_attrs carries the element's own attributes (already escaped) so they become STRUCT fields.
+// Wrap the fragment in its element so the parser sees a single root and so extraction receives a
+// node whose ->children are the original siblings. extra_ns_decls injects any xmlns: declarations
+// the fragment's prefixed names depend on (the originating decls are not part of the captured
+// fragment), without which strict parsing would fail and the value would be lost. extra_attrs
+// carries the element's own attributes (already escaped) so they become STRUCT fields.
+static std::string WrapXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                   const std::string &extra_ns_decls, const std::string &extra_attrs) {
 	std::string wrapped;
 	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + extra_ns_decls.size() + extra_attrs.size() + 5);
 	wrapped.append("<")
@@ -2350,8 +2345,15 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
 	    .append("</")
 	    .append(wrapper_name)
 	    .append(">");
+	return wrapped;
+}
 
-	XMLDocRAII doc(wrapped);
+Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
+                                                      const std::string &extra_ns_decls,
+                                                      const std::string &extra_attrs,
+                                                      const std::string &datetime_format) {
+	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
 	if (!doc.doc) {
 		return Value(target_type);
 	}
@@ -2512,8 +2514,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
-						Value element_value = ExtractValueFromNode(child, element_type, options, datetime_format);
-						list_values.push_back(element_value);
+						AppendListItems(child, element_type, options, datetime_format, list_values);
 						found = true;
 					}
 					child = child->next;
@@ -2571,6 +2572,46 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 	}
 
 	return Value::LIST(element_type, list_values);
+}
+
+// Append the items one occurrence of a repeated element contributes to a LIST. Usually that is one
+// item, the occurrence's own value. An occurrence that only wraps child elements
+// (<l><i>1</i><i>2</i></l>) holds its items as those children instead, and reading it as a single
+// typed scalar would concatenate their text into '12'. A VARCHAR list keeps such an occurrence as
+// one serialized fragment, which is lossless, and STRUCT or LIST items extract their own children.
+void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &element_type,
+                                         const XMLSchemaOptions &options, const std::string &datetime_format,
+                                         std::vector<Value> &items) {
+	const bool scalar_item = element_type.id() != LogicalTypeId::VARCHAR &&
+	                         element_type.id() != LogicalTypeId::STRUCT && element_type.id() != LogicalTypeId::LIST;
+	if (scalar_item && !HasDirectText(node)) {
+		bool wrapped = false;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				items.push_back(ExtractValueFromNode(child, element_type, options, datetime_format));
+				wrapped = true;
+			}
+		}
+		if (wrapped) {
+			return;
+		}
+	}
+	items.push_back(ExtractValueFromNode(node, element_type, options, datetime_format));
+}
+
+void XMLSchemaInference::AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                        const LogicalType &element_type,
+                                                        const XMLSchemaOptions &options,
+                                                        const std::string &extra_ns_decls,
+                                                        const std::string &extra_attrs,
+                                                        const std::string &datetime_format, std::vector<Value> &items) {
+	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
+	xmlNodePtr root = doc.doc ? xmlDocGetRootElement(doc.doc) : nullptr;
+	if (!root) {
+		items.push_back(Value(element_type));
+		return;
+	}
+	AppendListItems(root, element_type, options, datetime_format, items);
 }
 
 Value XMLSchemaInference::ExtractXMLArrayFromNode(xmlNodePtr node) {

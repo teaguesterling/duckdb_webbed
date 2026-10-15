@@ -1,0 +1,38 @@
+# name: test/sql/list_wrapped_items.test
+# description: An explicit typed scalar LIST over a wrapper element (<l><i>1</i><i>2</i></l>) read the wrapper as a single item. DOM concatenated the descendant text, so INTEGER[] read [12] and TIME[] or DATE[] failed to parse. SAX read [NULL]. Each child element of a wrapper is its own item, on both paths.
+# group: [sql]
+
+require webbed
+
+# Columns, per row of the fixture:
+#   l  wrapped TIME items, one with an AM/PM marker; then two repeated wrappers
+#   n  wrapped INTEGER items; then a bare item
+#   d  wrapped DATE items; then an empty element
+#   s  VARCHAR[] keeps a wrapper as its serialized fragment, which is lossless
+#   p  repeated bare items, read as before
+#   q  an item carrying its own attribute, which SAX captured as XML and read as NULL
+#   st a wrapped list inside a STRUCT field
+
+query IIIIIII
+SELECT * FROM read_xml('test/xml/list_wrapped_items.xml', columns := {'l': 'TIME[]', 'n': 'INTEGER[]', 'd': 'DATE[]', 's': 'VARCHAR[]', 'p': 'INTEGER[]', 'q': 'INTEGER[]', 'st': 'STRUCT(l INTEGER[])'}, streaming := false);
+----
+['13:30:00', '13:30:00']	[1, 2]	[2024-01-15, 2024-01-16]	[<i>a</i><i>b</i>]	[5, 6]	[7]	{'l': [1, 2]}
+['14:00:00', '15:00:00']	[3]	[NULL]	[c]	[8]	[9]	{'l': [3]}
+
+query IIIIIII
+SELECT * FROM read_xml('test/xml/list_wrapped_items.xml', columns := {'l': 'TIME[]', 'n': 'INTEGER[]', 'd': 'DATE[]', 's': 'VARCHAR[]', 'p': 'INTEGER[]', 'q': 'INTEGER[]', 'st': 'STRUCT(l INTEGER[])'}, streaming := true, maximum_file_size := 1);
+----
+['13:30:00', '13:30:00']	[1, 2]	[2024-01-15, 2024-01-16]	[<i>a</i><i>b</i>]	[5, 6]	[7]	{'l': [1, 2]}
+['14:00:00', '15:00:00']	[3]	[NULL]	[c]	[8]	[9]	{'l': [3]}
+
+# Text beside the child elements makes the occurrence one item, so its text is read as before
+statement error
+SELECT n FROM parse_xml('<rows><row><n>1 <b>2</b></n></row></rows>', columns := {'n': 'INTEGER[]'});
+----
+1 2
+
+# Inference types a wrapper as a STRUCT of its children, unaffected
+query I
+SELECT typeof(n) FROM parse_xml('<rows><row><n><i>1</i><i>2</i></n></row></rows>');
+----
+STRUCT(i INTEGER[])
