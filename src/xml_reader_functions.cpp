@@ -206,7 +206,15 @@ static bool SchemaHasUnsupportedSAXType(const std::vector<LogicalType> &column_t
 // New columns are appended; existing columns are widened via MergeXMLColumnType.
 // When the merged type differs from the previous one, the column's datetime format
 // hint is reset so that DuckDB's built-in temporal parsing handles the widened type.
-// A previous SQLNULL (an element empty so far) carries no format, so the new file's is taken.
+// An unknown side (SQLNULL, or a list of it: an element empty so far) carries no format, so the
+// other side's is kept.
+static bool IsUnknownElementType(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::LIST) {
+		return IsUnknownElementType(ListType::GetChildType(type));
+	}
+	return type.id() == LogicalTypeId::SQLNULL;
+}
+
 static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
                                  std::unordered_map<std::string, LogicalType> &union_schema,
                                  std::unordered_map<std::string, std::string> &union_formats,
@@ -221,8 +229,11 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 		}
 		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, text_key);
 		if (merged != it->second) {
-			union_formats[col_info.name] =
-			    it->second.id() == LogicalTypeId::SQLNULL ? col_info.winning_datetime_format : "";
+			if (IsUnknownElementType(it->second)) {
+				union_formats[col_info.name] = col_info.winning_datetime_format;
+			} else if (!IsUnknownElementType(col_info.type)) {
+				union_formats[col_info.name] = "";
+			}
 			it->second = merged;
 		}
 		// NOTE(#38): When types match across files but datetime formats differ,
