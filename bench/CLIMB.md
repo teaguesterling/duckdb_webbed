@@ -256,6 +256,27 @@ Run `tmp/climb/runs/c8`, 8 samples per arm, against C6 (records, nested and many
 
 Accepted. RSS is flat because the scan's own parse still sets the peak.
 
+### Rejected: C7, per-thread cache of compiled XPath expressions
+
+Hypothesis: `EvalXPathChecked` compiles the expression on every call, and scalar functions call it once per row with a constant expression. `xmlXPathCtxtCompile` is 9.4% of `scalar/extract_text_xpaths` CPU. A compiled expression holds no document state, since namespace prefixes resolve at evaluation (the contract in `xml_utils.hpp`), and libxslt reuses compiled expressions the same way. A `thread_local` map from expression text to compiled expression, capped at 256 entries and compiled against a document-less context with the same silent error handler, skips the compile on repeat rows. No mutex. Invalid expressions still throw the same error and are never cached.
+
+```
+before: comp = compile(ctx, xpath); eval(comp, ctx); free(comp)
+after:  comp = thread_cache[xpath] or compile(compile_ctx, xpath); eval(comp, ctx)
+```
+
+Target: CPU down 5 to 9% on `scalar/extract_text_xpaths` and `scalar/extract_elements_attributes`, smaller on other XPath users. RSS flat. Guards: all fingerprints, including namespace-prefixed XPath in `stream/soap_xpath_ns`.
+
+Run `tmp/climb/runs/c7`, 8 samples per arm, against C8. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | instructions |
+| --- | ---: | ---: | ---: |
+| `scalar/extract_text_xpaths` (target) | -2.9% | -1.1% | +0.2% |
+| `scalar/extract_elements_attributes` | +10.0% | -4.1%* | -5.9%* |
+| `scalar/minify_pretty` | +16.3%* | +1.1% | +4.8%* |
+
+Rejected: the main target did not move, and `minify_pretty` regressed on wall. The compile share in the base profile overstated what a cache could save there, since parsing the same document four times per row dominates. Patch: `bench/rejected/c7-xpath-cache.patch`.
+
 ## Where It Stands
 
 (pending)
