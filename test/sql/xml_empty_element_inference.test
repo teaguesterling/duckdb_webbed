@@ -136,3 +136,11 @@ WHERE d IS NOT NULL ORDER BY d;
 ----
 2026-02-01
 2026-10-14
+
+# SAX with sample_size := -1 verifies the whole file: content past a sample of empty elements
+# widens the column to VARCHAR, so it doesn't merge as the other file's INTEGER
+query TT
+SELECT typeof(amount), list(amount ORDER BY amount) FROM read_xml('test/xml/type_fidelity/empty_out_of_sample/*.xml', record_element='r', union_by_name=true, sample_size=-1, streaming=true, maximum_file_size=1)
+WHERE amount IS NOT NULL GROUP BY ALL;
+----
+VARCHAR	[5, oops]

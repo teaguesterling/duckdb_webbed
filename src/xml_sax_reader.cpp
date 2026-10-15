@@ -703,6 +703,23 @@ static bool IsWidenableScalar(const LogicalType &type) {
 	}
 }
 
+// True for a column the sample saw only empty elements for (SQLNULL, or a list of it). Any content
+// outside the sample is new evidence, so it widens to VARCHAR, the type such a column had before
+// SQLNULL deferred the decision to the multi-file merge.
+static bool IsUnknownType(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::LIST) {
+		return IsUnknownType(ListType::GetChildType(type));
+	}
+	return type.id() == LogicalTypeId::SQLNULL;
+}
+
+static LogicalType WidenUnknownToVarchar(const LogicalType &type) {
+	if (type.id() == LogicalTypeId::LIST) {
+		return LogicalType::LIST(WidenUnknownToVarchar(ListType::GetChildType(type)));
+	}
+	return LogicalType::VARCHAR;
+}
+
 void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
                                                       const XMLSchemaOptions &options,
                                                       std::vector<XMLColumnInfo> &columns) {
@@ -710,7 +727,7 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	std::vector<bool> widen(columns.size(), false);
 	bool any_candidate = false;
 	for (idx_t i = 0; i < columns.size(); i++) {
-		if (!columns[i].is_attribute && IsWidenableScalar(columns[i].type)) {
+		if (!columns[i].is_attribute && (IsWidenableScalar(columns[i].type) || IsUnknownType(columns[i].type))) {
 			any_candidate = true;
 		}
 	}
@@ -756,7 +773,19 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	auto test_and_clear = [&]() {
 		for (auto &rec : completed) {
 			for (idx_t i = 0; i < columns.size(); i++) {
-				if (widen[i] || columns[i].is_attribute || !IsWidenableScalar(columns[i].type)) {
+				if (widen[i] || columns[i].is_attribute) {
+					continue;
+				}
+				if (IsUnknownType(columns[i].type)) {
+					for (const auto &occ : rec.GetOccurrences(columns[i].name)) {
+						if (occ.is_xml || (!occ.payload.empty() && !IsNullString(occ.payload, options))) {
+							widen[i] = true;
+							break;
+						}
+					}
+					continue;
+				}
+				if (!IsWidenableScalar(columns[i].type)) {
 					continue;
 				}
 				for (const auto &occ : rec.GetOccurrences(columns[i].name)) {
@@ -800,7 +829,7 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 
 	for (idx_t i = 0; i < columns.size(); i++) {
 		if (widen[i]) {
-			columns[i].type = LogicalType::VARCHAR;
+			columns[i].type = IsUnknownType(columns[i].type) ? WidenUnknownToVarchar(columns[i].type) : LogicalType::VARCHAR;
 			columns[i].winning_datetime_format.clear();
 		}
 	}
