@@ -11,7 +11,6 @@
 
 #include <libxml/tree.h>
 #include <libxml/xmlmemory.h>
-#include <regex>
 #include <set>
 
 namespace duckdb {
@@ -819,34 +818,8 @@ void XMLScalarFunctions::XMLDetectPrefixesFunction(DataChunk &args, ExpressionSt
 	auto &xpath_vector = args.data[0];
 	auto count = args.size();
 
-	// Regex pattern to match namespace prefixes in XPath
-	// Matches: prefix:name where prefix is NCName (valid XML name without colon)
-	// NCName pattern: [A-Za-z_][A-Za-z0-9._-]*
-	// We look for prefix: followed by a valid name character
-	// But we need to exclude axis specifiers like "child::", "descendant::", etc.
-	static const std::regex prefix_pattern(
-	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))", std::regex::optimize);
-
-	// XPath axes to exclude (these use :: not single :)
-	static const std::set<std::string> xpath_axes = {
-	    "ancestor",  "ancestor-or-self",  "attribute", "child",  "descendant", "descendant-or-self",
-	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
-	    "self"};
-
 	ExecuteNullSafeString(xpath_vector, result, count, [&](idx_t i, const std::string &xpath) {
-		// Find all prefixes
-		std::set<std::string> prefixes;
-		std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
-		std::sregex_iterator end;
-
-		while (iter != end) {
-			std::string prefix = (*iter)[1].str();
-			// Don't include XPath axis specifiers
-			if (xpath_axes.find(prefix) == xpath_axes.end()) {
-				prefixes.insert(prefix);
-			}
-			++iter;
-		}
+		auto prefixes = DetectXPathPrefixes(xpath);
 
 		// Create LIST<VARCHAR> result
 		vector<Value> prefix_values;

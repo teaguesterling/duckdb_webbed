@@ -369,6 +369,27 @@ Run `tmp/climb/runs/c13`, 8 samples per arm, against C9. Guard 56/56, `make test
 
 Accepted. The org gains match the 23% bound from the profile. The catalog and glob cases use simple `record_element` tags too and gain the same way. `orders_objects` reads whole documents and has no record lookup.
 
+### Accepted: C14, scan XPath prefixes by hand
+
+Hypothesis (re-profile `acc8`): `DetectXPathPrefixes` owns 4.5% of `stream/soap_xpath_ns`. It runs a `std::regex` over the XPath for every row in `namespaces := 'auto'`, the same pattern as the document scan C2 replaced. A hand scanner that reproduces the regex's match positions (start of string or after `/ [ ( @ , |`, greedy prefix and name, resume after the name) gives the same set. `xml_detect_prefixes` carried a copy of the regex and now calls the same function.
+
+```
+before: for m in regex_iterator(xpath, (^|[/[(@,|])(prefix):(?!:)(name)): add m.prefix unless axis
+after:  same positions found by a character scan
+```
+
+Target: CPU and wall down about 4% on `soap_xpath_ns`. RSS flat. Guards: fingerprints. Equivalence: 3M generated XPath strings against the old regex compiled the same way (`tmp/climb/fuzz/xpath_prefix_fuzz.cpp`): 0 mismatches. Plus `xml_detect_prefixes` over 500k hash-generated XPaths in SQL: identical.
+
+Run `tmp/climb/runs/c14`, 8 samples per arm, against C13. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `stream/soap_xpath_ns` | 0.213→0.204 -4.1%* | 1.467→1.423 -3.0%* | -1.1% | -5.6%* |
+| `scalar/extract_text_xpaths` | +5.3%* | -0.8% | -0.1% | -5.3% |
+| `scalar/extract_elements_attributes` | +0.1% | -0.0% | +1.9% | -1.5% |
+
+The `extract_text_xpaths` wall star came with flat CPU and fewer instructions, so it was re-run alone (`tmp/climb/runs/c14-confirm`, 8 samples per arm): wall -2.1% p=0.49, CPU +1.2% p=0.36. No regression. Accepted on the target, within the 4.5% bound.
+
 ## Where It Stands
 
 (pending)

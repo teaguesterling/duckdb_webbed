@@ -17,7 +17,6 @@
 #include <functional>
 #include <map>
 #include <mutex>
-#include <regex>
 #include <set>
 #include <unordered_set>
 
@@ -3142,29 +3141,53 @@ std::string XMLUtils::HTMLEscape(const std::string &text) {
 std::set<std::string> DetectXPathPrefixes(const std::string &xpath) {
 	std::set<std::string> prefixes;
 
-	// Regex pattern to match namespace prefixes in XPath
-	// Matches: prefix:name where prefix is NCName (valid XML name without colon)
-	// NCName pattern: [A-Za-z_][A-Za-z0-9._-]*
-	// We look for prefix: followed by a valid name character (not ::)
-	static const std::regex prefix_pattern(
-	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))", std::regex::optimize);
-
 	// XPath axes to exclude (these use :: not single :)
 	static const std::set<std::string> xpath_axes = {
 	    "ancestor",  "ancestor-or-self",  "attribute", "child",  "descendant", "descendant-or-self",
 	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
 	    "self"};
 
-	std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
-	std::sregex_iterator end;
+	// Finds `prefix:name` at the start or after one of / [ ( @ , |, where prefix is
+	// [A-Za-z_][A-Za-z0-9._-]* and name starts with [A-Za-z_*] (so `axis::` never matches). Each
+	// match consumes its name, and scanning resumes after it.
+	auto is_name_start = [](char c) {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+	};
+	auto is_name_char = [&](char c) {
+		return is_name_start(c) || (c >= '0' && c <= '9') || c == '.' || c == '-';
+	};
+	auto is_delimiter = [](char c) {
+		return c == '/' || c == '[' || c == '(' || c == '@' || c == ',' || c == '|';
+	};
 
-	while (iter != end) {
-		std::string prefix = (*iter)[1].str();
-		// Don't include XPath axis specifiers
-		if (xpath_axes.find(prefix) == xpath_axes.end()) {
-			prefixes.insert(prefix);
+	const size_t n = xpath.size();
+	size_t i = 0;
+	while (i < n) {
+		size_t name_start;
+		if (i == 0 && is_name_start(xpath[0])) {
+			name_start = 0;
+		} else if (is_delimiter(xpath[i]) && i + 1 < n && is_name_start(xpath[i + 1])) {
+			name_start = i + 1;
+		} else {
+			i++;
+			continue;
 		}
-		++iter;
+		size_t colon = name_start + 1;
+		while (colon < n && is_name_char(xpath[colon])) {
+			colon++;
+		}
+		if (colon + 1 < n && xpath[colon] == ':' && (is_name_start(xpath[colon + 1]) || xpath[colon + 1] == '*')) {
+			std::string prefix = xpath.substr(name_start, colon - name_start);
+			if (xpath_axes.find(prefix) == xpath_axes.end()) {
+				prefixes.insert(std::move(prefix));
+			}
+			i = colon + 2;
+			while (i < n && is_name_char(xpath[i])) {
+				i++;
+			}
+			continue;
+		}
+		i++;
 	}
 
 	return prefixes;
