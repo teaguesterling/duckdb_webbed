@@ -242,7 +242,8 @@ public:
 	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
 	                                         const LogicalType &target_type, const XMLSchemaOptions &options,
 	                                         const std::string &extra_ns_decls = "",
-	                                         const std::string &extra_attrs = "");
+	                                         const std::string &extra_attrs = "",
+	                                         const std::string &datetime_format = "");
 
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);

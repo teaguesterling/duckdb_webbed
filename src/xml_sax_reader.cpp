@@ -938,11 +938,13 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 					} else {
 						value = XMLSchemaInference::ConvertToValuePublic(occ.payload, col_type, options, datetime_fmt);
 					}
-				} else if (col_type.id() == LogicalTypeId::VARCHAR) {
-					// Widened to VARCHAR but the source element had element children: surface the fragment.
-					value = Value(occ.payload);
 				} else {
-					value = Value(); // NULL
+					// The element had element children or its own attributes. Reparse it with those
+					// attributes and extract as DOM does: a VARCHAR column gets the serialized children,
+					// and otherwise the text content is converted, so an empty attribute-only element
+					// reads NULL.
+					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, occ.payload, col_type, options,
+					                                                        ns_decls, occ.own_attrs, datetime_fmt);
 				}
 			} else if (col_type.id() == LogicalTypeId::VARCHAR) {
 				// Widened to VARCHAR but the element repeated: concatenate occurrences in document
