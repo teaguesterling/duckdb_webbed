@@ -2432,7 +2432,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
 		else if (xmlChar *attr_value = options.attr_mode == "discard"
 		                                   ? nullptr
-		                                   : xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
+		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			field_value = ConvertToValue(str_value, field_type, options, datetime_format);
 			xmlFree(attr_value);
@@ -2450,7 +2450,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
 						Value element_value = ExtractValueFromNode(child, element_type, options, datetime_format);
 						list_values.push_back(element_value);
 						found = true;
@@ -2466,7 +2466,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
 						field_value = ExtractValueFromNode(child, field_type, options, datetime_format);
 						found = true;
 						break;
