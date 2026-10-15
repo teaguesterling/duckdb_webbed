@@ -851,15 +851,10 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 				                                                        options, ns_decls, occs.front().own_attrs);
 			} else {
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
-				// shell (fields NULL), matching DOM, rather than a fully-NULL struct. An empty
-				// element takes the same path.
-				const std::string &text = occs.front().payload;
-				if (IsNullString(text, options)) {
-					value = Value(col_type); // typed NULL
-				} else {
-					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(text), col_type,
-					                                                        options, ns_decls);
-				}
+				// shell (fields NULL), matching DOM, rather than a fully-NULL struct. An empty element
+				// takes the same path, and nullstr applies to the struct's scalar fields, as in DOM.
+				value = XMLSchemaInference::ExtractValueFromXmlFragment(
+				    col_name, XmlEscapeText(occs.front().payload), col_type, options, ns_decls);
 			}
 		} else if (col_type.id() == LogicalTypeId::LIST) {
 			// LIST column. Iterate the field's occurrences in document order, dispatching each to the
@@ -874,12 +869,11 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 			// own_attrs (pre-escaped, empty unless the element carried attributes) is appended to the
 			// wrapper open tag via the extra_attrs parameter so list items keep their @attr fields.
 			auto append_text = [&](const std::string &item, const std::string &own_attrs) {
-				if (IsNullString(item, options)) {
-					list_vals.push_back(Value(child_type));
-				} else if (child_is_complex) {
+				if (child_is_complex) {
 					// Text inside a complex-typed list: wrap so ExtractValueFromXmlFragment can
-					// surface it as a #text-bearing struct (NULL for missing fields). Escape XML
-					// special chars first so '&', '<', '>' do not break the synthetic wrapper.
+					// surface it as a #text-bearing struct (NULL for missing fields), applying nullstr
+					// to the struct's scalar fields as DOM does. Escape XML special chars first so
+					// '&', '<', '>' do not break the synthetic wrapper.
 					list_vals.push_back(XMLSchemaInference::ExtractValueFromXmlFragment(
 					    col_name, XmlEscapeText(item), child_type, options, ns_decls, own_attrs));
 				} else {
