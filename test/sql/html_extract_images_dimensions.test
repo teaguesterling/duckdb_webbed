@@ -20,6 +20,15 @@ FROM (SELECT unnest(html_extract_images('<img src="d.png" width="auto" height="4
 ----
 d.png	NULL	40
 
+# A value with a numeric prefix but trailing characters comes back NULL for both dimensions
+query III
+SELECT img.src, img.width, img.height
+FROM (SELECT unnest(html_extract_images('<img src="e.png" width="50%" height="12.5"><img src="f.png" width="12.5" height="30px"><img src="g.png" width=" 64 " height="48">')) AS img);
+----
+e.png	NULL	NULL
+f.png	NULL	NULL
+g.png	64	48
+
 # Deterministic across many rows: every missing dimension is NULL
 query II
 SELECT count(*) FILTER (WHERE img.width IS NOT NULL), count(*) FILTER (WHERE img.height IS NOT NULL)

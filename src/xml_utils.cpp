@@ -2662,6 +2662,25 @@ std::vector<HTMLLink> XMLUtils::ExtractHTMLLinks(const std::string &html_str) {
 	return links;
 }
 
+// Parses an img width/height attribute. The whole value, apart from surrounding whitespace, must
+// be an integer: std::stoll alone accepts a prefix, which would read "50%" as 50 and "12.5" as 12.
+static bool ParseHTMLDimension(const xmlChar *raw, int64_t &out) {
+	if (!raw) {
+		return false;
+	}
+	std::string value(reinterpret_cast<const char *>(raw));
+	size_t consumed = 0;
+	try {
+		out = std::stoll(value, &consumed);
+	} catch (...) {
+		return false;
+	}
+	while (consumed < value.size() && std::isspace(static_cast<unsigned char>(value[consumed]))) {
+		consumed++;
+	}
+	return consumed == value.size();
+}
+
 std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) {
 	std::vector<HTMLImage> images;
 
@@ -2702,24 +2721,12 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 				image.title = std::string(reinterpret_cast<const char *>(title.get()));
 			}
 
-			// width/height stay unset (NULL) when absent or not an integer, e.g. width="auto"
+			// width/height stay unset (NULL) when absent or not an integer, e.g. "auto", "50%", "12.5"
 			XMLCharPtr width(xmlGetProp(node, BAD_CAST "width"));
-			if (width) {
-				try {
-					image.width = std::stoll(std::string(reinterpret_cast<const char *>(width.get())));
-					image.has_width = true;
-				} catch (...) {
-				}
-			}
+			image.has_width = ParseHTMLDimension(width.get(), image.width);
 
 			XMLCharPtr height(xmlGetProp(node, BAD_CAST "height"));
-			if (height) {
-				try {
-					image.height = std::stoll(std::string(reinterpret_cast<const char *>(height.get())));
-					image.has_height = true;
-				} catch (...) {
-				}
-			}
+			image.has_height = ParseHTMLDimension(height.get(), image.height);
 
 			image.line_number = node->line;
 			images.push_back(image);
