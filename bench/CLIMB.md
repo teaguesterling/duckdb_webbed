@@ -320,6 +320,31 @@ Run `tmp/climb/runs/c10`, 8 samples per arm, against C9. Guard 56/56, `make test
 
 Rejected: no wall or CPU gain reaches 3%, and RSS regresses. A moved hash map keeps the bucket array it grew to, where the copy was sized to its contents, so the stored inference samples got larger. The copy cost the profile showed was real (instructions fell 5%) but small next to parsing. Patch: `bench/rejected/c10-move-sax-records.patch`.
 
+### Rejected: C12, parse in-memory documents in place
+
+Hypothesis (re-profile `acc8`): every DOM parse feeds libxml2 through `xmlCtxtReadIO` / `htmlReadIO` with a callback that copies the input chunk by chunk. That path exists only because `xmlCtxtReadMemory` takes an `int` length (>2 GiB support, #115). Buffer reads and growth (`XMLInMemoryReaderRead`, `xmlParserInputBufferGrow`, `xmlParserInputGrow`, `xmlParserShrink`, `xmlBufGrow`) are 3.1% of `to_json`, 3.9% of `minify_pretty` and 5.6% of `validity_stats`. libxml2 2.15 parses a memory buffer in place. Using the memory entry points when the size fits an `int`, and the IO reader above that, removes the copying without changing what parses.
+
+```
+before: xmlCtxtReadIO(ctx, copy_chunk_callback, &reader, ...)
+after:  size <= INT_MAX ? xmlCtxtReadMemory(ctx, data, size, ...) : xmlCtxtReadIO(...)   (same for HTML)
+```
+
+Target: CPU down 3 to 6% on the scalar DOM cases (`to_json`, `minify_pretty`, `validity_stats`, `extract_text_xpaths`). RSS flat or down (no input copy). Guards: fingerprints. Equivalence: 400k hash-generated documents mixing BOMs, encoding declarations (ISO-8859-1, UTF-16), NUL bytes, truncation, entities, DOCTYPEs and HTML fragments, plus the 40k C9 documents, through `xml_valid`, `xml_well_formed`, `xml_to_json`, `xml_minify`, `xml_pretty_print`, `xml_extract_text`, `html_extract_text`, `html_unescape`, `html_extract_tables_json` and `html_to_duck_blocks` (`tmp/climb/fuzz/input.sql`): identical.
+
+Run `tmp/climb/runs/c12`, 8 samples per arm, against C9, over the 14 scalar, HTML and `catalog_record_element` cases. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `scalar/to_json` | -3.4%* | -0.4% | +4.0%* | +2.3% |
+| `scalar/validity_stats` | +12.7% | -1.8% | -0.3% | -0.8% |
+| `scalar/minify_pretty` | -0.2% | -1.8% | -0.3% | +0.5% |
+| `scalar/extract_elements_attributes` | +1.0% | -2.1% | -0.5% | -4.3% |
+| geomean (14 cases) | +0.0% | -0.7% | +0.0% | -0.4% |
+
+Rejected: CPU, the target, moves at most 2% and never significantly. The input-buffer frames in the profile were bookkeeping the memory path also does, not copying it avoids. Patch: `bench/rejected/c12-memory-parse-input.patch`.
+
+C11 (one bind parse in `parse_xml`) was set aside without measuring. The bind is 1.4% of `scalar/parse_xml_batch`, so no profile entry backs it.
+
 ## Where It Stands
 
 (pending)
