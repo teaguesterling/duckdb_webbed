@@ -68,9 +68,12 @@ struct SAXRecordAccumulator {
 	// stored on the FieldOccurrence so reconstruction can splice them into the field's open tag.
 	std::string current_field_attrs;
 
-	// Nested XML accumulation (for elements deeper than record_depth+1)
+	// Nested XML accumulation (for elements deeper than record_depth+1). The direct child's own text is
+	// also appended, so a mixed-content child keeps the text between its elements.
 	std::string nested_xml;
-	int nested_depth = 0; // How deep we are in nested elements (0 = direct child of record)
+	int nested_depth = 0;            // How deep we are in nested elements (0 = direct child of record)
+	bool field_has_children = false; // Whether the current direct child has element children
+	std::string field_text_run;      // Direct child text since its last child element, not yet in nested_xml
 
 	// Output signal
 	bool row_ready = false;

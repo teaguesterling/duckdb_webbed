@@ -1,0 +1,52 @@
+# name: test/sql/xml_mixed_content.test
+# description: Mixed content (text next to child elements) infers a leading text_key field holding the element's full text
+# group: [sql]
+
+require webbed
+
+# DBLP titles: plain titles and titles with inline markup both keep their text
+query TT
+SELECT typeof(title), title FROM read_xml('test/xml/mixed_content/dblp.xml', record_element := '//dblp/*');
+----
+STRUCT("#text" VARCHAR, sub INTEGER, tt VARCHAR, i VARCHAR[])	{'#text': 'PRPL: A Database Workload Specification Language, v1.3.', 'sub': NULL, 'tt': NULL, 'i': NULL}
+STRUCT("#text" VARCHAR, sub INTEGER, tt VARCHAR, i VARCHAR[])	{'#text': Codes over Z4., 'sub': 4, 'tt': NULL, 'i': NULL}
+STRUCT("#text" VARCHAR, sub INTEGER, tt VARCHAR, i VARCHAR[])	{'#text': Progress Report on the Disjunctive Deductive Database System dlv., 'sub': NULL, 'tt': dlv, 'i': NULL}
+STRUCT("#text" VARCHAR, sub INTEGER, tt VARCHAR, i VARCHAR[])	{'#text': Experimental Comparison of call string and functional Approaches to Interprocedural Analysis., 'sub': NULL, 'tt': NULL, 'i': [call string, functional]}
+
+# SAX keeps the text between the inline elements
+query T
+SELECT title."#text" FROM read_xml('test/xml/mixed_content/dblp.xml', record_element := 'article', streaming := true, maximum_file_size := 1);
+----
+Codes over Z4.
+Progress Report on the Disjunctive Deductive Database System dlv.
+Experimental Comparison of call string and functional Approaches to Interprocedural Analysis.
+
+# A custom text_key names the field
+query T
+SELECT title FROM read_xml('test/xml/mixed_content/dblp.xml', record_element := 'article', text_key := '_text') LIMIT 1;
+----
+{'_text': Codes over Z4., 'sub': 4, 'tt': NULL, 'i': NULL}
+
+# HTML table cells: plain-text cells keep their text next to cells holding links
+query T
+SELECT td FROM read_html('test/html/mixed_content/table.html', record_element := '//table/tbody/tr');
+----
+[{'#text': '272,665', 'sup': NULL, 'a': NULL}, {'#text': River by, 'sup': NULL, 'a': NULL}]
+[{'#text': 'Value forecast[17]', 'sup': {'a': {'#text': '[17]', 'href': #cite-9}}, 'a': NULL}, {'#text': Zürich, 'sup': NULL, 'a': {'#text': Zürich, 'href': /wiki/Zurich}}]
+
+# Indentation between child elements isn't text, so no text_key field appears
+query T
+SELECT typeof(ctx) FROM read_xml('test/xml/mixed_content/indented.xml', record_element := 'rec');
+----
+STRUCT(a STRUCT(k VARCHAR), b VARCHAR)
+
+# SAX drops that indentation from an XML fragment, as DOM does
+query T
+SELECT ctx::VARCHAR FROM read_xml('test/xml/mixed_content/indented.xml', record_element := 'rec', max_depth := 2, streaming := false);
+----
+<a k="1"/><b>x</b>
+
+query T
+SELECT ctx::VARCHAR FROM read_xml('test/xml/mixed_content/indented.xml', record_element := 'rec', max_depth := 2, streaming := true, maximum_file_size := 1);
+----
+<a k="1"></a><b>x</b>

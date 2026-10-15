@@ -386,6 +386,20 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 	    text, target_type.ToString(), options.sample_size);
 }
 
+// True when text other than whitespace sits directly under the node
+static bool HasDirectText(xmlNodePtr node) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
+			for (const xmlChar *c = child->content; *c; c++) {
+				if (!std::isspace(*c)) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
                                                                   const XMLSchemaOptions &options,
                                                                   const std::vector<std::string> &child_names) {
@@ -491,6 +505,43 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		return scalar_type;
 	}
 
+	// Mixed content: an element with element children whose instances also hold text directly (next to
+	// the children, or alone in other instances). A leading text_key field keeps the element's full text,
+	// which extraction reads with xmlNodeGetContent, so plain-text instances don't read as all-NULL fields.
+	auto add_mixed_text_field = [&](const std::vector<std::string> &child_names, child_list_t<LogicalType> &fields) {
+		std::vector<std::string> samples;
+		bool has_text = false;
+		for (xmlNodePtr instance : column.instances) {
+			if (!HasDirectText(instance)) {
+				continue;
+			}
+			has_text = true;
+			if (samples.size() >= XmlSampleLimit(options)) {
+				break;
+			}
+			xmlChar *content = xmlNodeGetContent(instance);
+			if (content) {
+				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
+				if (!text.empty() && !IsNullString(text, options)) {
+					samples.push_back(text);
+				}
+				xmlFree(content);
+			}
+		}
+		if (!has_text) {
+			return;
+		}
+		for (const auto &name : child_names) {
+			if (StringUtil::CIEquals(name, options.text_key)) {
+				return;
+			}
+		}
+		std::string text_winning_fmt;
+		LogicalType text_type =
+		    samples.empty() ? LogicalType::VARCHAR : InferTypeFromSamples(samples, options, text_winning_fmt);
+		fields.insert(fields.begin(), make_pair(CompatMakeIdentifier(options.text_key), text_type));
+	};
+
 	// Complex element - check depth limit
 	if (remaining_depth <= 0) {
 		// Depth limit reached - return opaque type (XML or HTML)
@@ -585,6 +636,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
+		if (!child_max_counts.empty()) {
+			add_mixed_text_field(ordered_child_names, struct_fields);
+		}
+
 		if (!struct_fields.empty()) {
 			return LogicalType::LIST(LogicalType::STRUCT(struct_fields));
 		}
@@ -648,6 +703,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
 			struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 		}
+
+		add_mixed_text_field(ordered_child_names, struct_fields);
 
 		if (!struct_fields.empty()) {
 			return LogicalType::STRUCT(struct_fields);

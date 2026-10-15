@@ -24,6 +24,8 @@ void SAXRecordAccumulator::Reset() {
 	current_field_attrs.clear();
 	nested_xml.clear();
 	nested_depth = 0;
+	field_has_children = false;
+	field_text_run.clear();
 	row_ready = false;
 	// Note: element_stack, current_depth, record_depth, record_tag, namespace_mode,
 	// namespace_declarations are NOT reset — they persist across records
@@ -154,6 +156,15 @@ static bool MatchesRecordTag(const std::string &element_name, const std::string 
 
 // ─── SAX2 Callbacks ─────────────────────────────────────────────────────────
 
+// Move the direct child's pending text into its fragment. A run of only whitespace is indentation
+// between child elements, which the DOM path drops too.
+static void FlushFieldTextRun(SAXRecordAccumulator &acc) {
+	if (acc.field_text_run.find_first_not_of(" \t\r\n") != std::string::npos) {
+		acc.nested_xml += XmlEscapeText(acc.field_text_run);
+	}
+	acc.field_text_run.clear();
+}
+
 void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI,
                        int nb_namespaces, const xmlChar **namespaces, int nb_attributes, int nb_defaulted,
                        const xmlChar **attributes) {
@@ -229,6 +240,9 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			acc->current_element_name = name;
 			acc->nested_depth = 0;
 			acc->current_field_attrs.clear();
+			acc->nested_xml.clear();
+			acc->field_has_children = false;
+			acc->field_text_run.clear();
 
 			// Serialize this direct child's OWN attributes so they can be spliced into the field
 			// element's open tag during reconstruction (schema inference + row build). Without this an
@@ -255,7 +269,11 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			}
 		} else if (relative_depth > 1) {
 			// Deeper nested element: accumulate raw XML
+			if (relative_depth == 2) {
+				FlushFieldTextRun(*acc);
+			}
 			acc->nested_depth = relative_depth;
+			acc->field_has_children = true;
 			acc->nested_xml += "<" + name;
 
 			// Add attributes to raw XML (escape attribute values)
@@ -305,18 +323,18 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 			}
 		} else if (relative_depth == 1) {
 			// Closing a direct child of the record. The child is captured as a nested-XML fragment when
-			// it has element children (acc->nested_xml) OR carries its own attributes
+			// it has element children (acc->nested_xml, which includes its own text) OR carries its own attributes
 			// (acc->current_field_attrs), so the rich-typing path reconstructs a STRUCT (@attrs plus
 			// #text/children); otherwise it is plain text. own_attrs rides on the occurrence and is
 			// spliced into the reconstructed open tag. Append in close order, capturing document order
 			// across a field's text and XML occurrences.
 			std::string own_attrs = std::move(acc->current_field_attrs);
 			bool has_attrs = !own_attrs.empty();
-			bool is_xml = !acc->nested_xml.empty() || has_attrs;
+			FlushFieldTextRun(*acc);
+			bool is_xml = acc->field_has_children || has_attrs;
 			std::string value;
-			if (!acc->nested_xml.empty()) {
+			if (acc->field_has_children) {
 				value = std::move(acc->nested_xml);
-				acc->nested_xml.clear();
 			} else if (has_attrs) {
 				// Attribute-only (or attribute + text) child: the inner content is the element's text,
 				// escaped so it stays well-formed when wrapped as <field own_attrs>text</field>.
@@ -336,6 +354,9 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 			acc->current_text.clear();
 			acc->current_element_name.clear();
 			acc->current_field_attrs.clear();
+			acc->nested_xml.clear();
+			acc->field_has_children = false;
+			acc->field_text_run.clear();
 			acc->nested_depth = 0;
 		} else {
 			// Closing a deeper nested element: append closing tag to raw XML
@@ -365,8 +386,9 @@ void SAXCharacters(void *ctx, const xmlChar *ch, int len) {
 		// since SAX delivers decoded text but we're reconstructing XML)
 		acc->nested_xml += XmlEscapeText(text);
 	} else if (relative_depth == 1) {
-		// Direct child text: accumulate
+		// Direct child text: accumulate, and keep its place among any element children
 		acc->current_text += text;
+		acc->field_text_run += text;
 	}
 	// relative_depth == 0 means text directly in the record element (whitespace usually), ignore
 }
