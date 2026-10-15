@@ -345,6 +345,30 @@ Rejected: CPU, the target, moves at most 2% and never significantly. The input-b
 
 C11 (one bind parse in `parse_xml`) was set aside without measuring. The bind is 1.4% of `scalar/parse_xml_batch`, so no profile entry backs it.
 
+### Accepted: C13, find simple `record_element` tags by walking the tree
+
+Hypothesis (re-profile `acc8`): `EvalXPathChecked` owns 22.9% of `nested/org_departments` and 23.6% of `nested/org_regions_deep`, all inside `xmlXPathCompiledEval`. A bare `record_element` tag (or `//tag`) is rewritten to `//*[local-name()='tag']`, so libxml2 calls the `local-name()` function, allocating a string object, on every element of the document, at bind and again at scan. A preorder walk from the root element comparing `node->name` yields the same node set in document order. libxml2's descendant axis does not enter unexpanded entity references or the DTD, so elements only nest under elements and the walk recurses over element children alone. A tag holding a quote or NUL still goes to XPath, which rejects it as before.
+
+```
+before: EvalXPath("//*[local-name()='" + tag + "']")
+after:  walk(root): if name == tag: emit; for child element: walk(child)
+```
+
+Target: CPU and wall down 15 to 20% on `org_departments` and `org_regions_deep`, smaller on `catalog_record_element`. RSS flat. Guards: fingerprints. Equivalence: 3000 generated files (nested same-name records, prefixed and default-namespaced elements, entity references whose text holds records, DTDs) read with 13 `record_element` spellings under three option sets, plus the quote error (`tmp/climb/fuzz/rec.sh`), two seeds: identical.
+
+Run `tmp/climb/runs/c13`, 8 samples per arm, against C9. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `nested/org_departments` | 0.622→0.480 -22.9%* | -22.1%* | -3.0% | -26.3%* |
+| `nested/org_regions_deep` | 0.603→0.463 -23.2%* | -23.2%* | -2.4% | -26.7%* |
+| `records/catalog_record_element` | 0.515→0.394 -23.4%* | -23.5%* | -3.7%* | -26.5%* |
+| `manyfiles/catalog_medium` | 0.350→0.271 -22.7%* | -15.6%* | -4.2%* | -22.4%* |
+| `manyfiles/orders_glob` | -19.3% | -14.3%* | -0.6% | -21.7%* |
+| `manyfiles/orders_objects` | -5.2% | -1.2% | -0.2% | -0.7% |
+
+Accepted. The org gains match the 23% bound from the profile. The catalog and glob cases use simple `record_element` tags too and gain the same way. `orders_objects` reads whole documents and has no record lookup.
+
 ## Where It Stands
 
 (pending)

@@ -164,6 +164,62 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 }
 
 // Phase 1: Identify Record Elements
+static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std::vector<xmlNodePtr> &out) {
+	if (xmlStrEqual(node->name, name)) {
+		out.push_back(node);
+	}
+	// Elements only nest inside elements: entity references are left unexpanded, and the XPath
+	// descendant axis does not enter them either.
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollectElementsByLocalName(child, name, out);
+		}
+	}
+}
+
+// Resolve record_element to its nodes in document order. A bare tag, or `//tag`, matches by local
+// name regardless of namespace: the node set of //*[local-name()='tag'], found by walking the tree
+// instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
+// cannot sit inside that XPath literal (a quote or NUL) still goes to XPath, which rejects it.
+static std::vector<xmlNodePtr> FindRecordElements(XMLDocRAII &doc, const std::string &record_element) {
+	auto is_simple = [](const std::string &tag) {
+		return tag.find_first_of("/[@") == std::string::npos;
+	};
+	std::string xpath_expr = record_element;
+	std::string tag;
+	bool simple = false;
+	if (is_simple(record_element)) {
+		tag = record_element;
+		simple = true;
+	} else if (record_element.substr(0, 2) == "//" && is_simple(record_element.substr(2))) {
+		tag = record_element.substr(2);
+		simple = true;
+	}
+	if (simple) {
+		if (tag.find_first_of(std::string("'\0", 2)) == std::string::npos) {
+			std::vector<xmlNodePtr> nodes;
+			xmlNodePtr root = xmlDocGetRootElement(doc.doc);
+			if (root) {
+				CollectElementsByLocalName(root, BAD_CAST tag.c_str(), nodes);
+			}
+			return nodes;
+		}
+		xpath_expr = "//*[local-name()='" + tag + "']";
+	}
+
+	std::vector<xmlNodePtr> nodes;
+	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(doc.xpath_ctx, xpath_expr);
+	if (xpath_obj && xpath_obj->nodesetval) {
+		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+			nodes.push_back(xpath_obj->nodesetval->nodeTab[i]);
+		}
+	}
+	if (xpath_obj) {
+		xmlXPathFreeObject(xpath_obj);
+	}
+	return nodes;
+}
+
 std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
                                                                    const XMLSchemaOptions &options) {
 	std::vector<xmlNodePtr> record_elements;
@@ -181,33 +237,7 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
-		std::string xpath_expr = options.record_element;
-
-		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
-		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
-		    xpath_expr.find('@') == std::string::npos) {
-			// Simple tag name - use local-name() for namespace-agnostic matching
-			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
-		} else if (xpath_expr.substr(0, 2) == "//") {
-			// XPath starting with // - check if it's just a simple tag name after //
-			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
-			    tag_part.find('@') == std::string::npos) {
-				// Simple tag name after // - use local-name()
-				xpath_expr = "//*[local-name()='" + tag_part + "']";
-			}
-		}
-
-		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(doc.xpath_ctx, xpath_expr);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
-			}
-		}
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+		record_elements = FindRecordElements(doc, options.record_element);
 	}
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {
@@ -795,34 +825,7 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
-		std::string xpath_expr = options.record_element;
-
-		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
-		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
-		    xpath_expr.find('@') == std::string::npos) {
-			// Simple tag name - use local-name() for namespace-agnostic matching
-			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
-		} else if (xpath_expr.substr(0, 2) == "//") {
-			// XPath starting with // - check if it's just a simple tag name after //
-			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
-			    tag_part.find('@') == std::string::npos) {
-				// Simple tag name after // - use local-name()
-				xpath_expr = "//*[local-name()='" + tag_part + "']";
-			}
-		}
-
-		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath_expr);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
-			}
-		}
-
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+		record_elements = FindRecordElements(xml_doc, options.record_element);
 	}
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {
