@@ -159,6 +159,31 @@ Run `tmp/climb/runs/c3`, 8 samples per arm, against C2. Guard 56/56, `make test`
 
 Bound: the merge was 71.6% of `large_page_tables` CPU, and CPU fell 68%. Accepted.
 
+### Rejected: C4, parse DOM documents without the shared name dictionary
+
+Hypothesis: every `XMLDocRAII` parse makes the document reference the parser context's name dictionary, then releases it twice (context free, document free). libxml2 2.15 counts dict references under one process-wide mutex, so parallel scalar calls queue on it. `xmlDict*` is 15 to 36% of the scalar profiles, with `__psynch_mutexwait` under `xmlDictReference`/`xmlDictFree` at 10 to 25% (`to_xml_struct` 25%, `extract_text_xpaths` 10%). `XML_PARSE_NODICT` stores names in the document instead, leaving one locked release per parse (the context's) and adding a `strdup` per element and attribute name.
+
+```
+before: xmlCtxtReadIO(ctx, ..., NOERROR | NOWARNING | NONET)
+after:  xmlCtxtReadIO(ctx, ..., NOERROR | NOWARNING | NONET | NODICT)
+```
+
+Target: CPU and wall down on the scalar family, `manyfiles/*_objects` and DOM `read_xml`. Risk: the extra allocations could cost more than the lock on single-threaded or name-heavy documents (`nested/catalog_*`). RSS may rise slightly. Guards: all fingerprints. Nothing in `src/` reads `doc->dict` or compares interned name pointers.
+
+Run `tmp/climb/runs/c4`, full dev set, 8 samples per arm, against C3. Guard 56/56, `make test` passes. Geomean wall +1.2%, CPU +1.2%, RSS +1.2%, instructions +3.2%.
+
+| Scenario | wall | CPU | RSS |
+| --- | ---: | ---: | ---: |
+| `scalar/to_xml_struct` | -16.1%* | -15.1%* | -1.7% |
+| `scalar/minify_pretty` | -4.0%* | -1.1% | -8.5%* |
+| `nested/org_regions_deep` | +12.3%* | +11.9%* | +4.3%* |
+| `nested/org_departments` | +8.8%* | +8.9%* | +4.5%* |
+| `records/events_attr_discard` | +8.8%* | +10.7%* | +6.1%* |
+| `nested/catalog_dom_infer` | +7.2%* | +7.1%* | +7.3%* |
+| `scalar/parse_xml_batch` | +5.9%* | +8.4%* | +3.7%* |
+
+Rejected: starred regressions on every large-DOM case. Per-name `strdup` outweighs the saved lock on documents with many elements, and costs RSS. The lock only dominates on many tiny parses, and `to_xml_struct`'s tiny parses are `IsValidXML` probes that C5 removes outright. Patch: `bench/rejected/c4-nodict.patch`.
+
 ## Where It Stands
 
 (pending)
