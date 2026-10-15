@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CASES_DIR = os.path.join(ROOT, "bench", "cases")
 DATA_ROOT = os.environ.get("BENCH_DATA", os.path.join(ROOT, "tmp", "bench-data"))
 DUCKDB = os.environ.get(
-    "BENCH_DUCKDB", os.path.expanduser("~/.local/share/mise/installs/aqua-duckdb-duckdb/1.5.6/duckdb")
+    "BENCH_DUCKDB", os.path.join(ROOT, "tmp", "climb", "duckdb")
 )
 HYPERFINE = os.environ.get(
     "BENCH_HYPERFINE",
@@ -82,16 +82,16 @@ def parse_arms(specs):
 
 
 def duckdb_argv(ext, case_path):
-    return [DUCKDB, "-unsigned", "-noheader", "-csv", "-cmd", f"LOAD '{ext}'", "-f", case_path]
-
-
-def shell_quote(arg):
-    return "'" + arg.replace("'", "'\"'\"'") + "'"
+    init = os.path.join(os.path.dirname(ext), "init.sql")
+    with open(init, "w") as f:
+        f.write(f"LOAD '{ext}';\n")
+    return [DUCKDB, "-unsigned", "-noheader", "-csv", "-init", init, "-f", case_path]
 
 
 def run(args):
     arms = parse_arms(args.arm)
     cases = find_cases(args.cases, args.split)
+    args.out = os.path.abspath(args.out)
     os.makedirs(args.out, exist_ok=False)
     with open(os.path.join(args.out, "meta.json"), "w") as f:
         json.dump({"arms": dict(arms), "cases": [c for c, _ in cases], "duckdb": DUCKDB}, f, indent=1)
@@ -103,7 +103,7 @@ def run(args):
             order = arms[shift:] + arms[:shift]
             for arm, ext in order:
                 export = os.path.join(args.out, name.replace("/", "__") + f".{arm}.r{rnd}.json")
-                cmd = " ".join(shell_quote(a) for a in duckdb_argv(ext, path))
+                cmd = " ".join(duckdb_argv(ext, path))
                 proc = subprocess.run(
                     [HYPERFINE, "-N", "--runs", str(args.runs), "--warmup", str(args.warmup), "--export-json", export,
                      "--output", "null", "--style", "none", cmd],
