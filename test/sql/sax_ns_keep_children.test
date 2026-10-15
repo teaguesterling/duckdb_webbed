@@ -1,0 +1,32 @@
+# name: test/sql/sax_ns_keep_children.test
+# description: Under namespaces := 'keep', SAX must fill prefixed child columns (dc:creator, content:encoded, media:content) the way DOM does. read_xml names those columns by local name on both paths. Regression for: SAX keyed each child by its prefixed name, so every prefixed column read NULL.
+# group: [sql]
+
+require webbed
+
+query IIII
+SELECT title, creator, encoded, content
+FROM read_xml('test/xml/sax_ns_keep_children.xml', record_element := 'item', namespaces := 'keep')
+ORDER BY title;
+----
+a	ann	<p>hi</p>	{'credit': c1}
+b	bob	plain	{'credit': c2}
+
+query IIII
+SELECT title, creator, encoded, content
+FROM read_xml('test/xml/sax_ns_keep_children.xml', record_element := 'item', namespaces := 'keep',
+  maximum_file_size := 1)
+ORDER BY title;
+----
+a	ann	<p>hi</p>	{'credit': c1}
+b	bob	plain	{'credit': c2}
+
+# An explicit schema names the columns the same way
+query II
+SELECT title, creator
+FROM read_xml('test/xml/sax_ns_keep_children.xml', record_element := 'item', namespaces := 'keep',
+  maximum_file_size := 1, columns := {'title': 'VARCHAR', 'creator': 'VARCHAR'})
+ORDER BY title;
+----
+a	ann
+b	bob

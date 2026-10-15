@@ -1,0 +1,4 @@
+<root>
+  <rec id="1"><name>a</name><owner id="7"><id>8</id><name>x</name></owner><tag k="1">t</tag><flag on="yes"/><v n="1">5</v></rec>
+  <rec id="2"><name>b</name><owner><id>9</id><name>y</name></owner><tag>u</tag><flag/><v>6</v></rec>
+</root>

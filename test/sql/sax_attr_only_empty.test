@@ -1,0 +1,32 @@
+# name: test/sql/sax_attr_only_empty.test
+# description: SAX must extract an element that carries its own attributes the way DOM does when the column is scalar or XML. Regression for: SAX returned the raw captured payload, so an empty attribute-only element (Atom <link rel href/>) inferred as XML read '' where DOM reads NULL, a VARCHAR kept its escaped text, and a typed column read NULL.
+# group: [sql]
+
+require webbed
+
+query TTT
+SELECT title, typeof(link), link IS NULL
+FROM read_xml('test/xml/sax_attr_only_empty.xml', record_element := 'entry') ORDER BY title;
+----
+a	XML	true
+b	XML	true
+
+query TTT
+SELECT title, typeof(link), link IS NULL
+FROM read_xml('test/xml/sax_attr_only_empty.xml', record_element := 'entry', maximum_file_size := 1) ORDER BY title;
+----
+a	XML	true
+b	XML	true
+
+# Attribute-bearing elements in scalar columns read their text content, converted to the column type
+query III
+SELECT n, s, d FROM read_xml('test/xml/sax_attr_scalar.xml', record_element := 'rec',
+  columns := {'n': 'INTEGER', 's': 'VARCHAR', 'd': 'DATE'});
+----
+5	x & y	2024-01-02
+
+query III
+SELECT n, s, d FROM read_xml('test/xml/sax_attr_scalar.xml', record_element := 'rec', maximum_file_size := 1,
+  columns := {'n': 'INTEGER', 's': 'VARCHAR', 'd': 'DATE'});
+----
+5	x & y	2024-01-02

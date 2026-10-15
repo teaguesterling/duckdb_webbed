@@ -1,0 +1,96 @@
+# name: test/sql/sax_empty_struct_parity.test
+# description: SAX streaming must read an empty element (<owner/>) under a STRUCT or LIST target the way DOM does: a struct of NULL fields, or an empty inner list. Regression for: SAX returned NULL for the whole value. A scalar target still reads NULL on both paths, and an absent element stays NULL.
+# group: [sql]
+
+require webbed
+
+# DOM baseline.
+query IIIII
+SELECT id, owner, tag, grid, note
+FROM read_xml('test/xml/sax_empty_struct_parity.xml', record_element := 'rec',
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(name VARCHAR)', 'tag': 'STRUCT(k VARCHAR)[]',
+              'grid': 'VARCHAR[][]', 'note': 'VARCHAR'})
+ORDER BY id;
+----
+1	{'name': NULL}	[{'k': NULL}]	[[]]	NULL
+2	{'name': ann}	[{'k': x}, {'k': NULL}]	[[a]]	hi
+3	NULL	NULL	NULL	NULL
+
+# SAX streaming (maximum_file_size := 1 forces streaming) must match the DOM baseline.
+query IIIII
+SELECT id, owner, tag, grid, note
+FROM read_xml('test/xml/sax_empty_struct_parity.xml', record_element := 'rec',
+  streaming := true, maximum_file_size := 1,
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(name VARCHAR)', 'tag': 'STRUCT(k VARCHAR)[]',
+              'grid': 'VARCHAR[][]', 'note': 'VARCHAR'})
+ORDER BY id;
+----
+1	{'name': NULL}	[{'k': NULL}]	[[]]	NULL
+2	{'name': ann}	[{'k': x}, {'k': NULL}]	[[a]]	hi
+3	NULL	NULL	NULL	NULL
+
+# The empty STRUCT is a non-NULL value whose fields are NULL.
+query II
+SELECT owner IS NULL, owner.name IS NULL
+FROM read_xml('test/xml/sax_empty_struct_parity.xml', record_element := 'rec',
+  streaming := true, maximum_file_size := 1,
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(name VARCHAR)'})
+WHERE id = 1;
+----
+false	true
+
+# An empty element with its own attributes yields those attributes as fields on both paths.
+query I
+SELECT owner
+FROM read_xml('test/xml/sax_empty_struct_attr.xml', record_element := 'rec',
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(id VARCHAR, name VARCHAR)'});
+----
+{'id': 7, 'name': NULL}
+
+query I
+SELECT owner
+FROM read_xml('test/xml/sax_empty_struct_attr.xml', record_element := 'rec',
+  streaming := true, maximum_file_size := 1,
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(id VARCHAR, name VARCHAR)'});
+----
+{'id': 7, 'name': NULL}
+
+# nullstr applies to scalar values, including a struct's #text field, never to the struct or a
+# STRUCT list item itself. Under both paths a matching element yields a struct of NULL fields.
+query IIII
+SELECT id, owner, tag, v
+FROM read_xml('test/xml/sax_empty_struct_nullstr.xml', record_element := 'rec', nullstr := ['', 'NULL'],
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(name VARCHAR)', 'tag': 'STRUCT(k VARCHAR)[]', 'v': 'VARCHAR'})
+ORDER BY id;
+----
+1	{'name': NULL}	[{'k': x}, {'k': NULL}]	NULL
+2	{'name': NULL}	[{'k': NULL}]	NULL
+
+query IIII
+SELECT id, owner, tag, v
+FROM read_xml('test/xml/sax_empty_struct_nullstr.xml', record_element := 'rec', nullstr := ['', 'NULL'],
+  streaming := true, maximum_file_size := 1,
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(name VARCHAR)', 'tag': 'STRUCT(k VARCHAR)[]', 'v': 'VARCHAR'})
+ORDER BY id;
+----
+1	{'name': NULL}	[{'k': x}, {'k': NULL}]	NULL
+2	{'name': NULL}	[{'k': NULL}]	NULL
+
+query II
+SELECT id, owner
+FROM read_xml('test/xml/sax_empty_struct_nullstr.xml', record_element := 'rec', nullstr := 'NULL',
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT("#text" VARCHAR)'})
+ORDER BY id;
+----
+1	{'#text': NULL}
+2	{'#text': NULL}
+
+query II
+SELECT id, owner
+FROM read_xml('test/xml/sax_empty_struct_nullstr.xml', record_element := 'rec', nullstr := 'NULL',
+  streaming := true, maximum_file_size := 1,
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT("#text" VARCHAR)'})
+ORDER BY id;
+----
+1	{'#text': NULL}
+2	{'#text': NULL}

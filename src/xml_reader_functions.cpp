@@ -938,6 +938,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					lstate.sax_ctx->stop_parsing = false;
 					lstate.sax_ctx->completed_records = &lstate.sax_pending_records;
 					lstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
+					lstate.sax_ctx->discard_attrs = (schema_options.attr_mode == "discard");
 
 					lstate.sax_handler = SAXStreamReader::CreateSAXHandler();
 					// Fail-closed entity loader: refuse external DTD/entity fetch during streaming parse.

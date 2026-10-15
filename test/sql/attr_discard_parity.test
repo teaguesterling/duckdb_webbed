@@ -1,0 +1,41 @@
+# name: test/sql/attr_discard_parity.test
+# description: attr_mode := 'discard' ignores attributes on both read paths. Explicit columns and STRUCT fields that share a name with an attribute read only from elements, so <owner id="7"><id>8</id></owner> gives owner.id = 8. Regression for: DOM extraction read attributes under discard, and the streaming scan never set discard_attrs, so both paths filled these from attributes.
+# group: [sql]
+
+require webbed
+
+# DOM, explicit columns
+query IIIIII
+SELECT * FROM read_xml('test/xml/attr_discard_parity.xml', record_element := 'rec', attr_mode := 'discard', columns := {'id': 'INTEGER', 'name': 'VARCHAR', 'owner': 'STRUCT(id INTEGER, name VARCHAR)', 'tag': 'STRUCT(k VARCHAR, "#text" VARCHAR)', 'flag': 'STRUCT("on" VARCHAR)', 'v': 'INTEGER'}) ORDER BY name;
+----
+NULL	a	{'id': 8, 'name': x}	{'k': NULL, '#text': t}	{'on': NULL}	5
+NULL	b	{'id': 9, 'name': y}	{'k': NULL, '#text': u}	{'on': NULL}	6
+
+# SAX, explicit columns
+query IIIIII
+SELECT * FROM read_xml('test/xml/attr_discard_parity.xml', record_element := 'rec', attr_mode := 'discard', maximum_file_size := 1, columns := {'id': 'INTEGER', 'name': 'VARCHAR', 'owner': 'STRUCT(id INTEGER, name VARCHAR)', 'tag': 'STRUCT(k VARCHAR, "#text" VARCHAR)', 'flag': 'STRUCT("on" VARCHAR)', 'v': 'INTEGER'}) ORDER BY name;
+----
+NULL	a	{'id': 8, 'name': x}	{'k': NULL, '#text': t}	{'on': NULL}	5
+NULL	b	{'id': 9, 'name': y}	{'k': NULL, '#text': u}	{'on': NULL}	6
+
+# DOM, inferred schema has no attribute columns or fields
+query IIIII
+SELECT * FROM read_xml('test/xml/attr_discard_parity.xml', record_element := 'rec', attr_mode := 'discard') ORDER BY name;
+----
+a	{'id': 8, 'name': x}	t	NULL	5
+b	{'id': 9, 'name': y}	u	NULL	6
+
+# SAX, inferred schema
+query IIIII
+SELECT * FROM read_xml('test/xml/attr_discard_parity.xml', record_element := 'rec', attr_mode := 'discard', maximum_file_size := 1) ORDER BY name;
+----
+a	{'id': 8, 'name': x}	t	NULL	5
+b	{'id': 9, 'name': y}	u	NULL	6
+
+# Without discard, attributes still fill matching fields
+query II
+SELECT id, owner FROM read_xml('test/xml/attr_discard_parity.xml', record_element := 'rec',
+  columns := {'id': 'INTEGER', 'owner': 'STRUCT(id INTEGER, name VARCHAR)'}) ORDER BY id;
+----
+1	{'id': 7, 'name': x}
+2	{'id': 9, 'name': y}

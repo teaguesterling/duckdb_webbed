@@ -1787,9 +1787,11 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 
 		Value value;
 
-		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode)
+		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode). attr_mode='discard'
+		// ignores attributes, so a column can only come from an element.
 		std::string attr_name = AttributeNameFromColumn(column_name, options);
-		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+		xmlChar *attr_value =
+		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
 			value = ConvertToValue(str_value, column_type, options, col_fmt);
@@ -2095,12 +2097,8 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
                                                       const LogicalType &target_type, const XMLSchemaOptions &options,
                                                       const std::string &extra_ns_decls,
-                                                      const std::string &extra_attrs) {
-	// Empty inner content yields NULL only when the element also has no own attributes; an
-	// attribute-only element (inner_xml empty, extra_attrs set) must still parse to a non-NULL STRUCT.
-	if (inner_xml.empty() && extra_attrs.empty()) {
-		return Value(target_type);
-	}
+                                                      const std::string &extra_attrs,
+                                                      const std::string &datetime_format) {
 	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
 	// receives a node whose ->children are the original siblings. extra_ns_decls injects any xmlns:
 	// declarations the fragment's prefixed names depend on (the originating decls are not part of the
@@ -2126,7 +2124,7 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
 	if (!root) {
 		return Value(target_type);
 	}
-	return ExtractValueFromNode(root, target_type, options);
+	return ExtractValueFromNode(root, target_type, options, datetime_format);
 }
 
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
@@ -2222,8 +2220,10 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlFree(content);
 			}
 		}
-		// Check if this field is an attribute on the node itself
-		else if (xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
+		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
+		else if (xmlChar *attr_value = options.attr_mode == "discard"
+		                                   ? nullptr
+		                                   : xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			field_value = ConvertToValue(str_value, field_type, options, datetime_format);
 			xmlFree(attr_value);

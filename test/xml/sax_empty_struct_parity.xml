@@ -1,0 +1,20 @@
+<root>
+  <rec>
+    <id>1</id>
+    <owner/>
+    <tag/>
+    <grid/>
+    <note/>
+  </rec>
+  <rec>
+    <id>2</id>
+    <owner><name>ann</name></owner>
+    <tag><k>x</k></tag>
+    <tag/>
+    <grid><v>a</v></grid>
+    <note>hi</note>
+  </rec>
+  <rec>
+    <id>3</id>
+  </rec>
+</root>
