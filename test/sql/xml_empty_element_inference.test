@@ -1,0 +1,175 @@
+# name: test/sql/xml_empty_element_inference.test
+# description: An empty element's type is unknown, so it takes the type inferred elsewhere instead of collapsing the column to VARCHAR
+# group: [sql]
+
+require webbed
+
+# A STRUCT in one file and <sharedTo/> in another stays a STRUCT
+query ITT
+SELECT fullName, typeof(sharedTo), sharedTo
+FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView', union_by_name=true)
+ORDER BY fullName;
+----
+a	STRUCT("group" VARCHAR, "role" VARCHAR)	{'group': Admins, 'role': CEO}
+b	STRUCT("group" VARCHAR, "role" VARCHAR)	{'group': NULL, 'role': NULL}
+
+# A LIST<STRUCT> in one file and <c/> in another stays a LIST<STRUCT>, keeping every element
+query TT
+SELECT typeof(s), s
+FROM read_xml('test/xml/type_fidelity/list_empty/*.xml', record_element='r', union_by_name=true, filename=true)
+ORDER BY filename;
+----
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': a}, {'i': b}]}
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': NULL}]}
+
+# Same with force_list: the forced singleton is a list of unknown elements, not LIST<VARCHAR>
+query TT
+SELECT typeof(s), s
+FROM read_xml('test/xml/type_fidelity/list_empty/*.xml', record_element='r', union_by_name=true, force_list=['c'], filename=true)
+ORDER BY filename;
+----
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': a}, {'i': b}]}
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': NULL}]}
+
+# The empty file first: the unknown type waits for the merge instead of locking in VARCHAR
+query TT
+SELECT typeof(sharedTo), sharedTo
+FROM read_xml(['test/xml/type_fidelity/struct_empty/b.xml', 'test/xml/type_fidelity/struct_empty/a.xml'], record_element='ListView', union_by_name=true, streaming=false);
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)	{'group': NULL, 'role': NULL}
+STRUCT("group" VARCHAR, "role" VARCHAR)	{'group': Admins, 'role': CEO}
+
+query TT
+SELECT typeof(s), s
+FROM read_xml(['test/xml/type_fidelity/list_empty/2.xml', 'test/xml/type_fidelity/list_empty/1.xml'], record_element='r', union_by_name=true, force_list=['c'], streaming=false);
+----
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': NULL}]}
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': a}, {'i': b}]}
+
+# SAX inference (streaming with files over maximum_file_size), both file orders
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml(['test/xml/type_fidelity/struct_empty/b.xml', 'test/xml/type_fidelity/struct_empty/a.xml'], record_element='ListView', union_by_name=true, streaming=true, maximum_file_size=1);
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)
+
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml(['test/xml/type_fidelity/struct_empty/a.xml', 'test/xml/type_fidelity/struct_empty/b.xml'], record_element='ListView', union_by_name=true, streaming=true, maximum_file_size=1);
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)
+
+query TT
+SELECT typeof(s), s
+FROM read_xml(['test/xml/type_fidelity/list_empty/2.xml', 'test/xml/type_fidelity/list_empty/1.xml'], record_element='r', union_by_name=true, force_list=['c'], streaming=true, maximum_file_size=1);
+----
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': NULL}]}
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': a}, {'i': b}]}
+
+query TT
+SELECT typeof(s), s
+FROM read_xml(['test/xml/type_fidelity/list_empty/1.xml', 'test/xml/type_fidelity/list_empty/2.xml'], record_element='r', union_by_name=true, streaming=true, maximum_file_size=1);
+----
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': a}, {'i': b}]}
+STRUCT(c STRUCT(i VARCHAR)[])	{'c': [{'i': NULL}]}
+
+# A nested child that is empty in every instance of a single file resolves to VARCHAR
+query TT
+SELECT typeof(info), info FROM read_xml('test/xml/type_fidelity/nested_empty/one.xml', record_element='rec');
+----
+STRUCT("name" VARCHAR, note VARCHAR)	{'name': x, 'note': NULL}
+STRUCT("name" VARCHAR, note VARCHAR)	{'name': y, 'note': NULL}
+
+# A column empty in every file resolves to VARCHAR
+query ITT
+SELECT id, typeof(gone), gone
+FROM read_xml('test/xml/type_fidelity/all_empty/*.xml', record_element='rec', union_by_name=true)
+ORDER BY id;
+----
+1	VARCHAR	NULL
+2	VARCHAR	NULL
+
+# Without union_by_name, the sampled files still merge the empty element away
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView');
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)
+
+# empty_elements := 'object' is the same as the default 'null'
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView', union_by_name=true, empty_elements='object');
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)
+
+# empty_elements := 'string' treats an empty element as a string, collapsing the column to VARCHAR
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView', union_by_name=true, empty_elements='string');
+----
+VARCHAR
+
+# A NULL empty_elements uses the default
+query T
+SELECT DISTINCT typeof(sharedTo)
+FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView', union_by_name=true, empty_elements=NULL);
+----
+STRUCT("group" VARCHAR, "role" VARCHAR)
+
+statement error
+SELECT * FROM read_xml('test/xml/type_fidelity/struct_empty/*.xml', record_element='ListView', empty_elements='nothing');
+----
+"empty_elements" parameter must be 'null', 'object' or 'string'
+
+# parse_xml goes through the same inference
+query T
+SELECT typeof(info) FROM parse_xml('<root><rec><info/></rec><rec><info/></rec></root>', record_element='rec') LIMIT 1;
+----
+VARCHAR
+
+# A file where the element is only empty keeps the date format the next file inferred.
+# 14/10/2026 makes file 2 day-first, so 01/02/2026 is 1 February.
+query T
+SELECT d FROM read_xml('test/xml/type_fidelity/empty_then_date/*.xml', record_element='rec', union_by_name=true)
+WHERE d IS NOT NULL ORDER BY d;
+----
+2026-02-01
+2026-10-14
+
+# The same holds when the empty side is a list: forced, repeated, and in either file order
+query T
+SELECT d FROM read_xml(['test/xml/type_fidelity/empty_then_date/1.xml', 'test/xml/type_fidelity/empty_then_date/2.xml'], record_element='rec', union_by_name=true, force_list=['d'])
+WHERE d[1] IS NOT NULL ORDER BY d;
+----
+[2026-02-01]
+[2026-10-14]
+
+query T
+SELECT d FROM read_xml(['test/xml/type_fidelity/empty_then_date/2.xml', 'test/xml/type_fidelity/empty_then_date/1.xml'], record_element='rec', union_by_name=true, force_list=['d'])
+WHERE d[1] IS NOT NULL ORDER BY d;
+----
+[2026-02-01]
+[2026-10-14]
+
+query T
+SELECT d FROM read_xml(['test/xml/type_fidelity/empty_list_then_date/1.xml', 'test/xml/type_fidelity/empty_list_then_date/2.xml'], record_element='rec', union_by_name=true)
+WHERE d[1] IS NOT NULL ORDER BY d;
+----
+[2026-02-01]
+[2026-10-14]
+
+query T
+SELECT d FROM read_xml(['test/xml/type_fidelity/empty_list_then_date/2.xml', 'test/xml/type_fidelity/empty_list_then_date/1.xml'], record_element='rec', union_by_name=true)
+WHERE d[1] IS NOT NULL ORDER BY d;
+----
+[2026-02-01]
+[2026-10-14]
+
+# SAX with sample_size := -1 verifies the whole file: content past a sample of empty elements
+# widens the column to VARCHAR, so it doesn't merge as the other file's INTEGER
+query TT
+SELECT typeof(amount), list(amount ORDER BY amount) FROM read_xml('test/xml/type_fidelity/empty_out_of_sample/*.xml', record_element='r', union_by_name=true, sample_size=-1, streaming=true, maximum_file_size=1)
+WHERE amount IS NOT NULL GROUP BY ALL;
+----
+VARCHAR	[5, oops]

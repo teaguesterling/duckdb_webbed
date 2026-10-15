@@ -176,9 +176,15 @@ struct ColumnAnalysis {
 // Core schema inference engine
 class XMLSchemaInference {
 public:
-	// Main inference function
+	// Main inference function. An element empty in every instance types as VARCHAR.
 	static std::vector<XMLColumnInfo> InferSchema(const std::string &xml_content,
 	                                              const XMLSchemaOptions &options = XMLSchemaOptions {});
+
+	// Inference for a schema that will be merged with other files' schemas. An element empty in
+	// every instance keeps SQLNULL so the merge can take its type from another file. Pass the merged
+	// types through ResolveUnknownTypes before using them.
+	static std::vector<XMLColumnInfo> InferSchemaForMerge(const std::string &xml_content,
+	                                                      const XMLSchemaOptions &options);
 
 	// Extract structured data according to inferred schema
 	static std::vector<std::vector<Value>> ExtractData(const std::string &xml_content,
@@ -259,7 +265,16 @@ public:
 	// LogicalType::ForceMaxLogicalType but only accepts the candidate when both inputs have a
 	// valid implicit cast path to it (via CastRules::ImplicitCast); otherwise falls back to
 	// VARCHAR so textual data is preserved.
-	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b);
+	// SQLNULL is the inferred type of an element that is empty in every instance (no text, children
+	// or attributes) and merges as the identity.
+	// A scalar merged with a STRUCT that has a text_key field (an element seen as plain text in one
+	// file and as text plus attributes in another) widens into that field.
+	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b, const std::string &text_key);
+
+	// Replace SQLNULL left over after merging (an element empty in every file) with VARCHAR,
+	// including inside nested types.
+	static LogicalType ResolveUnknownTypes(const LogicalType &type);
+	static void ResolveUnknownTypes(std::vector<XMLColumnInfo> &columns);
 
 private:
 	// 3-phase schema inference helpers
@@ -287,6 +302,12 @@ private:
 	// first-seen document order. Ensures optional fields absent from the first instance are included.
 	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
 	                                     std::vector<std::string> &result);
+
+	// Attribute names across all instances in first-seen order, empty under attr_mode 'discard'. A name
+	// already taken by a child element is skipped, since a STRUCT can't hold two fields with one name.
+	static std::vector<std::string> CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
+	                                                      const XMLSchemaOptions &options,
+	                                                      const std::vector<std::string> &child_names);
 
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 

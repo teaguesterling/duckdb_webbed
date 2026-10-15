@@ -5,6 +5,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
@@ -73,9 +74,16 @@ void XMLSchemaInference::CollectChildNamesInOrder(const std::vector<xmlNodePtr> 
 	}
 }
 
-// NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
                                                            const XMLSchemaOptions &options) {
+	auto columns = InferSchemaForMerge(xml_content, options);
+	ResolveUnknownTypes(columns);
+	return columns;
+}
+
+// NEW: Main InferSchema function using 3-phase approach
+std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::string &xml_content,
+                                                                   const XMLSchemaOptions &options) {
 	std::vector<XMLColumnInfo> columns;
 
 	// Parse document using appropriate parser based on opaque type name
@@ -378,6 +386,45 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 	    text, target_type.ToString(), options.sample_size);
 }
 
+// True when text other than whitespace sits directly under the node
+static bool HasDirectText(xmlNodePtr node) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
+			for (const xmlChar *c = child->content; *c; c++) {
+				if (!std::isspace(*c)) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
+                                                                  const XMLSchemaOptions &options,
+                                                                  const std::vector<std::string> &child_names) {
+	std::vector<std::string> names;
+	if (options.attr_mode == "discard") {
+		return names;
+	}
+	case_insensitive_set_t seen(child_names.begin(), child_names.end());
+	for (xmlNodePtr instance : instances) {
+		for (xmlAttrPtr attr = instance->properties; attr; attr = attr->next) {
+			if (!attr->name) {
+				continue;
+			}
+			std::string attr_name((const char *)attr->name);
+			if (options.namespaces == "strip") {
+				attr_name = StripNamespacePrefix(attr_name);
+			}
+			if (seen.insert(attr_name).second) {
+				names.push_back(attr_name);
+			}
+		}
+	}
+	return names;
+}
+
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
                                                 const XMLSchemaOptions &options, std::string &winning_datetime_format) {
 	winning_datetime_format.clear();
@@ -444,13 +491,56 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
-		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_datetime_format);
+		// Every instance is empty (no text, children or attributes), so the element's type is unknown.
+		// SQLNULL lets MergeXMLColumnType adopt the type another file or sibling inferred, instead of
+		// a VARCHAR that would collapse a STRUCT or LIST seen elsewhere. empty_elements := 'string'
+		// keeps the old behavior of treating an empty element as a string.
+		bool no_evidence = text_samples.empty() && options.empty_elements != "string";
+		LogicalType scalar_type = no_evidence ? LogicalType::SQLNULL
+		                                      : InferTypeFromSamples(sample_values, options, winning_datetime_format);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
 		}
 		return scalar_type;
 	}
+
+	// Mixed content: an element with element children whose instances also hold text directly (next to
+	// the children, or alone in other instances). A leading text_key field keeps the element's full text,
+	// which extraction reads with xmlNodeGetContent, so plain-text instances don't read as all-NULL fields.
+	auto add_mixed_text_field = [&](const std::vector<std::string> &child_names, child_list_t<LogicalType> &fields) {
+		std::vector<std::string> samples;
+		bool has_text = false;
+		for (xmlNodePtr instance : column.instances) {
+			if (!HasDirectText(instance)) {
+				continue;
+			}
+			has_text = true;
+			if (samples.size() >= XmlSampleLimit(options)) {
+				break;
+			}
+			xmlChar *content = xmlNodeGetContent(instance);
+			if (content) {
+				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
+				if (!text.empty() && !IsNullString(text, options)) {
+					samples.push_back(text);
+				}
+				xmlFree(content);
+			}
+		}
+		if (!has_text) {
+			return;
+		}
+		for (const auto &name : child_names) {
+			if (StringUtil::CIEquals(name, options.text_key)) {
+				return;
+			}
+		}
+		std::string text_winning_fmt;
+		LogicalType text_type =
+		    samples.empty() ? LogicalType::VARCHAR : InferTypeFromSamples(samples, options, text_winning_fmt);
+		fields.insert(fields.begin(), make_pair(CompatMakeIdentifier(options.text_key), text_type));
+	};
 
 	// Complex element - check depth limit
 	if (remaining_depth <= 0) {
@@ -464,8 +554,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	// Column repeats in a record OR forced to be list → LIST type
 	if (column.repeats_in_record || force_as_list) {
 		// Analyze the structure across ALL instances to determine element type
-		xmlNodePtr first = column.instances[0];
-
 		// Check what child elements exist across ALL instances and track max count per record
 		std::unordered_map<std::string, int> child_max_counts;
 		for (xmlNodePtr instance : column.instances) {
@@ -487,20 +575,14 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// Build STRUCT type: first attributes, then child elements
 		child_list_t<LogicalType> struct_fields;
+		// Iterate over children across ALL instances in document order so that optional
+		// fields absent from the first occurrence are still included in the struct.
+		std::vector<std::string> ordered_child_names;
+		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
 
-		// 1. Add attributes as STRUCT fields (unless we're discarding them)
-		if (options.attr_mode != "discard" && first->properties != nullptr) {
-			for (xmlAttrPtr attr = first->properties; attr; attr = attr->next) {
-				if (attr->name) {
-					std::string attr_name((const char *)attr->name);
-					// Strip namespace prefix if configured
-					if (options.namespaces == "strip") {
-						attr_name = StripNamespacePrefix(attr_name);
-					}
-					// Attributes are always VARCHAR
-					struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
-				}
-			}
+		// 1. Add attributes from every instance as VARCHAR STRUCT fields (unless we're discarding them)
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 		}
 
 		// 2. If no child elements but has text content, add #text field with inferred type
@@ -531,10 +613,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
-			// Iterate over children across ALL instances in document order so that optional
-			// fields absent from the first occurrence are still included in the struct.
-			std::vector<std::string> ordered_child_names;
-			CollectChildNamesInOrder(column.instances, options, ordered_child_names);
 			for (const std::string &child_name : ordered_child_names) {
 				// Create a ColumnAnalysis for this nested child
 				ColumnAnalysis nested_col(child_name, false);
@@ -558,6 +636,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
+		if (!child_max_counts.empty()) {
+			add_mixed_text_field(ordered_child_names, struct_fields);
+		}
+
 		if (!struct_fields.empty()) {
 			return LogicalType::LIST(LogicalType::STRUCT(struct_fields));
 		}
@@ -568,7 +650,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Single complex element per record → could be STRUCT
 	// Analyze children across ALL instances
-	xmlNodePtr first = column.instances[0];
 	std::unordered_map<std::string, int> child_max_counts;
 
 	// Check what child elements exist across ALL instances and track max count per record
@@ -597,6 +678,12 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		// fields absent from the first occurrence are still included in the struct.
 		std::vector<std::string> ordered_child_names;
 		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+
+		// Attributes come first as VARCHAR fields, as in the repeated-element branch
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
+		}
+
 		for (const std::string &child_name : ordered_child_names) {
 			// Create a ColumnAnalysis for this nested child
 			ColumnAnalysis nested_col(child_name, false);
@@ -616,6 +703,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			LogicalType child_type = InferColumnType(nested_col, remaining_depth - 1, options, nested_winning_fmt2);
 			struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 		}
+
+		add_mixed_text_field(ordered_child_names, struct_fields);
 
 		if (!struct_fields.empty()) {
 			return LogicalType::STRUCT(struct_fields);
@@ -656,14 +745,17 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		// If we have attributes discovered across records, build STRUCT with text + attrs
-		if (has_any_attrs && !cross_record_text_samples.empty()) {
+		// If we have attributes discovered across records, build STRUCT with text (when any) + attrs.
+		// An attribute-only element such as <geo lat=".." lon=".."/> gets a STRUCT of its attributes.
+		if (has_any_attrs) {
 			child_list_t<LogicalType> struct_fields;
 
 			// Add text content field with inferred type
-			std::string text_winning_fmt;
-			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
-			struct_fields.push_back(make_pair(CompatMakeIdentifier(options.text_key), text_type));
+			if (!cross_record_text_samples.empty()) {
+				std::string text_winning_fmt;
+				LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
+				struct_fields.push_back(make_pair(CompatMakeIdentifier(options.text_key), text_type));
+			}
 
 			// Add attribute fields (sorted for determinism)
 			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());
@@ -1425,8 +1517,15 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 	return result;
 }
 
-LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b) {
+LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b,
+                                                   const std::string &text_key) {
 	if (a == b) {
+		return a;
+	}
+	if (a.id() == LogicalTypeId::SQLNULL) {
+		return b;
+	}
+	if (b.id() == LogicalTypeId::SQLNULL) {
 		return a;
 	}
 
@@ -1449,7 +1548,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 			if (it == b_index.end()) {
 				merged.emplace_back(ac.first, ac.second);
 			} else {
-				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second));
+				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second, text_key));
 				b_index.erase(it);
 			}
 		}
@@ -1465,7 +1564,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	}
 
 	if (a.id() == LogicalTypeId::LIST && b.id() == LogicalTypeId::LIST) {
-		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b)));
+		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b), text_key));
 	}
 
 	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
@@ -1473,6 +1572,55 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return t.id() == LogicalTypeId::STRUCT || t.id() == LogicalTypeId::LIST || t.id() == LogicalTypeId::MAP ||
 		       t.id() == LogicalTypeId::ARRAY;
 	};
+
+	// Text plus attributes in one file, plain text in another: the scalar is the struct's text field.
+	auto text_field_index = [&](const LogicalType &t) -> optional_idx {
+		if (t.id() != LogicalTypeId::STRUCT) {
+			return optional_idx();
+		}
+		auto &fields = StructType::GetChildTypes(t);
+		for (idx_t i = 0; i < fields.size(); i++) {
+			if (CompatIdentifierName(fields[i].first) == text_key) {
+				return optional_idx(i);
+			}
+		}
+		return optional_idx();
+	};
+	auto is_temporal = [](const LogicalType &t) {
+		switch (t.id()) {
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_SEC:
+		case LogicalTypeId::TIMESTAMP_MS:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return true;
+		default:
+			return false;
+		}
+	};
+	auto widen_text_field = [&](const LogicalType &struct_type, idx_t index, const LogicalType &scalar) {
+		child_list_t<LogicalType> fields = StructType::GetChildTypes(struct_type);
+		auto merged = MergeXMLColumnType(fields[index].second, scalar, text_key);
+		// The two files' dates may use different formats, and the union keeps no format for a field
+		// inside a struct, so a temporal text field stays VARCHAR.
+		fields[index].second = is_temporal(merged) ? LogicalType::VARCHAR : merged;
+		return LogicalType::STRUCT(std::move(fields));
+	};
+	if (!is_complex(b)) {
+		auto index = text_field_index(a);
+		if (index.IsValid()) {
+			return widen_text_field(a, index.GetIndex(), b);
+		}
+	}
+	if (!is_complex(a)) {
+		auto index = text_field_index(b);
+		if (index.IsValid()) {
+			return widen_text_field(b, index.GetIndex(), a);
+		}
+	}
 
 	// Cardinality mismatch: an element occurring once infers as a scalar T, the same element
 	// occurring 2+ times in another file infers as LIST<T>. Reconcile by treating the singleton
@@ -1482,6 +1630,15 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	// A genuinely different shape such as STRUCT vs LIST<VARCHAR> is a true collision and falls
 	// through to the VARCHAR fallback below.
 	auto reconcilable = [&](const LogicalType &element, const LogicalType &singleton) {
+		if (element.id() == LogicalTypeId::SQLNULL) {
+			return true;
+		}
+		if (!is_complex(singleton) && text_field_index(element).IsValid()) {
+			return true;
+		}
+		if (!is_complex(element) && text_field_index(singleton).IsValid()) {
+			return true;
+		}
 		if (is_complex(element) || is_complex(singleton)) {
 			return element.id() == singleton.id();
 		}
@@ -1490,13 +1647,13 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	if (a.id() == LogicalTypeId::LIST && b.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(a);
 		if (reconcilable(element, b)) {
-			return LogicalType::LIST(MergeXMLColumnType(element, b));
+			return LogicalType::LIST(MergeXMLColumnType(element, b, text_key));
 		}
 	}
 	if (b.id() == LogicalTypeId::LIST && a.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(b);
 		if (reconcilable(element, a)) {
-			return LogicalType::LIST(MergeXMLColumnType(a, element));
+			return LogicalType::LIST(MergeXMLColumnType(a, element, text_key));
 		}
 	}
 
@@ -1518,6 +1675,18 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return candidate;
 	}
 	return LogicalType::VARCHAR;
+}
+
+LogicalType XMLSchemaInference::ResolveUnknownTypes(const LogicalType &type) {
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &t) {
+		return t.id() == LogicalTypeId::SQLNULL ? LogicalType::VARCHAR : t;
+	});
+}
+
+void XMLSchemaInference::ResolveUnknownTypes(std::vector<XMLColumnInfo> &columns) {
+	for (auto &column : columns) {
+		column.type = ResolveUnknownTypes(column.type);
+	}
 }
 
 std::string XMLSchemaInference::AttributeNameFromColumn(const std::string &column_name,
@@ -2190,6 +2359,39 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 	}
 }
 
+// True when the node has an attribute or child element named name (child elements match case-insensitively,
+// like the field lookup in ExtractStructFromNode).
+static bool HasAttributeOrChildNamed(xmlNodePtr node, const std::string &name) {
+	if (xmlHasProp(node, (const xmlChar *)name.c_str())) {
+		return true;
+	}
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE && xmlStrcasecmp(child->name, (const xmlChar *)name.c_str()) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// Whether a text_key field missing from this node as an attribute or child holds the node's own
+// text. A text_key that is a legal XML name ('_text', 'text') may instead name a child element that
+// this instance omits, so it reads the node's text only when that text is its own: direct text, or
+// no element children for xmlNodeGetContent to borrow from. The default '#text' can't be a name.
+static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
+	if (xmlValidateNCName((const xmlChar *)text_key.c_str(), 0) != 0) {
+		return true;
+	}
+	if (HasDirectText(node)) {
+		return true;
+	}
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			return false;
+		}
+	}
+	return true;
+}
+
 Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
                                                 const XMLSchemaOptions &options,
                                                 const std::string &datetime_format) {
@@ -2208,8 +2410,10 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		Value field_value;
 		bool found = false;
 
-		// Special handling for #text field - extract text content of the node itself
-		if (field_name == "#text") {
+		// The text_key field (inference names it from options.text_key) holds the node's own text,
+		// unless a custom text_key matches an attribute or child element, which then fills the field
+		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name) &&
+		    IsOwnTextField(node, field_name)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);

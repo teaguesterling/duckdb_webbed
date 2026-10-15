@@ -154,8 +154,8 @@ Empty Element Handling
      - Description
    * - ``empty_elements``
      - VARCHAR
-     - 'object'
-     - How to handle empty elements: ``'object'`` returns empty struct, ``'null'`` returns NULL, ``'string'`` returns empty string
+     - 'null'
+     - How an empty element (no text, children or attributes) affects type inference. With ``'null'`` or ``'object'``, the column takes its type from the element's other occurrences, in the same file or in other files, and is VARCHAR only when the element is empty everywhere. ``'string'`` types the column VARCHAR whenever the element is empty somewhere. The empty element itself reads as NULL, or as a struct of NULL fields in a STRUCT column
 
 Multi-File Parameters
 ---------------------

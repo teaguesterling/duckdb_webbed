@@ -67,7 +67,7 @@ Read XML files with automatic schema inference.
      - Key for text content in mixed elements (default: '#text')
    * - ``empty_elements``
      - VARCHAR
-     - Empty element handling: 'object', 'null', 'string' (default: 'object')
+     - How empty elements type their column: 'null', 'object', 'string' (default: 'null'). See :doc:`../parameters`
    * - ``namespaces``
      - VARCHAR
      - Namespace handling: 'strip', 'expand', 'keep' (default: 'strip')

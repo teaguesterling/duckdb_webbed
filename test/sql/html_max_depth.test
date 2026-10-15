@@ -4,12 +4,12 @@
 
 require webbed
 
-# Test 1: Default max_depth should handle reasonable nesting
+# Test 1: Default max_depth should handle reasonable nesting (each div keeps its class attribute)
 query I
 SELECT typeof(div)
 FROM read_html('test/html/deep_nesting.html', record_element:='article');
 ----
-STRUCT(div STRUCT(div STRUCT(div STRUCT(div STRUCT("data-value" VARCHAR)))))
+STRUCT("class" VARCHAR, div STRUCT("class" VARCHAR, div STRUCT("class" VARCHAR, div STRUCT("class" VARCHAR, div STRUCT("class" VARCHAR, "data-value" VARCHAR)))))
 
 # Test 2: max_depth=1 should stop at first level (article column becomes HTML type)
 query I
@@ -30,7 +30,7 @@ query I
 SELECT typeof(div)
 FROM read_html('test/html/deep_nesting.html', record_element:='article', max_depth:=3);
 ----
-STRUCT(div HTML)
+STRUCT("class" VARCHAR, div HTML)
 
 # Test 5: Verify data is still accessible with limited depth (max_depth=1 means article becomes HTML)
 query I
