@@ -114,6 +114,29 @@ Run `tmp/climb/runs/c1`, 8 samples per arm, interleaved (SAX cases only, since t
 
 Bound: the erase and accumulator moves were 31% of `transactions_stream_large` inclusive and about 80% of `logs_sax_ignore_errors`, consistent with the gains. Accepted: the two predicted cases star on wall, CPU and instructions, and nothing regresses.
 
+### Accepted: C2, hand scan in `DetectDocumentPrefixes`
+
+Hypothesis: `namespaces := 'auto'` runs `DetectDocumentPrefixes` over every input document with a `std::regex` iterator. libc++ regex backtracks per character, which made it 63% of `stream/soap_xpath_ns` CPU. A single pass that finds `<` or whitespace, reads an NCName and checks for `:` yields the same set: `:` is not a name character, so the regex can never backtrack to a shorter prefix, and the next search resumes after the colon either way.
+
+```
+before: for m in regex_iterator(xml, "<(NCName):|\s(NCName):"): add m.prefix unless "xmlns"
+after:  for i: if xml[i] is '<' or C-locale space: read NCName run; if next is ':': add, i = after ':'
+```
+
+Target: CPU and wall down on `stream/soap_xpath_ns` (and holdout `soap12`). Guards: fingerprints on the XPath namespace cases.
+
+Equivalence: the old regex and the new scanner were compiled side by side (`tmp/climb/fuzz/prefix_fuzz.cpp`) and run on 2M random strings over `<`, whitespace (all six C-locale classes), `:`, name characters, `xmlns` and a UTF-8 byte. 0 mismatches. Guard 56/56, `make test` passes.
+
+Run `tmp/climb/runs/c2`, 8 samples per arm, against C1:
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `stream/soap_xpath_ns` | 0.635→0.215 -66.2%* | 4.458→1.524 -65.8%* | 41.7→43.3 +3.8%* | -78.0%* |
+| `stream/atom_glob_ns_strip` | +2.0% | +0.6% | -0.1% | +0.2% |
+| `scalar/extract_text_xpaths` | -4.5% | +0.4% | -0.0% | -0.3% |
+
+The RSS star is concurrency, not the change: at `threads=1` RSS is 31.4 vs 31.5 MB (8 runs each), and at 8 threads 38.3 vs 39.3 MB. The scanner allocates only the prefixes it returns, as the regex did. With each worker finishing about 3x sooner, more of them hold a parsed document at once. Accepted with that exception noted. Bound: the regex was 63% of CPU in the profile, and CPU fell 66%, within noise of the bound.
+
 ## Where It Stands
 
 (pending)

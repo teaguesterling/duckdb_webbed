@@ -3246,20 +3246,38 @@ std::string GetCommonNamespaceURI(const std::string &prefix) {
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str) {
 	std::set<std::string> prefixes;
 
-	// Pattern to match prefixed element or attribute names: prefix:name
-	static const std::regex prefix_pattern(R"(<([A-Za-z_][A-Za-z0-9._-]*):|\s([A-Za-z_][A-Za-z0-9._-]*):)",
-	                                       std::regex::optimize);
+	// Finds `<prefix:` (element) and `<whitespace>prefix:` (attribute), where prefix is
+	// [A-Za-z_][A-Za-z0-9._-]*. This runs on every document in namespaces := 'auto', where a
+	// std::regex scan dominated the query.
+	auto is_name_start = [](char c) {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+	};
+	auto is_name_char = [&](char c) {
+		return is_name_start(c) || (c >= '0' && c <= '9') || c == '.' || c == '-';
+	};
+	auto is_space = [](char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+	};
 
-	std::sregex_iterator iter(xml_str.begin(), xml_str.end(), prefix_pattern);
-	std::sregex_iterator end;
-
-	while (iter != end) {
-		// Match is in group 1 (element) or group 2 (attribute)
-		std::string prefix = (*iter)[1].matched ? (*iter)[1].str() : (*iter)[2].str();
-		if (!prefix.empty() && prefix != "xmlns") {
-			prefixes.insert(prefix);
+	const size_t n = xml_str.size();
+	size_t i = 0;
+	while (i < n) {
+		char c = xml_str[i];
+		if ((c == '<' || is_space(c)) && i + 1 < n && is_name_start(xml_str[i + 1])) {
+			size_t name_end = i + 2;
+			while (name_end < n && is_name_char(xml_str[name_end])) {
+				name_end++;
+			}
+			if (name_end < n && xml_str[name_end] == ':') {
+				std::string prefix = xml_str.substr(i + 1, name_end - i - 1);
+				if (prefix != "xmlns") {
+					prefixes.insert(std::move(prefix));
+				}
+				i = name_end + 1;
+				continue;
+			}
 		}
-		++iter;
+		i++;
 	}
 
 	return prefixes;
