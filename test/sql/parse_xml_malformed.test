@@ -1,0 +1,45 @@
+# name: test/sql/parse_xml_malformed.test
+# description: parse_xml raises on malformed input and matches read_xml under ignore_errors
+# group: [sql]
+
+require webbed
+
+# The second <order> is never closed
+statement error
+SELECT * FROM parse_xml('<orders><order><a>1</a></order><order><a>2</a></orders>', record_element := 'order');
+----
+Input contains invalid XML
+
+# Explicit columns skip inference, and malformed input still raises
+statement error
+SELECT * FROM parse_xml('<orders><order><a>1</a></order><order><a>2</a></orders>', record_element := 'order', columns := {a: 'INT'});
+----
+Input contains invalid XML
+
+# ignore_errors skips the malformed document, as read_xml skips a malformed file
+query I
+SELECT count(*) FROM parse_xml('<orders><order><a>1</a></order><order><a>2</a></orders>', record_element := 'order', ignore_errors := true);
+----
+0
+
+query I
+SELECT count(*) FROM read_xml('test/xml/malformed_orders.xml', record_element := 'order', ignore_errors := true);
+----
+0
+
+query I
+SELECT count(*) FROM parse_xml('<orders><order><a>1</a></order><order><a>2</a></orders>', record_element := 'order', columns := {a: 'INT'}, ignore_errors := true);
+----
+0
+
+query I
+SELECT count(*) FROM read_xml('test/xml/malformed_orders.xml', record_element := 'order', columns := {a: 'INT'}, ignore_errors := true);
+----
+0
+
+# Well-formed input with explicit columns is unaffected
+query I
+SELECT a FROM parse_xml('<orders><order><a>1</a></order><order><a>2</a></order></orders>', record_element := 'order', columns := {a: 'INT'});
+----
+1
+2
