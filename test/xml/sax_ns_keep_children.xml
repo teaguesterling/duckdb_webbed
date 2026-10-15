@@ -1,0 +1,4 @@
+<rss xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/"><channel>
+<item><title>a</title><dc:creator>ann</dc:creator><content:encoded><![CDATA[<p>hi</p>]]></content:encoded><media:content url="u1"><media:credit>c1</media:credit></media:content></item>
+<item><title>b</title><dc:creator>bob</dc:creator><content:encoded>plain</content:encoded><media:content url="u2"><media:credit>c2</media:credit></media:content></item>
+</channel></rss>

@@ -326,10 +326,14 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 				value = XMLSchemaInference::CleanTextContent(acc->current_text, sax_ctx->preserve_whitespace);
 			}
 
-			auto field_it = acc->current_fields.find(name);
+			// Key the field by local name: read_xml names columns by local name in every namespace
+			// mode, as DOM does. The prefix stays on nested fragments, which reparse against the
+			// accumulated declarations.
+			std::string field_name = reinterpret_cast<const char *>(localname);
+			auto field_it = acc->current_fields.find(field_name);
 			if (field_it == acc->current_fields.end()) {
-				field_it = acc->current_fields.emplace(name, std::vector<FieldOccurrence>()).first;
-				acc->field_order.push_back(name);
+				field_it = acc->current_fields.emplace(field_name, std::vector<FieldOccurrence>()).first;
+				acc->field_order.push_back(field_name);
 			}
 			field_it->second.push_back({is_xml, std::move(value), std::move(own_attrs)});
 
