@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<eventLog cluster="ap-northeast-1">
+  <event seq="1">
+    <context env="prod" build="3.3.52">
+      <client ip="10.177.153.150" agent="curl/8.4"/>
+    </context>
+  </event>
+  <event seq="2">
+    <context env="staging" build="2.11.55">
+      <client ip="10.250.193.37" agent="Mozilla/5.0"/>
+    </context>
+  </event>
+</eventLog>

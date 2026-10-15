@@ -386,6 +386,31 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 	    text, target_type.ToString(), options.sample_size);
 }
 
+std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
+                                                                  const XMLSchemaOptions &options,
+                                                                  const std::vector<std::string> &child_names) {
+	std::vector<std::string> names;
+	if (options.attr_mode == "discard") {
+		return names;
+	}
+	case_insensitive_set_t seen(child_names.begin(), child_names.end());
+	for (xmlNodePtr instance : instances) {
+		for (xmlAttrPtr attr = instance->properties; attr; attr = attr->next) {
+			if (!attr->name) {
+				continue;
+			}
+			std::string attr_name((const char *)attr->name);
+			if (options.namespaces == "strip") {
+				attr_name = StripNamespacePrefix(attr_name);
+			}
+			if (seen.insert(attr_name).second) {
+				names.push_back(attr_name);
+			}
+		}
+	}
+	return names;
+}
+
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
                                                 const XMLSchemaOptions &options, std::string &winning_datetime_format) {
 	winning_datetime_format.clear();
@@ -478,8 +503,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	// Column repeats in a record OR forced to be list → LIST type
 	if (column.repeats_in_record || force_as_list) {
 		// Analyze the structure across ALL instances to determine element type
-		xmlNodePtr first = column.instances[0];
-
 		// Check what child elements exist across ALL instances and track max count per record
 		std::unordered_map<std::string, int> child_max_counts;
 		for (xmlNodePtr instance : column.instances) {
@@ -501,20 +524,14 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// Build STRUCT type: first attributes, then child elements
 		child_list_t<LogicalType> struct_fields;
+		// Iterate over children across ALL instances in document order so that optional
+		// fields absent from the first occurrence are still included in the struct.
+		std::vector<std::string> ordered_child_names;
+		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
 
-		// 1. Add attributes as STRUCT fields (unless we're discarding them)
-		if (options.attr_mode != "discard" && first->properties != nullptr) {
-			for (xmlAttrPtr attr = first->properties; attr; attr = attr->next) {
-				if (attr->name) {
-					std::string attr_name((const char *)attr->name);
-					// Strip namespace prefix if configured
-					if (options.namespaces == "strip") {
-						attr_name = StripNamespacePrefix(attr_name);
-					}
-					// Attributes are always VARCHAR
-					struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
-				}
-			}
+		// 1. Add attributes from every instance as VARCHAR STRUCT fields (unless we're discarding them)
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 		}
 
 		// 2. If no child elements but has text content, add #text field with inferred type
@@ -545,10 +562,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// 3. Add child elements as STRUCT fields (if any)
 		if (!child_max_counts.empty()) {
-			// Iterate over children across ALL instances in document order so that optional
-			// fields absent from the first occurrence are still included in the struct.
-			std::vector<std::string> ordered_child_names;
-			CollectChildNamesInOrder(column.instances, options, ordered_child_names);
 			for (const std::string &child_name : ordered_child_names) {
 				// Create a ColumnAnalysis for this nested child
 				ColumnAnalysis nested_col(child_name, false);
@@ -582,7 +595,6 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Single complex element per record → could be STRUCT
 	// Analyze children across ALL instances
-	xmlNodePtr first = column.instances[0];
 	std::unordered_map<std::string, int> child_max_counts;
 
 	// Check what child elements exist across ALL instances and track max count per record
@@ -611,6 +623,12 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		// fields absent from the first occurrence are still included in the struct.
 		std::vector<std::string> ordered_child_names;
 		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
+
+		// Attributes come first as VARCHAR fields, as in the repeated-element branch
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
+		}
+
 		for (const std::string &child_name : ordered_child_names) {
 			// Create a ColumnAnalysis for this nested child
 			ColumnAnalysis nested_col(child_name, false);
@@ -670,14 +688,17 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		// If we have attributes discovered across records, build STRUCT with text + attrs
-		if (has_any_attrs && !cross_record_text_samples.empty()) {
+		// If we have attributes discovered across records, build STRUCT with text (when any) + attrs.
+		// An attribute-only element such as <geo lat=".." lon=".."/> gets a STRUCT of its attributes.
+		if (has_any_attrs) {
 			child_list_t<LogicalType> struct_fields;
 
 			// Add text content field with inferred type
-			std::string text_winning_fmt;
-			LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
-			struct_fields.push_back(make_pair(CompatMakeIdentifier(options.text_key), text_type));
+			if (!cross_record_text_samples.empty()) {
+				std::string text_winning_fmt;
+				LogicalType text_type = InferTypeFromSamples(cross_record_text_samples, options, text_winning_fmt);
+				struct_fields.push_back(make_pair(CompatMakeIdentifier(options.text_key), text_type));
+			}
 
 			// Add attribute fields (sorted for determinism)
 			std::vector<std::string> sorted_attrs(all_attrs.begin(), all_attrs.end());

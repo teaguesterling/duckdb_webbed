@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest carrier="UPS" day="2025-12-05">
+  <shipment id="7000002">
+    <origin code="FR"><address><city>Paris</city><geo lat="4.1157" lon="162.8575"/></address></origin>
+    <customs value="15872.46" currency="CHF"/>
+  </shipment>
+  <shipment id="7000003">
+    <origin code="DE"><address><city>Berlin</city><geo lat="-14.1155" lon="147.5810"/></address></origin>
+    <customs value="120.00" currency="EUR"/>
+  </shipment>
+</manifest>

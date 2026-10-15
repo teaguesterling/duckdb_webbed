@@ -1,0 +1,53 @@
+# name: test/sql/xml_element_attributes.test
+# description: Inference keeps the attributes of nested elements that have element children or no content at all
+# group: [sql]
+
+require webbed
+
+# An element with attributes and element children keeps the attributes as leading fields
+query TT
+SELECT typeof(provider), provider FROM read_xml('test/xml/element_attributes/claims.xml', record_element := 'claim') LIMIT 1;
+----
+STRUCT(npi VARCHAR, "name" VARCHAR, address STRUCT(city VARCHAR, country VARCHAR))	{'npi': 1090752184, 'name': Farah Pérez, 'address': {'city': Seattle, 'country': CH}}
+
+# An attribute-only empty element is a STRUCT of its attributes, at the top level and nested
+query TT
+SELECT origin, customs FROM read_xml('test/xml/element_attributes/shipments.xml', record_element := 'shipment', streaming := false);
+----
+{'code': FR, 'address': {'city': Paris, 'geo': {'lat': 4.1157, 'lon': 162.8575}}}	{'currency': CHF, 'value': 15872.46}
+{'code': DE, 'address': {'city': Berlin, 'geo': {'lat': -14.1155, 'lon': 147.5810}}}	{'currency': EUR, 'value': 120.00}
+
+# SAX reads the same values
+query TT
+SELECT origin, customs FROM read_xml('test/xml/element_attributes/shipments.xml', record_element := 'shipment', streaming := true, maximum_file_size := 1);
+----
+{'code': FR, 'address': {'city': Paris, 'geo': {'lat': 4.1157, 'lon': 162.8575}}}	{'currency': CHF, 'value': 15872.46}
+{'code': DE, 'address': {'city': Berlin, 'geo': {'lat': -14.1155, 'lon': 147.5810}}}	{'currency': EUR, 'value': 120.00}
+
+query T
+SELECT context FROM read_xml('test/xml/element_attributes/events.xml', record_element := 'event', streaming := true, maximum_file_size := 1);
+----
+{'env': prod, 'build': 3.3.52, 'client': {'agent': curl/8.4, 'ip': 10.177.153.150}}
+{'env': staging, 'build': 2.11.55, 'client': {'agent': Mozilla/5.0, 'ip': 10.250.193.37}}
+
+# Nested attributes keep their names in every attr_mode except 'discard', matching a leaf with text and attributes
+query TTT
+SELECT typeof(context), typeof(context.client), typeof("@seq") FROM read_xml('test/xml/element_attributes/events.xml', record_element := 'event', attr_mode := 'prefixed') LIMIT 1;
+----
+STRUCT(env VARCHAR, build VARCHAR, client STRUCT(agent VARCHAR, ip VARCHAR))	STRUCT(agent VARCHAR, ip VARCHAR)	VARCHAR
+
+query T
+SELECT typeof(context) FROM read_xml('test/xml/element_attributes/events.xml', record_element := 'event', attr_mode := 'map') LIMIT 1;
+----
+STRUCT(env VARCHAR, build VARCHAR, client STRUCT(agent VARCHAR, ip VARCHAR))
+
+query TT
+SELECT typeof(context), context FROM read_xml('test/xml/element_attributes/events.xml', record_element := 'event', attr_mode := 'discard') LIMIT 1;
+----
+STRUCT(client VARCHAR)	{'client': NULL}
+
+# A repeated element collects attributes from every instance
+query T
+SELECT line FROM parse_xml('<root><r><line n="1"><a>x</a></line><line k="z"><a>y</a></line></r></root>', record_element := 'r');
+----
+[{'n': 1, 'k': NULL, 'a': x}, {'n': NULL, 'k': z, 'a': y}]

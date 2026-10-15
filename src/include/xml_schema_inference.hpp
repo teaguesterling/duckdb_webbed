@@ -302,6 +302,12 @@ private:
 	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
 	                                     std::vector<std::string> &result);
 
+	// Attribute names across all instances in first-seen order, empty under attr_mode 'discard'. A name
+	// already taken by a child element is skipped, since a STRUCT can't hold two fields with one name.
+	static std::vector<std::string> CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
+	                                                      const XMLSchemaOptions &options,
+	                                                      const std::vector<std::string> &child_names);
+
 	static LogicalType GetMostSpecificType(const std::vector<LogicalType> &types);
 
 	static Value ConvertToValue(const std::string &text, const LogicalType &target_type,

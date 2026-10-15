@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<claims_export source="clearinghouse">
+  <claim id="C00000000" type="dental"><provider npi="1090752184"><name>Farah Pérez</name><address><city>Seattle</city><country>CH</country></address></provider></claim>
+  <claim id="C00000001" type="institutional"><provider npi="5566042486"><name>Oğuz Hájek</name><address><city>Montréal</city><country>CA</country></address></provider></claim>
+</claims_export>
