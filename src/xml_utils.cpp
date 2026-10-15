@@ -2663,23 +2663,22 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 				image.title = std::string(reinterpret_cast<const char *>(title.get()));
 			}
 
-			// Get width attribute using RAII
+			// width/height stay unset (NULL) when absent or not an integer, e.g. width="auto"
 			XMLCharPtr width(xmlGetProp(node, BAD_CAST "width"));
 			if (width) {
 				try {
 					image.width = std::stoll(std::string(reinterpret_cast<const char *>(width.get())));
+					image.has_width = true;
 				} catch (...) {
-					image.width = 0;
 				}
 			}
 
-			// Get height attribute using RAII
 			XMLCharPtr height(xmlGetProp(node, BAD_CAST "height"));
 			if (height) {
 				try {
 					image.height = std::stoll(std::string(reinterpret_cast<const char *>(height.get())));
+					image.has_height = true;
 				} catch (...) {
-					image.height = 0;
 				}
 			}
 

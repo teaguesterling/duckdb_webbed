@@ -214,16 +214,20 @@ struct HTMLLink {
 	std::string text;
 	std::string url;
 	std::string title;
-	int64_t line_number;
+	int64_t line_number = 0;
 };
 
 struct HTMLImage {
 	std::string alt_text;
 	std::string src;
 	std::string title;
-	int64_t width;
-	int64_t height;
-	int64_t line_number;
+	// width/height are meaningful only when the matching has_* flag is set: the attribute was
+	// present and parsed as an integer. Otherwise the SQL value is NULL.
+	int64_t width = 0;
+	int64_t height = 0;
+	bool has_width = false;
+	bool has_height = false;
+	int64_t line_number = 0;
 };
 
 struct HTMLTable {
@@ -231,9 +235,9 @@ struct HTMLTable {
 	std::vector<std::vector<std::string>> rows;
 	// <tfoot> rows, kept apart from body rows so summary rows stay identifiable.
 	std::vector<std::vector<std::string>> footers;
-	int64_t line_number;
-	int64_t num_columns;
-	int64_t num_rows;
+	int64_t line_number = 0;
+	int64_t num_columns = 0;
+	int64_t num_rows = 0;
 };
 
 // Outcome of parsing XML content: a valid parse, a malformed document, or a parse that
