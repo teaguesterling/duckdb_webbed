@@ -2227,6 +2227,20 @@ Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalTyp
 	}
 }
 
+// True when the node has an attribute or child element named name (child elements match case-insensitively,
+// like the field lookup in ExtractStructFromNode).
+static bool HasAttributeOrChildNamed(xmlNodePtr node, const std::string &name) {
+	if (xmlHasProp(node, (const xmlChar *)name.c_str())) {
+		return true;
+	}
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE && xmlStrcasecmp(child->name, (const xmlChar *)name.c_str()) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
                                                 const XMLSchemaOptions &options,
                                                 const std::string &datetime_format) {
@@ -2245,8 +2259,9 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		Value field_value;
 		bool found = false;
 
-		// Special handling for #text field - extract text content of the node itself
-		if (field_name == "#text") {
+		// The text_key field (inference names it from options.text_key) holds the node's own text,
+		// unless a custom text_key matches an attribute or child element, which then fills the field
+		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);

@@ -143,10 +143,10 @@ SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', attr_prefix='@');
 true
 
 # Test 4.3: text_key parameter (undocumented)
-query I
-SELECT count(*) >= 0 FROM read_xml('test/xml/simple.xml', text_key='_text');
+query T
+SELECT price FROM parse_xml('<items><item><price currency="USD">9.99</price></item></items>', text_key='_text');
 ----
-true
+{'_text': 9.99, 'currency': USD}
 
 # Test 4.4: empty_elements parameter (undocumented)
 query I

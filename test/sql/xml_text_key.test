@@ -1,0 +1,41 @@
+# name: test/sql/xml_text_key.test
+# description: text_key names the field holding an element's own text, and extraction fills that field
+# group: [sql]
+
+require webbed
+
+# Default key
+query T
+SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata');
+----
+[{'field': F1, 'value': {'#text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'#text': NULL, 'nil': true, 'type': NULL}}]
+
+# Custom key, DOM extraction
+query T
+SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata', text_key='_text', streaming=false);
+----
+[{'field': F1, 'value': {'_text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'nil': true, 'type': NULL}}]
+
+# Custom key, SAX extraction
+query T
+SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata', text_key='_text', streaming=true, maximum_file_size=1);
+----
+[{'field': F1, 'value': {'_text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'nil': true, 'type': NULL}}]
+
+# Custom key on a top-level column with a typed text value
+query T
+SELECT price._text FROM parse_xml('<items><item><price currency="USD">9.99</price></item></items>', text_key='_text');
+----
+9.99
+
+# Custom key in a repeated element (the LIST<STRUCT> inference branch)
+query T
+SELECT tag FROM parse_xml('<items><item><tag k="a">x</tag><tag k="b">y</tag></item></items>', text_key='_text');
+----
+[{'_text': x, 'k': a}, {'_text': y, 'k': b}]
+
+# A custom key that matches a child element's name reads the child, not the parent's text
+query T
+SELECT p FROM parse_xml('<root><rec><p><text>child</text><age>3</age></p></rec></root>', record_element='rec', text_key='text');
+----
+{'text': child, 'age': 3}
