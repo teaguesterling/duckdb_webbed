@@ -563,12 +563,15 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 		}
 	}
 
-	// Finalize parsing
-	int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
-	if (final_result != 0) {
-		std::string detail = DescribeParseError(parser_ctx);
-		xmlFreeParserCtxt(parser_ctx);
-		throw IOException("SAX parsing error in file '%s': %s", filename, detail);
+	// Reaching max_rows stops the read mid-document. Terminating the parse there would make libxml2
+	// report the unclosed elements as malformed, so an intentional stop skips the final chunk.
+	if (!ctx.stop_parsing) {
+		int final_result = xmlParseChunk(parser_ctx, nullptr, 0, 1 /* terminate */);
+		if (final_result != 0) {
+			std::string detail = DescribeParseError(parser_ctx);
+			xmlFreeParserCtxt(parser_ctx);
+			throw IOException("SAX parsing error in file '%s': %s", filename, detail);
+		}
 	}
 	xmlFreeParserCtxt(parser_ctx);
 

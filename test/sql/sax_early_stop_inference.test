@@ -1,0 +1,25 @@
+# name: test/sql/sax_early_stop_inference.test
+# description: SAX schema inference stops reading once it has sample_size records. Regression for: the stop left the document half-parsed, libxml2 then reported it as malformed, and inference threw (or, under ignore_errors, collapsed the schema to a single xml column). The fixture is larger than one 64 KB parse chunk so the stop lands mid-document.
+# group: [sql]
+
+require webbed
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/sax_early_stop.xml',
+  record_element := 'rec', maximum_file_size := 1, sample_size := 5));
+----
+id	INTEGER
+name	VARCHAR
+
+query III
+SELECT count(*), min(id), max(id) FROM read_xml('test/xml/sax_early_stop.xml',
+  record_element := 'rec', maximum_file_size := 1, sample_size := 5);
+----
+2000	0	1999
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/sax_early_stop.xml',
+  record_element := 'rec', maximum_file_size := 1, sample_size := 5, ignore_errors := true));
+----
+id	INTEGER
+name	VARCHAR
