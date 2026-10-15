@@ -200,8 +200,21 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 // evaluates to NULL returns nullptr, which callers continue to treat as "no matches" --
 // so an undeclared namespace prefix keeps its existing empty result.
 //
-// Returns a node-set object the caller owns and must xmlXPathFreeObject, or nullptr.
+// Returns the result object, which the caller owns and must xmlXPathFreeObject, or nullptr.
+// The result is a node set only when the expression selects nodes. count(//a), sum(...),
+// boolean(...) and string(...) yield XPATH_NUMBER, XPATH_BOOLEAN or XPATH_STRING objects with
+// no nodesetval.
 xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::string &xpath);
+
+// EvalXPathChecked for callers that return nodes (elements, fragments, attributes). Throws
+// InvalidInputException when the expression yields a number, boolean or string, since those
+// callers have no way to represent one.
+xmlXPathObjectPtr EvalXPathNodeSet(xmlXPathContextPtr xpath_ctx, const std::string &xpath);
+
+// For a number, boolean or string result, sets `out` to its XPath string value (what
+// string() would return: "3", "2.5", "true") and returns true. Returns false for a node set
+// or nullptr, which the caller walks node by node.
+bool XPathScalarString(xmlXPathObjectPtr obj, std::string &out);
 
 // Detect namespace prefixes used in an XML document (scans for prefix:name patterns)
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);
