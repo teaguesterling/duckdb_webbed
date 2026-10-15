@@ -711,8 +711,8 @@ read_xml('pattern',
     all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
     datetime_format='auto',       -- Date/time format: 'auto', 'none', 'us', 'eu', 'iso', or strftime string
     nullstr='N/A',                -- String value(s) to interpret as NULL
-    attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
-    attr_prefix='@',              -- Prefix for attribute columns (default: '@')
+    attr_mode='columns',          -- Attribute handling: 'columns' (default), 'prefixed', or 'discard'
+    attr_prefix='@',              -- Prefix for attribute columns when attr_mode='prefixed' (default: '@')
     text_key='#text',             -- Key for text content in mixed elements (default: '#text')
     empty_elements='object',      -- How to handle empty elements: 'object' (default), 'null', 'string'
     namespaces='strip',           -- Namespace handling: 'strip' (default), 'expand', 'keep'
@@ -735,8 +735,8 @@ read_xml('pattern',
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
 - **`datetime_format`**: Controls date/time detection and parsing. Accepts `'auto'` (default — tries common formats), `'none'` (disables temporal detection), preset names (`'us'`, `'eu'`, `'iso'`, `'us_timestamp'`, `'eu_timestamp'`, `'iso_timestamp'`, `'iso_timestamptz'`, `'12hour'`, `'24hour'`), custom strftime format strings (`'%m/%d/%Y'`), or a list of formats (`['%m/%d/%Y', '%Y-%m-%d %H:%M:%S']`). Ambiguous dates default to US (month-first) ordering.
 - **`nullstr`**: String value(s) to interpret as NULL. Accepts a single VARCHAR (e.g., `nullstr='N/A'`) or a list of VARCHAR (e.g., `nullstr=['N/A', '-', 'NULL']`). Matching values are excluded from type inference and converted to NULL during extraction. Matching is case-sensitive. When used with `all_varchar=true`, matched values still become NULL (default: none)
-- **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
-- **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
+- **`attr_mode`**: How to handle XML attributes: `'columns'` (default) makes each attribute a column under its bare name, `'prefixed'` prepends `attr_prefix` to attribute column names, `'discard'` drops attributes
+- **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefixed'` (default: `'@'`)
 - **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)
 - **`empty_elements`**: How to handle empty elements: `'object'` (default) returns empty struct, `'null'` returns NULL, `'string'` returns empty string
 - **`namespaces`**: Namespace handling mode: `'strip'` (default) removes namespace prefixes, `'expand'` replaces prefixes with full URIs, `'keep'` preserves prefixes as-is

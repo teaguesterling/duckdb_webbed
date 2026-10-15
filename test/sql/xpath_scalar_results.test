@@ -1,0 +1,72 @@
+# name: test/sql/xpath_scalar_results.test
+# description: XPath expressions that evaluate to a number, boolean or string
+# group: [sql]
+
+require webbed
+
+statement ok
+CREATE TABLE docs AS SELECT '<r><order><total>2</total></order><order><total>3.5</total></order></r>' AS xml;
+
+# Text functions return the XPath string value as a one-element list
+query IIIIII
+SELECT xml_extract_text(xml, 'count(//order)'),
+       xml_extract_text(xml, 'sum(//order/total)'),
+       xml_extract_text(xml, 'boolean(//order)'),
+       xml_extract_text(xml, 'boolean(//missing)'),
+       xml_extract_text(xml, 'string(//order/total)'),
+       xml_extract_text(xml, 'number(//missing)')
+FROM docs;
+----
+[2]	[5.5]	[true]	[false]	[2]	[NaN]
+
+# The XML type overload and an explicit namespace mode take the same path
+query II
+SELECT xml_extract_text(xml::XML, 'count(//total)'),
+       xml_extract_text(xml, 'count(//total)', 'strict')
+FROM docs;
+----
+[2]	[2]
+
+query I
+SELECT xml_extract_text('<r xmlns:ns="urn:x"><ns:a/><ns:a/></r>', 'count(//ns:a)', map(['ns'], ['urn:x']));
+----
+[2]
+
+# An empty string result is still one value
+query I
+SELECT xml_extract_text('<r><a/></r>', 'string(//a)');
+----
+['']
+
+# xml_extract_text_each evaluates the relative expression per context node
+query I
+SELECT xml_extract_text_each('<r><a><b>1</b><b>2</b></a><a/></r>', '//a', 'count(b)');
+----
+[2, 0]
+
+query I
+SELECT html_extract_text('<p>hi</p><p>yo</p>', 'count(//p)');
+----
+[2]
+
+# Node-returning functions reject a non-node result instead of returning an empty list
+statement error
+SELECT xml_extract_elements(xml, 'count(//order)') FROM docs;
+----
+evaluates to a number
+
+statement error
+SELECT xml_extract_elements_string(xml, 'boolean(//order)') FROM docs;
+----
+evaluates to a boolean
+
+statement error
+SELECT xml_extract_attributes(xml, 'string(//order)') FROM docs;
+----
+evaluates to a string
+
+# Node-set expressions are unchanged
+query II
+SELECT xml_extract_text(xml, '//total'), len(xml_extract_elements(xml, '//order')) FROM docs;
+----
+[2, 3.5]	2

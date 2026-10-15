@@ -144,6 +144,30 @@ xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::stri
 	return result;
 }
 
+xmlXPathObjectPtr EvalXPathNodeSet(xmlXPathContextPtr xpath_ctx, const std::string &xpath) {
+	xmlXPathObjectPtr result = EvalXPathChecked(xpath_ctx, xpath);
+	if (result && result->type != XPATH_NODESET) {
+		const char *kind = result->type == XPATH_NUMBER    ? "a number"
+		                   : result->type == XPATH_BOOLEAN ? "a boolean"
+		                   : result->type == XPATH_STRING  ? "a string"
+		                                                   : "a value that is not a node set";
+		xmlXPathFreeObject(result);
+		throw InvalidInputException("XPath expression '%s' evaluates to %s. This function needs an expression that "
+		                            "selects nodes. Use xml_extract_text to get the value.",
+		                            xpath, kind);
+	}
+	return result;
+}
+
+bool XPathScalarString(xmlXPathObjectPtr obj, std::string &out) {
+	if (!obj || (obj->type != XPATH_NUMBER && obj->type != XPATH_BOOLEAN && obj->type != XPATH_STRING)) {
+		return false;
+	}
+	XMLCharPtr str(xmlXPathCastToString(obj));
+	out = str ? std::string(reinterpret_cast<const char *>(str.get())) : std::string();
+	return true;
+}
+
 // Helper function to register all namespace declarations from the document into the XPath context.
 // This enables XPath expressions like "//gml:posList" to work when xmlns:gml="..." is declared.
 // Without this, libxml2's XPath engine requires manual registration of each namespace prefix.
@@ -477,7 +501,7 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 	}
 
 	// XPath evaluation (errors already suppressed during document parsing)
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (xpath_obj && xpath_obj->nodesetval) {
 		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -507,7 +531,7 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 	// Register custom namespaces
 	xml_doc.RegisterCustomNamespaces(namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (xpath_obj && xpath_obj->nodesetval) {
 		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -575,7 +599,7 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 
 	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (xpath_obj && xpath_obj->nodesetval) {
 		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -604,7 +628,7 @@ std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::
 
 	std::string result;
 	if (xpath_obj) {
-		if (xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
+		if (!XPathScalarString(xpath_obj, result) && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
 			if (node) {
 				xmlChar *content = xmlNodeGetContent(node);
@@ -633,7 +657,7 @@ std::string XMLUtils::ExtractTextByXPath(const std::string &xml_str, const std::
 
 	std::string result;
 	if (xpath_obj) {
-		if (xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
+		if (!XPathScalarString(xpath_obj, result) && xpath_obj->nodesetval && xpath_obj->nodesetval->nodeNr > 0) {
 			xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
 			if (node) {
 				xmlChar *content = xmlNodeGetContent(node);
@@ -659,6 +683,10 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
 
+	std::string scalar;
+	if (XPathScalarString(xpath_obj, scalar)) {
+		results.push_back(scalar);
+	}
 	if (xpath_obj) {
 		if (xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -691,6 +719,10 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
 
+	std::string scalar;
+	if (XPathScalarString(xpath_obj, scalar)) {
+		results.push_back(scalar);
+	}
 	if (xpath_obj) {
 		if (xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -775,7 +807,10 @@ std::vector<std::pair<bool, std::string>> XMLUtils::ExtractTextByXPathEach(const
 			// Pre-compiled, so this cannot throw and the loop body needs no cleanup handler.
 			xmlXPathObjectPtr rel_obj = xmlXPathCompiledEval(rel_compiled, xml_doc.xpath_ctx);
 			if (rel_obj) {
-				if (rel_obj->nodesetval && rel_obj->nodesetval->nodeNr > 0) {
+				if (XPathScalarString(rel_obj, text)) {
+					// count(b), string(@id) and the like have a value for every context node.
+					found = true;
+				} else if (rel_obj->nodesetval && rel_obj->nodesetval->nodeNr > 0) {
 					// FIRST match only, matching the `list[1]` idiom callers already use for the
 					// single-value case. A context node with two matches is a document we cannot
 					// represent one-to-one; callers needing all of them want ExtractAllTextByXPath.
@@ -866,6 +901,10 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 	// Evaluate XPath
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
 
+	std::string scalar;
+	if (XPathScalarString(xpath_obj, scalar)) {
+		results.push_back(scalar);
+	}
 	if (xpath_obj) {
 		if (xpath_obj->nodesetval) {
 			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
@@ -1610,7 +1649,7 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 		return "";
 	}
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1681,7 +1720,7 @@ std::string XMLUtils::ExtractXMLFragment(const std::string &xml_str, const std::
 
 	xml_doc.RegisterCustomNamespaces(namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1742,7 +1781,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 		return "";
 	}
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1822,7 +1861,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 
 	xml_doc.RegisterCustomNamespaces(namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -1933,7 +1972,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 
 	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -2004,7 +2043,7 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 		return results;
 	}
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -2074,7 +2113,7 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 
 	xml_doc.RegisterCustomNamespaces(namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -2177,7 +2216,7 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 
 	xml_doc.RegisterCustomNamespaces(ns_config.custom_namespaces);
 
-	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath);
+	xmlXPathObjectPtr xpath_obj = EvalXPathNodeSet(xml_doc.xpath_ctx, xpath);
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
@@ -2623,6 +2662,25 @@ std::vector<HTMLLink> XMLUtils::ExtractHTMLLinks(const std::string &html_str) {
 	return links;
 }
 
+// Parses an img width/height attribute. The whole value, apart from surrounding whitespace, must
+// be an integer: std::stoll alone accepts a prefix, which would read "50%" as 50 and "12.5" as 12.
+static bool ParseHTMLDimension(const xmlChar *raw, int64_t &out) {
+	if (!raw) {
+		return false;
+	}
+	std::string value(reinterpret_cast<const char *>(raw));
+	size_t consumed = 0;
+	try {
+		out = std::stoll(value, &consumed);
+	} catch (...) {
+		return false;
+	}
+	while (consumed < value.size() && std::isspace(static_cast<unsigned char>(value[consumed]))) {
+		consumed++;
+	}
+	return consumed == value.size();
+}
+
 std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) {
 	std::vector<HTMLImage> images;
 
@@ -2663,25 +2721,12 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 				image.title = std::string(reinterpret_cast<const char *>(title.get()));
 			}
 
-			// Get width attribute using RAII
+			// width/height stay unset (NULL) when absent or not an integer, e.g. "auto", "50%", "12.5"
 			XMLCharPtr width(xmlGetProp(node, BAD_CAST "width"));
-			if (width) {
-				try {
-					image.width = std::stoll(std::string(reinterpret_cast<const char *>(width.get())));
-				} catch (...) {
-					image.width = 0;
-				}
-			}
+			image.has_width = ParseHTMLDimension(width.get(), image.width);
 
-			// Get height attribute using RAII
 			XMLCharPtr height(xmlGetProp(node, BAD_CAST "height"));
-			if (height) {
-				try {
-					image.height = std::stoll(std::string(reinterpret_cast<const char *>(height.get())));
-				} catch (...) {
-					image.height = 0;
-				}
-			}
+			image.has_height = ParseHTMLDimension(height.get(), image.height);
 
 			image.line_number = node->line;
 			images.push_back(image);
@@ -2845,13 +2890,18 @@ std::string XMLUtils::ExtractHTMLText(const std::string &html_str, const std::st
 
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(html_doc.xpath_ctx, xpath);
 
+	std::string text_content;
+	if (XPathScalarString(xpath_obj, text_content)) {
+		xmlXPathFreeObject(xpath_obj);
+		return text_content;
+	}
+
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
 			xmlXPathFreeObject(xpath_obj);
 		return "";
 	}
 
-	std::string text_content;
 	for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
 		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[i];
 		if (node) {
@@ -2874,13 +2924,18 @@ std::string XMLUtils::ExtractHTMLTextByXPath(const std::string &html_str, const 
 
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(html_doc.xpath_ctx, xpath);
 
+	std::string text_content;
+	if (XPathScalarString(xpath_obj, text_content)) {
+		xmlXPathFreeObject(xpath_obj);
+		return text_content;
+	}
+
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)
 			xmlXPathFreeObject(xpath_obj);
 		return "";
 	}
 
-	std::string text_content;
 	// Return only the first match
 	if (xpath_obj->nodesetval->nodeNr > 0) {
 		xmlNodePtr node = xpath_obj->nodesetval->nodeTab[0];
@@ -2905,6 +2960,13 @@ std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &
 	}
 
 	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(html_doc.xpath_ctx, xpath);
+
+	std::string scalar;
+	if (XPathScalarString(xpath_obj, scalar)) {
+		results.push_back(scalar);
+		xmlXPathFreeObject(xpath_obj);
+		return results;
+	}
 
 	if (!xpath_obj || !xpath_obj->nodesetval) {
 		if (xpath_obj)

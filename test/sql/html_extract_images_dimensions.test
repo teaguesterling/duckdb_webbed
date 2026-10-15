@@ -1,0 +1,40 @@
+# name: test/sql/html_extract_images_dimensions.test
+# description: html_extract_images returns NULL width/height when the attribute is missing or not an integer
+# group: [sql]
+
+require webbed
+
+# A missing width or height comes back NULL
+query III
+SELECT img.src, img.width, img.height
+FROM (SELECT unnest(html_extract_images('<html><body><img src="a.png"><img src="b.png" width="10"><img src="c.png" height="7"></body></html>')) AS img);
+----
+a.png	NULL	NULL
+b.png	10	NULL
+c.png	NULL	7
+
+# A non-integer value comes back NULL
+query III
+SELECT img.src, img.width, img.height
+FROM (SELECT unnest(html_extract_images('<img src="d.png" width="auto" height="40">')) AS img);
+----
+d.png	NULL	40
+
+# A value with a numeric prefix but trailing characters comes back NULL for both dimensions
+query III
+SELECT img.src, img.width, img.height
+FROM (SELECT unnest(html_extract_images('<img src="e.png" width="50%" height="12.5"><img src="f.png" width="12.5" height="30px"><img src="g.png" width=" 64 " height="48">')) AS img);
+----
+e.png	NULL	NULL
+f.png	NULL	NULL
+g.png	64	48
+
+# Deterministic across many rows: every missing dimension is NULL
+query II
+SELECT count(*) FILTER (WHERE img.width IS NOT NULL), count(*) FILTER (WHERE img.height IS NOT NULL)
+FROM (
+    SELECT unnest(html_extract_images('<p><img src="x.png" alt="x"><img src="y.png"></p>')) AS img
+    FROM range(5000)
+);
+----
+0	0

@@ -1999,8 +1999,10 @@ void XMLScalarFunctions::HTMLExtractImagesFunction(DataChunk &args, ExpressionSt
 			image_children.emplace_back("alt", Value(image.alt_text));
 			image_children.emplace_back("src", Value(image.src));
 			image_children.emplace_back("title", image.title.empty() ? Value() : Value(image.title));
-			image_children.emplace_back("width", Value::BIGINT(image.width));
-			image_children.emplace_back("height", Value::BIGINT(image.height));
+			image_children.emplace_back("width",
+			                            image.has_width ? Value::BIGINT(image.width) : Value(LogicalType::BIGINT));
+			image_children.emplace_back("height",
+			                            image.has_height ? Value::BIGINT(image.height) : Value(LogicalType::BIGINT));
 			image_children.emplace_back("line_number", Value::BIGINT(image.line_number));
 
 			image_values.emplace_back(Value::STRUCT(image_children));

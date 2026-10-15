@@ -2023,24 +2023,27 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 	result->schema_options = schema_options;
 
+	// Validate XML before either schema path, as read_xml does per file. Extraction against
+	// explicit columns returns an empty result for a document that fails to parse, so the
+	// check has to run here for malformed input to raise. HTML is left to libxml2's lenient
+	// parser.
+	bool malformed_xml = false;
+	if (mode == ParseMode::XML && !XMLUtils::IsValidXML(result->xml_content)) {
+		if (!result->ignore_errors) {
+			throw InvalidInputException("Input contains invalid XML");
+		}
+		malformed_xml = true;
+	}
+
 	// Perform schema inference only if no explicit columns were provided
 	if (!has_explicit_columns) {
+		if (malformed_xml) {
+			return_types.push_back(XMLTypes::XMLType());
+			names.push_back("xml");
+			return std::move(result);
+		}
 		try {
 			const string &content = result->xml_content;
-
-			// Validate content based on mode
-			if (mode == ParseMode::XML) {
-				if (!XMLUtils::IsValidXML(content)) {
-					if (!result->ignore_errors) {
-						throw InvalidInputException("Input contains invalid XML");
-					}
-					// Fallback to simple schema
-					return_types.push_back(XMLTypes::XMLType());
-					names.push_back("xml");
-					return std::move(result);
-				}
-			}
-			// HTML mode: skip validation, let libxml2's HTML parser handle it
 
 			// Perform schema inference
 			auto inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);

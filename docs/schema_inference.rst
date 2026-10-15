@@ -65,8 +65,8 @@ For each record element, the extension creates columns from:
 
 Results in columns:
 
-- ``@id`` (from attribute)
-- ``@category`` (from attribute)
+- ``id`` (from attribute)
+- ``category`` (from attribute)
 - ``name`` (from child element)
 - ``price`` (from child element)
 - ``tags`` (nested STRUCT with LIST)

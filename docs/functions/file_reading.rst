@@ -58,10 +58,10 @@ Read XML files with automatic schema inference.
      - Combine columns by name for multiple files (default: false)
    * - ``attr_mode``
      - VARCHAR
-     - Attribute handling: 'prefix', 'merge', 'ignore' (default: 'prefix')
+     - Attribute handling: 'columns', 'prefixed', 'discard' (default: 'columns')
    * - ``attr_prefix``
      - VARCHAR
-     - Prefix for attribute columns (default: '@')
+     - Prefix for attribute columns when attr_mode='prefixed' (default: '@')
    * - ``text_key``
      - VARCHAR
      - Key for text content in mixed elements (default: '#text')

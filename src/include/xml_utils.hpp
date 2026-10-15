@@ -200,8 +200,21 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 // evaluates to NULL returns nullptr, which callers continue to treat as "no matches" --
 // so an undeclared namespace prefix keeps its existing empty result.
 //
-// Returns a node-set object the caller owns and must xmlXPathFreeObject, or nullptr.
+// Returns the result object, which the caller owns and must xmlXPathFreeObject, or nullptr.
+// The result is a node set only when the expression selects nodes. count(//a), sum(...),
+// boolean(...) and string(...) yield XPATH_NUMBER, XPATH_BOOLEAN or XPATH_STRING objects with
+// no nodesetval.
 xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::string &xpath);
+
+// EvalXPathChecked for callers that return nodes (elements, fragments, attributes). Throws
+// InvalidInputException when the expression yields a number, boolean or string, since those
+// callers have no way to represent one.
+xmlXPathObjectPtr EvalXPathNodeSet(xmlXPathContextPtr xpath_ctx, const std::string &xpath);
+
+// For a number, boolean or string result, sets `out` to its XPath string value (what
+// string() would return: "3", "2.5", "true") and returns true. Returns false for a node set
+// or nullptr, which the caller walks node by node.
+bool XPathScalarString(xmlXPathObjectPtr obj, std::string &out);
 
 // Detect namespace prefixes used in an XML document (scans for prefix:name patterns)
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str);
@@ -214,16 +227,20 @@ struct HTMLLink {
 	std::string text;
 	std::string url;
 	std::string title;
-	int64_t line_number;
+	int64_t line_number = 0;
 };
 
 struct HTMLImage {
 	std::string alt_text;
 	std::string src;
 	std::string title;
-	int64_t width;
-	int64_t height;
-	int64_t line_number;
+	// width/height are meaningful only when the matching has_* flag is set: the attribute was
+	// present and parsed as an integer. Otherwise the SQL value is NULL.
+	int64_t width = 0;
+	int64_t height = 0;
+	bool has_width = false;
+	bool has_height = false;
+	int64_t line_number = 0;
 };
 
 struct HTMLTable {
@@ -231,9 +248,9 @@ struct HTMLTable {
 	std::vector<std::vector<std::string>> rows;
 	// <tfoot> rows, kept apart from body rows so summary rows stay identifiable.
 	std::vector<std::vector<std::string>> footers;
-	int64_t line_number;
-	int64_t num_columns;
-	int64_t num_rows;
+	int64_t line_number = 0;
+	int64_t num_columns = 0;
+	int64_t num_rows = 0;
 };
 
 // Outcome of parsing XML content: a valid parse, a malformed document, or a parse that

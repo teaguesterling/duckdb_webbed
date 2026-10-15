@@ -114,12 +114,12 @@ Attribute Handling Parameters
      - Description
    * - ``attr_mode``
      - VARCHAR
-     - 'prefix'
-     - How to handle attributes: ``'prefix'`` adds prefix to column names, ``'merge'`` merges with elements, ``'ignore'`` ignores attributes
+     - 'columns'
+     - How to handle attributes: ``'columns'`` makes each attribute a column under its bare name, ``'prefixed'`` prepends ``attr_prefix`` to attribute column names, ``'discard'`` drops attributes
    * - ``attr_prefix``
      - VARCHAR
      - '@'
-     - Prefix added to attribute column names when ``attr_mode='prefix'``
+     - Prefix added to attribute column names when ``attr_mode='prefixed'``
    * - ``text_key``
      - VARCHAR
      - '#text'
@@ -305,11 +305,11 @@ Attribute Handling
 
 .. code-block:: sql
 
-   -- Use underscore prefix for attributes
-   SELECT * FROM read_xml('data.xml', attr_prefix := '_');
+   -- Prefix attribute columns with an underscore
+   SELECT * FROM read_xml('data.xml', attr_mode := 'prefixed', attr_prefix := '_');
 
-   -- Ignore attributes entirely
-   SELECT * FROM read_xml('data.xml', attr_mode := 'ignore');
+   -- Drop attributes entirely
+   SELECT * FROM read_xml('data.xml', attr_mode := 'discard');
 
 Multi-File Processing
 ~~~~~~~~~~~~~~~~~~~~~
