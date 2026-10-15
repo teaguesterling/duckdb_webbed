@@ -39,3 +39,10 @@ query T
 SELECT p FROM parse_xml('<root><rec><p><text>child</text><age>3</age></p></rec></root>', record_element='rec', text_key='text');
 ----
 {'text': child, 'age': 3}
+
+# When that child is absent, the field is NULL rather than the parent's text
+query T
+SELECT p FROM parse_xml('<root><rec><p><text>child</text><age>3</age></p></rec><rec><p><age>4</age></p></rec></root>', record_element='rec', text_key='text');
+----
+{'text': child, 'age': 3}
+{'text': NULL, 'age': 4}

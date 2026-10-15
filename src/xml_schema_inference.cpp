@@ -2375,6 +2375,25 @@ static bool HasAttributeOrChildNamed(xmlNodePtr node, const std::string &name) {
 	return false;
 }
 
+// Whether a text_key field missing from this node as an attribute or child holds the node's own
+// text. A text_key that is a legal XML name ('_text', 'text') may instead name a child element that
+// this instance omits, so it reads the node's text only when that text is its own: direct text, or
+// no element children for xmlNodeGetContent to borrow from. The default '#text' can't be a name.
+static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
+	if (xmlValidateNCName((const xmlChar *)text_key.c_str(), 0) != 0) {
+		return true;
+	}
+	if (HasDirectText(node)) {
+		return true;
+	}
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			return false;
+		}
+	}
+	return true;
+}
+
 Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
                                                 const XMLSchemaOptions &options,
                                                 const std::string &datetime_format) {
@@ -2395,7 +2414,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 
 		// The text_key field (inference names it from options.text_key) holds the node's own text,
 		// unless a custom text_key matches an attribute or child element, which then fills the field
-		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name)) {
+		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name) &&
+		    IsOwnTextField(node, field_name)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
