@@ -218,21 +218,23 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			acc->record_depth = acc->current_depth;
 			acc->nested_depth = 0;
 
-			// Extract attributes from the record element itself
-			for (int i = 0; i < nb_attributes; i++) {
-				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
-				const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
+			// Extract attributes from the record element itself, unless attr_mode='discard'
+			if (!sax_ctx->discard_attrs) {
+				for (int i = 0; i < nb_attributes; i++) {
+					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
+					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
 
-				std::string attr_name;
-				if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
-					attr_name = std::string(attr_prefix_ptr) + ":" + attr_localname;
-				} else {
-					attr_name = attr_localname;
-				}
+					std::string attr_name;
+					if (acc->namespace_mode == "keep" && attr_prefix_ptr != nullptr) {
+						attr_name = std::string(attr_prefix_ptr) + ":" + attr_localname;
+					} else {
+						attr_name = attr_localname;
+					}
 
-				std::string attr_value = SAXAttributeValue(attributes, i);
-				if (acc->current_attributes.emplace(attr_name, attr_value).second) {
-					acc->attribute_order.push_back(attr_name);
+					std::string attr_value = SAXAttributeValue(attributes, i);
+					if (acc->current_attributes.emplace(attr_name, attr_value).second) {
+						acc->attribute_order.push_back(attr_name);
+					}
 				}
 			}
 		}

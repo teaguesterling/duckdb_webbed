@@ -1787,9 +1787,11 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 
 		Value value;
 
-		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode)
+		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode). attr_mode='discard'
+		// ignores attributes, so a column can only come from an element.
 		std::string attr_name = AttributeNameFromColumn(column_name, options);
-		xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+		xmlChar *attr_value =
+		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
 			value = ConvertToValue(str_value, column_type, options, col_fmt);
@@ -2218,8 +2220,10 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlFree(content);
 			}
 		}
-		// Check if this field is an attribute on the node itself
-		else if (xmlChar *attr_value = xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
+		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
+		else if (xmlChar *attr_value = options.attr_mode == "discard"
+		                                   ? nullptr
+		                                   : xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			field_value = ConvertToValue(str_value, field_type, options, datetime_format);
 			xmlFree(attr_value);
