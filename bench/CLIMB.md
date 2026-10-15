@@ -298,6 +298,28 @@ Run `tmp/climb/runs/c9`, 8 samples per arm, against C8. Guard 56/56, `make test`
 
 `validity_stats` never calls `xml_to_json`. Its CPU star is the same noise the A/A showed on identical binaries (+3.9%, p=0.01). Accepted. The gain is below the 45% bound because parsing still dominates `to_json`.
 
+### Rejected: C10, move completed SAX records instead of copying
+
+Hypothesis (re-profile `acc8`): each completed SAX record is stored with `push_back(*acc)`, a deep copy of its field and attribute hash maps, followed by `Reset()` clearing the originals. Copy construction is 7.0% and destruction 6.4% of `records/transactions_stream_large`. Moving the four per-record containers into the stored record, and copying only the persistent state as before, removes the deep copy. Nothing iterates the hash maps (lookups only), so a moved map's iteration order cannot change output.
+
+```
+before: pending.push_back(*acc); acc->Reset()
+after:  f = move(acc->fields), ...; pending.push_back(*acc); back().fields = move(f), ...; acc->Reset()
+```
+
+Target: CPU and wall down 5 to 10% on SAX scans (`transactions_stream_large`, `claims_sax`, `orders_sax_*`, `logs_sax_ignore_errors`) and on SAX inference sampling. RSS flat. Guards: fingerprints of SAX cases.
+
+Run `tmp/climb/runs/c10`, 8 samples per arm, against C9. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `records/transactions_stream_large` | -1.3% | -2.6% | -0.4% | -5.3%* |
+| `stream/logs_sax_ignore_errors` | -2.6% | -3.2%* | +2.3% | -4.2%* |
+| `records/tickets_stream_infer` | -1.4% | -1.3% | 193.5→216.6 +12.0%* | -0.7% |
+| `nested/claims_sax` | +4.0% | +2.3% | +0.4% | -0.3% |
+
+Rejected: no wall or CPU gain reaches 3%, and RSS regresses. A moved hash map keeps the bucket array it grew to, where the copy was sized to its contents, so the stored inference samples got larger. The copy cost the profile showed was real (instructions fell 5%) but small next to parsing. Patch: `bench/rejected/c10-move-sax-records.patch`.
+
 ## Where It Stands
 
 (pending)
