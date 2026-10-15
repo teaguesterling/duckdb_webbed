@@ -457,6 +457,114 @@ Run `tmp/climb/runs/c17`, 8 samples per arm, against C16. Guard 56/56, `make tes
 
 Accepted. The bound is `SetValue` (11.6%) plus the skipped `Value` construction (1.4%).
 
+### Set Aside Without Measuring
+
+Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
+
+| Lead | Profile share | Why not |
+| --- | ---: | --- |
+| C11: one bind parse in `parse_xml` | 1.4% of `parse_xml_batch` | No profile entry backs it. |
+| Lazy XPath context in `XMLDocRAII` | ≤1.1% | Too small to reach 3%. |
+| `XML_PARSE_COMPACT` for DOM parses | unmeasured | Compact text overlays `properties` and `nsDef` on text nodes. A `record_element` XPath that selects text nodes would send them through the attribute loops in `xml_schema_inference.cpp`, so it fails the correctness rule without per-site guards. |
+| Reuse one scratch document in `ExtractXMLFragmentList` | ~1-2% of `extract_elements_attributes` | Most of `xmlFreeDoc` there is freeing the copied subtree, which stays. Dumping the original node instead of a copy changes namespace output. |
+| Tree-less validity check for `xml_valid` | parse is 48% of `validity_stats` | libxml2's entity and DTD handling lives in the SAX2 tree handlers, so the result could diverge from the DOM parse. |
+| Share one parse across scalar calls on the same row | parse is ~60% of `orders_objects` | DuckDB evaluates each function over the whole chunk in turn, so a per-thread last-document cache never hits. |
+| `InferColumnType`, SAX row emission, `HtmlToDuckBlocks` | 7-31% each, diffuse | Spread over many small callees (hash lookups, small copies, `Value` construction). No single change bounded above 3%. |
+| `ReadFileFully` and `OpenFile` in `manyfiles` cases | 15-23% | File system calls, outside scope. |
+
 ## Where It Stands
 
-(pending)
+Base (`3c0d569`) against final (C17, `0d46b54`), interleaved, 8 samples per arm per case. The guard reported 0 mismatches over 56 cases and `make test` passes on the final build.
+
+| Split | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `dev`, geomean over 36 cases | -26.3% | -25.2% | -2.4% | -25.6% |
+| `holdout`, geomean over 20 cases | -17.3% | -17.4% | -2.6% | -20.8% |
+
+The climb holds on `holdout`. No holdout case regressed significantly on any metric, and both real-data cases improved: DBLP wall -20.5%*, RSS -18.8%*, NASA wall -10.9%*, RSS -11.1%*.
+
+Accepted, in order: C1, C2, C3, C5, C6, C8, C9, C13, C14, C15, C16, C17. Rejected: C4, C7, C10, C12. Set aside: C11 and the leads above.
+
+`scalar/extract_text_xpaths` was the one starred dev regression (wall +11.0%*, CPU +3.4%, not significant). A rerun of that case alone (`runs/final-xpaths`, 12 samples per arm) gave wall -11.3%*, CPU -0.2%, instructions -1.8%. Its multi-threaded wall swings about ±11% between runs, and CPU did not move, so it is noise.
+
+Stop reason: the profile's remaining entries are either below the 3% bar on their own, diffuse across many callees, or outside scope (file system calls, libxml2 internals). See Set Aside Without Measuring. The budget was not the limit.
+
+### `dev`
+
+```
+case                                arm    wall (s)                    cpu (s)                     rss (MB)                    instr (G)                  
+html/duck_blocks                    final  0.941→0.930 -1.2% p=0.34    0.937→0.925 -1.2% p=0.45    215.0→215.6 +0.3% p=0.78    11.76→11.73 -0.2% p=0.86   
+html/extract_text                   final  1.095→1.084 -1.0% p=0.32    1.086→1.078 -0.8% p=0.49    309.9→309.9 +0.0% p=1.00    12.44→12.43 -0.1% p=1.00   
+html/large_page_tables              final  1.228→0.352 -71.3% p=0.00*  1.218→0.349 -71.3% p=0.00*  320.3→307.6 -4.0% p=0.00*   11.81→4.21 -64.4% p=0.00*  
+html/links_images                   final  0.283→0.282 -0.5% p=0.87    2.227→2.259 +1.4% p=0.21    46.4→46.3 -0.1% p=0.99      21.38→21.45 +0.3% p=0.38   
+html/read_html_tables               final  0.121→0.120 -1.2% p=0.59    0.834→0.818 -1.9% p=0.35    34.5→34.3 -0.7% p=0.05      7.29→7.24 -0.8% p=0.05     
+html/table_rows                     final  1.724→1.284 -25.5% p=0.05*  1.424→1.277 -10.3% p=0.00*  345.1→342.9 -0.6% p=0.20    18.59→17.30 -6.9% p=0.01*  
+manyfiles/catalog_medium            final  0.371→0.252 -32.0% p=0.00*  2.349→1.825 -22.3% p=0.00*  55.9→53.5 -4.3% p=0.03*     26.46→18.04 -31.8% p=0.00* 
+manyfiles/orders_glob               final  0.396→0.338 -14.5% p=0.00*  2.915→2.397 -17.8% p=0.00*  50.0→49.0 -1.9% p=0.02      27.56→20.73 -24.8% p=0.00* 
+manyfiles/orders_objects            final  0.625→0.618 -1.1% p=0.27    4.866→4.780 -1.8% p=0.01    46.7→46.2 -0.9% p=0.06      46.82→46.77 -0.1% p=0.03   
+manyfiles/pages_html_objects        final  0.293→0.286 -2.6% p=0.32    1.999→2.039 +2.0% p=0.45    47.7→47.6 -0.0% p=0.99      15.64→15.75 +0.7% p=0.83   
+manyfiles/telemetry_union           final  1.176→0.792 -32.7% p=0.00*  2.114→1.482 -29.9% p=0.00*  40.5→39.5 -2.4% p=0.00      24.76→16.04 -35.2% p=0.00* 
+nested/catalog_dom_infer            final  1.720→1.417 -17.6% p=0.00*  1.694→1.411 -16.7% p=0.00*  413.2→413.4 +0.1% p=0.59    20.11→16.03 -20.3% p=0.00* 
+nested/catalog_force_list           final  1.712→1.417 -17.2% p=0.00*  1.676→1.409 -15.9% p=0.03*  414.9→413.9 -0.2% p=0.05    20.14→16.06 -20.3% p=0.01* 
+nested/catalog_max_depth            final  1.919→1.387 -27.7% p=0.01*  1.718→1.379 -19.7% p=0.01*  409.7→408.2 -0.4% p=0.08    20.37→16.37 -19.7% p=0.03* 
+nested/claims_sax                   final  2.083→2.048 -1.7% p=0.16    2.080→2.051 -1.4% p=0.37    32.1→32.1 +0.1% p=0.77      28.90→28.65 -0.9% p=0.01   
+nested/org_departments              final  0.692→0.474 -31.5% p=0.00*  0.686→0.471 -31.4% p=0.02*  158.0→151.5 -4.1% p=0.00*   8.74→5.54 -36.6% p=0.04*   
+nested/org_regions_deep             final  0.677→0.462 -31.8% p=0.00*  0.672→0.459 -31.8% p=0.00*  168.1→162.2 -3.5% p=0.00*   8.67→5.46 -37.0% p=0.00*   
+records/catalog_record_element      final  0.610→0.391 -35.9% p=0.00*  0.606→0.387 -36.1% p=0.00*  171.8→165.7 -3.6% p=0.00*   7.49→4.23 -43.6% p=0.00*   
+records/events_attr_discard         final  0.405→0.298 -26.3% p=0.00*  0.400→0.295 -26.3% p=0.00*  199.6→198.8 -0.4% p=0.01    5.26→3.68 -30.0% p=0.00*   
+records/events_attr_prefixed        final  0.510→0.395 -22.4% p=0.00*  0.505→0.394 -21.9% p=0.01*  204.4→204.4 +0.0% p=1.00    6.60→5.02 -24.0% p=0.01*   
+records/orders_infer                final  0.753→0.626 -16.8% p=0.00*  0.748→0.621 -17.1% p=0.00*  235.1→235.0 -0.0% p=0.61    8.40→6.52 -22.4% p=0.00*   
+records/readings_columns_numeric    final  0.287→0.284 -1.1% p=1.00    0.279→0.287 +2.8% p=0.45    236.8→236.7 -0.0% p=0.32    3.54→3.52 -0.5% p=0.03     
+records/tickets_stream_infer        final  0.853→0.706 -17.2% p=0.04*  0.847→0.703 -17.0% p=0.06*  254.6→193.0 -24.2% p=0.00*  11.28→9.30 -17.5% p=0.06*  
+records/transactions_stream_large   final  2.453→1.605 -34.6% p=0.00*  2.434→1.590 -34.7% p=0.00*  26.7→26.6 -0.5% p=0.01      32.94→22.88 -30.5% p=0.00* 
+scalar/extract_elements_attributes  final  1.711→1.738 +1.6% p=0.56    12.782→12.493 -2.3% p=0.09  255.6→261.2 +2.2% p=0.09    133.49→131.64 -1.4% p=0.17 
+scalar/extract_text_xpaths          final  1.843→2.047 +11.0% p=0.04*  13.347→13.804 +3.4% p=0.16  227.1→227.2 +0.1% p=0.89    136.72→144.79 +5.9% p=0.10*
+scalar/minify_pretty                final  1.226→1.138 -7.2% p=0.61    7.931→7.776 -1.9% p=0.63    323.3→317.1 -1.9% p=0.62    80.00→81.31 +1.6% p=0.75   
+scalar/parse_xml_batch              final  2.005→1.621 -19.1% p=0.07*  2.285→1.966 -14.0% p=0.02*  722.6→709.2 -1.9% p=0.00    24.85→21.37 -14.0% p=0.02* 
+scalar/to_json                      final  0.912→0.645 -29.2% p=0.00*  6.783→4.763 -29.8% p=0.00*  227.5→227.7 +0.1% p=1.00    64.86→45.96 -29.1% p=0.00* 
+scalar/to_xml_struct                final  0.618→0.194 -68.6% p=0.00*  4.474→1.395 -68.8% p=0.00*  60.6→57.2 -5.6% p=0.00*     25.56→13.88 -45.7% p=0.00* 
+scalar/validity_stats               final  1.248→1.254 +0.5% p=0.67    9.358→9.314 -0.5% p=0.70    218.3→218.3 -0.0% p=1.00    96.30→96.38 +0.1% p=0.82   
+stream/atom_glob_ns_strip           final  2.188→1.824 -16.6% p=0.01*  3.358→2.884 -14.1% p=0.01*  305.0→273.9 -10.2% p=0.00*  41.06→34.22 -16.7% p=0.02* 
+stream/logs_sax_ignore_errors       final  1.635→0.209 -87.2% p=0.00*  1.660→0.238 -85.7% p=0.00*  116.9→116.4 -0.4% p=0.40    17.91→3.02 -83.2% p=0.00*  
+stream/orders_sax_infer             final  2.763→2.358 -14.7% p=0.01*  2.738→2.336 -14.7% p=0.00*  741.8→618.1 -16.7% p=0.00*  34.48→28.98 -15.9% p=0.00* 
+stream/orders_sax_items_columns     final  1.455→1.398 -3.9% p=0.03*   1.465→1.411 -3.7% p=0.03*   63.2→63.5 +0.5% p=0.80      20.88→20.22 -3.2% p=0.01*  
+stream/soap_xpath_ns                final  0.572→0.209 -63.5% p=0.00*  4.612→1.407 -69.5% p=0.00*  41.6→42.6 +2.4% p=0.02      55.50→11.01 -80.2% p=0.00* 
+
+geomean final cpu: -25.2% over 36 cases
+geomean final instr: -25.6% over 36 cases
+geomean final rss: -2.4% over 36 cases
+geomean final wall: -26.3% over 36 cases
+samples per arm per case: {'final': 8, 'base': 8}
+```
+
+### `holdout`
+
+```
+case                                        arm    wall (s)                    cpu (s)                     rss (MB)                      instr (G)                 
+html/holdout_duck_blocks                    final  1.662→1.680 +1.1% p=0.48    1.660→1.680 +1.2% p=0.50    318.1→316.6 -0.5% p=0.67      21.23→21.26 +0.2% p=0.72  
+html/holdout_extract_text                   final  0.822→0.832 +1.3% p=0.05    0.816→0.825 +1.1% p=0.05    237.0→237.3 +0.1% p=0.76      9.11→9.12 +0.1% p=0.78    
+html/holdout_table_rows                     final  0.552→0.521 -5.6% p=0.01*   0.549→0.517 -5.8% p=0.00*   213.2→212.3 -0.4% p=0.46      6.40→5.97 -6.7% p=0.00*   
+manyfiles/ledger_union                      final  0.777→0.537 -31.0% p=0.00*  1.427→1.089 -23.6% p=0.00*  37.2→36.7 -1.4% p=0.02        15.20→10.43 -31.4% p=0.00*
+manyfiles/shipments_glob                    final  0.251→0.237 -5.3% p=0.28    1.728→1.564 -9.5% p=0.01*   49.7→49.2 -1.0% p=0.07        13.55→11.67 -13.9% p=0.00*
+manyfiles/shipments_objects                 final  0.298→0.292 -2.3% p=0.37    2.054→2.055 +0.1% p=0.92    41.3→41.1 -0.4% p=0.47        17.75→17.71 -0.2% p=0.60  
+nested/holdout_catalog_dom_infer            final  1.509→1.266 -16.1% p=0.00*  1.503→1.249 -16.9% p=0.00*  380.6→379.5 -0.3% p=0.02      17.74→14.05 -20.8% p=0.00*
+nested/holdout_claims_sax                   final  2.388→2.384 -0.2% p=0.90    2.382→2.367 -0.7% p=0.31    33.4→33.4 +0.0% p=0.99        32.74→32.44 -0.9% p=0.02  
+nested/holdout_org_regions_deep             final  0.657→0.454 -31.0% p=0.00*  0.653→0.450 -31.1% p=0.00*  164.2→159.0 -3.1% p=0.00*     8.35→5.25 -37.1% p=0.00*  
+records/holdout_events_attr_prefixed        final  0.658→0.531 -19.3% p=0.00*  0.653→0.526 -19.4% p=0.00*  248.3→247.9 -0.1% p=0.32      8.56→6.64 -22.5% p=0.00*  
+records/holdout_orders_infer                final  0.666→0.553 -16.9% p=0.02*  0.661→0.549 -17.0% p=0.00*  197.8→197.7 -0.1% p=0.36      7.56→5.88 -22.2% p=0.00*  
+records/holdout_transactions_stream         final  1.674→1.447 -13.6% p=0.00*  1.669→1.443 -13.5% p=0.00*  27.0→26.9 -0.2% p=0.07        23.04→20.22 -12.2% p=0.00*
+scalar/holdout_extract_elements_attributes  final  1.288→1.278 -0.7% p=0.54    9.841→9.827 -0.1% p=0.94    330.3→333.0 +0.8% p=0.52      100.29→100.06 -0.2% p=0.65
+scalar/holdout_extract_text_xpaths          final  1.595→1.534 -3.8% p=0.19    11.258→11.148 -1.0% p=0.53  257.0→257.4 +0.1% p=0.44      112.05→111.92 -0.1% p=0.83
+scalar/holdout_to_json                      final  0.873→0.576 -34.0% p=0.02*  6.126→4.159 -32.1% p=0.00*  334.0→326.8 -2.2% p=0.00      54.89→40.18 -26.8% p=0.00*
+stream/holdout_orders_sax_items_columns     final  0.673→0.635 -5.6% p=0.08*   0.688→0.648 -5.9% p=0.30    54.2→53.4 -1.4% p=0.24        9.33→8.87 -4.9% p=0.29    
+stream/holdout_real_dblp_sax                final  5.619→4.465 -20.5% p=0.00*  5.619→4.450 -20.8% p=0.00*  1545.5→1254.7 -18.8% p=0.00*  73.25→57.78 -21.1% p=0.00*
+stream/holdout_real_nasa_ns_sax             final  1.313→1.171 -10.9% p=0.00*  1.307→1.158 -11.4% p=0.00*  351.5→312.4 -11.1% p=0.00*    15.35→13.20 -14.0% p=0.00*
+stream/holdout_rss_glob_ns_strip            final  1.236→0.974 -21.2% p=0.00*  1.503→1.199 -20.2% p=0.00*  270.9→239.9 -11.4% p=0.00*    19.09→14.81 -22.4% p=0.00*
+stream/holdout_soap12_xpath_ns              final  0.427→0.140 -67.1% p=0.00*  3.409→0.962 -71.8% p=0.00*  38.2→39.2 +2.7% p=0.00        44.54→8.02 -82.0% p=0.00* 
+
+geomean final cpu: -17.4% over 20 cases
+geomean final instr: -20.8% over 20 cases
+geomean final rss: -2.6% over 20 cases
+geomean final wall: -17.3% over 20 cases
+samples per arm per case: {'base': 8, 'final': 8}
+```
