@@ -996,8 +996,14 @@ make release
 make test
 ```
 
+To load a local build alongside extensions installed from the community registry, the build must report the registry's DuckDB version. Tag the pinned commit before building:
+
+```bash
+DUCKDB_TAG=v2.0.0-alpha46057 make set_duckdb_tag
+```
+
 **Requirements:**
-- DuckDB v1.5+ (built against the current stable line; see releases for the exact pinned version)
+- DuckDB v2.0 (the `duckdb` submodule pins the community registry's default commit). Binaries are also built for DuckDB v1.5.6.
 - libxml2 (managed via vcpkg)
 - C++17 compiler
 
