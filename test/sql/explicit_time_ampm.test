@@ -1,0 +1,221 @@
+# name: test/sql/explicit_time_ampm.test
+# description: An explicit TIME column dropped the AM/PM marker. With no datetime format threaded in, a TIME value was parsed with DuckDB's lenient time cast, which stops at the first character it does not recognise, so '01:30:00 PM' read as 01:30:00. Inference typed the same column correctly through %I:%M:%S %p. An explicit TIME column must read the same value, or fail, but never read a different time.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# Inferred: the %I:%M:%S %p candidate types the column and reads the marker.
+# This was already correct and is the reference for the explicit column.
+# =============================================================================
+
+query II
+SELECT typeof(t), t FROM read_xml('test/xml/time_ampm.xml', streaming := false);
+----
+TIME	13:30:00
+TIME	11:05:00
+TIME	00:00:00
+
+query II
+SELECT typeof(t), t FROM read_xml('test/xml/time_ampm.xml', streaming := true, maximum_file_size := 1);
+----
+TIME	13:30:00
+TIME	11:05:00
+TIME	00:00:00
+
+# =============================================================================
+# Explicit TIME: before the fix both paths read 01:30:00, 11:05:00, 12:00:00.
+# =============================================================================
+
+query I
+SELECT t FROM read_xml('test/xml/time_ampm.xml', columns := {'t': 'TIME'}, streaming := false);
+----
+13:30:00
+11:05:00
+00:00:00
+
+query I
+SELECT t FROM read_xml('test/xml/time_ampm.xml', columns := {'t': 'TIME'}, streaming := true, maximum_file_size := 1);
+----
+13:30:00
+11:05:00
+00:00:00
+
+# Without seconds, %I:%M:%S %p doesn't match, so the value fails instead of dropping the marker
+statement error
+SELECT t FROM parse_xml('<rows><row><t>1:30 PM</t></row></rows>', columns := {'t': 'TIME'});
+----
+does not match column type TIME
+
+query I
+SELECT t FROM parse_xml('<rows><row><t>1:30 PM</t></row></rows>', columns := {'t': 'TIME'}, ignore_errors := true);
+----
+NULL
+
+# With temporal detection off there are no candidates, so the marker cannot be read
+statement error
+SELECT t FROM read_xml('test/xml/time_ampm.xml', columns := {'t': 'TIME'}, datetime_format := 'none');
+----
+does not match column type TIME
+
+# Text the lenient cast accepted without loss still parses
+query I
+SELECT t FROM parse_xml('<rows><row><t>13:30</t></row><row><t>2024-01-15 13:30:00</t></row></rows>', columns := {'t': 'TIME'});
+----
+13:30:00
+13:30:00
+
+# =============================================================================
+# The other temporal types. TIMETZ already rejected a trailing marker as an
+# invalid offset and fell back to the candidates. TIMESTAMP and TIMESTAMPTZ
+# read ' PM' as a time zone name and fail, so neither reads a wrong value.
+# =============================================================================
+
+query I
+SELECT t::VARCHAR FROM read_xml('test/xml/time_ampm.xml', columns := {'t': 'TIMETZ'}, streaming := false);
+----
+13:30:00+00
+11:05:00+00
+00:00:00+00
+
+query I
+SELECT t::VARCHAR FROM read_xml('test/xml/time_ampm.xml', columns := {'t': 'TIMETZ'}, streaming := true, maximum_file_size := 1);
+----
+13:30:00+00
+11:05:00+00
+00:00:00+00
+
+# Inferred: no auto candidate pairs a date with %p, so the column stays VARCHAR
+query II
+SELECT typeof(ts), ts FROM read_xml('test/xml/time_ampm.xml', streaming := false) LIMIT 1;
+----
+VARCHAR	2024-01-15 01:30:00 PM
+
+statement error
+SELECT ts FROM read_xml('test/xml/time_ampm.xml', columns := {'ts': 'TIMESTAMP'}, streaming := false);
+----
+2024-01-15 01:30:00 PM
+
+statement error
+SELECT ts FROM read_xml('test/xml/time_ampm.xml', columns := {'ts': 'TIMESTAMP'}, streaming := true, maximum_file_size := 1);
+----
+2024-01-15 01:30:00 PM
+
+statement error
+SELECT ts FROM read_xml('test/xml/time_ampm.xml', columns := {'ts': 'TIMESTAMPTZ'}, streaming := false);
+----
+2024-01-15 01:30:00 PM
+
+statement error
+SELECT ts FROM read_xml('test/xml/time_ampm.xml', columns := {'ts': 'TIMESTAMPTZ'}, streaming := true, maximum_file_size := 1);
+----
+2024-01-15 01:30:00 PM
+
+query II
+SELECT ts IS NULL, count(*) FROM read_xml('test/xml/time_ampm.xml', columns := {'ts': 'TIMESTAMP'}, ignore_errors := true) GROUP BY ALL;
+----
+true	3
+
+# =============================================================================
+# Marker spellings. %p matches case-insensitively, and 12 PM is noon. Without
+# a space before the marker no candidate matches, and inference leaves such a
+# column VARCHAR, so an explicit TIME column rejects it too.
+# =============================================================================
+
+query I
+SELECT t FROM parse_xml('<rows><row><t>01:30:00 pm</t></row><row><t>12:00:00 PM</t></row></rows>', columns := {'t': 'TIME'});
+----
+13:30:00
+12:00:00
+
+statement error
+SELECT t FROM parse_xml('<rows><row><t>01:30:00PM</t></row></rows>', columns := {'t': 'TIME'});
+----
+does not match column type TIME
+
+query II
+SELECT typeof(t), t FROM parse_xml('<rows><row><t>01:30:00PM</t></row></rows>');
+----
+VARCHAR	01:30:00PM
+
+# A 24-hour value with a marker is ambiguous. The lenient cast read it as 13:30:00.
+statement error
+SELECT t FROM parse_xml('<rows><row><t>13:30:00 PM</t></row></rows>', columns := {'t': 'TIME'});
+----
+does not match column type TIME
+
+# =============================================================================
+# Zone suffixes. A zero offset ('Z', 'UTC', +00:00) reads as the bare time. A
+# non-zero offset raises instead of being dropped, and names TIMETZ.
+# =============================================================================
+
+query I
+SELECT t FROM parse_xml('<rows><row><t>13:30:00Z</t></row><row><t>13:30:00 UTC</t></row><row><t>13:30:00+00:00</t></row><row><t>2024-01-15 13:30:00Z</t></row></rows>', columns := {'t': 'TIME'});
+----
+13:30:00
+13:30:00
+13:30:00
+13:30:00
+
+statement error
+SELECT t FROM parse_xml('<rows><row><t>13:30:00+05:00</t></row></rows>', columns := {'t': 'TIME'});
+----
+Use TIMETZ to keep it
+
+statement error
+SELECT t FROM parse_xml('<rows><row><t>2024-01-15 13:30:00+05:00</t></row></rows>', columns := {'t': 'TIME'});
+----
+Use TIMETZ to keep it
+
+# TIMETZ reads 'Z' and 'UTC' as a zero offset. DuckDB's offset parser takes only ±HH[:MM[:SS]].
+query I
+SELECT t::VARCHAR FROM parse_xml('<rows><row><t>13:30:00Z</t></row><row><t>13:30:00 UTC</t></row><row><t>13:30:00+05:00</t></row></rows>', columns := {'t': 'TIMETZ'});
+----
+13:30:00+00
+13:30:00+00
+13:30:00+05
+
+# =============================================================================
+# DOM and SAX agree across positions: a scalar column, a zone suffix, a STRUCT
+# field, a repeated LIST element, and a timestamp read as TIME, with nullstr
+# reading NULL in each.
+# =============================================================================
+
+query IIIII
+SELECT * FROM read_xml('test/xml/time_explicit.xml', columns := {'t': 'TIME', 'z': 'TIME', 's': 'STRUCT(t TIME)', 'l': 'TIME[]', 'ts': 'TIME'}, nullstr := 'N/A', streaming := false);
+----
+13:30:00	13:30:00	{'t': '13:30:00'}	['13:30:00', '11:05:00']	13:30:00
+12:00:00	13:30:00	{'t': '00:00:00'}	['12:00:00']	01:05:00
+NULL	13:30:00	{'t': NULL}	[NULL]	NULL
+
+query IIIII
+SELECT * FROM read_xml('test/xml/time_explicit.xml', columns := {'t': 'TIME', 'z': 'TIME', 's': 'STRUCT(t TIME)', 'l': 'TIME[]', 'ts': 'TIME'}, nullstr := 'N/A', streaming := true, maximum_file_size := 1);
+----
+13:30:00	13:30:00	{'t': '13:30:00'}	['13:30:00', '11:05:00']	13:30:00
+12:00:00	13:30:00	{'t': '00:00:00'}	['12:00:00']	01:05:00
+NULL	13:30:00	{'t': NULL}	[NULL]	NULL
+
+# =============================================================================
+# ignore_errors drops only the unreadable rows, on both paths.
+# =============================================================================
+
+query I
+SELECT t FROM read_xml('test/xml/time_ampm_invalid.xml', columns := {'t': 'TIME'}, ignore_errors := true, streaming := false);
+----
+13:30:00
+NULL
+NULL
+11:05:00
+
+query I
+SELECT t FROM read_xml('test/xml/time_ampm_invalid.xml', columns := {'t': 'TIME'}, ignore_errors := true, streaming := true, maximum_file_size := 1);
+----
+13:30:00
+NULL
+NULL
+11:05:00
+
+statement error
+SELECT t FROM read_xml('test/xml/time_ampm_invalid.xml', columns := {'t': 'TIME'}, streaming := true, maximum_file_size := 1);
+----
+13:30:00 PM
