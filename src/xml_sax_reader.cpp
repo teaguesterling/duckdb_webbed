@@ -851,9 +851,10 @@ std::vector<Value> SAXStreamReader::AccumulatorToRow(const SAXRecordAccumulator 
 				                                                        options, ns_decls, occs.front().own_attrs);
 			} else {
 				// Text-only occurrence: wrap escaped text so the extractor yields a non-NULL struct
-				// shell (fields NULL), matching DOM, rather than a fully-NULL struct.
+				// shell (fields NULL), matching DOM, rather than a fully-NULL struct. An empty
+				// element takes the same path.
 				const std::string &text = occs.front().payload;
-				if (text.empty() || IsNullString(text, options)) {
+				if (IsNullString(text, options)) {
 					value = Value(col_type); // typed NULL
 				} else {
 					value = XMLSchemaInference::ExtractValueFromXmlFragment(col_name, XmlEscapeText(text), col_type,

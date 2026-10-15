@@ -2096,11 +2096,6 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
                                                       const LogicalType &target_type, const XMLSchemaOptions &options,
                                                       const std::string &extra_ns_decls,
                                                       const std::string &extra_attrs) {
-	// Empty inner content yields NULL only when the element also has no own attributes; an
-	// attribute-only element (inner_xml empty, extra_attrs set) must still parse to a non-NULL STRUCT.
-	if (inner_xml.empty() && extra_attrs.empty()) {
-		return Value(target_type);
-	}
 	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
 	// receives a node whose ->children are the original siblings. extra_ns_decls injects any xmlns:
 	// declarations the fragment's prefixed names depend on (the originating decls are not part of the
