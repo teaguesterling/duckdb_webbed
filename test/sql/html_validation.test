@@ -34,9 +34,10 @@ statement ok
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', namespaces:='invalid_value');
 
 # Test 6: Verify empty_elements parameter accepts only valid values
-# TODO: Add parameter validation for empty_elements
-statement ok
+statement error
 SELECT * FROM read_html('test/html/complex_types_test.html', record_element:='article', empty_elements:='invalid_value');
+----
+"empty_elements" parameter must be 'null', 'object' or 'string'
 
 # Test 7: Test that HTML files are properly validated before processing
 query I

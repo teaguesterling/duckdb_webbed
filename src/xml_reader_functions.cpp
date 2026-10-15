@@ -131,6 +131,21 @@ std::vector<std::string> ResolveDatetimeFormat(const std::string &input) {
 
 namespace duckdb {
 
+// Parse empty_elements: how an element with no text, children or attributes types its column.
+// 'null' and 'object' leave the type to other instances or files (VARCHAR if none has one).
+// 'string' types the column VARCHAR.
+static std::string ParseEmptyElementsParameter(const Value &val, const char *function_name) {
+	if (val.IsNull()) {
+		return XMLSchemaOptions {}.empty_elements;
+	}
+	auto mode = val.ToString();
+	if (mode != "null" && mode != "object" && mode != "string") {
+		throw BinderException("%s \"empty_elements\" parameter must be 'null', 'object' or 'string', got: '%s'",
+		                      function_name, mode);
+	}
+	return mode;
+}
+
 // Parse nullstr parameter (VARCHAR or LIST(VARCHAR)) into null_strings vector.
 // Throws BinderException for invalid types.
 static void ParseNullstrParameter(const Value &val, const char *function_name, std::vector<std::string> &null_strings) {
@@ -191,6 +206,7 @@ static bool SchemaHasUnsupportedSAXType(const std::vector<LogicalType> &column_t
 // New columns are appended; existing columns are widened via MergeXMLColumnType.
 // When the merged type differs from the previous one, the column's datetime format
 // hint is reset so that DuckDB's built-in temporal parsing handles the widened type.
+// A previous SQLNULL (an element empty so far) carries no format, so the new file's is taken.
 static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
                                  std::unordered_map<std::string, LogicalType> &union_schema,
                                  std::unordered_map<std::string, std::string> &union_formats,
@@ -205,8 +221,9 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 		}
 		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type);
 		if (merged != it->second) {
+			union_formats[col_info.name] =
+			    it->second.id() == LogicalTypeId::SQLNULL ? col_info.winning_datetime_format : "";
 			it->second = merged;
-			union_formats[col_info.name] = "";
 		}
 		// NOTE(#38): When types match across files but datetime formats differ,
 		// the first file's format wins. This is acceptable since the format was
@@ -466,7 +483,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "namespaces") {
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
-			schema_options.empty_elements = kv.second.ToString();
+			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, function_name);
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -650,12 +667,13 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 							}
 						}
 
-						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 					}
 
 					// Store full inferred schema from first file (preserves is_attribute flags)
 					if (result->inferred_schema.empty()) {
 						result->inferred_schema = inferred_columns;
+						XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 					}
 
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
@@ -674,7 +692,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
 					names.push_back(CompatMakeName(col_name));
-					return_types.push_back(union_schema[col_name]);
+					return_types.push_back(XMLSchemaInference::ResolveUnknownTypes(union_schema[col_name]));
 				}
 
 				// Always store schema for execution to ensure consistent column ordering
@@ -1445,7 +1463,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "namespaces") {
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
-			schema_options.empty_elements = kv.second.ToString();
+			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, "read_xml");
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -1623,7 +1641,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 							continue;
 						}
 
-						inferred_columns = XMLSchemaInference::InferSchema(content, schema_options);
+						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 					}
 
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order);
@@ -1642,7 +1660,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			if (!union_schema.empty()) {
 				for (const auto &col_name : column_order) {
 					names.push_back(CompatMakeName(col_name));
-					return_types.push_back(union_schema[col_name]);
+					return_types.push_back(XMLSchemaInference::ResolveUnknownTypes(union_schema[col_name]));
 				}
 
 				// Always store schema for execution to ensure consistent column ordering
@@ -1921,7 +1939,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 		} else if (kv.first == "namespaces") {
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
-			schema_options.empty_elements = kv.second.ToString();
+			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, function_name);
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {

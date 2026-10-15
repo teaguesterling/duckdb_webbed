@@ -714,7 +714,7 @@ read_xml('pattern',
     attr_mode='prefix',           -- Attribute handling: 'prefix' (default), 'merge', or 'ignore'
     attr_prefix='@',              -- Prefix for attribute columns (default: '@')
     text_key='#text',             -- Key for text content in mixed elements (default: '#text')
-    empty_elements='object',      -- How to handle empty elements: 'object' (default), 'null', 'string'
+    empty_elements='null',        -- How empty elements type their column: 'null' (default), 'object', 'string'
     namespaces='strip',           -- Namespace handling: 'strip' (default), 'expand', 'keep'
     union_by_name=false           -- Combine columns by name when reading multiple files (default: false)
 );
@@ -738,7 +738,7 @@ read_xml('pattern',
 - **`attr_mode`**: How to handle XML attributes: `'prefix'` (default) adds prefix to attribute column names, `'merge'` merges with elements, `'ignore'` ignores attributes
 - **`attr_prefix`**: Prefix added to attribute column names when `attr_mode='prefix'` (default: `'@'`)
 - **`text_key`**: Key name for text content when elements have mixed content (text + child elements) (default: `'#text'`)
-- **`empty_elements`**: How to handle empty elements: `'object'` (default) returns empty struct, `'null'` returns NULL, `'string'` returns empty string
+- **`empty_elements`**: How an empty element (no text, children or attributes) affects type inference. With `'null'` (default) or `'object'`, the column takes its type from the element's other occurrences, in the same file or in other files, and is VARCHAR only when the element is empty everywhere. `'string'` types the column VARCHAR whenever the element is empty somewhere. The empty element itself reads as NULL, or as a struct of NULL fields in a STRUCT column
 - **`namespaces`**: Namespace handling mode: `'strip'` (default) removes namespace prefixes, `'expand'` replaces prefixes with full URIs, `'keep'` preserves prefixes as-is
 - **`union_by_name`**: When reading multiple files, combine columns by name (like DuckDB's `union_by_name` for other formats). Scans **all** files to build the schema. Useful when files have different schemas and you want every column regardless of how many files there are (default: false)
 - **`sample_files`**: Number of files sampled for schema inference on a multi-file read (default: 8). Sampling a bounded handful — rather than only the first file — makes the inferred schema robust to columns/types that a leading file happens not to exhibit, without opening an entire glob. `sample_files := 1` restores first-file-only inference; `sample_files := -1` samples every file (like `union_by_name`). Ignored when `union_by_name = true` (which always scans all files) or when `columns` is given

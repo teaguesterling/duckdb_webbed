@@ -632,7 +632,7 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	// Force the record element to "record" since that's what we built
 	infer_options.record_element = "record";
 
-	auto columns = XMLSchemaInference::InferSchema(xml.str(), infer_options);
+	auto columns = XMLSchemaInference::InferSchemaForMerge(xml.str(), infer_options);
 
 	// sample_size <= 0 opts into a full-file verify pass that widens any column whose out-of-sample
 	// values don't fit the type inferred from the sample. (In SAX mode a non-positive sample_size

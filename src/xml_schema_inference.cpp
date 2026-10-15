@@ -5,6 +5,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/type_visitor.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
@@ -73,9 +74,16 @@ void XMLSchemaInference::CollectChildNamesInOrder(const std::vector<xmlNodePtr> 
 	}
 }
 
-// NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
                                                            const XMLSchemaOptions &options) {
+	auto columns = InferSchemaForMerge(xml_content, options);
+	ResolveUnknownTypes(columns);
+	return columns;
+}
+
+// NEW: Main InferSchema function using 3-phase approach
+std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::string &xml_content,
+                                                                   const XMLSchemaOptions &options) {
 	std::vector<XMLColumnInfo> columns;
 
 	// Parse document using appropriate parser based on opaque type name
@@ -444,7 +452,13 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// If all instances are leaf nodes, check if we should return as LIST
 	if (all_leaf) {
-		LogicalType scalar_type = InferTypeFromSamples(sample_values, options, winning_datetime_format);
+		// Every instance is empty (no text, children or attributes), so the element's type is unknown.
+		// SQLNULL lets MergeXMLColumnType adopt the type another file or sibling inferred, instead of
+		// a VARCHAR that would collapse a STRUCT or LIST seen elsewhere. empty_elements := 'string'
+		// keeps the old behavior of treating an empty element as a string.
+		bool no_evidence = text_samples.empty() && options.empty_elements != "string";
+		LogicalType scalar_type = no_evidence ? LogicalType::SQLNULL
+		                                      : InferTypeFromSamples(sample_values, options, winning_datetime_format);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
@@ -1429,6 +1443,12 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	if (a == b) {
 		return a;
 	}
+	if (a.id() == LogicalTypeId::SQLNULL) {
+		return b;
+	}
+	if (b.id() == LogicalTypeId::SQLNULL) {
+		return a;
+	}
 
 	if (a.id() == LogicalTypeId::STRUCT && b.id() == LogicalTypeId::STRUCT) {
 		auto &a_children = StructType::GetChildTypes(a);
@@ -1482,6 +1502,9 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	// A genuinely different shape such as STRUCT vs LIST<VARCHAR> is a true collision and falls
 	// through to the VARCHAR fallback below.
 	auto reconcilable = [&](const LogicalType &element, const LogicalType &singleton) {
+		if (element.id() == LogicalTypeId::SQLNULL) {
+			return true;
+		}
 		if (is_complex(element) || is_complex(singleton)) {
 			return element.id() == singleton.id();
 		}
@@ -1518,6 +1541,18 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return candidate;
 	}
 	return LogicalType::VARCHAR;
+}
+
+LogicalType XMLSchemaInference::ResolveUnknownTypes(const LogicalType &type) {
+	return TypeVisitor::VisitReplace(type, [](const LogicalType &t) {
+		return t.id() == LogicalTypeId::SQLNULL ? LogicalType::VARCHAR : t;
+	});
+}
+
+void XMLSchemaInference::ResolveUnknownTypes(std::vector<XMLColumnInfo> &columns) {
+	for (auto &column : columns) {
+		column.type = ResolveUnknownTypes(column.type);
+	}
 }
 
 std::string XMLSchemaInference::AttributeNameFromColumn(const std::string &column_name,
