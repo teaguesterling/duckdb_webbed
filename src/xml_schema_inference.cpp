@@ -2412,8 +2412,13 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 
 		// The text_key field (inference names it from options.text_key) holds the node's own text,
 		// unless a custom text_key matches an attribute or child element, which then fills the field
-		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name) &&
-		    IsOwnTextField(node, field_name)) {
+		// field_name is the struct child's key: std::string on the v1.5 line and
+		// duckdb::Identifier on v2.0, where it will not bind to a `const std::string&`
+		// parameter. CompatIdentifierName reads the raw name out of either (the string
+		// overload is a pass-through), so both helpers take a plain name on both lines.
+		const auto &field_name_str = CompatIdentifierName(field_name);
+		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
+		    IsOwnTextField(node, field_name_str)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
