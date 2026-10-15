@@ -137,6 +137,28 @@ Run `tmp/climb/runs/c2`, 8 samples per arm, against C1:
 
 The RSS star is concurrency, not the change: at `threads=1` RSS is 31.4 vs 31.5 MB (8 runs each), and at 8 threads 38.3 vs 39.3 MB. The scanner allocates only the prefixes it returns, as the regex did. With each worker finishing about 3x sooner, more of them hold a parsed document at once. Accepted with that exception noted. Bound: the regex was 63% of CPU in the profile, and CPU fell 66%, within noise of the bound.
 
+### Accepted: C3, walk table descendants instead of XPath unions
+
+Hypothesis: `ExtractHTMLTables` selects rows with `.//tbody//tr[not(ancestor::tfoot)] | .//tr[not(th)][not(ancestor::tfoot)]`. libxml2 evaluates each operand, then `xmlXPathNodeSetMerge` checks every node of one set against the other, which is quadratic in rows. That merge is 71.6% of `html/large_page_tables` (one 37k-row table). The header union `.//thead//th | .//tr[1]//th` has the same shape. One document-order walk of the table's descendants that tracks thead, tbody, tfoot and first-row ancestor depth gives the same sets in the same order without a merge.
+
+```
+before: rows = xpath(".//tbody//tr[not(ancestor::tfoot)] | .//tr[not(th)][not(ancestor::tfoot)]")
+after:  walk(table): on tr with no tfoot ancestor: keep if !has_th || in_tbody || no th child
+```
+
+Target: wall and CPU down on `html/large_page_tables` and `html/table_rows`, and `html/read_html_tables` slightly. Guards: fingerprints on HTML cases. Equivalence also checked on 90k random table documents (`tmp/climb/fuzz/gen_tables.py`, seeds 1 to 3, nested tables, foreign namespaces, uppercase tags, tables inside `tfoot`) through `html_extract_tables_json` and `html_extract_table_rows`: identical fingerprints.
+
+Run `tmp/climb/runs/c3`, 8 samples per arm, against C2. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `html/large_page_tables` | 1.070→0.341 -68.1%* | 1.071→0.340 -68.3%* | 319.2→305.4 -4.3%* | -64.7%* |
+| `html/table_rows` | 1.342→1.270 -5.4%* | 1.348→1.264 -6.2%* | -1.4% | -6.7%* |
+| `html/read_html_tables` | +1.2% | -3.2% | -1.1% | +0.2% |
+| other HTML cases | within ±3%, none starred | | | |
+
+Bound: the merge was 71.6% of `large_page_tables` CPU, and CPU fell 68%. Accepted.
+
 ## Where It Stands
 
 (pending)

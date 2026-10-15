@@ -2737,6 +2737,79 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 	return images;
 }
 
+// Ancestor depths inside an HTML table while walking its descendants in document order.
+struct HTMLTableScope {
+	int thead = 0;
+	int tbody = 0;
+	int tfoot = 0;
+	int first_tr = 0;
+};
+
+// Matches an unprefixed XPath name test, which in libxml2 also requires a null namespace.
+static bool IsHTMLElement(xmlNodePtr node, const char *name) {
+	return node->type == XML_ELEMENT_NODE && node->ns == nullptr && xmlStrEqual(node->name, BAD_CAST name);
+}
+
+static bool HasHTMLChild(xmlNodePtr node, const char *name) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (IsHTMLElement(child, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// XPath tr[1]: the first tr among its parent's children.
+static bool IsFirstHTMLRow(xmlNodePtr tr) {
+	for (xmlNodePtr sib = tr->prev; sib; sib = sib->prev) {
+		if (IsHTMLElement(sib, "tr")) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Visits every descendant of table in document order (the XPath descendant axis), passing the
+// counts of thead/tbody/tfoot/first-row ancestors strictly between the table and the node.
+template <class VISIT>
+static void WalkHTMLTable(xmlNodePtr table, VISIT &&visit) {
+	HTMLTableScope scope;
+	auto adjust = [&](xmlNodePtr node, int delta) {
+		if (node->type != XML_ELEMENT_NODE || node->ns != nullptr) {
+			return;
+		}
+		if (IsHTMLElement(node, "thead")) {
+			scope.thead += delta;
+		} else if (IsHTMLElement(node, "tbody")) {
+			scope.tbody += delta;
+		} else if (IsHTMLElement(node, "tfoot")) {
+			scope.tfoot += delta;
+		} else if (IsHTMLElement(node, "tr") && IsFirstHTMLRow(node)) {
+			scope.first_tr += delta;
+		}
+	};
+	xmlNodePtr cur = table->children;
+	while (cur) {
+		visit(cur, scope);
+		adjust(cur, 1);
+		if (cur->type != XML_ENTITY_REF_NODE && cur->children) {
+			cur = cur->children;
+			continue;
+		}
+		while (cur) {
+			adjust(cur, -1);
+			if (cur->next) {
+				cur = cur->next;
+				break;
+			}
+			cur = cur->parent;
+			if (cur == table) {
+				cur = nullptr;
+			}
+		}
+	}
+}
+
 std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) {
 	std::vector<HTMLTable> tables;
 
@@ -2766,39 +2839,43 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 				// Set context to this table node
 				local_ctx->node = table_node;
 
-				// Look for header cells (th elements)
-				xmlXPathObjectPtr header_obj = EvalXPathChecked(local_ctx, ".//thead//th | .//tr[1]//th");
-
-				if (header_obj && header_obj->nodesetval && header_obj->nodesetval->nodeNr > 0) {
-					// Found th elements - use as headers
-					for (int j = 0; j < header_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr th_node = header_obj->nodesetval->nodeTab[j];
-						XMLCharPtr text(xmlNodeGetContent(th_node));
-						if (text) {
-							table.headers.push_back(std::string(reinterpret_cast<const char *>(text.get())));
-						} else {
-							table.headers.push_back("");
-						}
+				// Header cells are `.//thead//th | .//tr[1]//th`. The walks below evaluate these
+				// unions directly: libxml2 merges union operands pairwise, which is quadratic in
+				// the row count of a large table.
+				WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
+					if ((scope.thead > 0 || scope.first_tr > 0) && IsHTMLElement(node, "th")) {
+						XMLCharPtr text(xmlNodeGetContent(node));
+						table.headers.push_back(text ? std::string(reinterpret_cast<const char *>(text.get())) : "");
 					}
-				}
-
-				if (header_obj)
-					xmlXPathFreeObject(header_obj);
+				});
 
 				// Extract data rows (all rows for tables without th headers)
 				bool has_th_headers = !table.headers.empty();
 				// tfoot rows are excluded here and collected separately below; without the
-				// filter they land in the body as ordinary data rows.
-				std::string data_xpath = has_th_headers ? ".//tbody//tr[not(ancestor::tfoot)] | "
-				                                          ".//tr[not(th)][not(ancestor::tfoot)]"
-				                                        : ".//tbody//tr[not(ancestor::tfoot)] | "
-				                                          ".//tr[not(ancestor::tfoot)]";
+				// filter they land in the body as ordinary data rows. With th headers this is
+				// `.//tbody//tr[not(ancestor::tfoot)] | .//tr[not(th)][not(ancestor::tfoot)]`,
+				// otherwise `.//tr[not(ancestor::tfoot)]`.
+				bool table_in_tfoot = false;
+				for (xmlNodePtr anc = table_node->parent; anc; anc = anc->parent) {
+					if (IsHTMLElement(anc, "tfoot")) {
+						table_in_tfoot = true;
+						break;
+					}
+				}
+				std::vector<xmlNodePtr> row_nodes;
+				if (!table_in_tfoot) {
+					WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
+						if (scope.tfoot > 0 || !IsHTMLElement(node, "tr")) {
+							return;
+						}
+						if (!has_th_headers || scope.tbody > 0 || !HasHTMLChild(node, "th")) {
+							row_nodes.push_back(node);
+						}
+					});
+				}
 
-				xmlXPathObjectPtr rows_obj = EvalXPathChecked(local_ctx, data_xpath);
-
-				if (rows_obj && rows_obj->nodesetval) {
-					for (int j = 0; j < rows_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr row_node = rows_obj->nodesetval->nodeTab[j];
+				{
+					for (xmlNodePtr row_node : row_nodes) {
 						std::vector<std::string> row_data;
 
 						// Extract td elements from this row
@@ -2829,9 +2906,6 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 						}
 					}
 				}
-
-				if (rows_obj)
-					xmlXPathFreeObject(rows_obj);
 
 				// <tfoot> rows, gathered the same way as body rows
 				xmlXPathObjectPtr foot_obj = EvalXPathChecked(local_ctx, ".//tfoot//tr");
