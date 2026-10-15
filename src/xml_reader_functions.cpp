@@ -668,19 +668,27 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 						ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 						if (mode == ParseMode::XML) {
-							auto validity = XMLUtils::CheckXML(content);
-							if (validity == XMLValidity::ResourceError) {
-								ThrowLibxmlOutOfMemory(file_path);
-							}
-							if (validity != XMLValidity::Valid) {
+							// One parse serves both the validity check (CheckXML parses identically)
+							// and inference, instead of parsing the file twice at bind.
+							XMLDocRAII doc(content);
+							if (!doc.IsValid()) {
+								if (doc.HadResourceError()) {
+									ThrowLibxmlOutOfMemory(file_path);
+								}
 								if (!result->ignore_errors) {
 									throw InvalidInputException("File %s contains invalid XML", file_path);
 								}
 								continue;
 							}
+							if (schema_options.opaque_type_name == "HTML") {
+								inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
+							} else {
+								string().swap(content);
+								inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
+							}
+						} else {
+							inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 						}
-
-						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
 					}
 
 					// Store full inferred schema from first file (preserves is_attribute flags)
@@ -1653,18 +1661,24 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 						content.resize(file_size);
 						ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
-						auto validity = XMLUtils::CheckXML(content);
-						if (validity == XMLValidity::ResourceError) {
-							ThrowLibxmlOutOfMemory(file_path);
-						}
-						if (validity != XMLValidity::Valid) {
+						// One parse serves both the validity check (CheckXML parses identically) and
+						// inference, instead of parsing the file twice at bind.
+						XMLDocRAII doc(content);
+						if (!doc.IsValid()) {
+							if (doc.HadResourceError()) {
+								ThrowLibxmlOutOfMemory(file_path);
+							}
 							if (!result->ignore_errors) {
 								throw InvalidInputException("File %s contains invalid XML", file_path);
 							}
 							continue;
 						}
-
-						inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
+						if (schema_options.opaque_type_name == "HTML") {
+							inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
+						} else {
+							string().swap(content);
+							inferred_columns = XMLSchemaInference::InferSchemaFromDocument(doc, schema_options);
+						}
 					}
 
 					MergeInferredColumns(inferred_columns, union_schema, union_formats, column_order,

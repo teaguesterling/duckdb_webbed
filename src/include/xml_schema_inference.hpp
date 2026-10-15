@@ -185,6 +185,8 @@ public:
 	// types through ResolveUnknownTypes before using them.
 	static std::vector<XMLColumnInfo> InferSchemaForMerge(const std::string &xml_content,
 	                                                      const XMLSchemaOptions &options);
+	// InferSchemaForMerge over an already parsed document, for callers that parsed it to check validity.
+	static std::vector<XMLColumnInfo> InferSchemaFromDocument(XMLDocRAII &doc, const XMLSchemaOptions &options);
 
 	// Extract structured data according to inferred schema
 	static std::vector<std::vector<Value>> ExtractData(const std::string &xml_content,

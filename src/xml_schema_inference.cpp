@@ -81,15 +81,18 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	return columns;
 }
 
-// NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::string &xml_content,
                                                                    const XMLSchemaOptions &options) {
-	std::vector<XMLColumnInfo> columns;
-
 	// Parse document using appropriate parser based on opaque type name
 	// HTML mode uses libxml2's HTML parser which handles malformed content better
 	bool is_html = (options.opaque_type_name == "HTML");
 	XMLDocRAII doc(xml_content, is_html);
+	return InferSchemaFromDocument(doc, options);
+}
+
+std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAII &doc,
+                                                                       const XMLSchemaOptions &options) {
+	std::vector<XMLColumnInfo> columns;
 	if (!doc.IsValid()) {
 		// Fallback
 		columns.emplace_back("content", LogicalType::VARCHAR, false, "", 1.0);

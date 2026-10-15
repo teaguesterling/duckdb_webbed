@@ -228,6 +228,34 @@ Run `tmp/climb/runs/c6`, 8 samples per arm, against C5. Guard 56/56, `make test`
 
 Accepted. The remaining 636 MB on `orders_sax_infer` is mostly the DOM of the 100k-record synthetic sample, which inference needs.
 
+### Accepted: C8, one parse for the bind-time validity check and DOM inference
+
+Hypothesis: DOM schema inference at bind parses each file in `CheckXML`, discards that document, and parses it again in `InferSchema`. The scan then parses it a third time. In `nested/catalog_dom_infer`, `XMLDocRAII` construction is 33.9% of CPU and destruction about 7%, spread over these three parses. Parsing once at bind and inferring from that document (`InferSchemaFromDocument`) removes one of the three, and freeing the file text before inference lowers bind-time memory. `CheckXML` and the XML branch of `InferSchema` parse with identical flags, so the document is the same. HTML-typed options keep the old path.
+
+```
+before: CheckXML(content) ? InferSchema(content) : error      // two parses
+after:  doc = parse(content); doc ? InferSchemaFromDocument(doc) : error
+```
+
+Target: wall and CPU down about 10% on DOM-inferred reads (`records/*` DOM cases, `nested/*` DOM cases, `manyfiles/*` with `union_by_name`). RSS flat or down. Guards: all fingerprints. Invalid-file errors keep the same message and resource-error path.
+
+Run `tmp/climb/runs/c8`, 8 samples per arm, against C6 (records, nested and manyfiles families). Guard 56/56, `make test` passes. Geomean wall -9.7%, CPU -8.8%, RSS -0.4%.
+
+| Scenario | wall | CPU | RSS |
+| --- | ---: | ---: | ---: |
+| `records/events_attr_discard` | -25.0%* | -24.9%* | -0.1% |
+| `records/events_attr_prefixed` | -20.1%* | -20.2%* | -0.1% |
+| `manyfiles/telemetry_union` | -17.3%* | -8.5%* | -1.0% |
+| `nested/catalog_max_depth` | -15.8%* | -15.7%* | -0.2% |
+| `records/orders_infer` | -15.0%* | -15.8%* | -0.2% |
+| `nested/catalog_force_list` | -14.7%* | -14.6%* | -0.3% |
+| `nested/catalog_dom_infer` | -14.3%* | -14.5%* | +0.0% |
+| `records/catalog_record_element` | -14.1%* | -14.1%* | -0.1% |
+| `nested/org_departments`, `org_regions_deep` | -10.2%* | -10.1%* | -0.7% |
+| SAX and explicit-column cases | within ±1%, none starred | | |
+
+Accepted. RSS is flat because the scan's own parse still sets the peak.
+
 ## Where It Stands
 
 (pending)
