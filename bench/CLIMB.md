@@ -277,6 +277,27 @@ Run `tmp/climb/runs/c7`, 8 samples per arm, against C8. Guard 56/56, `make test`
 
 Rejected: the main target did not move, and `minify_pretty` regressed on wall. The compile share in the base profile overstated what a cache could save there, since parsing the same document four times per row dominates. Patch: `bench/rejected/c7-xpath-cache.patch`.
 
+### Accepted: C9, `xml_to_json` writes into one buffer
+
+Hypothesis (from the re-profile of the accepted arm, `tmp/climb/profile/acc8`): in `scalar/to_json` the options overload of `XMLToJSON` owns 45% of CPU outside parsing. Each element returns its own string, which is copied into a `map<string, vector<string>>` and then into its parent's string, so every subtree is copied once per ancestor and built from `+` temporaries. Grouping child nodes (not their JSON) by name and recursing straight into one output buffer gives the same text. An element left empty under `empty_elements` 'null' or 'string' truncates back to its start, as the old early return did.
+
+```
+before: json(node) = "{" + attrs + text + for name in sorted(groups): name + ":" + join(json(child)) + "}"
+after:  write(node, out): same order, appending to out; children grouped as nodes
+```
+
+Target: CPU and wall down 20 to 30% on `scalar/to_json`. RSS flat. Guards: fingerprints. Equivalence: 40k generated documents (namespaced elements and attributes, default namespace, CDATA, comments, entities, repeated and empty children) through six `xml_to_json` option combinations covering every `namespaces` and `empty_elements` mode, `force_list`, `attr_prefix`, `text_key` and `xmlns_key` (`tmp/climb/fuzz/json.sql`): identical.
+
+Run `tmp/climb/runs/c9`, 8 samples per arm, against C8. Guard 56/56, `make test` passes.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `scalar/to_json` | 0.896→0.735 -18.0%* | 6.637→5.401 -18.6%* | +1.5% | -12.2%* |
+| `scalar/validity_stats` | -9.1% | +5.4%* | +0.0% | +5.9%* |
+| `scalar/minify_pretty` | +0.5% | +1.0% | -0.3% | +1.0% |
+
+`validity_stats` never calls `xml_to_json`. Its CPU star is the same noise the A/A showed on identical binaries (+3.9%, p=0.01). Accepted. The gain is below the 45% bound because parsing still dominates `to_json`.
+
 ## Where It Stands
 
 (pending)

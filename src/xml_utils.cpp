@@ -1313,68 +1313,57 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 	// Create a set for fast lookup of force_list elements
 	std::unordered_set<std::string> force_list_set(options.force_list.begin(), options.force_list.end());
 
-	std::function<std::string(xmlNodePtr, bool)> node_to_json = [&](xmlNodePtr node, bool is_root) -> std::string {
-		if (!node || node->type != XML_ELEMENT_NODE) {
-			return "null";
-		}
-
-		// Get node name based on namespace handling mode
-		std::string node_name;
-		std::string local_name = std::string((const char *)node->name);
-
+	auto qualified_name = [&](const xmlChar *local, xmlNsPtr ns) {
+		std::string local_name(reinterpret_cast<const char *>(local));
 		if (options.namespaces == "strip") {
 			// Strip namespaces: use local name only
-			node_name = local_name;
-		} else if (options.namespaces == "expand" && node->ns && node->ns->href) {
+			return local_name;
+		} else if (options.namespaces == "expand" && ns && ns->href) {
 			// Expand: use full URI as prefix
-			node_name = std::string((const char *)node->ns->href) + ":" + local_name;
-		} else if (options.namespaces == "keep" && node->ns && node->ns->prefix) {
+			return std::string(reinterpret_cast<const char *>(ns->href)) + ":" + local_name;
+		} else if (options.namespaces == "keep" && ns && ns->prefix) {
 			// Keep: preserve namespace prefix
-			node_name = std::string((const char *)node->ns->prefix) + ":" + local_name;
-		} else {
-			// No namespace or keep mode without prefix
-			node_name = local_name;
+			return std::string(reinterpret_cast<const char *>(ns->prefix)) + ":" + local_name;
 		}
+		// No namespace or keep mode without prefix
+		return local_name;
+	};
+	auto append_quoted = [](std::string &out, const std::string &text) {
+		out += '"';
+		out += EscapeJSONString(text);
+		out += '"';
+	};
 
-		std::string result = "{";
+	// Each element writes straight into one output buffer. Returning a string per element and
+	// copying it into the parent's copied every subtree once per ancestor. An element that ends up
+	// empty under empty_elements 'null' or 'string' truncates back to where it started.
+	std::function<void(xmlNodePtr, bool, std::string &)> write_node = [&](xmlNodePtr node, bool is_root,
+	                                                                      std::string &out) {
+		size_t start = out.size();
+		if (is_root) {
+			// For the root element, wrap it with the element name
+			out += '{';
+			append_quoted(out, qualified_name(node->name, node->ns));
+			out += ':';
+		}
+		out += '{';
 
 		// Add attributes if any
 		bool has_content = false;
 		for (xmlAttrPtr attr = node->properties; attr; attr = attr->next) {
-			if (has_content)
-				result += ",";
-
-			std::string attr_local_name = std::string((const char *)attr->name);
-			std::string attr_name;
-
-			if (options.namespaces == "strip") {
-				// Strip namespaces from attributes
-				attr_name = attr_local_name;
-			} else if (options.namespaces == "expand" && attr->ns && attr->ns->href) {
-				// Expand: use full URI as prefix
-				attr_name = std::string((const char *)attr->ns->href) + ":" + attr_local_name;
-			} else if (options.namespaces == "keep" && attr->ns && attr->ns->prefix) {
-				// Keep: preserve namespace prefix
-				attr_name = std::string((const char *)attr->ns->prefix) + ":" + attr_local_name;
-			} else {
-				// No namespace or keep mode without prefix
-				attr_name = attr_local_name;
+			if (has_content) {
+				out += ',';
 			}
-
 			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1));
-			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "";
-
-			result +=
-			    "\"" + EscapeJSONString(options.attr_prefix + attr_name) + "\":\"" + EscapeJSONString(attr_val) + "\"";
+			append_quoted(out, options.attr_prefix + qualified_name(attr->name, attr->ns));
+			out += ':';
+			append_quoted(out, attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "");
 			has_content = true;
 		}
 
 		// Add namespace declarations if xmlns_key is set and this is the root
 		if (is_root && !options.xmlns_key.empty()) {
-			// Collect all namespace declarations
 			std::map<std::string, std::string> namespaces;
-
-			// Get all namespace definitions on this node
 			for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
 				std::string prefix = ns->prefix ? std::string((const char *)ns->prefix) : "";
 				std::string href = ns->href ? std::string((const char *)ns->href) : "";
@@ -1382,21 +1371,23 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 					namespaces[prefix] = href;
 				}
 			}
-
-			// Add xmlns metadata if any namespaces found
 			if (!namespaces.empty()) {
-				if (has_content)
-					result += ",";
-				result += "\"" + EscapeJSONString(options.xmlns_key) + "\":{";
+				if (has_content) {
+					out += ',';
+				}
+				append_quoted(out, options.xmlns_key);
+				out += ":{";
 				bool first_ns = true;
 				for (const auto &ns_pair : namespaces) {
-					if (!first_ns)
-						result += ",";
-					result +=
-					    "\"" + EscapeJSONString(ns_pair.first) + "\":\"" + EscapeJSONString(ns_pair.second) + "\"";
+					if (!first_ns) {
+						out += ',';
+					}
+					append_quoted(out, ns_pair.first);
+					out += ':';
+					append_quoted(out, ns_pair.second);
 					first_ns = false;
 				}
-				result += "}";
+				out += '}';
 				has_content = true;
 			}
 		}
@@ -1406,7 +1397,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		std::string direct_text;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
-				direct_text += std::string((const char *)child->content);
+				direct_text += reinterpret_cast<const char *>(child->content);
 			}
 		}
 
@@ -1415,52 +1406,43 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		direct_text.erase(direct_text.find_last_not_of(" \t\n\r") + 1);
 
 		if (!direct_text.empty()) {
-			if (has_content)
-				result += ",";
-			result += "\"" + EscapeJSONString(options.text_key) + "\":\"" + EscapeJSONString(direct_text) + "\"";
+			if (has_content) {
+				out += ',';
+			}
+			append_quoted(out, options.text_key);
+			out += ':';
+			append_quoted(out, direct_text);
 			has_content = true;
 		}
 
-		// Add children elements
-		std::map<std::string, std::vector<std::string>> children_by_name;
+		// Add children elements, grouped by name in name order
+		std::map<std::string, std::vector<xmlNodePtr>> children_by_name;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				// Get child name using same namespace logic as parent
-				std::string child_local_name = std::string((const char *)child->name);
-				std::string child_name;
-
-				if (options.namespaces == "strip") {
-					child_name = child_local_name;
-				} else if (options.namespaces == "expand" && child->ns && child->ns->href) {
-					child_name = std::string((const char *)child->ns->href) + ":" + child_local_name;
-				} else if (options.namespaces == "keep" && child->ns && child->ns->prefix) {
-					child_name = std::string((const char *)child->ns->prefix) + ":" + child_local_name;
-				} else {
-					child_name = child_local_name;
-				}
-
-				std::string child_json = node_to_json(child, false);
-				children_by_name[child_name].push_back(child_json);
+				children_by_name[qualified_name(child->name, child->ns)].push_back(child);
 			}
 		}
 
 		for (const auto &child_group : children_by_name) {
-			if (has_content)
-				result += ",";
+			if (has_content) {
+				out += ',';
+			}
+			append_quoted(out, child_group.first);
+			out += ':';
 
 			// Check if this element should be forced to a list OR has multiple instances
 			bool should_be_array = force_list_set.count(child_group.first) > 0 || child_group.second.size() > 1;
-
 			if (should_be_array) {
-				result += "\"" + EscapeJSONString(child_group.first) + "\":[";
+				out += '[';
 				for (size_t i = 0; i < child_group.second.size(); i++) {
-					if (i > 0)
-						result += ",";
-					result += child_group.second[i];
+					if (i > 0) {
+						out += ',';
+					}
+					write_node(child_group.second[i], false, out);
 				}
-				result += "]";
+				out += ']';
 			} else {
-				result += "\"" + EscapeJSONString(child_group.first) + "\":" + child_group.second[0];
+				write_node(child_group.second[0], false, out);
 			}
 			has_content = true;
 		}
@@ -1468,26 +1450,29 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		// Handle empty elements if no content was added
 		if (!has_content) {
 			if (options.empty_elements == "null") {
-				return "null";
+				out.resize(start);
+				out += "null";
+				return;
 			} else if (options.empty_elements == "string") {
-				return "\"\"";
+				out.resize(start);
+				out += "\"\"";
+				return;
 			}
 			// Default "object" case - return empty object
 		}
 
-		result += "}";
-
-		// For the root element, wrap it with the element name
+		out += '}';
 		if (is_root) {
-			return "{\"" + EscapeJSONString(node_name) + "\":" + result + "}";
+			out += '}';
 		}
-
-		return result;
 	};
 
 	xmlNodePtr root = xmlDocGetRootElement(xml_doc.doc);
 	if (root) {
-		return node_to_json(root, true);
+		std::string json;
+		json.reserve(xml_str.size());
+		write_node(root, true, json);
+		return json;
 	}
 
 	return "{}";
