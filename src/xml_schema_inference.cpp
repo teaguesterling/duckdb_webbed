@@ -1272,7 +1272,7 @@ static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
 	timestamp_t local;
 	timestamp_t utc;
 	if (Timestamp::TryConvertTimestamp(text.c_str(), text.size(), local, false) != TimestampCastResult::SUCCESS ||
-	    !Timestamp::IsFinite(local)) {
+	    !CompatIsFinite(local)) {
 		return false;
 	}
 	if (Timestamp::TryConvertTimestamp(text.c_str(), text.size(), utc, true) != TimestampCastResult::SUCCESS ||
