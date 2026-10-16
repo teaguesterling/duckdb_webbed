@@ -98,7 +98,6 @@ public:
 	// it has no counterpart in the format-neutral canonical vocabulary.
 	static constexpr const char *FRONTMATTER_MIME_TYPE = "application/vnd.frontmatter+yaml";
 
-
 	// Helper to create an attributes MAP from a std::map. Key order in the
 	// resulting MAP follows std::map's sorted iteration (alphabetical by key),
 	// which is fine for callers that only ever look attributes up by name.

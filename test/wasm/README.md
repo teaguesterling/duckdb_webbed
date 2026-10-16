@@ -62,16 +62,17 @@ deps in `package.json` (`npm install` here first).
 ```bash
 make wasm_eh
 cd test/wasm && npm install
-mkdir -p repo/v1.5.3/wasm_eh
-cp ../../build/wasm_eh/repository/v1.5.3/wasm_eh/webbed.duckdb_extension.wasm repo/v1.5.3/wasm_eh/
+mkdir -p repo/v1.5.6/wasm_eh
+cp ../../build/wasm_eh/repository/v1.5.6/wasm_eh/webbed.duckdb_extension.wasm repo/v1.5.6/wasm_eh/
 node load_test.cjs --repo repo --name webbed --platform eh \
     --query "SELECT xml_valid('<a/>') AS ok" --expect '"ok":true'
 ```
 
 **Engine matching (important).** A clean `LOAD` requires an engine matching
-**both** the extension's duckdb version (v1.5.3) **and** its emscripten ABI
-(`extension-ci-tools@v1.5.3` pins emsdk 3.1.71). As of this writing no public
-engine satisfies both:
+**both** the extension's duckdb version **and** its emscripten ABI. The live test
+targets the v1.5.6 build, since no duckdb-wasm engine exists for the v2.0 line.
+When this was measured against a v1.5.3 build (`extension-ci-tools@v1.5.3` pins
+emsdk 3.1.71), no public engine satisfied both:
 
 | engine | duckdb | emsdk ABI | LOAD result |
 | --- | --- | --- | --- |
@@ -80,8 +81,8 @@ engine satisfies both:
 
 In both engines the load gets **past symbol resolution** (no missing/undefined
 symbol) — confirming the LINKED_LIBS fix — and fails only on version/toolchain
-ABI. The live test will go green once the official duckdb-wasm ships v1.5.3
-(built with the same pinned emsdk). Until then it is wired into CI as a
+ABI. The live test will go green once the official duckdb-wasm ships an engine
+matching the build (same duckdb version and pinned emsdk). Until then it is wired into CI as a
 **non-blocking** (informational) step; the Layer 1 static check is the hard gate.
 
 Background: https://rusty.today/blog/testing-duckdb-wasm-extensions/ ·
@@ -89,7 +90,8 @@ https://github.com/Query-farm-haybarn/haybarn-extension-wasm-tester
 
 ## CI
 
-`wasm-load-test` in `MainDistributionPipeline.yml` downloads the v1.5.3 wasm
-artifacts and runs Layer 1 (hard gate) plus Layer 2 (`continue-on-error`, see
-above). The reusable distribution workflow builds the `.wasm` but never inspects
+`wasm-load-test` in `MainDistributionPipeline.yml` downloads the wasm artifacts
+of both shipped lines, the DuckDB v2.0 default (named by commit) and the v1.5.6
+variant. Layer 1 (hard gate) checks both. Layer 2 (`continue-on-error`, see
+above) loads the v1.5.6 build. The reusable distribution workflow builds the `.wasm` but never inspects
 or loads it — which is why this bug shipped green.
