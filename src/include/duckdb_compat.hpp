@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -153,6 +154,22 @@ inline LogicalType CompatWithAliasImpl(TYPE type, string alias, std::false_type)
 template <class TYPE>
 inline LogicalType CompatWithAlias(TYPE type, string alias) {
 	return CompatWithAliasImpl(std::move(type), std::move(alias), CompatHasWithAlias<TYPE>());
+}
+
+// --- Timestamp finite check ---
+//
+// v1.5: static bool Timestamp::IsFinite(timestamp_t)
+// v2.0: bool timestamp_t::IsFinite() const  -- the check moved onto the value type, matching
+//       date_t::IsFinite(). The static is REMOVED, not deprecated, so the v1.5 spelling is a
+//       hard compile error on v2.0 and the v2.0 spelling is one on v1.5.
+//
+// NO VERSION PROBE HERE, UNLIKE THE SHIMS ABOVE. timestamp_t::infinity() and ::ninfinity() are
+// public on BOTH lines, and the comparison below is exactly the body of v1.5's static (see
+// timestamp.hpp:181 at v1.5.6), so one portable spelling covers both without tag dispatch.
+// Verified by compiling all three spellings against v1.5.6 (C++11 and C++17) and the v2.0
+// pin: only this one is OK in all three.
+inline bool CompatIsFinite(timestamp_t ts) {
+	return ts != timestamp_t::infinity() && ts != timestamp_t::ninfinity();
 }
 
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
