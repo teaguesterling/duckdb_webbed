@@ -1,0 +1,100 @@
+# name: test/sql/sax_sample_stop_large_file.test
+# description: A streamed file with more records than the inference sample must read in full. SAX inference stops after sample_size records (50 under sample_size := -1), mid-chunk and usually mid-record. Terminating the push parser there made libxml2 report the truncated chunk as malformed, so read_xml failed on well-formed files with "Premature end of data", "StartTag: invalid element name" or "Opening and ending tag mismatch" depending on where the 64 KB chunk ended. The fixture is generated over the default 16 MiB SAX threshold so no option forces streaming.
+# group: [sql]
+
+require webbed
+
+# 80,000 Salesforce-style <fieldSets> records, ~20 MB. Every third record repeats displayedFields
+# (a nested repeated struct), every 997th carries the optional availableFields struct, and
+# sortOrder gives the sample_size := -1 verify pass a column to check.
+statement ok
+COPY (
+  SELECT '<?xml version="1.0" encoding="UTF-8"?>' || chr(10)
+    || '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">' || chr(10)
+    || string_agg(
+      '  <fieldSets><label>fs' || i || '</label>'
+      || '<displayedFields><field>F' || i || '__c</field><isFieldManaged>false</isFieldManaged><isRequired>false</isRequired></displayedFields>'
+      || CASE WHEN i % 3 = 0 THEN '<displayedFields><field>G' || i || '__c</field><isFieldManaged>true</isFieldManaged><isRequired>true</isRequired></displayedFields>' ELSE '' END
+      || CASE WHEN i % 997 = 0 THEN '<availableFields><field>A' || i || '__c</field><isFieldManaged>true</isFieldManaged></availableFields>' ELSE '' END
+      || '<sortOrder>' || i || '</sortOrder></fieldSets>',
+      chr(10) ORDER BY i)
+    || chr(10) || '</CustomObject>'
+  FROM range(80000) t(i)
+) TO '__TEST_DIR__/sax_stop_Big.object' (FORMAT csv, HEADER false, QUOTE '');
+
+query I
+SELECT size > 16 * 1024 * 1024 FROM read_blob('__TEST_DIR__/sax_stop_Big.object');
+----
+true
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/sax_stop_Big.object', record_element := 'fieldSets'));
+----
+label	VARCHAR
+displayedFields	STRUCT(field VARCHAR, isFieldManaged BOOLEAN, isRequired BOOLEAN)[]
+availableFields	STRUCT(field VARCHAR, isFieldManaged BOOLEAN)
+sortOrder	INTEGER
+
+query IIII
+SELECT count(*), sum(sortOrder), sum(len(displayedFields)), count(availableFields)
+FROM read_xml('__TEST_DIR__/sax_stop_Big.object', record_element := 'fieldSets');
+----
+80000	3199960000	106667	81
+
+query IIII
+SELECT count(*), sum(sortOrder), sum(len(displayedFields)), count(availableFields)
+FROM read_xml('__TEST_DIR__/sax_stop_Big.object', record_element := 'fieldSets', sample_size := -1);
+----
+80000	3199960000	106667	81
+
+# Out-of-sample fields of the last record survive the stop.
+query IIII
+SELECT label, displayedFields[2].field, availableFields.field, sortOrder
+FROM read_xml('__TEST_DIR__/sax_stop_Big.object', record_element := 'fieldSets')
+WHERE sortOrder IN (77766, 79997, 79999) ORDER BY sortOrder;
+----
+fs77766	G77766__c	A77766__c	77766
+fs79997	NULL	NULL	79997
+fs79999	NULL	NULL	79999
+
+# Small DOM-path files in the same glob, one with a column the large file lacks.
+statement ok
+COPY (SELECT '<?xml version="1.0" encoding="UTF-8"?>' || chr(10)
+  || '<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">'
+  || '<fieldSets><label>small0</label><description>first</description><displayedFields><field>S0__c</field><isFieldManaged>false</isFieldManaged><isRequired>true</isRequired></displayedFields><sortOrder>-1</sortOrder></fieldSets>'
+  || '<fieldSets><label>small1</label><sortOrder>-2</sortOrder></fieldSets>'
+  || '</CustomObject>') TO '__TEST_DIR__/sax_stop_Small.object' (FORMAT csv, HEADER false, QUOTE '');
+
+query IIIII
+SELECT parse_filename(filename), count(*), sum(sortOrder), count(description), count(availableFields)
+FROM read_xml('__TEST_DIR__/sax_stop_*.object', record_element := 'fieldSets', filename := true, union_by_name := true)
+GROUP BY ALL ORDER BY ALL;
+----
+sax_stop_Big.object	80000	3199960000	0	81
+sax_stop_Small.object	2	-3	1	0
+
+query II
+SELECT count(*), sum(sortOrder)
+FROM read_xml('__TEST_DIR__/sax_stop_*.object', record_element := 'fieldSets', filename := true, union_by_name := true, sample_size := -1);
+----
+80002	3199959997
+
+# sample_size := -1 runs a full-file verify pass after the 50-record sample. A value past the last
+# chunk boundary that does not fit the sampled INTEGER type must still widen the column.
+statement ok
+COPY (SELECT '<root>'
+  || string_agg('<rec><id>' || CASE WHEN i = 39999 THEN 'n/a' ELSE i::VARCHAR END || '</id></rec>', '' ORDER BY i)
+  || '</root>'
+  FROM range(40000) t(i)) TO '__TEST_DIR__/sax_stop_widen.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/sax_stop_widen.xml',
+  record_element := 'rec', maximum_file_size := 1, sample_size := -1));
+----
+id	VARCHAR
+
+query II
+SELECT count(*), max(id) FILTER (WHERE id NOT SIMILAR TO '[0-9]+') FROM read_xml('__TEST_DIR__/sax_stop_widen.xml',
+  record_element := 'rec', maximum_file_size := 1, sample_size := -1);
+----
+40000	n/a
