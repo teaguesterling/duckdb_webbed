@@ -1283,6 +1283,41 @@ static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
 	return true;
 }
 
+// Reject a timestamp whose trailing text is a timezone NAME that DuckDB cannot resolve.
+//
+// The two DuckDB lines disagree here. v1.5 returns ERROR_NON_UTC_TIMEZONE unconditionally once a
+// non-UTC name is present. v2.0 returns SUCCESS for the same input when use_offset is false and
+// silently discards the name -- so '2024-01-15 01:30:00 PM', whose trailing 'PM' BOTH lines parse
+// as a timezone name rather than a meridiem marker, reads as 2024-01-15 01:30:00 on v2.0 instead
+// of erroring. That is the same silent truncation #158 fixed for TIME, arriving through the
+// TIMESTAMP path. Checking it here rather than trusting the cast makes both lines agree, and makes
+// them agree on the SAFE answer.
+//
+// A numeric OFFSET is deliberately NOT this case: '...+05:00' parses with tz empty and has_offset
+// set, and is accepted-and-ignored for TIMESTAMP on both lines. Narrowing that would change
+// behaviour well beyond the defect, so this inspects the name only. UTC is allowed because it names
+// a zero offset, so the bare timestamp is the same instant.
+static void RejectUnresolvedTimezoneName(const std::string &text) {
+	timestamp_t parsed;
+	bool has_offset = false;
+	string_t tz(nullptr, 0);
+	if (Timestamp::TryConvertTimestampTZ(text.c_str(), text.size(), parsed, false, has_offset, tz) !=
+	    TimestampCastResult::SUCCESS) {
+		// Not parseable at all. Leave that error to the caller, which has a candidate-list fallback.
+		return;
+	}
+	if (tz.GetSize() == 0) {
+		return;
+	}
+	const auto tz_name = tz.GetString();
+	if (StringUtil::CIEquals(tz_name, "UTC")) {
+		return;
+	}
+	throw ConversionException("Could not read '%s' as a timestamp without discarding its '%s' suffix, which is not a "
+	                          "resolvable time zone. Supply datetime_format if it is a meridiem marker",
+	                          text, tz_name);
+}
+
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
                                                      const XMLSchemaOptions &options,
                                                      std::string &winning_datetime_format) {
@@ -2203,6 +2238,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
+				RejectUnresolvedTimezoneName(text);
 				return Value::TIMESTAMP(Timestamp::FromString(text, false));
 			} catch (...) {
 				Value fallback;
@@ -2225,6 +2261,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
+				RejectUnresolvedTimezoneName(text);
 				return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, false)));
 			} catch (...) {
 				Value fallback;

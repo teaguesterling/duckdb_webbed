@@ -1,0 +1,38 @@
+# name: test/sql/timestamp_timezone_name_not_dropped.test
+# description: An explicit TIMESTAMP column discarded an unresolvable time zone name on DuckDB v2.0. Both lines parse trailing alphabetic text as a zone NAME rather than a meridiem marker; v1.5 rejects a name it cannot resolve, but v2.0 returns success for the same input when use_offset is false and drops the name, so '2024-01-15 01:30:00 PM' read as 01:30:00. An explicit TIMESTAMP column must read the same instant, or fail, but never read a different one. A numeric offset is a separate case and stays accepted.
+# group: [sql]
+
+require webbed
+
+# A zone NAME that DuckDB cannot resolve must error rather than be discarded.
+statement error
+SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMP'}, streaming := false);
+----
+EST
+
+statement error
+SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMP'}, streaming := true, maximum_file_size := 1);
+----
+EST
+
+# TIMESTAMPTZ reaches the same lenient cast, so it must refuse the same input rather than
+# silently drop the name and claim a zone it never applied.
+statement error
+SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMPTZ'}, streaming := false);
+----
+EST
+
+# REGRESSION GUARD ON THE NARROWING. A numeric offset is NOT the rejected case: it parses with
+# the zone name empty, and TIMESTAMP accepts-and-ignores it on both DuckDB lines. If the check
+# above is ever widened from "unresolvable name" to "any trailing text", this query starts
+# failing -- which is the point of asserting it.
+query I
+SELECT offset::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'offset': 'TIMESTAMP'}, streaming := false);
+----
+2024-01-15 10:00:00
+
+# UTC names a zero offset, so the bare timestamp is the same instant and stays accepted.
+query I
+SELECT utc::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'utc': 'TIMESTAMP'}, streaming := false);
+----
+2024-01-15 10:00:00
