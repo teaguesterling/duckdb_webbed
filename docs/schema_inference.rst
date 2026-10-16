@@ -86,6 +86,12 @@ When an element name repeats within a record, it becomes a LIST:
 
 The ``item`` column will be ``LIST<VARCHAR>``.
 
+An explicit typed list column also reads an element that wraps its items. With
+``columns := {'items': 'INTEGER[]'}``, ``<items><i>1</i><i>2</i></items>`` reads ``[1, 2]``, and
+repeated wrappers contribute their items in document order. An element with text of its own
+beside its children stays one item. A ``VARCHAR[]`` column keeps a wrapper as its serialized
+XML, one item per wrapper.
+
 Use ``force_list`` to ensure array types even for single occurrences:
 
 .. code-block:: sql

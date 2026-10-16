@@ -1223,6 +1223,66 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 	return found;
 }
 
+// Split a trailing UTC designator ('Z', or 'UTC' with optional leading whitespace) off a time value.
+// Both name a zero offset, so the bare time is the same instant.
+static bool StripUtcDesignator(const std::string &text, std::string &bare) {
+	idx_t end = text.size();
+	while (end > 0 && StringUtil::CharacterIsSpace(text[end - 1])) {
+		end--;
+	}
+	idx_t suffix = end;
+	if (end >= 1 && (text[end - 1] == 'Z' || text[end - 1] == 'z')) {
+		suffix = end - 1;
+	} else if (end >= 3 && StringUtil::CIEquals(text.substr(end - 3, 3), "UTC")) {
+		suffix = end - 3;
+	} else {
+		return false;
+	}
+	bare = text.substr(0, suffix);
+	return true;
+}
+
+static ConversionException TimeOffsetException(const std::string &text) {
+	return ConversionException("Could not read '%s' as TIME without dropping its UTC offset. Use TIMETZ to keep it",
+	                           text);
+}
+
+// Read text as a time of day with DuckDB's strict casts, without dropping anything. The lenient cast
+// ignores trailing text, reading '01:30:00 PM' as 01:30:00 and '13:30:00+05:00' as 13:30:00. A zero
+// offset is lossless and reads as the bare time. A non-zero one throws rather than being dropped.
+// A full timestamp reads as its time of day, as the lenient cast did. Returns false for text none of
+// these accept, such as a 12-hour time, which the caller leaves to the datetime candidates.
+static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
+	if (TryCast::Operation(string_t(text), result, true)) {
+		return true;
+	}
+	std::string bare;
+	if (StripUtcDesignator(text, bare) && TryCast::Operation(string_t(bare), result, true)) {
+		return true;
+	}
+	dtime_tz_t with_offset;
+	if (TryCast::Operation(string_t(text), with_offset, true)) {
+		if (with_offset.offset() != 0) {
+			throw TimeOffsetException(text);
+		}
+		result = with_offset.time();
+		return true;
+	}
+	// The timestamp parser reads a trailing AM/PM as a time zone name and rejects it.
+	timestamp_t local;
+	timestamp_t utc;
+	if (Timestamp::TryConvertTimestamp(text.c_str(), text.size(), local, false) != TimestampCastResult::SUCCESS ||
+	    !Timestamp::IsFinite(local)) {
+		return false;
+	}
+	if (Timestamp::TryConvertTimestamp(text.c_str(), text.size(), utc, true) != TimestampCastResult::SUCCESS ||
+	    utc != local) {
+		throw TimeOffsetException(text);
+	}
+	result = Timestamp::GetTime(local);
+	return true;
+}
+
 LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::string> &samples,
                                                      const XMLSchemaOptions &options,
                                                      std::string &winning_datetime_format) {
@@ -1805,9 +1865,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
 					if (child_iter->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
-						Value element_value =
-						    ExtractValueFromNode(child_iter, element_type, options, column.winning_datetime_format);
-						list_values.push_back(element_value);
+						AppendListItems(child_iter, element_type, options, column.winning_datetime_format, list_values);
 					}
 				}
 
@@ -1972,8 +2030,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
 					if (child_iter->type == XML_ELEMENT_NODE &&
 					    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
-						Value element_value = ExtractValueFromNode(child_iter, element_type, options, col_fmt);
-						list_values.push_back(element_value);
+						AppendListItems(child_iter, element_type, options, col_fmt, list_values);
 					}
 				}
 
@@ -2194,7 +2251,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			// cast and route failures through the chokepoint instead of returning a VARCHAR Value that
 			// would abort at the typed output column.
 			dtime_t time_result;
-			if (TryCast::Operation(string_t(text), time_result, false)) {
+			if (TryParseTimeOfDay(text, time_result)) {
 				return Value::TIME(time_result);
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
@@ -2223,6 +2280,12 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			dtime_tz_t timetz_result;
 			if (TryCast::Operation(string_t(text), timetz_result, false)) {
 				return Value::TIMETZ(timetz_result);
+			}
+			// DuckDB's offset parser takes only ±HH[:MM[:SS]], so a 'Z' or 'UTC' suffix is read here.
+			std::string bare_time;
+			dtime_t utc_time;
+			if (StripUtcDesignator(text, bare_time) && TryCast::Operation(string_t(bare_time), utc_time, true)) {
+				return Value::TIMETZ(dtime_tz_t(utc_time, 0));
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			Value timetz_fallback;
@@ -2261,15 +2324,13 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
-Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
-                                                      const std::string &extra_ns_decls, const std::string &extra_attrs,
-                                                      const std::string &datetime_format) {
-	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
-	// receives a node whose ->children are the original siblings. extra_ns_decls injects any xmlns:
-	// declarations the fragment's prefixed names depend on (the originating decls are not part of the
-	// captured fragment), without which strict parsing would fail and the value would be lost.
-	// extra_attrs carries the element's own attributes (already escaped) so they become STRUCT fields.
+// Wrap the fragment in its element so the parser sees a single root and so extraction receives a
+// node whose ->children are the original siblings. extra_ns_decls injects any xmlns: declarations
+// the fragment's prefixed names depend on (the originating decls are not part of the captured
+// fragment), without which strict parsing would fail and the value would be lost. extra_attrs
+// carries the element's own attributes (already escaped) so they become STRUCT fields.
+static std::string WrapXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                   const std::string &extra_ns_decls, const std::string &extra_attrs) {
 	std::string wrapped;
 	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + extra_ns_decls.size() + extra_attrs.size() + 5);
 	wrapped.append("<")
@@ -2281,8 +2342,14 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
 	    .append("</")
 	    .append(wrapper_name)
 	    .append(">");
+	return wrapped;
+}
 
-	XMLDocRAII doc(wrapped);
+Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
+                                                      const std::string &extra_ns_decls, const std::string &extra_attrs,
+                                                      const std::string &datetime_format) {
+	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
 	if (!doc.doc) {
 		return Value(target_type);
 	}
@@ -2446,8 +2513,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
 					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
-						Value element_value = ExtractValueFromNode(child, element_type, options, datetime_format);
-						list_values.push_back(element_value);
+						AppendListItems(child, element_type, options, datetime_format, list_values);
 						found = true;
 					}
 					child = child->next;
@@ -2504,6 +2570,46 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 	}
 
 	return Value::LIST(element_type, list_values);
+}
+
+// Append the items one occurrence of a repeated element contributes to a LIST. Usually that is one
+// item, the occurrence's own value. An occurrence that only wraps child elements
+// (<l><i>1</i><i>2</i></l>) holds its items as those children instead, and reading it as a single
+// typed scalar would concatenate their text into '12'. A VARCHAR list keeps such an occurrence as
+// one serialized fragment, which is lossless, and STRUCT or LIST items extract their own children.
+void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &element_type,
+                                         const XMLSchemaOptions &options, const std::string &datetime_format,
+                                         std::vector<Value> &items) {
+	const bool scalar_item = element_type.id() != LogicalTypeId::VARCHAR &&
+	                         element_type.id() != LogicalTypeId::STRUCT && element_type.id() != LogicalTypeId::LIST;
+	if (scalar_item && !HasDirectText(node)) {
+		bool wrapped = false;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				items.push_back(ExtractValueFromNode(child, element_type, options, datetime_format));
+				wrapped = true;
+			}
+		}
+		if (wrapped) {
+			return;
+		}
+	}
+	items.push_back(ExtractValueFromNode(node, element_type, options, datetime_format));
+}
+
+void XMLSchemaInference::AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
+                                                        const LogicalType &element_type,
+                                                        const XMLSchemaOptions &options,
+                                                        const std::string &extra_ns_decls,
+                                                        const std::string &extra_attrs,
+                                                        const std::string &datetime_format, std::vector<Value> &items) {
+	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
+	xmlNodePtr root = doc.doc ? xmlDocGetRootElement(doc.doc) : nullptr;
+	if (!root) {
+		items.push_back(Value(element_type));
+		return;
+	}
+	AppendListItems(root, element_type, options, datetime_format, items);
 }
 
 Value XMLSchemaInference::ExtractXMLArrayFromNode(xmlNodePtr node) {

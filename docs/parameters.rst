@@ -246,6 +246,10 @@ When an explicit format or preset is specified, only those formats are tried. If
    Naming a format removes the ambiguity entirely -- the presets resolve to a single candidate
    (``'us'`` is ``%m/%d/%Y``, ``'eu'`` is ``%d/%m/%Y``).
 
+**Explicit columns:**
+
+A column declared through ``columns`` has no recorded format. Its values are read with DuckDB's strict casts, then with the candidate list above. An explicit ``TIME`` column reads ``01:30:00 PM`` as ``13:30:00``, as inference does. The marker needs a space before it: ``01:30:00PM`` matches no candidate, so it raises, or reads NULL under ``ignore_errors``. A zero UTC offset (``Z``, ``UTC``, ``+00:00``) reads as the bare time. A non-zero offset such as ``+05:00`` raises instead of being dropped. Declare the column ``TIMETZ`` to keep it.
+
 **Interactions with other parameters:**
 
 - ``all_varchar=true`` overrides ``datetime_format`` — no temporal detection occurs.
