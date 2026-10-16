@@ -220,6 +220,33 @@ jobs:
       # upstream sets PYTHONIOENCODING / utf8_mode on the mingw runner.
       exclude_archs: 'windows_amd64_mingw'
 
+  # V2.0 TEST COVERAGE. The job above matches the registry exactly, which is right
+  # for shipping -- but it currently runs ZERO tests. ci-tools @v2.0-cyanoptera
+  # drives the unittest binary through duckdb/scripts/ci/run_tests.py
+  # (duckdb_extension.Makefile:197-202), and under that wrapper `require webbed`
+  # is never satisfied, so all 123 files skip and the step still reports success:
+  #     require webbed: 123
+  #     ran tests: 0 passed, 123 skipped
+  # Filed upstream as duckdb/community-extensions#3086. Measured: ci-tools @main
+  # against the same 2.0-line DuckDB DOES run them -- `ran tests: 123 passed,
+  # 0 skipped` -- so the coverage is recoverable today rather than blocked on
+  # upstream. This job exists only for that signal; it ships nothing.
+  #
+  # Read `ran tests: N passed` in the log, not the check colour: a green Test
+  # step proves nothing while #3086 is open. Delete this job once the job above
+  # reports a non-zero count.
+  duckdb-v2-test-coverage:
+    name: Build extension binaries (v2.0 test coverage)
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
+    with:
+      duckdb_version: b15358c371daf10dad799a43b6167f6ccdce84d8
+      duckdb_tag: v2.0.0-alpha46057
+      ci_tools_version: main
+      extension_name: webbed
+      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
+      # Linux only: this job is a test signal, not an artifact source.
+      exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
+
   # The v1.5 variant the registry still builds (scripts/build.py routes v1.5.6 to
   # each descriptor's variegata ref). Gating on PRs: v1.5.6 users are the bulk of
   # current installs. The reusable workflow repoints DuckDB itself
