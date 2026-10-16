@@ -1,7 +1,7 @@
 <rows>
   <row>
     <named>2024-01-15 10:00:00 EST</named>
-    <offset>2024-01-15 10:00:00+05:00</offset>
+    <numeric_offset>2024-01-15 10:00:00+05:00</numeric_offset>
     <utc>2024-01-15 10:00:00 UTC</utc>
   </row>
 </rows>

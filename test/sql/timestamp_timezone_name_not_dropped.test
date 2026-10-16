@@ -27,7 +27,7 @@ EST
 # above is ever widened from "unresolvable name" to "any trailing text", this query starts
 # failing -- which is the point of asserting it.
 query I
-SELECT offset::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'offset': 'TIMESTAMP'}, streaming := false);
+SELECT numeric_offset::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'numeric_offset': 'TIMESTAMP'}, streaming := false);
 ----
 2024-01-15 10:00:00
 
