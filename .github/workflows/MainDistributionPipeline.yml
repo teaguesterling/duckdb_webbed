@@ -239,8 +239,18 @@ jobs:
     name: Build extension binaries (v2.0 test coverage)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: b15358c371daf10dad799a43b6167f6ccdce84d8
-      duckdb_tag: v2.0.0-alpha46057
+      # BRANCH NAME, deliberately -- not the registry's commit SHA. Measured on
+      # this repo, same ci-tools @main, only this input differing:
+      #   duckdb_version: v2.0-cyanoptera  -> ran tests: 123 passed, 0 skipped
+      #   duckdb_version: b15358c371daf... -> ran tests: 0 passed, 123 skipped
+      # Artifacts are named from duckdb_version, so the SHA form produces
+      # `webbed-b15358c371daf...-extension` and `require webbed` cannot load it;
+      # every test file then skips and the step still reports success. That is
+      # why the registry's own builds show zero tests for every extension.
+      # The cost of the branch form: this tests the cyanoptera tip rather than
+      # the exact commit the registry ships. Real test evidence on the 2.0 line
+      # beats none, and the shipping job above covers the exact commit's COMPILE.
+      duckdb_version: v2.0-cyanoptera
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
