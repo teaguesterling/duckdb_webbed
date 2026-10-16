@@ -2407,8 +2407,13 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 
 		// The text_key field (inference names it from options.text_key) holds the node's own text,
 		// unless a custom text_key matches an attribute or child element, which then fills the field
-		if (field_name == options.text_key && !HasAttributeOrChildNamed(node, field_name) &&
-		    IsOwnTextField(node, field_name)) {
+		// field_name is the struct child's key: std::string on the v1.5 line and
+		// duckdb::Identifier on v2.0, where it will not bind to a `const std::string&`
+		// parameter. CompatIdentifierName reads the raw name out of either (the string
+		// overload is a pass-through), so both helpers take a plain name on both lines.
+		const auto &field_name_str = CompatIdentifierName(field_name);
+		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
+		    IsOwnTextField(node, field_name_str)) {
 			xmlChar *content = xmlNodeGetContent(node);
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
@@ -2420,8 +2425,9 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			}
 		}
 		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
-		else if (xmlChar *attr_value =
-		             options.attr_mode == "discard" ? nullptr : xmlGetProp(node, (const xmlChar *)field_name.c_str())) {
+		else if (xmlChar *attr_value = options.attr_mode == "discard"
+		                                   ? nullptr
+		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			field_value = ConvertToValue(str_value, field_type, options, datetime_format);
 			xmlFree(attr_value);
@@ -2439,7 +2445,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
 						Value element_value = ExtractValueFromNode(child, element_type, options, datetime_format);
 						list_values.push_back(element_value);
 						found = true;
@@ -2455,7 +2461,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 				xmlNodePtr child = node->children;
 				while (child) {
 					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name.c_str()) == 0) {
+					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
 						field_value = ExtractValueFromNode(child, field_type, options, datetime_format);
 						found = true;
 						break;
