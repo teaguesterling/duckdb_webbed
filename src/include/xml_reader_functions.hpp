@@ -193,8 +193,9 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 	xmlParserCtxtPtr sax_parser_ctx = nullptr;             // Push parser context (persists across scan calls)
 	std::unique_ptr<FileHandle> sax_file_handle;           // File handle (persists across scan calls)
 	xmlSAXHandler sax_handler;                             // SAX handler (must outlive parser context)
-	std::vector<SAXRecordAccumulator> sax_pending_records; // Completed records (emitted only after a successful parse when ignore_errors)
-	bool sax_parse_complete = false;                       // Push parser reached EOF without error
+	std::vector<SAXRecordAccumulator>
+	    sax_pending_records;         // Completed records (emitted only after a successful parse when ignore_errors)
+	bool sax_parse_complete = false; // Push parser reached EOF without error
 
 	~XMLReadLocalState() {
 		if (sax_parser_ctx) {

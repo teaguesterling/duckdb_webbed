@@ -401,8 +401,8 @@ static bool HasDirectText(xmlNodePtr node) {
 }
 
 std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::vector<xmlNodePtr> &instances,
-                                                                  const XMLSchemaOptions &options,
-                                                                  const std::vector<std::string> &child_names) {
+                                                                   const XMLSchemaOptions &options,
+                                                                   const std::vector<std::string> &child_names) {
 	std::vector<std::string> names;
 	if (options.attr_mode == "discard") {
 		return names;
@@ -496,8 +496,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		// a VARCHAR that would collapse a STRUCT or LIST seen elsewhere. empty_elements := 'string'
 		// keeps the old behavior of treating an empty element as a string.
 		bool no_evidence = text_samples.empty() && options.empty_elements != "string";
-		LogicalType scalar_type = no_evidence ? LogicalType::SQLNULL
-		                                      : InferTypeFromSamples(sample_values, options, winning_datetime_format);
+		LogicalType scalar_type =
+		    no_evidence ? LogicalType::SQLNULL : InferTypeFromSamples(sample_values, options, winning_datetime_format);
 		// Return as LIST if forced OR if element repeats within a record
 		if (force_as_list || column.repeats_in_record) {
 			return LogicalType::LIST(scalar_type);
@@ -1678,9 +1678,8 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 }
 
 LogicalType XMLSchemaInference::ResolveUnknownTypes(const LogicalType &type) {
-	return TypeVisitor::VisitReplace(type, [](const LogicalType &t) {
-		return t.id() == LogicalTypeId::SQLNULL ? LogicalType::VARCHAR : t;
-	});
+	return TypeVisitor::VisitReplace(
+	    type, [](const LogicalType &t) { return t.id() == LogicalTypeId::SQLNULL ? LogicalType::VARCHAR : t; });
 }
 
 void XMLSchemaInference::ResolveUnknownTypes(std::vector<XMLColumnInfo> &columns) {
@@ -1836,8 +1835,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 					if (has_element_children) {
 						// Container element - check for structured types first
 						if (column.type.id() == LogicalTypeId::STRUCT) {
-							value = ExtractValueFromNode(child, column.type, options,
-							                             column.winning_datetime_format);
+							value = ExtractValueFromNode(child, column.type, options, column.winning_datetime_format);
 							element_text = "";
 							break;
 						}
@@ -2265,8 +2263,7 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 
 Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
                                                       const LogicalType &target_type, const XMLSchemaOptions &options,
-                                                      const std::string &extra_ns_decls,
-                                                      const std::string &extra_attrs,
+                                                      const std::string &extra_ns_decls, const std::string &extra_attrs,
                                                       const std::string &datetime_format) {
 	// Wrap the fragment in its element so the parser sees a single root and so ExtractValueFromNode
 	// receives a node whose ->children are the original siblings. extra_ns_decls injects any xmlns:
@@ -2297,8 +2294,7 @@ Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper
 }
 
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
-                                               const XMLSchemaOptions &options,
-                                               const std::string &datetime_format) {
+                                               const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (!node) {
 		return Value(); // NULL value
 	}
@@ -2393,8 +2389,7 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 }
 
 Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
-                                                const XMLSchemaOptions &options,
-                                                const std::string &datetime_format) {
+                                                const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (!node || struct_type.id() != LogicalTypeId::STRUCT) {
 		return Value(); // NULL value
 	}
@@ -2488,8 +2483,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 }
 
 Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
-                                              const XMLSchemaOptions &options,
-                                              const std::string &datetime_format) {
+                                              const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (!node || list_type.id() != LogicalTypeId::LIST) {
 		return Value(); // NULL value
 	}
