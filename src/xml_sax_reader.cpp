@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include <sstream>
+#include <unordered_set>
 
 namespace duckdb {
 
@@ -761,20 +762,18 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	// ELEMENT FIELDS ONLY. A late ATTRIBUTE is a separate case: attribute naming depends on
 	// attr_mode, and `attribute_order` carries dotted child-element attributes that would need
 	// their own handling. Out of scope here rather than half-done.
+	// A SET for membership, a VECTOR for order. The first version scanned both containers
+	// linearly, which was the wrong trade in THIS function specifically: it runs only when
+	// sample_size <= 0, and that promises a pass over every record of a file of any size. So the
+	// cost was O(records * fields * columns) on exactly the inputs that make it expensive --
+	// 1M records with 50 fields and 200 columns is 10^10 string compares. The simpler code was
+	// cheaper to read and quadratically more expensive to run.
+	std::unordered_set<std::string> known;
+	known.reserve(columns.size() * 2);
+	for (const auto &c : columns) {
+		known.insert(c.name);
+	}
 	std::vector<std::string> discovered; // first-seen order, so the appended schema is stable
-	auto already_known = [&columns, &discovered](const std::string &n) {
-		for (const auto &c : columns) {
-			if (c.name == n) {
-				return true;
-			}
-		}
-		for (const auto &d : discovered) {
-			if (d == n) {
-				return true;
-			}
-		}
-		return false;
-	};
 
 	// ignore_errors so ConvertToValuePublic returns a typed NULL on an uncastable value instead of
 	// throwing; combined with the empty/nullstr pre-filter below, a NULL result means "cast failed".
@@ -814,7 +813,8 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	auto test_and_clear = [&]() {
 		for (auto &rec : completed) {
 			for (const auto &field_name : rec.field_order) {
-				if (!already_known(field_name)) {
+				// insert() reports whether it was new, so one lookup does both jobs
+				if (known.insert(field_name).second) {
 					discovered.push_back(field_name);
 				}
 			}

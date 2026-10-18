@@ -1,5 +1,5 @@
 # name: test/sql/github_issue_184_late_column_discovery.test
-# description: Under SAX streaming a child element first appearing beyond the sample window was absent from the schema entirely, so querying it was a bind error rather than a NULL column. sample_size <= 0 already streams every record at bind time to widen out-of-sample types; it now also discovers out-of-sample columns. The fixture puts `late` in record 60, outside the 50-record window a non-positive sample_size samples.
+# description: Under SAX streaming a child element first appearing beyond the sample window was absent from the schema entirely, so querying it was a bind error rather than a NULL column. sample_size <= 0 already streams every record at bind time to widen out-of-sample types; it now also discovers out-of-sample columns. The 50-record window a non-positive sample_size samples still bounds TYPE inference; it no longer bounds DISCOVERY. The fixture puts `late` in record 60, outside that window, so it is found only by the full-file pass.
 # group: [sql]
 
 require webbed
@@ -29,10 +29,15 @@ VARCHAR
 # sample_size still bounds discovery: the output schema is fixed before the scan and
 # DuckDB gives table functions no mid-scan rebind, so a column outside a finite window
 # cannot be added. Use sample_size <= 0, or name it in `columns :=`.
+#
+# THE MESSAGE HERE IS NOT THE ONE IN #184, deliberately. A missing TOP-LEVEL column raises
+# `Referenced column "x" not found in FROM clause!` (table_function_binder.cpp). #184 quoted
+# `Could not find key "alter"` because its case was a STRUCT field, `pitch.alter`, which goes
+# through struct_extract.cpp instead. Both are real; this query provokes the first.
 statement error
 SELECT late FROM read_xml('test/xml/late_column_beyond_window.xml', sample_size := 5, streaming := true, maximum_file_size := 1);
 ----
-late
+Referenced column "late" not found
 
 # And the explicit escape hatch keeps working regardless of the window.
 query I
