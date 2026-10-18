@@ -220,6 +220,15 @@ jobs:
       # upstream sets PYTHONIOENCODING / utf8_mode on the mingw runner.
       exclude_archs: 'windows_amd64_mingw'
 
+      # Make a skipped test run FAIL on this leg. `T` is the test pattern ci-tools
+      # hands run_tests.py (`T ?=` in duckdb_extension.Makefile, so an env var wins)
+      # and test_env_variables reaches `make test_release` via ci_phase.py.
+      # `--require webbed` turns "could not load" into `require webbed: FAILED`
+      # instead of a silent skip. Verified on ci-tools main against b15358c371d:
+      # present -> exit 0 "16 passed, 2 skipped"; hidden -> exit 2 "0 passed, 18 failed".
+      # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
+      # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
+      test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
   # V2.0 TEST COVERAGE. The job above matches the registry exactly, which is right
   # for shipping -- but it currently runs ZERO tests. ci-tools @v2.0-cyanoptera
   # drives the unittest binary through duckdb/scripts/ci/run_tests.py
@@ -257,6 +266,15 @@ jobs:
       # Linux only: this job is a test signal, not an artifact source.
       exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
 
+      # Make a skipped test run FAIL on this leg. `T` is the test pattern ci-tools
+      # hands run_tests.py (`T ?=` in duckdb_extension.Makefile, so an env var wins)
+      # and test_env_variables reaches `make test_release` via ci_phase.py.
+      # `--require webbed` turns "could not load" into `require webbed: FAILED`
+      # instead of a silent skip. Verified on ci-tools main against b15358c371d:
+      # present -> exit 0 "16 passed, 2 skipped"; hidden -> exit 2 "0 passed, 18 failed".
+      # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
+      # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
+      test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
   # The v1.5 variant the registry still builds (scripts/build.py routes v1.5.6 to
   # each descriptor's variegata ref). Gating on PRs: v1.5.6 users are the bulk of
   # current installs. The reusable workflow repoints DuckDB itself
