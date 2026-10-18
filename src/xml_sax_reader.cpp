@@ -744,17 +744,37 @@ static LogicalType WidenUnknownToVarchar(const LogicalType &type) {
 void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
                                                       const XMLSchemaOptions &options,
                                                       std::vector<XMLColumnInfo> &columns) {
-	// Which columns could even widen? If none, skip the whole extra file read.
 	std::vector<bool> widen(columns.size(), false);
-	bool any_candidate = false;
-	for (idx_t i = 0; i < columns.size(); i++) {
-		if (!columns[i].is_attribute && (IsWidenableScalar(columns[i].type) || IsUnknownType(columns[i].type))) {
-			any_candidate = true;
+
+	// THE EARLY RETURN THAT USED TO LIVE HERE IS GONE, deliberately. It skipped the extra file
+	// read when no column could widen. Discovery (#184, below) has no such precondition: a child
+	// element whose first occurrence is beyond the sample window is undiscovered no matter what
+	// the sampled columns are typed as, so the read is always worth making. `sample_size <= 0`
+	// already means "look at every value", so paying for one full stream here is the contract,
+	// not a regression.
+
+	// #184: a child element first appearing BEYOND the sample window was absent from the schema
+	// entirely, so querying it was a bind error ("Could not find key") rather than a NULL column.
+	// This pass already streams every record at bind time, before the output schema is fixed, so
+	// discovery costs a name comparison per field and no extra I/O.
+	//
+	// ELEMENT FIELDS ONLY. A late ATTRIBUTE is a separate case: attribute naming depends on
+	// attr_mode, and `attribute_order` carries dotted child-element attributes that would need
+	// their own handling. Out of scope here rather than half-done.
+	std::vector<std::string> discovered; // first-seen order, so the appended schema is stable
+	auto already_known = [&columns, &discovered](const std::string &n) {
+		for (const auto &c : columns) {
+			if (c.name == n) {
+				return true;
+			}
 		}
-	}
-	if (!any_candidate) {
-		return;
-	}
+		for (const auto &d : discovered) {
+			if (d == n) {
+				return true;
+			}
+		}
+		return false;
+	};
 
 	// ignore_errors so ConvertToValuePublic returns a typed NULL on an uncastable value instead of
 	// throwing; combined with the empty/nullstr pre-filter below, a NULL result means "cast failed".
@@ -793,6 +813,11 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	// Test each buffered record's candidate columns, then drop the batch (bounded memory).
 	auto test_and_clear = [&]() {
 		for (auto &rec : completed) {
+			for (const auto &field_name : rec.field_order) {
+				if (!already_known(field_name)) {
+					discovered.push_back(field_name);
+				}
+			}
 			for (idx_t i = 0; i < columns.size(); i++) {
 				if (widen[i] || columns[i].is_attribute) {
 					continue;
@@ -854,6 +879,16 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 			    IsUnknownType(columns[i].type) ? WidenUnknownToVarchar(columns[i].type) : LogicalType::VARCHAR;
 			columns[i].winning_datetime_format.clear();
 		}
+	}
+
+	// VARCHAR, deliberately. A column discovered here never appeared in the sampled synthetic
+	// document, so there is no inferred type to widen FROM -- the widen machinery above cannot
+	// help. Probing these values for a narrower type would put a second concern inside a function
+	// whose comments already warn about exactly that (see the BOOLEAN note on IsWidenableScalar).
+	// VARCHAR is never wrong here, only never narrow, and a caller who wants narrower has
+	// `columns :=`.
+	for (const auto &name : discovered) {
+		columns.emplace_back(name, LogicalType::VARCHAR);
 	}
 }
 
