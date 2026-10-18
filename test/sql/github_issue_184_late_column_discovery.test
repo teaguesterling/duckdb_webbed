@@ -34,6 +34,12 @@ VARCHAR
 # `Referenced column "x" not found in FROM clause!` (table_function_binder.cpp). #184 quoted
 # `Could not find key "alter"` because its case was a STRUCT field, `pitch.alter`, which goes
 # through struct_extract.cpp instead. Both are real; this query provokes the first.
+#
+# The assertion matches a PREFIX of that message on purpose. webbed builds against three
+# DuckDB lines (v1.4.5, v1.5.6 and 2.0), and the trailing `in FROM clause!` is upstream
+# wording this test has no reason to pin. `Referenced column "late" not found` is the part
+# that discriminates: it names the column and the binder stage, so a different failure
+# cannot satisfy it.
 statement error
 SELECT late FROM read_xml('test/xml/late_column_beyond_window.xml', sample_size := 5, streaming := true, maximum_file_size := 1);
 ----
