@@ -17,6 +17,7 @@ import json
 import math
 import os
 import random
+import shutil
 import statistics
 import subprocess
 import sys
@@ -27,12 +28,7 @@ DATA_ROOT = os.environ.get("BENCH_DATA", os.path.join(ROOT, "tmp", "bench-data")
 DUCKDB = os.environ.get(
     "BENCH_DUCKDB", os.path.join(ROOT, "tmp", "climb", "duckdb")
 )
-HYPERFINE = os.environ.get(
-    "BENCH_HYPERFINE",
-    os.path.expanduser(
-        "~/.local/share/mise/installs/aqua-sharkdp-hyperfine/2.0.0/hyperfine-v2.0.0-x86_64-apple-darwin/hyperfine"
-    ),
-)
+HYPERFINE = os.environ.get("BENCH_HYPERFINE") or shutil.which("hyperfine") or "hyperfine"
 
 METRICS = {
     "wall": ("time_wall_clock", "s"),

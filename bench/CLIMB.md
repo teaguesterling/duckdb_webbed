@@ -22,7 +22,7 @@ The climb runs unattended overnight, so the Frame below was set by Claude from t
 - Comparison: `python3 bench/compare.py run tmp/climb/runs/<name> --arm base=<ext> --arm cand=<ext>` then `python3 bench/compare.py report tmp/climb/runs/<name>`.
 - Guard: `python3 bench/compare.py guard --arm base=<ext> --arm cand=<ext>`.
 - Build: `make release` with `EXT_FLAGS="-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR=$PWD/tmp/vcpkg_installed"`, reusing the main checkout's prebuilt libxml2 2.x tree because this machine lacks `ninja` and `pkg-config` for a vcpkg rebuild. Release flags match the CI build.
-- Arms: each build's `build/release/extension/webbed/webbed.duckdb_extension` is copied to `tmp/climb/arms/<name>/webbed.duckdb_extension` (DuckDB derives the init symbol from the file name). `hyperfine` is an x86_64 binary under Rosetta, so `compare.py` runs an arm64-thinned copy of DuckDB 1.5.6 at `tmp/climb/duckdb`. Otherwise the universal binary launches as x86_64 and cannot load the arm64 extension.
+- Arms: each build's `build/release/extension/webbed/webbed.duckdb_extension` is copied to `tmp/climb/arms/<name>/webbed.duckdb_extension` (DuckDB derives the init symbol from the file name). `compare.py` runs an arm64-thinned copy of DuckDB 1.5.6 at `tmp/climb/duckdb`, so the CLI launches as arm64 even under an x86_64 `hyperfine`, which otherwise starts the universal binary as x86_64 and cannot load the arm64 extension. `BENCH_DUCKDB` selects another CLI, and `BENCH_HYPERFINE` another `hyperfine` (default: the one on `PATH`). For DuckDB 2.0, use a shell built from the same DuckDB commit without webbed linked in, since `make release` links webbed into `build/release/duckdb` and `LOAD` of an arm is then a no-op.
 - `hyperfine` 2.0's export schema differs from the 1.x schema that the benchmark skill's `compare.ts` reads, which is why `compare.py` exists.
 
 ## Baseline
@@ -567,4 +567,117 @@ geomean final instr: -20.8% over 20 cases
 geomean final rss: -2.6% over 20 cases
 geomean final wall: -17.3% over 20 cases
 samples per arm per case: {'base': 8, 'final': 8}
+```
+
+## On Main `672d290`, DuckDB 1.5.6 and 2.0
+
+The branch rebased onto main `672d290` (v2.12.0), which pins DuckDB 2.0 (`b15358c`) and builds a v1.5.6 variant. Main against the rebased branch, interleaved, 8 samples per arm per case, on each DuckDB line. The v2.0 runs use a shell built from `b15358c` without webbed linked in. Load average ran 15 to 31 from other work on the machine, so wall time is noisier than in the climb. Instructions and CPU carry the comparison.
+
+The guard reported 0 mismatches over 58 cases on each line, and the two lines produce identical fingerprints. `make test` passes on both (4788 assertions in 129 test cases, `make test-require` on 2.0). `bench/fingerprints.txt` now records main's output: 13 cases changed with main's correctness fixes, and main and the branch agree on all of them.
+
+| DuckDB | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| 1.5.6, geomean over 38 dev cases | -35.0% | -24.5% | +2.5% | -26.9% |
+| 2.0, geomean over 38 dev cases | -33.3% | -22.1% | +2.4% | -24.2% |
+
+The RSS rise comes from parallel inference at bind: `bigunion/profiles_describe` +115%*, `stream/atom_glob_ns_strip` +107%*, `manyfiles/telemetry_union` +16%* on 1.5.6, against wall -91%*, -50%* and -80%*. Peak RSS grows with the files parsed at once, as measured on `bigunion` when the change landed.
+
+### 1.5.6
+
+```
+case                                arm   wall (s)                     cpu (s)                       rss (MB)                      instr (G)                   
+bigunion/profiles_describe          cand  33.981→2.946 -91.3% p=0.00*  32.818→23.122 -29.5% p=0.00*  415.1→893.5 +115.2% p=0.00*   429.99→200.88 -53.3% p=0.00*
+bigunion/profiles_union             cand  39.126→7.560 -80.7% p=0.00*  77.517→58.732 -24.2% p=0.00*  1483.2→1261.0 -15.0% p=0.00*  803.48→462.45 -42.4% p=0.00*
+html/duck_blocks                    cand  0.951→0.926 -2.7% p=0.15     0.940→0.924 -1.7% p=0.35      215.1→214.4 -0.4% p=0.88      11.77→11.80 +0.2% p=0.73    
+html/extract_text                   cand  1.145→1.097 -4.2% p=0.07*    1.119→1.090 -2.5% p=0.14      309.9→310.1 +0.1% p=0.66      12.41→12.47 +0.5% p=0.81    
+html/large_page_tables              cand  1.180→0.349 -70.4% p=0.00*   1.173→0.348 -70.3% p=0.00*    319.3→305.8 -4.2% p=0.00*     11.78→4.21 -64.2% p=0.00*   
+html/links_images                   cand  0.282→0.281 -0.5% p=0.80     2.230→2.194 -1.6% p=0.35      46.2→46.3 +0.1% p=0.89        21.43→21.39 -0.2% p=0.48    
+html/read_html_tables               cand  0.120→0.120 +0.1% p=0.96     0.820→0.826 +0.7% p=0.81      34.7→34.6 -0.1% p=1.00        7.32→7.28 -0.5% p=0.00      
+html/table_rows                     cand  1.367→1.291 -5.5% p=0.00*    1.357→1.284 -5.4% p=0.00*     342.0→342.1 +0.0% p=0.88      18.49→17.29 -6.5% p=0.00*   
+manyfiles/catalog_medium            cand  0.343→0.253 -26.2% p=0.05*   2.420→1.812 -25.1% p=0.00*    56.9→55.9 -1.8% p=0.16        26.53→18.15 -31.6% p=0.00*  
+manyfiles/orders_glob               cand  0.417→0.360 -13.8% p=0.27    2.914→2.412 -17.2% p=0.00*    50.4→49.1 -2.6% p=0.02        27.80→20.95 -24.6% p=0.00*  
+manyfiles/orders_objects            cand  0.636→0.616 -3.2% p=0.28     4.801→4.755 -1.0% p=0.41      46.6→46.4 -0.5% p=0.25        46.80→46.81 +0.0% p=0.61    
+manyfiles/pages_html_objects        cand  0.280→0.280 -0.2% p=0.91     2.050→2.055 +0.2% p=1.00      47.9→48.3 +0.8% p=0.62        15.68→15.64 -0.3% p=0.64    
+manyfiles/telemetry_union           cand  1.176→0.235 -80.0% p=0.00*   2.099→1.758 -16.3% p=0.00*    40.6→47.2 +16.4% p=0.00*      24.82→15.96 -35.7% p=0.00*  
+nested/catalog_dom_infer            cand  1.713→1.485 -13.3% p=0.07*   1.709→1.477 -13.6% p=0.00*    412.6→412.6 -0.0% p=0.99      20.31→16.27 -19.9% p=0.00*  
+nested/catalog_force_list           cand  1.750→1.493 -14.7% p=0.00*   1.738→1.515 -12.8% p=0.04*    413.4→413.0 -0.1% p=0.62      20.37→16.35 -19.7% p=0.01*  
+nested/catalog_max_depth            cand  1.688→1.382 -18.2% p=0.00*   1.708→1.372 -19.7% p=0.00*    408.3→408.7 +0.1% p=0.35      20.45→16.44 -19.6% p=0.00*  
+nested/claims_sax                   cand  2.091→2.025 -3.2% p=0.02*    2.081→2.040 -2.0% p=0.04      32.2→32.1 -0.3% p=0.77        29.04→28.80 -0.8% p=0.02    
+nested/org_departments              cand  0.699→0.482 -31.0% p=0.00*   0.694→0.484 -30.2% p=0.05*    157.2→151.3 -3.7% p=0.00*     8.80→5.58 -36.6% p=0.05*    
+nested/org_regions_deep             cand  0.673→0.467 -30.5% p=0.00*   0.669→0.464 -30.6% p=0.00*    167.6→161.4 -3.7% p=0.00*     8.71→5.51 -36.8% p=0.00*    
+records/catalog_record_element      cand  0.610→0.389 -36.3% p=0.01*   0.608→0.385 -36.7% p=0.00*    171.9→165.0 -4.0% p=0.00*     7.50→4.25 -43.4% p=0.00*    
+records/events_attr_discard         cand  0.402→0.294 -27.0% p=0.00*   0.399→0.291 -27.1% p=0.03*    199.0→199.0 +0.0% p=1.00      5.23→3.65 -30.3% p=0.01*    
+records/events_attr_prefixed        cand  0.504→0.391 -22.5% p=0.00*   0.500→0.387 -22.6% p=0.00*    204.2→203.7 -0.2% p=0.12      6.61→5.02 -24.0% p=0.00*    
+records/orders_infer                cand  0.766→0.630 -17.8% p=0.00*   0.762→0.627 -17.7% p=0.01*    235.2→233.9 -0.6% p=0.02      8.46→6.58 -22.3% p=0.01*    
+records/readings_columns_numeric    cand  0.271→0.268 -1.0% p=0.24     0.268→0.265 -1.1% p=0.15      236.7→236.6 -0.0% p=0.18      3.56→3.52 -1.2% p=0.03      
+records/tickets_stream_infer        cand  0.908→0.782 -13.8% p=0.00*   0.904→0.777 -14.1% p=0.00*    251.2→193.2 -23.1% p=0.00*    12.24→10.24 -16.3% p=0.00*  
+records/transactions_stream_large   cand  2.649→1.739 -34.4% p=0.00*   2.625→1.733 -34.0% p=0.00*    26.7→26.6 -0.4% p=0.09        36.32→25.85 -28.8% p=0.00*  
+scalar/extract_elements_attributes  cand  1.640→1.658 +1.1% p=0.18     12.626→12.748 +1.0% p=0.31    256.4→260.7 +1.7% p=0.46      132.71→132.89 +0.1% p=0.81  
+scalar/extract_text_xpaths          cand  1.941→1.842 -5.1% p=0.24     13.819→13.823 +0.0% p=1.00    225.6→227.4 +0.8% p=0.03      145.32→138.27 -4.9% p=0.22  
+scalar/minify_pretty                cand  1.055→1.054 -0.1% p=0.95     7.934→8.056 +1.5% p=0.63      326.6→327.9 +0.4% p=0.64      82.30→82.21 -0.1% p=1.00    
+scalar/parse_xml_batch              cand  1.963→1.595 -18.8% p=0.00*   2.269→1.887 -16.9% p=0.00*    743.5→731.3 -1.6% p=0.00      25.30→20.52 -18.9% p=0.00*  
+scalar/to_json                      cand  0.892→0.644 -27.8% p=0.01*   6.802→4.839 -28.9% p=0.00*    216.7→236.1 +8.9% p=0.06*     63.70→47.27 -25.8% p=0.00*  
+scalar/to_xml_struct                cand  0.683→0.193 -71.8% p=0.00*   4.948→1.381 -72.1% p=0.00*    60.2→58.0 -3.7% p=0.00*       26.18→13.77 -47.4% p=0.00*  
+scalar/validity_stats               cand  1.238→1.271 +2.7% p=0.42     9.285→9.332 +0.5% p=0.66      218.6→217.4 -0.5% p=0.20      91.14→95.14 +4.4% p=0.56    
+stream/atom_glob_ns_strip           cand  2.403→1.205 -49.8% p=0.00*   3.819→3.513 -8.0% p=0.00*     301.4→625.0 +107.4% p=0.00*   46.32→39.85 -14.0% p=0.00*  
+stream/logs_sax_ignore_errors       cand  1.652→0.196 -88.1% p=0.00*   1.688→0.278 -83.5% p=0.00*    117.5→118.1 +0.4% p=0.29      19.07→3.46 -81.9% p=0.00*   
+stream/orders_sax_infer             cand  2.852→2.411 -15.5% p=0.00*   2.773→2.402 -13.4% p=0.00*    735.1→618.7 -15.8% p=0.00*    35.59→30.03 -15.6% p=0.00*  
+stream/orders_sax_items_columns     cand  1.492→1.433 -3.9% p=0.00*    1.504→1.446 -3.9% p=0.10      63.2→63.8 +0.9% p=0.28        21.36→20.65 -3.3% p=0.05*   
+stream/soap_xpath_ns                cand  0.585→0.231 -60.5% p=0.03*   4.541→1.398 -69.2% p=0.00*    41.5→42.8 +3.1% p=0.01*       55.63→11.09 -80.1% p=0.00*  
+
+geomean cand cpu: -24.5% over 38 cases
+geomean cand instr: -26.9% over 38 cases
+geomean cand rss: +2.5% over 38 cases
+geomean cand wall: -35.0% over 38 cases
+samples per arm per case: {'cand': 8, 'base': 8}
+```
+
+### 2.0
+
+```
+case                                arm   wall (s)                     cpu (s)                       rss (MB)                      instr (G)                   
+bigunion/profiles_describe          cand  34.038→2.904 -91.5% p=0.00*  32.700→23.418 -28.4% p=0.00*  419.5→891.8 +112.6% p=0.00*   433.21→203.26 -53.1% p=0.00*
+bigunion/profiles_union             cand  39.343→7.108 -81.9% p=0.00*  77.015→57.754 -25.0% p=0.00*  1432.5→1180.2 -17.6% p=0.00*  803.62→461.27 -42.6% p=0.00*
+html/duck_blocks                    cand  0.941→0.918 -2.4% p=0.31     0.949→0.918 -3.3% p=0.19      172.0→172.2 +0.1% p=0.88      12.11→12.04 -0.6% p=0.48    
+html/extract_text                   cand  1.201→1.142 -4.9% p=0.05*    1.168→1.142 -2.2% p=0.06      223.8→223.5 -0.2% p=0.31      13.08→13.11 +0.2% p=0.99    
+html/large_page_tables              cand  1.073→0.354 -67.0% p=0.00*   1.070→0.352 -67.1% p=0.00*    347.2→329.0 -5.3% p=0.00*     11.87→4.29 -63.8% p=0.00*   
+html/links_images                   cand  0.291→0.292 +0.4% p=0.71     2.300→2.285 -0.7% p=0.69      52.4→52.0 -0.8% p=0.66        21.79→21.92 +0.6% p=0.15    
+html/read_html_tables               cand  0.141→0.139 -1.6% p=0.59     0.943→0.936 -0.7% p=0.75      41.1→41.0 -0.1% p=0.65        8.08→8.05 -0.4% p=0.05      
+html/table_rows                     cand  1.406→1.298 -7.7% p=0.00*    1.412→1.295 -8.3% p=0.00*     256.1→255.3 -0.3% p=0.40      18.97→17.62 -7.1% p=0.00*   
+manyfiles/catalog_medium            cand  0.348→0.238 -31.4% p=0.00*   2.491→1.855 -25.5% p=0.00*    61.8→60.7 -1.7% p=0.40        26.75→18.27 -31.7% p=0.00*  
+manyfiles/orders_glob               cand  0.506→0.440 -12.9% p=0.13    3.708→3.339 -10.0% p=0.00*    55.7→55.5 -0.3% p=0.64        32.12→24.91 -22.5% p=0.00*  
+manyfiles/orders_objects            cand  0.712→0.722 +1.4% p=0.48     5.617→5.643 +0.5% p=0.77      52.4→52.6 +0.4% p=0.37        51.11→51.17 +0.1% p=0.38    
+manyfiles/pages_html_objects        cand  0.378→0.406 +7.3% p=0.47     2.802→2.880 +2.8% p=0.46      53.3→52.9 -0.9% p=0.23        18.88→19.05 +0.9% p=0.65    
+manyfiles/telemetry_union           cand  1.387→0.357 -74.2% p=0.00*   2.657→2.569 -3.3% p=0.05*     46.5→51.1 +9.9% p=0.00*       28.21→19.40 -31.2% p=0.00*  
+nested/catalog_dom_infer            cand  1.744→1.448 -17.0% p=0.00*   1.737→1.807 +4.1% p=0.60      418.3→419.7 +0.3% p=0.10      20.22→22.85 +13.0% p=0.29   
+nested/catalog_force_list           cand  1.758→1.458 -17.1% p=0.00*   1.787→1.461 -18.3% p=0.05*    418.3→418.2 -0.0% p=0.76      20.28→16.22 -20.0% p=0.03*  
+nested/catalog_max_depth            cand  1.690→1.401 -17.1% p=0.01*   1.686→2.195 +30.2% p=0.31     413.7→415.2 +0.4% p=0.08      20.27→31.66 +56.2% p=0.31   
+nested/claims_sax                   cand  2.000→2.023 +1.1% p=0.39     1.999→2.009 +0.5% p=0.73      38.6→39.0 +1.1% p=0.20        28.22→28.01 -0.8% p=0.00    
+nested/org_departments              cand  0.698→0.485 -30.5% p=0.00*   0.695→0.601 -13.6% p=0.08*    162.6→157.9 -2.9% p=0.00      8.87→7.83 -11.7% p=0.10     
+nested/org_regions_deep             cand  0.676→0.466 -31.0% p=0.00*   0.675→0.465 -31.1% p=0.01*    172.0→165.7 -3.6% p=0.00*     8.76→5.56 -36.5% p=0.02*    
+records/catalog_record_element      cand  0.619→0.403 -34.9% p=0.00*   0.618→0.402 -35.1% p=0.00*    177.1→171.1 -3.4% p=0.00*     7.59→4.34 -42.9% p=0.00*    
+records/events_attr_discard         cand  0.412→0.308 -25.1% p=0.00*   0.411→0.308 -25.0% p=0.03*    204.9→204.5 -0.2% p=0.07      5.33→3.76 -29.5% p=0.01*    
+records/events_attr_prefixed        cand  0.507→0.401 -20.9% p=0.00*   0.506→0.414 -18.2% p=0.05*    210.6→210.6 +0.0% p=0.91      6.69→5.12 -23.5% p=0.05*    
+records/orders_infer                cand  0.796→0.653 -17.9% p=0.00*   0.794→0.650 -18.1% p=0.00*    240.0→240.1 +0.0% p=1.00      8.56→6.65 -22.3% p=0.00*    
+records/readings_columns_numeric    cand  0.303→0.296 -2.3% p=0.17     0.301→0.293 -2.6% p=0.19      243.4→243.5 +0.1% p=0.31      3.84→3.80 -1.1% p=0.00      
+records/tickets_stream_infer        cand  0.927→0.799 -13.8% p=0.04*   0.927→0.798 -13.9% p=0.00*    256.6→195.9 -23.7% p=0.00*    12.31→10.32 -16.1% p=0.00*  
+records/transactions_stream_large   cand  2.707→1.838 -32.1% p=0.03*   2.704→1.838 -32.1% p=0.00*    33.0→33.2 +0.3% p=0.29        37.24→26.81 -28.0% p=0.00*  
+scalar/extract_elements_attributes  cand  1.666→1.675 +0.6% p=0.71     12.405→12.845 +3.5% p=0.05*   307.6→331.9 +7.9% p=0.72      133.80→134.34 +0.4% p=0.23  
+scalar/extract_text_xpaths          cand  1.867→1.862 -0.3% p=0.99     13.853→13.573 -2.0% p=0.38    301.2→301.4 +0.1% p=0.80      145.48→141.25 -2.9% p=0.22  
+scalar/minify_pretty                cand  1.079→1.084 +0.5% p=0.69     7.930→7.842 -1.1% p=0.33      314.9→339.2 +7.7% p=0.62      81.57→82.95 +1.7% p=0.41    
+scalar/parse_xml_batch              cand  1.928→1.662 -13.8% p=0.01*   2.386→2.115 -11.4% p=0.09*    675.7→665.3 -1.5% p=0.00      27.25→22.99 -15.6% p=0.13   
+scalar/to_json                      cand  0.943→0.913 -3.1% p=0.75     6.801→4.592 -32.5% p=0.00*    255.4→255.8 +0.2% p=0.91      65.31→46.23 -29.2% p=0.00*  
+scalar/to_xml_struct                cand  0.711→0.217 -69.5% p=0.00*   5.004→1.453 -71.0% p=0.00*    65.6→63.2 -3.6% p=0.09*       27.41→15.01 -45.3% p=0.00*  
+scalar/validity_stats               cand  1.269→1.239 -2.4% p=0.56     9.277→9.195 -0.9% p=0.84      292.4→293.0 +0.2% p=0.53      90.96→93.61 +2.9% p=0.59    
+stream/atom_glob_ns_strip           cand  2.416→1.233 -49.0% p=0.00*   3.748→3.508 -6.4% p=0.00*     303.5→635.8 +109.5% p=0.00*   46.33→39.79 -14.1% p=0.00*  
+stream/logs_sax_ignore_errors       cand  1.899→0.211 -88.9% p=0.00*   1.936→0.340 -82.4% p=0.00*    123.6→124.8 +1.0% p=0.32      19.18→4.24 -77.9% p=0.00*   
+stream/orders_sax_infer             cand  2.763→2.475 -10.4% p=0.03*   2.754→3.003 +9.0% p=0.27      734.1→618.5 -15.7% p=0.00*    35.61→40.84 +14.7% p=0.27   
+stream/orders_sax_items_columns     cand  1.517→1.447 -4.6% p=0.00*    3.021→1.463 -51.6% p=0.00*    73.6→72.7 -1.2% p=0.13        49.55→20.89 -57.8% p=0.00*  
+stream/soap_xpath_ns                cand  0.620→0.287 -53.6% p=0.00*   5.065→2.062 -59.3% p=0.00*    47.6→49.0 +3.0% p=0.00        58.27→13.89 -76.2% p=0.00*  
+
+geomean cand cpu: -22.1% over 38 cases
+geomean cand instr: -24.2% over 38 cases
+geomean cand rss: +2.4% over 38 cases
+geomean cand wall: -33.3% over 38 cases
+samples per arm per case: {'cand': 8, 'base': 8}
 ```
