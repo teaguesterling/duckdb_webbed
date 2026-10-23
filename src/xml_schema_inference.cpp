@@ -2376,42 +2376,6 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
-// Wrap the fragment in its element so the parser sees a single root and so extraction receives a
-// node whose ->children are the original siblings. extra_ns_decls injects any xmlns: declarations
-// the fragment's prefixed names depend on (the originating decls are not part of the captured
-// fragment), without which strict parsing would fail and the value would be lost. extra_attrs
-// carries the element's own attributes (already escaped) so they become STRUCT fields.
-static std::string WrapXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                   const std::string &extra_ns_decls, const std::string &extra_attrs) {
-	std::string wrapped;
-	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + extra_ns_decls.size() + extra_attrs.size() + 5);
-	wrapped.append("<")
-	    .append(wrapper_name)
-	    .append(extra_ns_decls)
-	    .append(extra_attrs)
-	    .append(">")
-	    .append(inner_xml)
-	    .append("</")
-	    .append(wrapper_name)
-	    .append(">");
-	return wrapped;
-}
-
-Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
-                                                      const std::string &extra_ns_decls, const std::string &extra_attrs,
-                                                      const std::string &datetime_format) {
-	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
-	if (!doc.doc) {
-		return Value(target_type);
-	}
-	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
-	if (!root) {
-		return Value(target_type);
-	}
-	return ExtractValueFromNode(root, target_type, options, datetime_format);
-}
-
 Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
                                                const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (!node) {
@@ -2647,21 +2611,6 @@ void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &ele
 		}
 	}
 	items.push_back(ExtractValueFromNode(node, element_type, options, datetime_format));
-}
-
-void XMLSchemaInference::AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                        const LogicalType &element_type,
-                                                        const XMLSchemaOptions &options,
-                                                        const std::string &extra_ns_decls,
-                                                        const std::string &extra_attrs,
-                                                        const std::string &datetime_format, std::vector<Value> &items) {
-	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
-	xmlNodePtr root = doc.doc ? xmlDocGetRootElement(doc.doc) : nullptr;
-	if (!root) {
-		items.push_back(Value(element_type));
-		return;
-	}
-	AppendListItems(root, element_type, options, datetime_format, items);
 }
 
 Value XMLSchemaInference::ExtractXMLArrayFromNode(xmlNodePtr node) {

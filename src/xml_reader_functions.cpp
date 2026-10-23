@@ -152,7 +152,7 @@ static void ParseNullstrParameter(const Value &val, const char *function_name, s
 
 // True if a column type contains MAP or ARRAY at any nesting. These DuckDB types have no
 // XML extraction path, so SAX cannot materialize them. STRUCT and LIST<STRUCT> are supported
-// via the inner-XML capture / re-parse path in AccumulatorToRow.
+// through the DOM extraction of each streamed record.
 static bool ContainsUnsupportedSAXType(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::MAP:
@@ -1024,52 +1024,21 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 				lstate.use_sax = use_sax;
 
+				// Remaining depth for extraction against the inferred schema
+				int effective_depth = schema_options.max_depth;
+				if (effective_depth > 20 || effective_depth < 0) {
+					effective_depth = 20;
+				}
+				lstate.remaining_depth = effective_depth - 2;
+
 				if (use_sax) {
 					string().swap(content);
 					// Measuring a compressed file consumed it up to the limit
 					if (!file_handle->CanSeek()) {
 						file_handle->Reset();
 					}
-					// SAX mode: initialize push parser for incremental streaming
-					lstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
-					lstate.sax_accumulator->namespace_mode = schema_options.namespaces;
-
-					// Configure record tag matching
-					if (!schema_options.record_element.empty()) {
-						std::string tag = schema_options.record_element;
-						if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
-							tag = tag.substr(2);
-						}
-						lstate.sax_accumulator->record_tag = tag;
-					}
-
-					lstate.sax_ctx = make_uniq<SAXCallbackContext>();
-					lstate.sax_ctx->accumulator = lstate.sax_accumulator.get();
-					lstate.sax_ctx->max_rows = 0; // No limit per chunk
-					lstate.sax_ctx->rows_completed = 0;
-					lstate.sax_ctx->stop_parsing = false;
-					lstate.sax_ctx->completed_records = &lstate.sax_pending_records;
-					lstate.sax_ctx->preserve_whitespace = bind_data.schema_options.preserve_whitespace;
-					lstate.sax_ctx->discard_attrs = (schema_options.attr_mode == "discard");
-
-					lstate.sax_handler = SAXStreamReader::CreateSAXHandler();
-					// Fail-closed entity loader: refuse external DTD/entity fetch during streaming parse.
-					XMLUtils::EnsureSecureParsing();
-					lstate.sax_parser_ctx = xmlCreatePushParserCtxt(&lstate.sax_handler, lstate.sax_ctx.get(), nullptr,
-					                                                0, filename.c_str());
-					if (!lstate.sax_parser_ctx) {
-						throw IOException("Could not create SAX push parser for '%s'", filename);
-					}
-					// Match DOM: no XML_PARSE_RECOVER. Malformed XML must error (or be skipped
-					// via ignore_errors), not silently recover into partial/corrupt rows.
-					// XML_PARSE_HUGE: lift libxml2's built-in limits (element depth, text-node
-					// length, and other accumulators) that otherwise abort a large streaming
-					// parse. Required for multi-GB inputs; harmless for small ones.
-					xmlCtxtUseOptions(lstate.sax_parser_ctx,
-					                  XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_HUGE);
-
-					lstate.sax_file_handle = std::move(file_handle);
-					lstate.sax_pending_records.clear();
+					lstate.sax_stream = make_uniq<XMLRecordStream>(std::move(file_handle), filename, schema_options);
+					lstate.sax_pending_rows.clear();
 					lstate.sax_pending_pos = 0;
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
@@ -1109,36 +1078,32 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					lstate.record_elements =
 					    XMLSchemaInference::IdentifyRecordElements(lstate.current_doc, root, schema_options);
 
-					// Calculate remaining depth for inferred schema extraction
-					int effective_depth = schema_options.max_depth;
-					if (effective_depth > 20 || effective_depth < 0) {
-						effective_depth = 20;
-					}
-					lstate.remaining_depth = effective_depth - 2;
-
 					lstate.current_record_index = 0;
 					lstate.file_loaded = true;
 				}
 			}
 
-			if (lstate.use_sax) {
-				// SAX streaming: feed chunks until we have enough records or EOF
-				constexpr idx_t SAX_CHUNK_SIZE = 65536;
-				char sax_buffer[SAX_CHUNK_SIZE];
+			auto extract_record = [&](xmlNodePtr record) {
+				if (bind_data.has_explicit_schema) {
+					return XMLSchemaInference::ExtractSingleRecordWithSchema(record, bind_data.column_names,
+					                                                         bind_data.column_types, schema_options,
+					                                                         bind_data.column_datetime_formats);
+				}
+				return XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
+				                                               lstate.remaining_depth, schema_options);
+			};
 
-				auto &pending = lstate.sax_pending_records;
+			if (lstate.use_sax) {
+				auto &pending = lstate.sax_pending_rows;
 				auto emit_pending_sax_rows = [&]() {
 					while (lstate.sax_pending_pos < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
-						auto &record = pending[lstate.sax_pending_pos];
-						auto row = SAXStreamReader::AccumulatorToRow(
-						    record, bind_data.column_names, bind_data.column_types, schema_options,
-						    bind_data.column_datetime_formats, bind_data.inferred_schema);
-						EmitRow(output, output_idx, row, bind_data.include_filename, filename);
+						EmitRow(output, output_idx, pending[lstate.sax_pending_pos], bind_data.include_filename,
+						        filename);
 						output_idx++;
 						lstate.sax_pending_pos++;
 					}
-					// Erasing each emitted record from the front shifts every record behind it,
-					// which is quadratic when ignore_errors withholds a whole file.
+					// Erasing each emitted row from the front shifts every row behind it, which is
+					// quadratic when ignore_errors withholds a whole file.
 					if (lstate.sax_pending_pos == pending.size()) {
 						pending.clear();
 						lstate.sax_pending_pos = 0;
@@ -1158,29 +1123,21 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 							}
 						}
 
-						auto bytes_read = lstate.sax_file_handle->Read(sax_buffer, SAX_CHUNK_SIZE);
-						if (bytes_read == 0) {
-							int final_result = xmlParseChunk(lstate.sax_parser_ctx, nullptr, 0, 1);
-							if (final_result != 0) {
-								throw IOException("SAX parsing error in file '%s': %s", filename,
-								                  SAXStreamReader::DescribeParseError(lstate.sax_parser_ctx));
-							}
+						bool more = lstate.sax_stream->ParseChunk();
+						for (auto record : lstate.sax_stream->Records()) {
+							pending.push_back(extract_record(record));
+						}
+						lstate.sax_stream->ReleaseRecords();
+						if (!more) {
 							lstate.sax_parse_complete = true;
 							break;
-						}
-
-						int parse_result =
-						    xmlParseChunk(lstate.sax_parser_ctx, sax_buffer, static_cast<int>(bytes_read), 0);
-						if (parse_result != 0) {
-							throw IOException("SAX parsing error in file '%s': %s", filename,
-							                  SAXStreamReader::DescribeParseError(lstate.sax_parser_ctx));
 						}
 					}
 				}
 
 				if (lstate.sax_parse_complete) {
 					emit_pending_sax_rows();
-					if (lstate.sax_pending_records.empty()) {
+					if (pending.empty()) {
 						file_done = true;
 					}
 				}
@@ -1190,15 +1147,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				       output_idx < STANDARD_VECTOR_SIZE) {
 					xmlNodePtr record = lstate.record_elements[lstate.current_record_index];
 
-					std::vector<Value> row;
-					if (bind_data.has_explicit_schema) {
-						row = XMLSchemaInference::ExtractSingleRecordWithSchema(record, bind_data.column_names,
-						                                                        bind_data.column_types, schema_options,
-						                                                        bind_data.column_datetime_formats);
-					} else {
-						row = XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
-						                                              lstate.remaining_depth, schema_options);
-					}
+					auto row = extract_record(record);
 
 					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
 

@@ -1,0 +1,27 @@
+# name: test/sql/sax_record_selection_parity.test
+# description: Streaming selects records the way DOM does under root_element and max_depth := 0. Regression for: SAX ignored both options, reading the root's children as records and returning NULL columns.
+# group: [sql]
+
+require webbed
+
+query I
+SELECT * FROM read_xml('test/xml/sax_record_selection.xml', root_element := 'items', maximum_file_size := 1000000);
+----
+1
+2
+
+query I
+SELECT * FROM read_xml('test/xml/sax_record_selection.xml', root_element := 'items', maximum_file_size := 10);
+----
+1
+2
+
+query T
+SELECT * FROM read_xml('test/xml/sax_record_selection.xml', max_depth := 0, maximum_file_size := 1000000);
+----
+<meta><n>skip</n></meta><items><item><a>1</a></item><item><a>2</a></item></items>
+
+query T
+SELECT * FROM read_xml('test/xml/sax_record_selection.xml', max_depth := 0, maximum_file_size := 10);
+----
+<meta><n>skip</n></meta><items><item><a>1</a></item><item><a>2</a></item></items>

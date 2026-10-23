@@ -221,6 +221,24 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 	xmlFree(nsList);
 }
 
+// A silent, per-context error handler keeps XPath errors off the global handler. Registering the
+// document's namespace declarations lets XPath with prefixes work.
+static xmlXPathContextPtr NewDocumentXPathContext(xmlDocPtr doc) {
+	if (!doc) {
+		return nullptr;
+	}
+	xmlXPathContextPtr xpath_ctx = xmlXPathNewContext(doc);
+	if (xpath_ctx) {
+		xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
+		RegisterDocumentNamespaces(doc, xpath_ctx);
+	}
+	return xpath_ctx;
+}
+
+XMLDocRAII::XMLDocRAII(xmlDocPtr adopted) : doc(adopted) {
+	xpath_ctx = NewDocumentXPathContext(doc);
+}
+
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
 	// XML_PARSE_NOERROR: suppress error reports to stderr
@@ -253,15 +271,7 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 		resource_error = true;
 	}
 
-	if (doc) {
-		xpath_ctx = xmlXPathNewContext(doc);
-		// Set silent error handler on XPath context (thread-safe, per-context)
-		if (xpath_ctx) {
-			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
-			// Register all namespace declarations from the document so XPath with prefixes works
-			RegisterDocumentNamespaces(doc, xpath_ctx);
-		}
-	}
+	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
@@ -301,15 +311,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		}
 	}
 
-	if (doc) {
-		xpath_ctx = xmlXPathNewContext(doc);
-		// Set silent error handler on XPath context (thread-safe, per-context)
-		if (xpath_ctx) {
-			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
-			// Register all namespace declarations from the document so XPath with prefixes works
-			RegisterDocumentNamespaces(doc, xpath_ctx);
-		}
-	}
+	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
 XMLDocRAII::~XMLDocRAII() {

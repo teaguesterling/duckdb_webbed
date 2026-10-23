@@ -190,22 +190,10 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 
 	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
 	bool use_sax = false;
-	std::unique_ptr<SAXRecordAccumulator> sax_accumulator; // Accumulator state (persists across scan calls)
-	std::unique_ptr<SAXCallbackContext> sax_ctx;           // Callback context (persists across scan calls)
-	xmlParserCtxtPtr sax_parser_ctx = nullptr;             // Push parser context (persists across scan calls)
-	std::unique_ptr<FileHandle> sax_file_handle;           // File handle (persists across scan calls)
-	xmlSAXHandler sax_handler;                             // SAX handler (must outlive parser context)
-	std::vector<SAXRecordAccumulator>
-	    sax_pending_records;         // Completed records (emitted only after a successful parse when ignore_errors)
-	idx_t sax_pending_pos = 0;       // Next pending record to emit; the vector is cleared once drained
+	std::unique_ptr<XMLRecordStream> sax_stream;
+	std::vector<std::vector<Value>> sax_pending_rows; // Extracted rows (emitted only after a successful parse when ignore_errors)
+	idx_t sax_pending_pos = 0;       // Next pending row to emit; the vector is cleared once drained
 	bool sax_parse_complete = false; // Push parser reached EOF without error
-
-	~XMLReadLocalState() {
-		if (sax_parser_ctx) {
-			xmlFreeParserCtxt(sax_parser_ctx);
-			sax_parser_ctx = nullptr;
-		}
-	}
 
 	// Release all per-file resources (when a file is finished or skipped). Keeps file_index /
 	// last_batch_index so a just-produced chunk can still be tagged by get_partition_data.
@@ -213,14 +201,8 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 		current_doc = XMLDocRAII();
 		record_elements.clear();
 		current_record_index = 0;
-		if (sax_parser_ctx) {
-			xmlFreeParserCtxt(sax_parser_ctx);
-			sax_parser_ctx = nullptr;
-		}
-		sax_accumulator.reset();
-		sax_ctx.reset();
-		sax_file_handle.reset();
-		sax_pending_records.clear();
+		sax_stream.reset();
+		sax_pending_rows.clear();
 		sax_pending_pos = 0;
 		sax_parse_complete = false;
 		use_sax = false;

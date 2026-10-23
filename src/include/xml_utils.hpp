@@ -49,6 +49,8 @@ struct XMLDocRAII {
 	bool resource_error = false;
 
 	XMLDocRAII() = default;
+	// Take ownership of an already parsed document
+	explicit XMLDocRAII(xmlDocPtr adopted);
 	XMLDocRAII(const std::string &xml_str);
 	XMLDocRAII(const std::string &content, bool is_html);
 	~XMLDocRAII();

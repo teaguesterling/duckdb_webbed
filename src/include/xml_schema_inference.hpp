@@ -239,27 +239,6 @@ public:
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
 	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
-	// Parse an XML fragment (the inner contents of a wrapper element) and extract a value of the
-	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
-	// inner content was captured as raw XML during streaming.
-	// extra_ns_decls / extra_attrs are spliced verbatim into the synthetic wrapper's open tag
-	// (`<wrapper extra_ns_decls extra_attrs>inner</wrapper>`). extra_attrs carries the wrapped
-	// element's OWN attributes (e.g. ` id="1" UUID=".."`), which the SAX path captures separately
-	// from its inner content. An empty fragment is still parsed, so an empty element yields what DOM
-	// gives: a STRUCT of NULL fields or an empty LIST.
-	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-	                                         const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                         const std::string &extra_ns_decls = "",
-	                                         const std::string &extra_attrs = "",
-	                                         const std::string &datetime_format = "");
-
-	// Parse a captured list occurrence (the inner contents of one repeated element) and append the
-	// items it holds, by the same rule as DOM extraction (see AppendListItems).
-	static void AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-	                                           const LogicalType &element_type, const XMLSchemaOptions &options,
-	                                           const std::string &extra_ns_decls, const std::string &extra_attrs,
-	                                           const std::string &datetime_format, std::vector<Value> &items);
-
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
 
