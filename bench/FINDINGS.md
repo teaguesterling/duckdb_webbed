@@ -26,9 +26,7 @@ DBLP `<title>` holds text with inline `<i>`, `<sub>`, `<sup>`, `<tt>`. It infers
 
 ## SAX and DOM Disagree
 
-- With `namespaces := 'keep'`, SAX returns NULL for every prefixed child element (`dc:subject`, `thr:total`, `content:encoded`), while DOM returns the values. The changelog says Issue #77 fixed this.
-- SAX leaves entities in the attribute values of repeated children undecoded. On DBLP, `cite@label` is `Atzeni &#38; Parker 1982` under SAX and `Atzeni & Parker 1982` under DOM (80 rows differ).
-- The scan-path `SAXCallbackContext` never sets `discard_attrs` (`src/xml_reader_functions.cpp` ~934), while `ReadRecords` and `InferSchemaFromStream` do. This came from reading the source and was not exercised.
+Main fixed the three disagreements found here: prefixed children under `namespaces := 'keep'`, undecoded `&` in the attributes of repeated children, and `attr_mode := 'discard'` in the streaming scan. Streaming still ignored `root_element` and `max_depth := 0`. It read the root's children as records, or returned NULL columns. Streaming now builds each record as a DOM subtree and extracts it with the DOM code, which fixes both (`test/sql/sax_record_selection_parity.test`).
 
 ## Large Documents Silently Read as Zero Rows
 

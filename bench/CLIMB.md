@@ -681,3 +681,74 @@ geomean cand rss: +2.4% over 38 cases
 geomean cand wall: -33.3% over 38 cases
 samples per arm per case: {'cand': 8, 'base': 8}
 ```
+
+## Real Datasets
+
+`bench/cases/real` reads eight public datasets that `bench/cases/real/fetch.py` downloads and pins: ClinVar, UniProt Swiss-Prot and simplewiki history (each cut to 200 to 300 MB at a record boundary), PubMed, 5,000 IRS 990 e-files, 1,067 CLDR locales, the 313 MB MeSH descriptors, and 2,000 Common Crawl pages. Main `672d290` against the branch at `121a936`, interleaved, 8 samples per arm per case. Load average ran 6 to 20.
+
+The guard reports two mismatches beyond `pubmed_gz`, which main can't read. On main, `holdout_mesh_dom` reads 0 rows and `wiki_pages` infers a single `content` column: both documents pass libxml2's 10M-node XPath cap (`bench/FINDINGS.md`). The branch reads every record, so those two cases time correct output against a no-op and are left out of the summary below.
+
+| Cases | wall | CPU | RSS |
+| --- | ---: | ---: | ---: |
+| `irs990_union`, `holdout_cldr_union` (many files, `union_by_name`) | -78%*, -73%* | -5%*, -13%* | -6%, +6% |
+| `holdout_pubmed_sax` (two files) | -21%* | -19%* | +28%* |
+| `clinvar_sax`, `holdout_mesh_sax`, `holdout_uniprot_sax`, `wiki_revisions` (one large file through SAX) | -2% to -7% | -3% to -9% | -10% to -26%* |
+| `cc_html_extract` | -4% | -3% | -3% |
+
+The table is 1.5. DuckDB 2.0 lands within a few points of it on every case.
+
+Parallel inference carries the multi-file cases, as on the synthetic families. The large single-file SAX reads gain little on wall or CPU, so they lead the profiling below.
+
+### 1.5.6
+
+```
+case                  arm   wall (s)                      cpu (s)                       rss (MB)                      instr (G)                   
+real/cc_html_extract  cand  4.624→4.458 -3.6% p=0.24      4.566→4.446 -2.6% p=0.26      755.5→735.7 -2.6% p=0.01      52.13→51.21 -1.8% p=0.00    
+real/clinvar_sax      cand  13.108→12.214 -6.8% p=0.14    12.628→12.282 -2.7% p=0.43    2636.3→2271.2 -13.9% p=0.00*  133.08→126.13 -5.2% p=0.09* 
+real/irs990_union     cand  21.008→4.692 -77.7% p=0.00*   32.461→30.939 -4.7% p=0.02*   3058.2→2879.9 -5.8% p=0.63    340.03→310.26 -8.8% p=0.00* 
+real/wiki_pages       cand  7.769→19.461 +150.5% p=0.00*  7.733→18.705 +141.9% p=0.00*  3869.7→3462.8 -10.5% p=0.00*  99.97→228.93 +129.0% p=0.00*
+real/wiki_revisions   cand  8.384→8.224 -1.9% p=0.74      8.326→7.576 -9.0% p=0.00*     117.1→105.8 -9.6% p=0.00*     112.81→103.63 -8.1% p=0.00* 
+geomean cand cpu: +14.7% over 5 cases
+geomean cand instr: +12.3% over 5 cases
+geomean cand rss: -8.6% over 5 cases
+geomean cand wall: -13.2% over 5 cases
+samples per arm per case: {'cand': 8, 'base': 8}
+case                      arm   wall (s)                     cpu (s)                       rss (MB)                      instr (G)                   
+real/holdout_cldr_union   cand  2.028→0.539 -73.4% p=0.00*   4.675→4.067 -13.0% p=0.00*    660.8→702.9 +6.4% p=0.16      52.05→37.97 -27.1% p=0.00*  
+real/holdout_mesh_dom     cand  6.913→13.411 +94.0% p=0.00*  6.891→13.155 +90.9% p=0.00*   3418.0→3379.7 -1.1% p=0.00    94.14→114.57 +21.7% p=0.08* 
+real/holdout_mesh_sax     cand  10.937→10.361 -5.3% p=0.21   10.910→10.373 -4.9% p=0.06*   1665.2→1229.1 -26.2% p=0.00*  131.03→122.18 -6.8% p=0.03* 
+real/holdout_pubmed_sax   cand  9.932→7.802 -21.4% p=0.00*   13.709→11.160 -18.6% p=0.09*  1134.4→1456.9 +28.4% p=0.00*  169.80→122.06 -28.1% p=0.08*
+real/holdout_uniprot_sax  cand  20.111→19.385 -3.6% p=0.08*  18.896→18.115 -4.1% p=0.05*   2569.0→2225.6 -13.4% p=0.00*  231.63→218.91 -5.5% p=0.06* 
+geomean cand cpu: +4.3% over 5 cases
+geomean cand instr: -10.9% over 5 cases
+geomean cand rss: -2.9% over 5 cases
+geomean cand wall: -18.0% over 5 cases
+samples per arm per case: {'base': 8, 'cand': 8}
+```
+
+### 2.0
+
+```
+case                  arm   wall (s)                      cpu (s)                       rss (MB)                      instr (G)                    
+real/cc_html_extract  cand  4.539→4.298 -5.3% p=0.34      4.481→4.269 -4.7% p=0.25      636.4→635.0 -0.2% p=0.88      52.49→51.60 -1.7% p=0.00     
+real/clinvar_sax      cand  12.769→11.930 -6.6% p=0.06*   12.649→11.663 -7.8% p=0.29    2642.1→2264.5 -14.3% p=0.00*  133.40→125.77 -5.7% p=0.29   
+real/irs990_union     cand  21.322→4.820 -77.4% p=0.00*   34.005→32.588 -4.2% p=0.02*   2521.9→2647.3 +5.0% p=0.44    345.54→315.63 -8.7% p=0.00*  
+real/wiki_pages       cand  7.775→18.651 +139.9% p=0.00*  7.565→18.288 +141.7% p=0.00*  3876.3→3426.6 -11.6% p=0.00*  100.08→226.61 +126.4% p=0.00*
+real/wiki_revisions   cand  8.225→8.148 -0.9% p=0.80      8.140→7.559 -7.1% p=0.02*     122.7→112.0 -8.8% p=0.00*     111.67→102.82 -7.9% p=0.02*  
+geomean cand cpu: +13.6% over 5 cases
+geomean cand instr: +12.0% over 5 cases
+geomean cand rss: -6.3% over 5 cases
+geomean cand wall: -13.8% over 5 cases
+samples per arm per case: {'cand': 8, 'base': 8}
+case                      arm   wall (s)                     cpu (s)                      rss (MB)                      instr (G)                  
+real/holdout_cldr_union   cand  2.143→0.588 -72.6% p=0.00*   4.652→3.925 -15.6% p=0.00*   699.5→709.5 +1.4% p=0.72      52.57→38.58 -26.6% p=0.00* 
+real/holdout_mesh_dom     cand  7.363→12.920 +75.5% p=0.00*  6.778→12.748 +88.1% p=0.00*  3424.7→3384.3 -1.2% p=0.00    94.40→114.20 +21.0% p=0.02*
+real/holdout_mesh_sax     cand  11.203→10.909 -2.6% p=0.57   10.759→10.129 -5.8% p=0.01*  1672.5→1236.0 -26.1% p=0.00*  131.28→122.20 -6.9% p=0.03*
+real/holdout_pubmed_sax   cand  10.041→8.073 -19.6% p=0.01*  11.449→11.231 -1.9% p=0.13   1141.8→1484.5 +30.0% p=0.00*  131.85→121.82 -7.6% p=0.02*
+real/holdout_uniprot_sax  cand  19.316→18.196 -5.8% p=0.20   18.229→17.528 -3.8% p=0.00*  2575.3→2235.7 -13.2% p=0.00*  230.04→217.48 -5.5% p=0.00*
+geomean cand cpu: +7.1% over 5 cases
+geomean cand instr: -6.3% over 5 cases
+geomean cand rss: -3.5% over 5 cases
+geomean cand wall: -18.7% over 5 cases
+samples per arm per case: {'base': 8, 'cand': 8}
+```
