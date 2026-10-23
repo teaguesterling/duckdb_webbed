@@ -26,7 +26,9 @@ DBLP `<title>` holds text with inline `<i>`, `<sub>`, `<sup>`, `<tt>`. It infers
 
 ## SAX and DOM Disagree
 
-Main fixed the three disagreements found here: prefixed children under `namespaces := 'keep'`, undecoded `&` in the attributes of repeated children, and `attr_mode := 'discard'` in the streaming scan. Streaming still ignored `root_element` and `max_depth := 0`. It read the root's children as records, or returned NULL columns. Streaming now builds each record as a DOM subtree and extracts it with the DOM code, which fixes both (`test/sql/sax_record_selection_parity.test`).
+Main fixed the three disagreements found here: prefixed children under `namespaces := 'keep'`, undecoded `&` in the attributes of repeated children, and `attr_mode := 'discard'` in the streaming scan. Streaming still ignored `root_element` and `max_depth := 0`. It read the root's children as records, or returned NULL columns. It also dropped whitespace-only text between inline elements, so DBLP titles read `O(nlogn)` where DOM reads `O(n log n)`, and it stripped namespace prefixes from serialized subtrees, such as MathML in PubMed abstracts. Streaming now builds each record as a DOM subtree and extracts it with the DOM code, which fixes all four (`test/sql/sax_record_selection_parity.test`, `test/sql/sax_serialized_parity.test`).
+
+Cases: `stream/holdout_real_dblp_sax`, `real/holdout_pubmed_sax`, and `real/pubmed_gz` differ from the previous SAX reader's fingerprints for this reason.
 
 ## Large Documents Silently Read as Zero Rows
 
@@ -44,3 +46,4 @@ Cases: `real/holdout_mesh_dom` and `real/wiki_pages` differ from main's fingerpr
 - `parse_xml` returns 0 rows, without an error, when any part of the input is malformed, even with `ignore_errors := true`.
 - Docs list `attr_mode` values `prefix`/`merge`/`ignore` and an `@` default prefix. The source accepts `columns`/`prefixed`/`map`/`discard` and emits unprefixed names by default. Unknown `attr_mode` values are accepted silently.
 - Attribute values are never type-inferred under DOM and stay `VARCHAR`.
+- Serialized mixed content drops whitespace-only text between inline elements on both paths: `<i>n</i> <i>log</i>` serializes as `<i>n</i><i>log</i>`, while the same element's `#text` keeps the space.
