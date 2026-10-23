@@ -30,6 +30,16 @@ DBLP `<title>` holds text with inline `<i>`, `<sub>`, `<sup>`, `<tt>`. It infers
 - SAX leaves entities in the attribute values of repeated children undecoded. On DBLP, `cite@label` is `Atzeni &#38; Parker 1982` under SAX and `Atzeni & Parker 1982` under DOM (80 rows differ).
 - The scan-path `SAXCallbackContext` never sets `discard_attrs` (`src/xml_reader_functions.cpp` ~934), while `ReadRecords` and `InferSchemaFromStream` do. This came from reading the source and was not exercised.
 
+## Large Documents Silently Read as Zero Rows
+
+On main, `read_xml` finds a bare `record_element` with the XPath `//name`. libxml2 caps an XPath node-set at 10 million nodes, and `//` collects every node in the document first. A document past the cap makes the lookup fail without an error, so inference falls back to a single `content VARCHAR` column and the scan returns no records.
+
+The real MeSH descriptor file (313 MB, 6.8 million elements) reads as 0 rows through DOM with `record_element := 'DescriptorRecord'` or `'//DescriptorRecord'`. `'/DescriptorRecordSet/DescriptorRecord'` returns all 31,110. The SAX path hits the same cap when its inference sample grows large enough: simplewiki `page` records, each holding its full revision list, infer `content VARCHAR` on main.
+
+This branch finds simple tag names by walking the tree (C13), which never builds the node-set, so both cases read correctly. A `record_element` that still goes through XPath hits the same cap: `'//DescriptorRecord[DescriptorUI]'` reads MeSH as 0 rows on this branch too. The failure should raise instead of returning zero rows.
+
+Cases: `real/holdout_mesh_dom` and `real/wiki_pages` differ from main's fingerprints for this reason.
+
 ## Smaller Items
 
 - `xml_extract_text` returns `[]` with no error when an XPath evaluates to a number (`count(//order)`).
