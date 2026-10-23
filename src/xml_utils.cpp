@@ -1343,9 +1343,8 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		out += '"';
 	};
 
-	// Each element writes straight into one output buffer. Returning a string per element and
-	// copying it into the parent's copied every subtree once per ancestor. An element that ends up
-	// empty under empty_elements 'null' or 'string' truncates back to where it started.
+	// An element that ends up empty under empty_elements 'null' or 'string' truncates back to
+	// where it started.
 	std::function<void(xmlNodePtr, bool, std::string &)> write_node = [&](xmlNodePtr node, bool is_root,
 	                                                                      std::string &out) {
 		size_t start = out.size();
