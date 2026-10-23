@@ -8,8 +8,6 @@
 
 namespace duckdb {
 
-// ─── Record stream callbacks ────────────────────────────────────────────────
-
 // libxml2's tree builder takes the parser context as its callback argument, so the stream state
 // rides on the context's _private slot.
 static XMLRecordStream::State &StreamState(void *ctx) {
@@ -28,7 +26,6 @@ static bool NameEquals(const std::string &name, const xmlChar *localname, const 
 	return name == local;
 }
 
-// Record selection follows XMLSchemaInference::IdentifyRecordElements.
 static bool IsRecordStart(const XMLRecordStream::State &s, const xmlChar *localname, const xmlChar *prefix) {
 	if (s.root_is_record) {
 		return s.depth == 1;
@@ -140,8 +137,6 @@ static void StreamReference(void *ctx, const xmlChar *name) {
 	}
 }
 
-// ─── XMLRecordStream ────────────────────────────────────────────────────────
-
 XMLRecordStream::XMLRecordStream(std::unique_ptr<FileHandle> file_p, const std::string &filename_p,
                                  const XMLSchemaOptions &options, idx_t max_records, bool keep_records)
     : filename(filename_p), file(std::move(file_p)), buffer(CHUNK_SIZE) {
@@ -172,15 +167,14 @@ XMLRecordStream::XMLRecordStream(std::unique_ptr<FileHandle> file_p, const std::
 	handler.processingInstruction = StreamProcessingInstruction;
 	handler.reference = StreamReference;
 
-	// Fail-closed entity loader: refuse external DTD/entity fetch
 	XMLUtils::EnsureSecureParsing();
 	ctxt = xmlCreatePushParserCtxt(&handler, nullptr, nullptr, 0, filename.c_str());
 	if (!ctxt) {
 		throw IOException("Could not create SAX push parser context for '%s'", filename);
 	}
 	ctxt->_private = &state;
-	// The DOM read's options, plus XML_PARSE_HUGE: a streamed file is large by definition, and
-	// libxml2's default limits on text-node size and depth would abort it.
+	// XML_PARSE_HUGE lifts libxml2's default limits on text-node size and depth, which a large
+	// streamed file would exceed.
 	xmlCtxtUseOptions(ctxt, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_HUGE);
 }
 
@@ -267,8 +261,6 @@ std::string XMLRecordStream::DescribeParseError(xmlParserCtxtPtr ctx) {
 	return msg;
 }
 
-// ─── SAXStreamReader ────────────────────────────────────────────────────────
-
 std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs, const std::string &filename,
                                                                   const XMLSchemaOptions &options) {
 	idx_t sample_count = static_cast<idx_t>(options.sample_size > 0 ? options.sample_size : 50);
@@ -285,8 +277,6 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 
 	auto columns = XMLSchemaInference::InferSchemaFromDocument(doc, options);
 
-	// sample_size <= 0 opts into a full-file verify pass that widens any column whose out-of-sample
-	// values don't fit the type inferred from the sample.
 	if (options.sample_size <= 0) {
 		WidenSchemaForOutOfSampleValues(fs, filename, options, columns);
 	}
@@ -356,8 +346,6 @@ static LogicalType WidenUnknownToVarchar(const LogicalType &type) {
 	return LogicalType::VARCHAR;
 }
 
-// A field element whose value is structure rather than text: it has element children, or its own
-// attributes when attributes are read.
 static bool IsStructuredField(xmlNodePtr field, const XMLSchemaOptions &options) {
 	if (field->properties && options.attr_mode != "discard") {
 		return true;
@@ -458,8 +446,8 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 		}
 	}
 
-	// A column discovered here never appeared in the sample, so there is no inferred type to widen
-	// from. VARCHAR is never wrong, and a caller who wants narrower has `columns :=`.
+	// A column first seen past the sample has no inferred type to widen from, so it is VARCHAR.
+	// `columns :=` overrides it.
 	for (const auto &name : discovered) {
 		columns.emplace_back(name, LogicalType::VARCHAR);
 	}

@@ -62,13 +62,9 @@ xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, 
 }
 
 } // namespace
-// Escape a UTF-8 string for safe embedding inside a JSON string literal (GitHub Issue #78).
-// libxml2 returns entity-decoded text (e.g. &quot; -> ", &#10; -> newline), so characters that
-// are illegal raw inside a JSON string must be re-escaped here at emit time. Only " , \ and the
-// C0 control range (0x00-0x1F) require escaping per RFC 8259; raw UTF-8 multibyte sequences and
-// characters such as / < > & are valid unescaped and are passed through untouched.
-// Append input to out as JSON string contents. Runs of bytes that need no escape are appended
-// whole.
+// Append input to out as JSON string contents. libxml2 returns entity-decoded text, so
+// characters illegal raw in a JSON string are re-escaped here. Only ", \ and the C0 control
+// range (0x00-0x1F) need escaping per RFC 8259, so runs of other bytes are appended whole.
 static void AppendJSONEscaped(std::string &out, const std::string &input) {
 	static const char *hex = "0123456789abcdef";
 	const char *p = input.data();
@@ -104,7 +100,6 @@ static void AppendJSONEscaped(std::string &out, const std::string &input) {
 			out += "\\t";
 			break;
 		default:
-			// Remaining C0 control characters: emit as \u00XX (lowercase hex).
 			out += "\\u00";
 			out += hex[(c >> 4) & 0xF];
 			out += hex[c & 0xF];
@@ -221,8 +216,7 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 	xmlFree(nsList);
 }
 
-// A silent, per-context error handler keeps XPath errors off the global handler. Registering the
-// document's namespace declarations lets XPath with prefixes work.
+// A silent, per-context error handler keeps XPath errors off the global handler.
 static xmlXPathContextPtr NewDocumentXPathContext(xmlDocPtr doc) {
 	if (!doc) {
 		return nullptr;
@@ -410,11 +404,6 @@ void XMLUtils::CleanupLibXML() {
 }
 
 bool XMLUtils::IsValidXML(const std::string &xml_str) {
-	// Validity is determined solely by this thread's own parse result (doc != nullptr).
-	// A shared process-global flag must never gate the result: another thread's failed
-	// parse could otherwise poison this check and mislabel a valid document as invalid
-	// under concurrent execution.
-	//
 	// A well-formed document has a root element, so it contains `<`. That is byte 0x3C in every
 	// encoding libxml2 detects without a declaration except EBCDIC, which it detects only from the
 	// leading bytes 4C 6F A7 94. Rejecting other strings without a '<' byte skips a parse (and its
@@ -1346,7 +1335,6 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			// Keep: preserve namespace prefix
 			return std::string(reinterpret_cast<const char *>(ns->prefix)) + ":" + local_name;
 		}
-		// No namespace or keep mode without prefix
 		return local_name;
 	};
 	auto append_quoted = [](std::string &out, const std::string &text) {
@@ -1362,7 +1350,6 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 	                                                                      std::string &out) {
 		size_t start = out.size();
 		if (is_root) {
-			// For the root element, wrap it with the element name
 			out += '{';
 			append_quoted(out, qualified_name(node->name, node->ns));
 			out += ':';
@@ -1436,7 +1423,6 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 			has_content = true;
 		}
 
-		// Add children elements, grouped by name in name order
 		std::map<std::string, std::vector<xmlNodePtr>> children_by_name;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
@@ -2338,8 +2324,8 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	}
 }
 
-// Write a string straight into the flat result vector instead of building a Value per row. A string
-// that is not valid UTF-8 still goes through Value, which raises the same error as before.
+// Write a string directly into the flat result vector. A string that is not valid UTF-8 goes
+// through Value, which raises the error.
 static void SetStringResult(Vector &result, idx_t i, const std::string &str) {
 	if (!Value::StringIsValid(str.c_str(), str.size())) {
 		result.SetValue(i, Value(str));
@@ -2788,7 +2774,6 @@ static bool HasHTMLChild(xmlNodePtr node, const char *name) {
 	return false;
 }
 
-// XPath tr[1]: the first tr among its parent's children.
 static bool IsFirstHTMLRow(xmlNodePtr tr) {
 	for (xmlNodePtr sib = tr->prev; sib; sib = sib->prev) {
 		if (IsHTMLElement(sib, "tr")) {
@@ -2880,10 +2865,7 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 
 				// Extract data rows (all rows for tables without th headers)
 				bool has_th_headers = !table.headers.empty();
-				// tfoot rows are excluded here and collected separately below; without the
-				// filter they land in the body as ordinary data rows. With th headers this is
-				// `.//tbody//tr[not(ancestor::tfoot)] | .//tr[not(th)][not(ancestor::tfoot)]`,
-				// otherwise `.//tr[not(ancestor::tfoot)]`.
+				// tfoot rows are excluded here and collected separately below.
 				bool table_in_tfoot = false;
 				for (xmlNodePtr anc = table_node->parent; anc; anc = anc->parent) {
 					if (IsHTMLElement(anc, "tfoot")) {

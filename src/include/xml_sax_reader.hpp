@@ -10,8 +10,7 @@
 namespace duckdb {
 
 // Streams an XML file through libxml2's tree builder, building only record subtrees and their
-// ancestors. Each completed record is an ordinary DOM node, so it is read with the same extraction
-// code as a DOM read and frees as soon as it is consumed.
+// ancestors.
 class XMLRecordStream {
 public:
 	// keep_records leaves completed records in the document for TakeDocument. max_records > 0 stops
@@ -37,7 +36,6 @@ public:
 	// Hand over the document holding the kept records. Valid once parsing stops.
 	xmlDocPtr TakeDocument();
 
-	// Describe the libxml2 error on a parser context, for inclusion in a thrown message.
 	static std::string DescribeParseError(xmlParserCtxtPtr ctx);
 
 	// Callback state, public for the libxml2 handlers in the implementation file.
@@ -76,13 +74,13 @@ private:
 
 class SAXStreamReader {
 public:
-	// Infer the schema from the first sample_size records, as DOM inference would on those records.
+	// Infer the schema from the first sample_size records.
 	static std::vector<XMLColumnInfo> InferSchemaFromStream(FileSystem &fs, const std::string &filename,
 	                                                        const XMLSchemaOptions &options);
 
 	// Opt-in second bind-time pass (sample_size <= 0): stream the whole file and widen to VARCHAR any
 	// column whose out-of-sample values don't cast to the sampled type, and append child elements first
-	// seen past the sample. Memory stays bounded by one chunk of records. Updates `columns` in place.
+	// seen past the sample. Memory stays bounded by one chunk of records.
 	static void WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
 	                                            const XMLSchemaOptions &options, std::vector<XMLColumnInfo> &columns);
 };
