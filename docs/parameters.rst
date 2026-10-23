@@ -27,7 +27,7 @@ These parameters are available for both ``read_xml`` and ``read_html``:
    * - ``maximum_file_size``
      - BIGINT
      - 16777216
-     - Maximum file size in bytes for DOM parsing (16MB default). Files above this use SAX streaming when ``streaming=true``.
+     - Maximum file size in bytes for DOM parsing (16MB default). Files above this use SAX streaming when ``streaming=true``. For a compressed file this is the decompressed size.
    * - ``auto_detect``
      - BOOLEAN
      - true
@@ -156,6 +156,17 @@ Empty Element Handling
      - VARCHAR
      - 'null'
      - How an empty element (no text, children or attributes) affects type inference. With ``'null'`` or ``'object'``, the column takes its type from the element's other occurrences, in the same file or in other files, and is VARCHAR only when the element is empty everywhere. ``'string'`` types the column VARCHAR whenever the element is empty somewhere. The empty element itself reads as NULL, or as a struct of NULL fields in a STRUCT column
+
+Compressed Files
+----------------
+
+``read_xml``, ``read_html``, ``read_xml_objects``, and ``read_html_objects`` decompress files ending in ``.gz``, and ``.zst`` once the ``parquet`` extension is loaded. Compressed and plain files can mix in one glob.
+
+.. code-block:: sql
+
+   SELECT * FROM read_xml('dumps/*.xml.gz', record_element := 'record');
+
+A compressed file's decompressed size isn't known before it is read, so the reader decompresses up to ``maximum_file_size`` to decide between DOM and SAX. A file that overflows the limit is then read again from the start through SAX.
 
 Multi-File Parameters
 ---------------------

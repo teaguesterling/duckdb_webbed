@@ -1,6 +1,7 @@
 #include "xml_reader_functions.hpp"
 #include "named_parameter_compat.hpp"
 #include "xml_utils.hpp"
+#include "xml_file_io.hpp"
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
 #include "duckdb_compat.hpp"
@@ -39,30 +40,6 @@ static bool HasComplexXPath(const std::string &record_element) {
 	}
 	// Any remaining XPath tokens mean SAX can't handle it
 	return re.find_first_of("/[@]()*:.") != std::string::npos;
-}
-
-// Read an entire file into `data` (which must already hold `size` bytes) using bounded
-// chunks. A single FileHandle::Read of more than ~2 GiB fails on platforms whose underlying
-// read/pread caps at INT_MAX bytes — notably macOS, where it surfaces as
-// "IO Error: Could not read from file ...: Invalid argument". Reading in <=1 GiB chunks lets
-// XML files larger than 2 GiB load instead of erroring. (libxml2 DOM parsing of the result
-// is still memory-bound; true >RAM streaming is the SAX path.)
-//
-// FileHandle::Read returns the bytes actually read for that call, which may be fewer than
-// requested on non-local handles (network/FUSE) even when more data remains. Advance by the
-// returned count rather than the requested size so a legal short read can't silently leave a
-// zero-filled gap; only a non-positive return signals a genuine EOF/error.
-static void ReadFileFully(duckdb::FileHandle &handle, char *data, duckdb::idx_t size) {
-	duckdb::idx_t offset = 0;
-	while (offset < size) {
-		duckdb::idx_t want = duckdb::MinValue<duckdb::idx_t>(size - offset, duckdb::idx_t(1) << 30);
-		int64_t got = handle.Read(data + offset, want);
-		if (got <= 0) {
-			throw duckdb::IOException("Could not read from file \"%s\": unexpected end of file at offset %llu of %llu",
-			                          handle.path, offset, size);
-		}
-		offset += duckdb::UnsafeNumericCast<duckdb::idx_t>(got);
-	}
 }
 
 // Raise the error used when libxml2 cannot allocate memory while parsing a file. A
@@ -251,29 +228,19 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const XMLReadFunctionData &bind_data,
                              const XMLSchemaOptions &schema_options, ParseMode mode,
                              std::vector<XMLColumnInfo> &inferred_columns) {
-	auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
-	auto file_size = fs.GetFileSize(*file_handle);
-
-	bool use_sax_inference = schema_options.streaming && mode == ParseMode::XML &&
-	                         static_cast<idx_t>(file_size) > bind_data.max_file_size &&
-	                         !HasComplexXPath(schema_options.record_element);
-	if (use_sax_inference) {
-		inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
-		return true;
-	}
-
-	// DOM-based: enforce file size limit
-	if (static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+	string content;
+	if (!ReadXMLFile(*OpenXMLFile(fs, file_path), bind_data.max_file_size, content)) {
+		string().swap(content);
+		if (schema_options.streaming && mode == ParseMode::XML && !HasComplexXPath(schema_options.record_element)) {
+			inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
+			return true;
+		}
 		if (!bind_data.ignore_errors) {
 			throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
 			                            bind_data.max_file_size);
 		}
 		return false;
 	}
-
-	string content;
-	content.resize(file_size);
-	ReadFileFully(*file_handle, (char *)content.data(), file_size);
 
 	if (mode != ParseMode::XML) {
 		inferred_columns = XMLSchemaInference::InferSchemaForMerge(content, schema_options);
@@ -919,22 +886,14 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 		bool emitted = false;
 
 		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-
-			if (file_size > bind_data.max_file_size) {
+			string content;
+			if (!ReadXMLFile(*OpenXMLFile(fs, filename), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
 				}
 				// Skip this file (fall through to claim the next one)
 			} else {
-				// Read file content
-				string content;
-				content.resize(file_size);
-				ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
 				bool valid = true;
 				// Validate content based on mode
 				if (is_html) {
@@ -1043,21 +1002,16 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 		try {
 			// Load file if not already loaded
 			if (!lstate.file_loaded) {
-				auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-				auto file_size = fs.GetFileSize(*file_handle);
+				auto file_handle = OpenXMLFile(fs, filename);
+				string content;
+				bool fits = ReadXMLFile(*file_handle, bind_data.max_file_size, content);
 
-				// Determine whether to use SAX or DOM
-				bool use_sax = false;
-				if (schema_options.streaming && !is_html && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
-					// File exceeds max size — use SAX if possible
-					if (!HasComplexXPath(schema_options.record_element) &&
-					    !SchemaHasUnsupportedSAXType(bind_data.column_types)) {
-						use_sax = true;
-					}
-				}
+				// A file over the size limit streams through SAX when the read allows it
+				bool use_sax = !fits && schema_options.streaming && !is_html &&
+				               !HasComplexXPath(schema_options.record_element) &&
+				               !SchemaHasUnsupportedSAXType(bind_data.column_types);
 
-				// If not using SAX, enforce file size limit
-				if (!use_sax && static_cast<idx_t>(file_size) > bind_data.max_file_size) {
+				if (!fits && !use_sax) {
 					if (!bind_data.ignore_errors) {
 						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 						                            bind_data.max_file_size);
@@ -1071,6 +1025,11 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				lstate.use_sax = use_sax;
 
 				if (use_sax) {
+					string().swap(content);
+					// Measuring a compressed file consumed it up to the limit
+					if (!file_handle->CanSeek()) {
+						file_handle->Reset();
+					}
 					// SAX mode: initialize push parser for incremental streaming
 					lstate.sax_accumulator = make_uniq<SAXRecordAccumulator>();
 					lstate.sax_accumulator->namespace_mode = schema_options.namespaces;
@@ -1115,11 +1074,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
 				} else {
-					// DOM mode: read file content and build DOM
-					string content;
-					content.resize(file_size);
-					ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
+					// DOM mode: build the DOM from the content read above
 					// Parse DOM — DOM makes its own copy, so content string can be freed.
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
@@ -1418,22 +1373,14 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 		bool emitted = false;
 
 		try {
-			// Check file size
-			auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-
-			if (file_size > bind_data.max_file_size) {
+			string content;
+			if (!ReadXMLFile(*OpenXMLFile(fs, filename), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
 				}
 				// Skip this file (fall through to claim the next)
 			} else {
-				// Read file content
-				string content;
-				content.resize(file_size);
-				ReadFileFully(*file_handle, (char *)content.data(), file_size);
-
 				// Validate XML
 				auto validity = XMLUtils::CheckXML(content);
 				if (validity == XMLValidity::ResourceError) {

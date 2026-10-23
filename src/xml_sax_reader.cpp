@@ -1,5 +1,6 @@
 #include "xml_sax_reader.hpp"
 #include "xml_utils.hpp"
+#include "xml_file_io.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include <sstream>
@@ -572,7 +573,7 @@ std::vector<SAXRecordAccumulator> SAXStreamReader::ReadRecords(FileSystem &fs, c
 	xmlSAXHandler handler = CreateSAXHandler();
 
 	// Open file via DuckDB FileSystem (supports S3, HTTP, VFS, etc.)
-	auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+	auto file_handle = OpenXMLFile(fs, filename);
 
 	// Create push parser context (fail-closed entity loader: refuse external DTD/entity fetch)
 	XMLUtils::EnsureSecureParsing();
@@ -820,7 +821,7 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	ctx.discard_attrs = (options.attr_mode == "discard");
 
 	xmlSAXHandler handler = CreateSAXHandler();
-	auto file_handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+	auto file_handle = OpenXMLFile(fs, filename);
 	XMLUtils::EnsureSecureParsing();
 	xmlParserCtxtPtr parser_ctx = xmlCreatePushParserCtxt(&handler, &ctx, nullptr, 0, filename.c_str());
 	if (!parser_ctx) {

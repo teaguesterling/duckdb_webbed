@@ -1,0 +1,75 @@
+# name: test/sql/xml_compression.test
+# description: read_xml and read_html decompress .gz input, routing by decompressed size
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<rows>' || string_agg('<row id="' || i || '"><name>n' || i || '</name><v>' || (i * 1.5) || '</v></row>', '') || '</rows>' AS xml FROM range(200) t(i)) TO '__TEST_DIR__/comp.xml' (FORMAT 'csv', HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<rows>' || string_agg('<row id="' || i || '"><name>n' || i || '</name><v>' || (i * 1.5) || '</v></row>', '') || '</rows>' AS xml FROM range(200) t(i)) TO '__TEST_DIR__/comp.xml.gz' (FORMAT 'csv', HEADER false, QUOTE '', COMPRESSION gzip);
+
+statement ok
+COPY (SELECT '<html><body><table><tr><th>a</th></tr><tr><td>1</td></tr></table></body></html>' AS h) TO '__TEST_DIR__/comp.html.gz' (FORMAT 'csv', HEADER false, QUOTE '', COMPRESSION gzip);
+
+# DOM read of a small compressed file matches the plain file
+query II
+SELECT count(*), sum(hash(name, v, id)) = (SELECT sum(hash(name, v, id)) FROM read_xml('__TEST_DIR__/comp.xml', record_element := 'row'))
+FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row');
+----
+200	true
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row')) ORDER BY column_name;
+----
+id	VARCHAR
+name	VARCHAR
+v	DOUBLE
+
+# Decompressed content over maximum_file_size streams through SAX, at bind and in the scan.
+# The compressed file is smaller than the limit, so the routing must use the decompressed size.
+query II
+SELECT count(*), sum(hash(name, v, id)) = (SELECT sum(hash(name, v, id)) FROM read_xml('__TEST_DIR__/comp.xml', record_element := 'row'))
+FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row', streaming := true, maximum_file_size := 4000);
+----
+200	true
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row', streaming := true, maximum_file_size := 4000)) ORDER BY column_name;
+----
+id	VARCHAR
+name	VARCHAR
+v	DOUBLE
+
+# Without streaming, the limit applies to the decompressed size
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row', streaming := false, maximum_file_size := 4000);
+----
+exceeds maximum size limit
+
+query I
+SELECT count(*) FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row', streaming := false, maximum_file_size := 4000, ignore_errors := true);
+----
+0
+
+# Compressed and plain files mix in one union
+query I
+SELECT count(*) FROM read_xml(['__TEST_DIR__/comp.xml', '__TEST_DIR__/comp.xml.gz'], record_element := 'row', union_by_name := true);
+----
+400
+
+query I
+SELECT xml = (SELECT xml FROM read_xml_objects('__TEST_DIR__/comp.xml')) FROM read_xml_objects('__TEST_DIR__/comp.xml.gz');
+----
+true
+
+statement error
+SELECT * FROM read_xml_objects('__TEST_DIR__/comp.xml.gz', maximum_file_size := 4000);
+----
+exceeds maximum size limit
+
+query I
+SELECT count(*) FROM read_html_objects('__TEST_DIR__/comp.html.gz');
+----
+1
