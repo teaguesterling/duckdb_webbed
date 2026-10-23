@@ -32,11 +32,11 @@ DBLP `<title>` holds text with inline `<i>`, `<sub>`, `<sup>`, `<tt>`. It infers
 
 ## Large Documents Silently Read as Zero Rows
 
-On main, `read_xml` finds a bare `record_element` with the XPath `//name`. libxml2 caps an XPath node-set at 10 million nodes, and `//` collects every node in the document first. A document past the cap makes the lookup fail without an error, so inference falls back to a single `content VARCHAR` column and the scan returns no records.
+On main, `read_xml` finds a bare `record_element` with the XPath `//*[local-name()='name']`. libxml2 caps an XPath node set at 10 million nodes, and the predicate makes it collect every element in the document before filtering. A plain `//name` stays under the cap, because libxml2 rewrites it into one descendant walk. A document past the cap makes the lookup fail with `XML_ERR_NO_MEMORY`, which `EvalXPathChecked` returned as an empty result, so inference falls back to a single `content VARCHAR` column and the scan returns no records.
 
 The real MeSH descriptor file (313 MB, 6.8 million elements) reads as 0 rows through DOM with `record_element := 'DescriptorRecord'` or `'//DescriptorRecord'`. `'/DescriptorRecordSet/DescriptorRecord'` returns all 31,110. The SAX path hits the same cap when its inference sample grows large enough: simplewiki `page` records, each holding its full revision list, infer `content VARCHAR` on main.
 
-This branch finds simple tag names by walking the tree (C13), which never builds the node-set, so both cases read correctly. A `record_element` that still goes through XPath hits the same cap: `'//DescriptorRecord[DescriptorUI]'` reads MeSH as 0 rows on this branch too. The failure should raise instead of returning zero rows.
+This branch finds simple tag names by walking the tree (C13), which never builds the node-set, so both cases read correctly. A `record_element` that still goes through XPath hits the same cap: `'//DescriptorRecord[DescriptorUI]'` reads MeSH as 0 rows on this branch too. `EvalXPathChecked` now raises on that error, so the read fails with a message naming the expression.
 
 Cases: `real/holdout_mesh_dom` and `real/wiki_pages` differ from main's fingerprints for this reason.
 

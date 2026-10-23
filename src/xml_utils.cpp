@@ -150,8 +150,16 @@ xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::stri
 	if (!compiled) {
 		throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
 	}
+	xmlResetError(&xpath_ctx->lastError);
 	xmlXPathObjectPtr result = xmlXPathCompiledEval(compiled, xpath_ctx);
 	xmlXPathFreeCompExpr(compiled);
+	// libxml2 reports a node set past its 10 million node cap as out of memory. Other evaluation errors, such as an
+	// undefined namespace prefix, still read as no match.
+	if (!result && xpath_ctx->lastError.code == XML_ERR_NO_MEMORY) {
+		throw InvalidInputException("XPath expression '%s' selects more nodes than libxml2 allows (10 million). Use a "
+		                            "narrower path, or a simple record_element name.",
+		                            xpath);
+	}
 	return result;
 }
 
