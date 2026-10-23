@@ -17,6 +17,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/parallel/task_executor.hpp"
+#include "duckdb/main/config.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -312,8 +313,8 @@ struct FileInferenceResult {
 struct FileInferenceState {
 	FileInferenceState(FileSystem &fs, const std::vector<std::string> &files, const XMLReadFunctionData &bind_data,
 	                   const XMLSchemaOptions &schema_options, ParseMode mode)
-	    : fs(fs), files(files), bind_data(bind_data), schema_options(schema_options), mode(mode),
-	      results(files.size()), first_fatal_idx(files.size()) {
+	    : fs(fs), files(files), bind_data(bind_data), schema_options(schema_options), mode(mode), results(files.size()),
+	      first_fatal_idx(files.size()) {
 	}
 
 	FileSystem &fs;
@@ -322,8 +323,10 @@ struct FileInferenceState {
 	const XMLSchemaOptions &schema_options;
 	ParseMode mode;
 	std::vector<FileInferenceResult> results;
-	//! Lowest file index whose error the bind rethrows. Later files can't affect the outcome, so their
-	//! tasks return without parsing.
+	//! Next file for a task to claim. Files are claimed in ascending order.
+	atomic<idx_t> next_file_idx {0};
+	//! Lowest file index whose error the bind rethrows. Later files can't affect the outcome, so tasks
+	//! stop claiming once they pass it.
 	atomic<idx_t> first_fatal_idx;
 
 	void MarkFatal(idx_t file_idx) {
@@ -335,18 +338,28 @@ struct FileInferenceState {
 
 class FileInferenceTask : public BaseExecutorTask {
 public:
-	FileInferenceTask(TaskExecutor &executor, FileInferenceState &state, idx_t file_idx)
-	    : BaseExecutorTask(executor), state(state), file_idx(file_idx) {
+	FileInferenceTask(TaskExecutor &executor, FileInferenceState &state) : BaseExecutorTask(executor), state(state) {
 	}
 
 	void ExecuteTask() override {
-		if (file_idx > state.first_fatal_idx.load()) {
-			return;
+		for (auto file_idx = state.next_file_idx++; file_idx < state.files.size(); file_idx = state.next_file_idx++) {
+			if (file_idx > state.first_fatal_idx.load()) {
+				return;
+			}
+			InferFile(file_idx);
 		}
+	}
+
+	string TaskType() const override {
+		return "XMLFileInferenceTask";
+	}
+
+private:
+	void InferFile(idx_t file_idx) {
 		auto &result = state.results[file_idx];
 		try {
-			result.inferred = InferFileColumns(state.fs, state.files[file_idx], state.bind_data,
-			                                   state.schema_options, state.mode, result.columns);
+			result.inferred = InferFileColumns(state.fs, state.files[file_idx], state.bind_data, state.schema_options,
+			                                   state.mode, result.columns);
 			return;
 		} catch (const OutOfMemoryException &) {
 			result.error = std::current_exception();
@@ -363,26 +376,32 @@ public:
 		}
 	}
 
-	string TaskType() const override {
-		return "XMLFileInferenceTask";
-	}
-
-private:
 	FileInferenceState &state;
-	idx_t file_idx;
 };
 
-// Infer every file's columns on the DuckDB task scheduler, so at most `threads` files are parsed at
-// once. Results come back in file order, and the caller consumes them in that order, so the merged
-// schema and the error a failing bind raises match a serial loop over the same files.
+// Files parsed at once during bind-time inference: the xml_inference_threads setting when set,
+// otherwise every file, which the scheduler bounds by `threads`.
+static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count) {
+	Value limit;
+	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, limit) && !limit.IsNull()) {
+		return MinValue<idx_t>(limit.GetValue<uint64_t>(), file_count);
+	}
+	return file_count;
+}
+
+// Infer every file's columns on the DuckDB task scheduler, so at most `threads` files, or
+// xml_inference_threads when lower, are parsed at once. Results come back in file order, and the
+// caller consumes them in that order, so the merged schema and the error a failing bind raises match a
+// serial loop over the same files.
 static std::vector<FileInferenceResult> InferFilesColumns(ClientContext &context, FileSystem &fs,
                                                           const std::vector<std::string> &files,
                                                           const XMLReadFunctionData &bind_data,
                                                           const XMLSchemaOptions &schema_options, ParseMode mode) {
 	FileInferenceState state(fs, files, bind_data, schema_options, mode);
 	TaskExecutor executor(context);
-	for (idx_t file_idx = 0; file_idx < files.size(); file_idx++) {
-		executor.ScheduleTask(make_uniq<FileInferenceTask>(executor, state, file_idx));
+	auto task_count = InferenceTaskCount(context, files.size());
+	for (idx_t task_idx = 0; task_idx < task_count; task_idx++) {
+		executor.ScheduleTask(make_uniq<FileInferenceTask>(executor, state));
 	}
 	executor.WorkOnTasks();
 	return std::move(state.results);
@@ -2271,7 +2290,21 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseHTMLBind(ClientContext &contex
 	return ParseDocumentBind(context, input, return_types, names, ParseMode::HTML);
 }
 
+constexpr const char *XMLReaderFunctions::INFERENCE_THREADS_SETTING;
+
+static void CheckInferenceThreads(ClientContext &context, SetScope scope, Value &parameter) {
+	if (!parameter.IsNull() && parameter.GetValue<uint64_t>() == 0) {
+		throw InvalidInputException("%s must be at least 1", XMLReaderFunctions::INFERENCE_THREADS_SETTING);
+	}
+}
+
 void XMLReaderFunctions::Register(ExtensionLoader &loader) {
+	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
+	config.AddExtensionOption(INFERENCE_THREADS_SETTING,
+	                          "Maximum number of files read_xml and read_html parse at once while inferring a "
+	                          "schema at bind. Unset uses all threads. Lower it to cap bind-time memory.",
+	                          LogicalType::UBIGINT, Value(), CheckInferenceThreads);
+
 	// Register read_xml_objects table function (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_xml_objects_set("read_xml_objects");
 

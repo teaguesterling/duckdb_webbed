@@ -144,3 +144,56 @@ FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element 
 a,c10,s,c11,c12
 
 endloop
+
+# =============================================================================
+# xml_inference_threads caps the files parsed at once without changing the result
+# =============================================================================
+
+statement ok
+SET threads=4;
+
+foreach limit 1 2 3
+
+statement ok
+SET xml_inference_threads=${limit};
+
+query II
+SELECT column_name, column_type
+FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/pinf_*.xml', record_element := 'row', streaming := false, union_by_name := true))
+WHERE column_name IN ('a', 's', 'c49')
+ORDER BY column_name;
+----
+a	VARCHAR
+c49	VARCHAR
+s	STRUCT(k INTEGER, extra VARCHAR)
+
+statement error
+DESCRIBE SELECT * FROM read_xml(['__TEST_DIR__/pinf_10.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml', 'test/invalid/invalid.xml'], streaming := false, union_by_name := true);
+----
+File test/invalid/trailing_garbage.xml contains invalid XML
+
+query I
+SELECT string_agg(column_name, ',')
+FROM (DESCRIBE SELECT * FROM read_xml(['test/invalid/invalid.xml', '__TEST_DIR__/pinf_12.xml', 'test/invalid/trailing_garbage.xml', '__TEST_DIR__/pinf_11.xml'], record_element := 'row', streaming := true, maximum_file_size := 1, union_by_name := true, ignore_errors := true));
+----
+a,c12,s,c11
+
+endloop
+
+query I
+SELECT current_setting('xml_inference_threads');
+----
+3
+
+statement ok
+RESET xml_inference_threads;
+
+query I
+SELECT current_setting('xml_inference_threads') IS NULL;
+----
+true
+
+statement error
+SET xml_inference_threads=0;
+----
+xml_inference_threads must be at least 1

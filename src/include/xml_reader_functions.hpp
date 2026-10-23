@@ -20,6 +20,9 @@ class XMLReaderFunctions {
 public:
 	static void Register(ExtensionLoader &loader);
 
+	//! Setting that caps how many files bind-time schema inference parses at once
+	static constexpr const char *INFERENCE_THREADS_SETTING = "xml_inference_threads";
+
 	// Replacement scan function for direct file querying
 	static unique_ptr<TableRef> ReadXMLReplacement(ClientContext &context, ReplacementScanInput &input,
 	                                               optional_ptr<ReplacementScanData> data);
