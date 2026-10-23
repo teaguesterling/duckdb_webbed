@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb_compat.hpp"
+#include "file_batch_index.hpp"
 #include "xml_sax_reader.hpp"
 #include "xml_schema_inference.hpp"
 
@@ -168,10 +169,8 @@ private:
 // order-preserving reassembly restores glob/file order under parallel execution.
 struct XMLReadLocalState : public LocalTableFunctionState {
 	// Batch index layout: high bits = file index (glob order), low bits = chunk-within-file.
-	// FILE_SHIFT gives 2^32 chunks/file and 2^32 files — both far beyond any real input
-	// (2^32 chunks x 2048 rows would need ~10^13 rows in a <=4 GiB file). Keeps batch indices
-	// strictly ordered by (file_index, chunk), i.e. exactly glob/file order.
-	static constexpr idx_t FILE_SHIFT = 32;
+	// See FileBatchIndex for the bounds.
+	static constexpr idx_t FILE_SHIFT = FileBatchIndex::CHUNK_BITS;
 
 	idx_t file_index = DConstants::INVALID_INDEX; // file this worker is processing / last processed
 	string current_filename;                      // name of that file (per-file value source, never the global cursor)

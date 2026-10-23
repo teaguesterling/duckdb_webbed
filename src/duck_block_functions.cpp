@@ -7,6 +7,7 @@
 #include "duck_block_functions.hpp"
 #include "duck_block_types.hpp"
 #include "duckdb_compat.hpp"
+#include "file_batch_index.hpp"
 #include "xml_types.hpp"
 #include "xml_utils.hpp"
 #include "xml_in_memory_reader.hpp"
@@ -2027,7 +2028,7 @@ struct HTMLBlocksReadGlobalState : public GlobalTableFunctionState {
 };
 
 struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
-	static constexpr idx_t FILE_SHIFT = 32;
+	static constexpr idx_t FILE_SHIFT = FileBatchIndex::CHUNK_BITS;
 
 	idx_t file_index = DConstants::INVALID_INDEX;
 	string current_filename;
@@ -2161,6 +2162,10 @@ DuckBlockFunctions::ReadHTMLBlocksInitLocal(ExecutionContext &context, TableFunc
 OperatorPartitionData DuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientContext &context,
                                                                          TableFunctionGetPartitionInput &input) {
 	auto &lstate = input.local_state->Cast<HTMLBlocksReadLocalState>();
+	// Decode the file from the tag itself: by now the worker may have claimed a later file. Each
+	// file is tagged with chunk 0 only.
+	FileBatchIndex::Validate(lstate.last_batch_index >> HTMLBlocksReadLocalState::FILE_SHIFT, 0,
+	                         lstate.current_filename);
 	return OperatorPartitionData(lstate.last_batch_index);
 }
 

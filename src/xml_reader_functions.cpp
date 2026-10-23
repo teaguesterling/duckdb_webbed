@@ -360,6 +360,8 @@ OperatorPartitionData XMLReaderFunctions::ReadDocumentGetPartitionData(ClientCon
 	// Tag the just-produced chunk with the batch index computed at chunk finalization. DuckDB
 	// only calls this for non-empty chunks, so last_batch_index always refers to a real chunk.
 	auto &lstate = input.local_state->Cast<XMLReadLocalState>();
+	// chunk_counter has already advanced past the chunk being tagged.
+	FileBatchIndex::Validate(lstate.file_index, lstate.chunk_counter - 1, lstate.current_filename);
 	return OperatorPartitionData(lstate.last_batch_index);
 }
 
