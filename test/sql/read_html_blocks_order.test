@@ -1,0 +1,49 @@
+# name: test/sql/read_html_blocks_order.test
+# description: Multi-file read_html_blocks keeps glob order and within-file block order across threads
+# group: [sql]
+
+require webbed
+
+statement ok
+PRAGMA threads=8;
+
+statement ok
+PRAGMA verify_parallelism;
+
+statement ok
+SET preserve_insertion_order=true;
+
+# Six files, pages/f=0/data_0.html .. pages/f=5/data_0.html, each a run of <p>f_k</p> paragraphs.
+# Files 1, 3 and 5 hold more than STANDARD_VECTOR_SIZE (2048) blocks, so they span several output
+# chunks. The small files between them would share a chunk with a neighbour if one chunk could
+# hold more than one file.
+statement ok
+COPY (
+    SELECT f, string_agg('<p>' || f || '_' || k || '</p>', '' ORDER BY k) AS c
+    FROM (VALUES (0, 3), (1, 5000), (2, 7), (3, 4500), (4, 1), (5, 2100)) sizes(f, n), range(n) t(k)
+    GROUP BY f
+) TO '__TEST_DIR__/pages' (FORMAT csv, HEADER false, QUOTE '', PARTITION_BY (f), FILE_EXTENSION 'html');
+
+# CREATE TABLE AS under preserve_insertion_order uses the batch insert, which places chunks by
+# batch index.
+statement ok
+CREATE TABLE blocks AS SELECT content FROM read_html_blocks('__TEST_DIR__/pages/*/*.html');
+
+query I
+SELECT count(*) FROM blocks;
+----
+11611
+
+# The table's nth row is the nth block in (file, block) order.
+query I
+SELECT count(*)
+FROM (SELECT content, row_number() OVER (ORDER BY rowid) AS rn FROM blocks) actual
+JOIN (
+    SELECT content, row_number() OVER (
+        ORDER BY split_part(content, '_', 1)::INTEGER, split_part(content, '_', 2)::INTEGER
+    ) AS rn
+    FROM blocks
+) expected USING (rn)
+WHERE actual.content = expected.content;
+----
+11611
