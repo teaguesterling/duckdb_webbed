@@ -1,0 +1,58 @@
+# name: test/sql/xml_multifile_batch_index.test
+# description: Order-preserving multi-file reads past 2329 files keep valid batch indices (issue #198)
+# group: [sql]
+
+require webbed
+
+statement ok
+PRAGMA threads=4;
+
+statement ok
+SET preserve_insertion_order=true;
+
+# 2400 one-record files, one per partition directory: many/i=0/data_0.xml .. many/i=2399/data_0.xml.
+# A 32-bit chunk field puts file 2329 at batch index 2329 * 2^32 = 10002978832384, past DuckDB's
+# 10^13 limit.
+statement ok
+COPY (SELECT i, '<data><row><n>' || i || '</n></row></data>' AS c FROM range(2400) t(i)) TO '__TEST_DIR__/many' (FORMAT csv, HEADER false, QUOTE '', PARTITION_BY (i), FILE_EXTENSION 'xml');
+
+# CREATE TABLE AS under preserve_insertion_order uses the batch insert, which requires batch indices.
+statement ok
+CREATE TABLE objs AS SELECT filename FROM read_xml_objects('__TEST_DIR__/many/*/*.xml', filename := true);
+
+# Rows land in glob order: the table's nth row is the nth globbed file.
+query I
+SELECT count(*)
+FROM (SELECT filename, row_number() OVER (ORDER BY rowid) AS rn FROM objs) t
+JOIN (SELECT file, row_number() OVER (ORDER BY file) AS rn FROM glob('__TEST_DIR__/many/*/*.xml')) g
+  ON t.rn = g.rn AND t.filename = g.file;
+----
+2400
+
+statement ok
+CREATE TABLE recs AS SELECT n FROM read_xml('__TEST_DIR__/many/*/*.xml');
+
+query II
+SELECT count(*), sum(n) FROM recs;
+----
+2400	2878800
+
+statement ok
+CREATE TABLE html_objs AS SELECT * FROM read_html_objects('__TEST_DIR__/many/*/*.xml');
+
+query I
+SELECT count(*) FROM html_objs;
+----
+2400
+
+# read_html_blocks emits nothing for the XML files above, so give it HTML.
+statement ok
+COPY (SELECT i, '<p>' || i || '</p>' AS c FROM range(2400) t(i)) TO '__TEST_DIR__/pages' (FORMAT csv, HEADER false, QUOTE '', PARTITION_BY (i), FILE_EXTENSION 'html');
+
+statement ok
+CREATE TABLE blocks AS SELECT * FROM read_html_blocks('__TEST_DIR__/pages/*/*.html', filename := true);
+
+query I
+SELECT count(DISTINCT filename) FROM blocks;
+----
+2400
