@@ -208,8 +208,24 @@ jobs:
   # here is not evidence for the line the registry ships, and red here is a
   # preview, not a verdict.
   #   gh workflow run MainDistributionPipeline.yml --ref <branch>
+  #
+  # COMPILE ONLY, ON PURPOSE. Its signal is "does webbed still build against DuckDB
+  # main", which is the drift that has actually broken this repo (the Identifier type
+  # change, absorbed by duckdb_compat.hpp). It cannot also run the tests:
+  #   - Following main means `duckdb_version: main`. Without duckdb_commit, ci-tools
+  #     uses duckdb_version as both the checkout ref and the version stamp.
+  #   - The engine treats a version without "-dev" as a release and expects the stamp
+  #     NormalizeVersionTag("main") = "vmain" (src/main/extension/extension_install.cpp),
+  #     but the stamp is "main", so every load is refused. Measured: job 121226073100,
+  #     2026-10-25, "ran tests: 0 passed, 130 skipped" with a green check.
+  #   - Splitting the two with `duckdb_commit: main` fails at configure: DuckDB main's
+  #     CMakeLists.txt takes DUCKDB_COMMIT as the commit hash and requires 10-64 hex
+  #     characters ("Invalid DuckDB commit 'main'", job 121265722800).
+  # So the tests are skipped explicitly, and the check name says so, rather than
+  # skipping silently behind a green check. Test coverage of the next DuckDB line is
+  # duckdb-next-build's job.
   duckdb-main-canary:
-    name: Build extension binaries (duckdb main canary)
+    name: Build extension binaries (duckdb main canary, compile only)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
@@ -218,6 +234,7 @@ jobs:
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
+      skip_tests: true
 
   # The registry default line: the same commit, version and ci-tools branch as
   # community-extensions' build.yml. Artifacts are named from duckdb_version, so
