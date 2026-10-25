@@ -196,16 +196,37 @@ jobs:
   # here is not evidence for the line the registry ships, and red here is a
   # preview, not a verdict.
   #   gh workflow run MainDistributionPipeline.yml --ref <branch>
+  #
+  # CHECKOUT AND VERSION LABEL ARE SEPARATE INPUTS. duckdb_commit picks the checkout;
+  # duckdb_version becomes both the engine's version and the extension's stamp. The
+  # engine treats any version without "-dev" as a release, and then expects the stamp
+  # to equal NormalizeVersionTag(version), which prepends "v" when it is missing
+  # (duckdb src/main/extension/extension_install.cpp, GetVersionDirectoryName). With
+  # `duckdb_version: main` the engine wanted `vmain`, the stamp was `main`, and every
+  # load was refused: `ran tests: 0 passed, 130 skipped`, check green (job
+  # 121226073100, 2026-10-25). `vmain` starts with "v" and has no "-dev", so the two
+  # agree. It also stays outside duckdb-pin's vX.Y.Z literal scan.
+  #
+  # KNOWN RISK: `vmain` is not release-shaped for ci-tools, so ci_phase.py asks DuckDB
+  # staging for a prebuilt archive of main's commit (404 as of 2026-10-25, so DuckDB is
+  # built from source). If staging starts serving main commits, the prebuilt library
+  # reports its own alpha version, the stamp no longer matches, and every load is refused
+  # again. That is how the deleted v2.0 test coverage job broke. `--require webbed` below
+  # makes that a red check instead of skipped tests.
   duckdb-main-canary:
     name: Build extension binaries (duckdb main canary)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: main
+      duckdb_commit: main
+      duckdb_version: vmain
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
+      # Same guard as duckdb-stable-build: an extension that cannot load fails the run
+      # as `require webbed: FAILED` instead of skipping every file.
+      test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
 
   # The registry default line: the same commit, version and ci-tools branch as
   # community-extensions' build.yml. Artifacts are named from duckdb_version, so
