@@ -17,11 +17,16 @@ SET preserve_insertion_order=true;
 # Files 1, 3 and 5 hold more than STANDARD_VECTOR_SIZE (2048) blocks, so they span several output
 # chunks. The small files between them would share a chunk with a neighbour if one chunk could
 # hold more than one file.
+#
+# pages/f=25/data_0.html holds only a comment, so it yields no blocks. It sorts between f=2 and f=3.
+# A worker that claims it must go on to claim the next file, not return an empty chunk.
 statement ok
 COPY (
     SELECT f, string_agg('<p>' || f || '_' || k || '</p>', '' ORDER BY k) AS c
     FROM (VALUES (0, 3), (1, 5000), (2, 7), (3, 4500), (4, 1), (5, 2100)) sizes(f, n), range(n) t(k)
     GROUP BY f
+    UNION ALL
+    SELECT 25, '<!-- no blocks -->'
 ) TO '__TEST_DIR__/pages' (FORMAT csv, HEADER false, QUOTE '', PARTITION_BY (f), FILE_EXTENSION 'html');
 
 # CREATE TABLE AS under preserve_insertion_order uses the batch insert, which places chunks by
@@ -45,5 +50,19 @@ JOIN (
     FROM blocks
 ) expected USING (rn)
 WHERE actual.content = expected.content;
+----
+11611
+
+query I
+SELECT count(*) FROM read_html_blocks('__TEST_DIR__/pages/f=25/*.html');
+----
+0
+
+# With one worker, an empty chunk would end the scan at the empty file and drop files 3, 4 and 5.
+statement ok
+PRAGMA threads=1;
+
+query I
+SELECT count(*) FROM read_html_blocks('__TEST_DIR__/pages/*/*.html');
 ----
 11611
