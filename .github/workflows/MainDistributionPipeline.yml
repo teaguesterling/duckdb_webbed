@@ -62,15 +62,16 @@ jobs:
       # EMPTY THIS, and delete duckdb-legacy-build, when no supported user is still
       # on v1.5.5. Leaving it set indefinitely re-opens the blind spot it closes.
       DUCKDB_LEGACY: v1.5.5
-      # The LABEL duckdb-v2-dev-build passes as duckdb_version. It is not a DuckDB
-      # release; it names the tip of the 2.0 development line. It must be
-      # release-shaped (vX.Y.Z, optional -alpha/-rc N) so ci-tools uses it as given
-      # instead of substituting a staged prebuilt version, and it must not contain
-      # "-dev", or the engine checks the stamp against the commit hash. Exempt from the
-      # stray-literal scan below AND required to appear in a build job by the drift
-      # loop, so it can neither go stale silently nor be orphaned. Bump it to the next
-      # patch when DUCKDB_VERSION moves.
-      DUCKDB_DEV_LABEL: v2.0.1-alpha0
+      # THE NEXT PAIR duckdb-next-build tests: a v2.0-cyanoptera commit and the version
+      # DuckDB staged for it (<staging>/<commit>/latest_alpha_version.txt). They must
+      # be a TRUE pair. ci-tools then downloads the prebuilt built as that version, so
+      # the engine and the extension stamp agree, and every log and artifact name says
+      # exactly what was tested. Passing the branch name instead made the stamp differ
+      # from the prebuilt's version, and every `require webbed` failed (2026-10-25).
+      # Both are exempt from the literal scans below AND required by the drift loop,
+      # so neither can go stale silently. BUMP THEM TOGETHER, from the staging file.
+      DUCKDB_NEXT: v2.0.1-alpha50125
+      DUCKDB_NEXT_COMMIT: bb5bdadda4ee51d39b359fe8f4d1960973191175
     steps:
       - uses: actions/checkout@v4
       - name: Compare the submodule pin with the registry default commit
@@ -88,7 +89,7 @@ jobs:
           echo "registry default commit -> ${DUCKDB_COMMIT} (${DUCKDB_VERSION})"
           echo "submodule pin           -> ${have}"
           [ "$DUCKDB_COMMIT" = "$have" ] || { echo "::error::duckdb submodule pin ${have} is not the registry default commit ${DUCKDB_COMMIT}; run: git -C duckdb fetch origin ${DUCKDB_CI_TOOLS} && git -C duckdb checkout ${DUCKDB_COMMIT}"; exit 1; }
-          for want in "duckdb_commit: ${DUCKDB_COMMIT}" "duckdb_version: ${DUCKDB_VERSION}" "ci_tools_version: ${DUCKDB_CI_TOOLS}" "duckdb_version: ${DUCKDB_VARIANT}" "duckdb_version: ${DUCKDB_DEV_LABEL}"; do
+          for want in "duckdb_commit: ${DUCKDB_COMMIT}" "duckdb_version: ${DUCKDB_VERSION}" "ci_tools_version: ${DUCKDB_CI_TOOLS}" "duckdb_version: ${DUCKDB_VARIANT}" "duckdb_version: ${DUCKDB_NEXT}" "duckdb_commit: ${DUCKDB_NEXT_COMMIT}"; do
             c=$(grep -c "${want}$" "$wf" || true)
             [ "$c" -ge 1 ] || { echo "::error::no build job in this workflow uses ${want}; this job's constants have drifted"; exit 1; }
           done
@@ -113,7 +114,7 @@ jobs:
               [ "$v" = "$DUCKDB_VERSION" ] && continue
               [ "$v" = "$DUCKDB_VARIANT" ] && continue
               [ -n "$DUCKDB_LEGACY" ] && [ "$v" = "$DUCKDB_LEGACY" ] && continue
-              [ "$v" = "$DUCKDB_DEV_LABEL" ] && continue
+              [ "$v" = "$DUCKDB_NEXT" ] && continue
               echo "::error::line ${lineno}: ${line} -- a DuckDB version literal that is not the shipped ${DUCKDB_VERSION} or ${DUCKDB_VARIANT}: derive it from the shipped version or bump it"
               bad=1
             done
@@ -127,6 +128,7 @@ jobs:
             printf '%s\n' "$line" | grep -qE '^[[:space:]]*vcpkg_commit:' && continue
             for h in $(printf '%s\n' "$line" | grep -oE '[0-9a-f]{40}' || true); do
               [ "$h" = "$DUCKDB_COMMIT" ] && continue
+              [ "$h" = "$DUCKDB_NEXT_COMMIT" ] && continue
               echo "::error::line ${lineno}: ${line} -- a commit literal that is not the registry default ${DUCKDB_COMMIT}: derive it from the pinned commit or bump it"
               bad=1
             done
@@ -245,27 +247,23 @@ jobs:
       # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
       # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
       test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
-  # THE 2.0 DEVELOPMENT LINE: the tip of v2.0-cyanoptera, where the next 2.0.x patch is
-  # made. The job above tests only the exact commit the registry ships. This one shows
-  # 2.0.x drift before it ships. It ships nothing; Linux only.
+  # THE NEXT LINE: a pinned commit on v2.0-cyanoptera, where the next 2.0.x patch is
+  # made, one step past the tag the job above ships. It ships nothing; Linux only.
+  # Fleet shape (duck_tails #73, measured there: "version v2.0.1-alpha50125",
+  # staged prebuilt used, "ran tests: 73 passed, 0 skipped").
   #
-  # duckdb_commit selects the checkout. duckdb_version is a LABEL (DUCKDB_DEV_LABEL in
-  # duckdb-pin) that becomes both the engine's version and the extension's stamp, and
-  # they must agree or every `require webbed` fails. The job this replaces passed the
-  # branch name as duckdb_version. ci-tools then looked up the staged prebuilt
-  # (v2.0.1-alpha50125) for the download but stamped the extension with the branch
-  # name, so all 130 files failed `require webbed` from 2026-10-25. A release-shaped
-  # label skips that lookup:
-  #   - no prebuilt at <commit>/<label>/: DuckDB builds from source with the label as
-  #     its version, so the two agree;
-  #   - a prebuilt at that path: it was built as the label, so the two agree.
-  duckdb-v2-dev-build:
-    name: Build extension binaries (DuckDB 2.0 development line)
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+  # Pinned to the DUCKDB_NEXT / DUCKDB_NEXT_COMMIT pair in duckdb-pin (see the note
+  # there). The job this replaces passed the branch name as duckdb_version: ci-tools
+  # downloaded the staged prebuilt (v2.0.1-alpha50125) but the extension was stamped
+  # with the branch name, so all 130 files failed `require webbed` from 2026-10-25.
+  duckdb-next-build:
+    name: Build extension binaries (DuckDB next, v2.0-cyanoptera)
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_commit: v2.0-cyanoptera
-      duckdb_version: v2.0.1-alpha0
-      ci_tools_version: v2.0-cyanoptera
+      # The DUCKDB_NEXT pair from the duckdb-pin job; bump them together.
+      duckdb_version: v2.0.1-alpha50125
+      duckdb_commit: bb5bdadda4ee51d39b359fe8f4d1960973191175
+      ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
