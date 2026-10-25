@@ -2162,10 +2162,9 @@ DuckBlockFunctions::ReadHTMLBlocksInitLocal(ExecutionContext &context, TableFunc
 OperatorPartitionData DuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientContext &context,
                                                                          TableFunctionGetPartitionInput &input) {
 	auto &lstate = input.local_state->Cast<HTMLBlocksReadLocalState>();
-	// Decode the file from the tag itself: by now the worker may have claimed a later file. Each
-	// file is tagged with chunk 0 only.
-	FileBatchIndex::Validate(lstate.last_batch_index >> HTMLBlocksReadLocalState::FILE_SHIFT, 0,
-	                         lstate.current_filename);
+	// Each chunk holds one file, and the next file is claimed only on the next call, so file_index
+	// still names the tagged chunk's file. chunk_counter has already advanced past it.
+	FileBatchIndex::Validate(lstate.file_index, lstate.chunk_counter - 1, lstate.current_filename);
 	return OperatorPartitionData(lstate.last_batch_index);
 }
 
@@ -2177,7 +2176,7 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 
-	while (output_idx < STANDARD_VECTOR_SIZE) {
+	while (true) {
 		if (!lstate.have_file) {
 			idx_t claimed = gstate.ClaimNextFile();
 			if (claimed == DConstants::INVALID_INDEX) {
@@ -2236,12 +2235,21 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 		}
 
 		if (lstate.current_block_index >= lstate.current_blocks.size()) {
-			lstate.last_batch_index =
-			    (lstate.file_index << HTMLBlocksReadLocalState::FILE_SHIFT) | lstate.chunk_counter++;
 			lstate.have_file = false;
 			lstate.current_blocks.clear();
 			lstate.current_block_index = 0;
+			// An empty file yields no rows, so keep claiming rather than returning a 0-row chunk
+			// (which DuckDB reads as end-of-data for this worker).
+			if (output_idx == 0) {
+				continue;
+			}
 		}
+
+		// The chunk is full or its file is done. One file per output chunk keeps batch indices
+		// ordered, so tag and return it; an unfinished file resumes on the next call.
+		lstate.last_batch_index = (lstate.file_index << HTMLBlocksReadLocalState::FILE_SHIFT) | lstate.chunk_counter;
+		lstate.chunk_counter++;
+		break;
 	}
 
 	CompatSetOutputCardinality(output, output_idx);
