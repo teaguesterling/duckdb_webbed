@@ -2176,8 +2176,6 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 	auto &fs = FileSystem::GetFileSystem(context);
 	idx_t output_idx = 0;
 
-	// No row-count bound here: the loop ends because every `continue` below consumes one claimed
-	// file. A new `continue` must do the same, or this worker never returns.
 	while (true) {
 		if (!lstate.have_file) {
 			idx_t claimed = gstate.ClaimNextFile();
