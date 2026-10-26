@@ -10,11 +10,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  DUCKDB_CI_TOOLS: v2.0-cyanoptera
-  DUCKDB_NEXT: v2.0.1-alpha50125
-  DUCKDB_NEXT_COMMIT: bb5bdadda4ee51d39b359fe8f4d1960973191175
-
 # event_name is part of the group on purpose. Without it a workflow_dispatch on a
 # branch (used to run the canary against a PR) lands in the SAME group as that
 # branch's push run -- same ref, same sha -- and cancel-in-progress kills the
@@ -52,6 +47,7 @@ jobs:
       # commit as duckdb_version makes every `require webbed` fail
       # (duckdb/community-extensions#3086).
       DUCKDB_VERSION: v2.0.0
+      DUCKDB_CI_TOOLS: v2.0-cyanoptera
       DUCKDB_VARIANT: v1.5.6
       # Flip day (spec §3 step 3) keeps a duckdb-legacy-build at the outgoing version
       # for one release; set this to that version then so the stray-literal scan below
@@ -74,8 +70,8 @@ jobs:
       # from the prebuilt's version, and every `require webbed` failed (2026-10-25).
       # Both are exempt from the literal scans below AND required by the drift loop,
       # so neither can go stale silently. BUMP THEM TOGETHER, from the staging file.
-      DUCKDB_NEXT: ${{ env.DUCKDB_NEXT }}
-      DUCKDB_NEXT_COMMIT: ${{ env.DUCKDB_NEXT_COMMIT }}
+      DUCKDB_NEXT: v2.0.1-alpha50125
+      DUCKDB_NEXT_COMMIT: bb5bdadda4ee51d39b359fe8f4d1960973191175
     steps:
       - uses: actions/checkout@v4
       - name: Compare the submodule pin with the registry default commit
@@ -231,10 +227,10 @@ jobs:
   duckdb-main-canary:
     name: Build extension binaries (duckdb main canary, compile only)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       duckdb_version: main
-      ci_tools_version: ${{ env.DUCKDB_CI_TOOLS }}
+      ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
@@ -279,12 +275,12 @@ jobs:
   # with the branch name, so all 130 files failed `require webbed` from 2026-10-25.
   duckdb-next-build:
     name: Build extension binaries (DuckDB next, v2.0-cyanoptera)
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
       # The DUCKDB_NEXT pair from the duckdb-pin job; bump them together.
-      duckdb_version: ${{ env.DUCKDB_NEXT }}
-      duckdb_commit: ${{ env.DUCKDB_NEXT_COMMIT }}
-      ci_tools_version: ${{ env.DUCKDB_CI_TOOLS }}
+      duckdb_version: v2.0.1-alpha50125
+      duckdb_commit: bb5bdadda4ee51d39b359fe8f4d1960973191175
+      ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
