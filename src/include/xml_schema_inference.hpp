@@ -199,15 +199,13 @@ public:
 	                      const XMLSchemaOptions &options = XMLSchemaOptions {},
 	                      const std::vector<std::string> &column_datetime_formats = {});
 
-	// Extract one row from a record node using inferred schema
-	static std::vector<Value> ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
-	                                              int remaining_depth, const XMLSchemaOptions &options);
-
-	// Extract one row using explicit column names/types
-	static std::vector<Value>
-	ExtractSingleRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
-	                              const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
-	                              const std::vector<std::string> &column_datetime_formats = {});
+	// Write one record into row of out starting at column col, returning the column after the last one written
+	static idx_t WriteRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema, int remaining_depth,
+	                         const XMLSchemaOptions &options, DataChunk &out, idx_t col, idx_t row);
+	static idx_t WriteRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
+	                                   const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
+	                                   const std::vector<std::string> &column_datetime_formats, DataChunk &out,
+	                                   idx_t col, idx_t row);
 
 	// Identify record elements in a parsed document
 	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
@@ -306,15 +304,21 @@ private:
 	// LIST elements convert with the same format as the column's own scalar values (issue #159).
 	// Empty means none was recorded, in which case the conversion falls back to the candidate
 	// list inference used.
-	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                  const std::string &datetime_format = "");
-	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type, const XMLSchemaOptions &options,
+	static void WriteNodeValue(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format = "");
+	static Value ExtractScalarFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options,
 	                                   const std::string &datetime_format = "");
-	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options,
-	                                 const std::string &datetime_format = "");
+	static void WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
+	                                const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteListFromNode(xmlNodePtr node, const LogicalType &list_type, Vector &out, idx_t row,
+	                              const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteChildList(xmlNodePtr record, const std::string &name, const LogicalType &list_type, Vector &out,
+	                           idx_t row, const XMLSchemaOptions &options, const std::string &datetime_format);
 	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
-	static void AppendListItems(xmlNodePtr node, const LogicalType &element_type, const XMLSchemaOptions &options,
-	                            const std::string &datetime_format, std::vector<Value> &items);
+	static void AppendListItems(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+	                            const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void AppendListItem(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format);
 };
 
 } // namespace duckdb

@@ -959,24 +959,6 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 	CompatSetOutputCardinality(output, output_idx);
 }
 
-// Write one extracted row into the output chunk: optional filename column first, then the row's
-// values. Any output columns the row does not provide are NULL-filled so no vector slot is left
-// uninitialized (e.g. fallback schemas where extraction yields fewer values).
-static void EmitRow(DataChunk &output, idx_t output_idx, const std::vector<Value> &row, bool include_filename,
-                    const string &filename) {
-	idx_t output_col_idx = 0;
-	if (include_filename) {
-		output.data[output_col_idx++].SetValue(output_idx, Value(filename));
-	}
-	for (idx_t row_col_idx = 0; row_col_idx < row.size() && output_col_idx < output.ColumnCount();
-	     row_col_idx++, output_col_idx++) {
-		output.data[output_col_idx].SetValue(output_idx, row[row_col_idx]);
-	}
-	for (; output_col_idx < output.ColumnCount(); output_col_idx++) {
-		output.data[output_col_idx].SetValue(output_idx, Value(output.data[output_col_idx].GetType()));
-	}
-}
-
 void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<XMLReadGlobalState>();
@@ -1046,7 +1028,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						file_handle->Reset();
 					}
 					lstate.sax_stream = make_uniq<XMLRecordStream>(std::move(file_handle), filename, schema_options);
-					lstate.sax_pending_rows.clear();
+					lstate.sax_pending.clear();
+					lstate.sax_pending_chunk = 0;
 					lstate.sax_pending_pos = 0;
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
@@ -1090,30 +1073,48 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				}
 			}
 
-			auto extract_record = [&](xmlNodePtr record) {
-				if (bind_data.has_explicit_schema) {
-					return XMLSchemaInference::ExtractSingleRecordWithSchema(record, bind_data.column_names,
-					                                                         bind_data.column_types, schema_options,
-					                                                         bind_data.column_datetime_formats);
+			// Columns the record does not provide are NULL so no vector slot is left uninitialized
+			// (e.g. fallback schemas where extraction yields fewer values).
+			auto write_record = [&](xmlNodePtr record, DataChunk &chunk, idx_t row) {
+				idx_t col = 0;
+				if (bind_data.include_filename) {
+					chunk.data[col++].SetValue(row, Value(filename));
 				}
-				return XMLSchemaInference::ExtractSingleRecord(record, bind_data.inferred_schema,
-				                                               lstate.remaining_depth, schema_options);
+				if (bind_data.has_explicit_schema) {
+					col = XMLSchemaInference::WriteRecordWithSchema(record, bind_data.column_names,
+					                                                bind_data.column_types, schema_options,
+					                                                bind_data.column_datetime_formats, chunk, col, row);
+				} else {
+					col = XMLSchemaInference::WriteRecord(record, bind_data.inferred_schema, lstate.remaining_depth,
+					                                      schema_options, chunk, col, row);
+				}
+				for (; col < chunk.ColumnCount(); col++) {
+					FlatVector::SetNull(chunk.data[col], row, true);
+				}
 			};
 
 			if (lstate.use_sax) {
-				auto &pending = lstate.sax_pending_rows;
+				auto &pending = lstate.sax_pending;
 				auto emit_pending_sax_rows = [&]() {
-					while (lstate.sax_pending_pos < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
-						EmitRow(output, output_idx, pending[lstate.sax_pending_pos], bind_data.include_filename,
-						        filename);
-						output_idx++;
-						lstate.sax_pending_pos++;
+					while (lstate.sax_pending_chunk < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
+						auto &chunk = *pending[lstate.sax_pending_chunk];
+						CompatSetOutputCardinality(chunk, chunk.size());
+						auto count = MinValue<idx_t>(chunk.size() - lstate.sax_pending_pos,
+						                             STANDARD_VECTOR_SIZE - output_idx);
+						for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
+							VectorOperations::Copy(chunk.data[col], output.data[col], lstate.sax_pending_pos + count,
+							                       lstate.sax_pending_pos, output_idx);
+						}
+						output_idx += count;
+						lstate.sax_pending_pos += count;
+						if (lstate.sax_pending_pos == chunk.size()) {
+							pending[lstate.sax_pending_chunk++].reset();
+							lstate.sax_pending_pos = 0;
+						}
 					}
-					// Erasing each emitted row from the front shifts every row behind it, which is
-					// quadratic when ignore_errors withholds a whole file.
-					if (lstate.sax_pending_pos == pending.size()) {
+					if (lstate.sax_pending_chunk == pending.size()) {
 						pending.clear();
-						lstate.sax_pending_pos = 0;
+						lstate.sax_pending_chunk = 0;
 					}
 				};
 
@@ -1132,7 +1133,17 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 						bool more = lstate.sax_stream->ParseChunk();
 						for (auto record : lstate.sax_stream->Records()) {
-							pending.push_back(extract_record(record));
+							if (pending.empty() && !bind_data.ignore_errors && output_idx < STANDARD_VECTOR_SIZE) {
+								write_record(record, output, output_idx++);
+								continue;
+							}
+							if (pending.empty() || pending.back()->size() == STANDARD_VECTOR_SIZE) {
+								pending.push_back(make_uniq<DataChunk>());
+								pending.back()->Initialize(Allocator::Get(context), output.GetTypes());
+							}
+							auto &chunk = *pending.back();
+							write_record(record, chunk, chunk.size());
+							chunk.SetCardinality(chunk.size() + 1);
 						}
 						lstate.sax_stream->ReleaseRecords();
 						if (!more) {
@@ -1152,12 +1163,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				// DOM extraction: extract records one at a time
 				while (lstate.current_record_index < lstate.record_elements.size() &&
 				       output_idx < STANDARD_VECTOR_SIZE) {
-					xmlNodePtr record = lstate.record_elements[lstate.current_record_index];
-
-					auto row = extract_record(record);
-
-					EmitRow(output, output_idx, row, bind_data.include_filename, filename);
-
+					write_record(lstate.record_elements[lstate.current_record_index], output, output_idx);
 					output_idx++;
 					lstate.current_record_index++;
 				}

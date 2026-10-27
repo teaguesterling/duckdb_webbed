@@ -191,8 +191,10 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
 	bool use_sax = false;
 	std::unique_ptr<XMLRecordStream> sax_stream;
-	std::vector<std::vector<Value>> sax_pending_rows; // Extracted rows (emitted only after a successful parse when ignore_errors)
-	idx_t sax_pending_pos = 0;       // Next pending row to emit; the vector is cleared once drained
+	// Extracted rows that did not fit the output chunk, or all of a file's while ignore_errors withholds them
+	std::vector<unique_ptr<DataChunk>> sax_pending;
+	idx_t sax_pending_chunk = 0;     // Next pending chunk to emit; the vector is cleared once drained
+	idx_t sax_pending_pos = 0;       // Next row of that chunk to emit
 	bool sax_parse_complete = false; // Push parser reached EOF without error
 
 	// Release all per-file resources (when a file is finished or skipped). Keeps file_index /
@@ -202,7 +204,8 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 		record_elements.clear();
 		current_record_index = 0;
 		sax_stream.reset();
-		sax_pending_rows.clear();
+		sax_pending.clear();
+		sax_pending_chunk = 0;
 		sax_pending_pos = 0;
 		sax_parse_complete = false;
 		use_sax = false;
