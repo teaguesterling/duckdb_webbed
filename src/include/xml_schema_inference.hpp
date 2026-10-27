@@ -239,6 +239,8 @@ public:
 
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
+	static std::string CleanTextContent(const char *text, size_t size, bool preserve_whitespace);
+	static std::string CleanNodeText(xmlNodePtr node, bool preserve_whitespace);
 
 	// Map a column name back to the underlying XML attribute name. In attr_mode='prefixed' the
 	// inferred column name is attr_prefix + attribute name, so the prefix must be stripped before

@@ -612,6 +612,26 @@ Run `tmp/climb/c23`, 8 samples per arm, against C21. Guards: fingerprints, 0 mis
 
 RSS unchanged (-0.2% geomean). Accepted.
 
+### Accepted: C24, read single text runs in place
+
+Hypothesis (`sample` profile of C23): `xmlNodeGetContent` duplicates every leaf's text (`xmlStrdup`, 103–154 samples under extraction) before `CleanTextContent` copies it again. Most leaves hold one text or CDATA child, whose `content` is already the whole value. `CleanNodeText` cleans that run in place and falls back to `xmlNodeGetContent` for mixed or nested content. All nine text sites in inference and extraction use it.
+
+Run `tmp/climb/c24`, 8 samples per arm, against C23. Guards: fingerprints, 0 mismatches over 69 cases.
+
+| Scenario | wall | CPU | instructions |
+| --- | ---: | ---: | ---: |
+| `stream/atom_glob_ns_strip` | -8.8%* | -8.8%* | -6.1%* |
+| `nested/holdout_catalog_dom_infer` | -8.5%* | -8.0%* | -4.2%* |
+| `real/wiki_revisions` | -7.7%* | -7.2%* | -6.4%* |
+| `stream/holdout_real_dblp_sax` | -7.7%* | -7.8%* | -5.4%* |
+| `real/holdout_pubmed_sax` | -5.1%* | -5.3%* | -4.5%* |
+| `real/clinvar_sax` | -4.9%* | -4.7%* | -2.8% |
+| `real/wiki_pages` | -4.5%* | -4.5%* | -4.0%* |
+| `real/holdout_mesh_dom` | +1.2% | -1.7% | -2.6% |
+| geomean, 40 cases | -4.9% | -5.1% | -4.1% |
+
+RSS unchanged. No case regressed significantly. Accepted.
+
 ### Rejected: C22, look up interned names by pointer during inference
 
 Hypothesis (`sample` profile of C21): `InferColumnType` is 7–15% of CPU on the real SAX cases. Inside it, `GroupChildElements` hashes each child's name string (5% on PubMed) and `CollectAttributeNames` builds a `std::string` and a case-insensitive hash per attribute (5.5% on ClinVar). libxml2 interns names in the parser dictionary, so a map keyed on the name pointer in front of each lookup skips the string work on repeats.
