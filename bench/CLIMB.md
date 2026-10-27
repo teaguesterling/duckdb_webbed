@@ -501,6 +501,27 @@ Run `tmp/climb/runs/c19-dev` and `c19-holdout`, 8 samples per arm, against C18, 
 
 Geomean wall -8.8% over 23 dev cases and -9.0% over 14 holdout cases. RSS flat. Accepted.
 
+### Accepted: C20, build struct values against the schema type
+
+Hypothesis (profile `real-v15-dom`): `Value::STRUCT(child_list_t)` is 7 to 12% of CPU on `wiki_revisions` and `holdout_uniprot_sax`. It copies every field name into a new `LogicalType` per row, and a struct holding a value whose type differs from the column's, such as an untyped NULL, is cast again by `Vector::SetValue`. `Value::STRUCT(struct_type, values)` uses the schema's type and casts each field once.
+
+Target: CPU and wall down on cases with STRUCT columns. Guards: fingerprints, 0 mismatches over 69 cases. `make test` passes.
+
+Run `tmp/climb/runs/c20-dev` and `c20-holdout`, 8 samples per arm, against C19, DuckDB 1.5.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `nested/claims_sax` (explicit columns) | 1.65→0.65 -60.5%* | -60.5%* | -0.5% | -60.8%* |
+| `stream/orders_sax_items_columns` (explicit columns) | 1.13→0.60 -47.2%* | -46.5%* | -1.7% | -47.0%* |
+| `real/wiki_pages` | 12.60→8.89 -29.5%* | -30.1%* | -2.6% | -34.0%* |
+| `real/holdout_pubmed_sax` | 5.43→4.03 -25.7%* | -20.9%* | -0.7% | -20.6%* |
+| `real/holdout_uniprot_sax` | 11.28→8.62 -23.6%* | -21.1%* | -0.5% | -20.7%* |
+| `real/clinvar_sax` | 7.04→5.86 -16.7%* | -17.0%* | -0.3% | -17.5%* |
+| `real/irs990_union` | -2.2% | -9.7%* | 3360→2734 MB -18.6%* | -7.3%* |
+| `real/cc_html_extract` (control, rerun alone) | +0.9% | +2.1% | -0.4% | -0.3% |
+
+The explicit-columns cases gain most because the column type there is never the type the per-row struct was built with, so every row was cast in full. Geomean wall -14.7% over 21 dev cases and -19.0% over 14 holdout cases. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
