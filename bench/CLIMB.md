@@ -522,6 +522,29 @@ Run `tmp/climb/runs/c20-dev` and `c20-holdout`, 8 samples per arm, against C19, 
 
 The explicit-columns cases gain most because the column type there is never the type the per-row struct was built with, so every row was cast in full. Geomean wall -14.7% over 21 dev cases and -19.0% over 14 holdout cases. Accepted.
 
+### Accepted: M1, free indentation in the SAX inference sample
+
+Hypothesis (heap capture `tmp/climb/heap/v15-c20/holdout_pubmed_sax.txt`, `malloc_history -highWaterMark`): 99% of PubMed's 988 MiB heap peak is the inference sample, 10240 records held as a libxml2 DOM, and text nodes are 61% of it. Of the sample's 2.4M text nodes, 1.6M are indentation between child elements, which inference never reads. Freeing whitespace-only text from elements whose other children are all elements, as each sampled element closes, shrinks the sample. Mixed content keeps its whitespace.
+
+Target: peak RSS down on SAX inference cases, wall and CPU flat. Guards: fingerprints, 0 mismatches over 69 cases. `make test` passes. The heap capture on PubMed drops from 988 to 670 MiB high-water and from 1126 to 739 MiB peak footprint.
+
+Run `tmp/climb/runs/m1b-dev` and `m1b-holdout`, 8 samples per arm, against C20, DuckDB 1.5.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `real/holdout_mesh_sax` | -7.8%* | -7.8%* | 1061→634 MB -40.2%* | -0.2% |
+| `real/holdout_pubmed_sax` | -6.9% | -4.8%* | 1281→918 MB -28.3%* | -0.1% |
+| `stream/holdout_real_nasa_ns_sax` | -7.8%* | -7.7%* | 285→206 MB -27.8%* | -0.1% |
+| `real/wiki_pages` | -6.1%* | -6.4%* | 3524→2558 MB -27.4%* | +0.3% |
+| `stream/holdout_real_dblp_sax` | -3.2% | -3.0%* | 1048→780 MB -25.5%* | +0.0% |
+| `real/holdout_uniprot_sax` | +3.2% | -1.9% | 2150→1661 MB -22.7%* | +0.1% |
+| `real/wiki_revisions` | -0.2% | -0.2% | 95→77 MB -19.2%* | -0.2% |
+| `real/clinvar_sax` | -1.6% | -5.2%* | 1898→1554 MB -18.1%* | +0.2% |
+| `stream/orders_sax_infer` | -4.9%* | -5.0%* | 546→462 MB -15.4%* | +0.4% |
+| `real/holdout_mesh_dom` (control, DOM path) | -4.7% | -0.3% | +0.0% | -0.2% |
+
+Geomean RSS -6.3% over 16 dev cases and -13.0% over 12 holdout cases, with wall -1.4% and -2.1%. The DOM path and explicit-columns cases are unchanged, since neither keeps a sample. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
