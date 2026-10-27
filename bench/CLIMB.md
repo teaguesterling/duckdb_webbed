@@ -690,6 +690,16 @@ Run `tmp/climb/runs/c28`, 8 samples per arm, against C26.
 
 RSS unchanged. Accepted.
 
+### Rejected: C29, `xml_stats` from parser callbacks
+
+Hypothesis (`sample` profile of C28): `GetXMLStats` is 31% of `scalar/validity_stats`, a full DOM parse walked once and freed. A third per-thread context counts elements, attributes, depth, and namespace URIs from SAX2 callbacks.
+
+Matching the tree walk takes three rules the callbacks don't give for free. A child node of any type, text included, counts one level deeper. Entity content, which libxml2 parses through the same callbacks from a pushed input, has to be skipped by input-stack depth. DTD-defaulted attributes have to be subtracted. The first build missed the last two. With them, `xml_stats` agreed with C28 on all 42,124 documents of the C28 corpus plus entity cases, and the guard showed 0 mismatches over 68 cases.
+
+Run `tmp/climb/runs/c29`, 8 samples per arm, against C28: `scalar/validity_stats` -14.8%* wall, -11.9%* CPU, -14.5%* instructions. No other case calls `xml_stats`, and the geomean over 10 cases is -1.3% wall. No held-out case covers it.
+
+Rejected: about 70 lines that copy libxml2's tree-building behavior for one function, on one dev case. Diff in `tmp/climb/c29.diff`.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
@@ -700,7 +710,6 @@ Leads from the `acc8` and `acc14` profiles that were read and not turned into ca
 | Lazy XPath context in `XMLDocRAII` | ≤1.1% | Too small to reach 3%. |
 | `XML_PARSE_COMPACT` for DOM parses | unmeasured | Compact text overlays `properties` and `nsDef` on text nodes. A `record_element` XPath that selects text nodes would send them through the attribute loops in `xml_schema_inference.cpp`, so it fails the correctness rule without per-site guards. |
 | Reuse one scratch document in `ExtractXMLFragmentList` | ~1-2% of `extract_elements_attributes` | Most of `xmlFreeDoc` there is freeing the copied subtree, which stays. Dumping the original node instead of a copy changes namespace output. |
-| Tree-less `xml_stats` | 31% of `validity_stats` after C28 | Its `max_depth` counts a level below any element with a child node of any type, text included. Reproducing that from callbacks costs more code and risk than a niche function earns. |
 | Share one parse across scalar calls on the same row | parse is ~60% of `orders_objects` | DuckDB evaluates each function over the whole chunk in turn, so a per-thread last-document cache never hits. |
 | `InferColumnType`, SAX row emission, `HtmlToDuckBlocks` | 7-31% each, diffuse | Spread over many small callees (hash lookups, small copies, `Value` construction). No single change bounded above 3%. |
 | `ReadFileFully` and `OpenFile` in `manyfiles` cases | 15-23% | File system calls, outside scope. |
