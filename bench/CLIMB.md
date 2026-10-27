@@ -567,6 +567,31 @@ The unthresholded run's RSS gains on the small DOM cases (`records/*` -6%, `nest
 
 Hypothesis: inference types sample text only as datetime, number, boolean, or VARCHAR, and a text over 1 KiB with interior whitespace can only be VARCHAR, so replacing it in the sample frees `wiki_pages`' 783 MiB under `xmlSAX2TextNode`. Measured with heap captures before benchmarking: high-water unchanged on `wiki_pages` (1925 MiB) and `holdout_uniprot_sax` (1321 MiB). That 783 MiB is node structs, 4.8M content text nodes at about 120 bytes each. Text bytes come through `xmlStrndup` and total 133 MiB. `wiki_pages` holds all 2656 pages of its file in the sample, 6.5M elements, so what remains is the DOM's per-node cost. Shrinking it needs a smaller sample or inference over something other than libxml2 nodes. Rejected.
 
+### Accepted: C21, write extracted records straight into vectors
+
+Hypothesis (`sample` profile of M2, `tmp/climb/profile/sample-v15-m2/`): building a `Value` per field costs 13–21% of CPU on the real nested cases, and `Vector::SetValue` another 3–8%. `Value::STRUCT` and `Value::LIST` cast every child to its declared type even when it already matches. Each cast builds a `CastFunctionSet` and deep-copies the child, so a nested record pays once per level. On `holdout_uniprot_sax`, `Value::STRUCT` alone was 10.6%.
+
+Extraction now writes each field into the output `Vector` at the record's row. STRUCT fields go to their child vectors, and LIST items append to the list's child vector. Scalars still convert through `ConvertToValue` and `SetValue`. SAX records write straight into the output chunk when nothing is pending. A record that doesn't fit, or any record while `ignore_errors` withholds the file, goes to a columnar staging chunk that is copied out by `VectorOperations::Copy`. `parse_xml` keeps its buffered `Value` rows through a one-row chunk.
+
+Run `tmp/climb/c21`, 8 samples per arm, against M2, DuckDB 1.5. Guards: fingerprints, 0 mismatches over 69 cases. Tests pass on 1.5 and 2.0.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `real/holdout_uniprot_sax` | -26.4%* | -25.7%* | -2.2% | -27.1%* |
+| `real/holdout_pubmed_sax` | -24.1%* | -22.1%* | -0.9% | -24.6%* |
+| `real/clinvar_sax` | -21.6%* | -17.6%* | +1.3% | -17.8%* |
+| `real/holdout_mesh_sax` | -18.6%* | -18.5%* | +0.1% | -18.5%* |
+| `real/wiki_revisions` | -16.5%* | -16.2%* | +0.7% | -15.8%* |
+| `real/holdout_mesh_dom` | -11.2%* | -9.4%* | -0.0% | -13.3%* |
+| `real/wiki_pages` | -10.9%* | -11.8%* | -3.9%* | -13.4%* |
+| `nested/claims_sax` | -28.4%* | -28.3%* | -1.0% | -28.3%* |
+| `nested/catalog_dom_infer` | -13.7%* | -13.3%* | -0.1% | -16.7%* |
+| `stream/logs_sax_ignore_errors` | -4.9%* | -4.8%* | 122→97 MB -20.8%* | -3.4% |
+| `records/readings_columns_numeric` | -2.2% | -2.3% | -0.0% | -3.6%* |
+| geomean, 36 cases | -12.4% | -12.2% | -1.3% | -13.6% |
+
+No case regressed. Flat scalar records gain least (`records/*` -1% to -10%), since their scalars still pass through `Value`. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
