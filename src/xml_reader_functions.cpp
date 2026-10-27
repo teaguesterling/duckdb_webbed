@@ -228,8 +228,14 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const XMLReadFunctionData &bind_data,
                              const XMLSchemaOptions &schema_options, ParseMode mode,
                              std::vector<XMLColumnInfo> &inferred_columns) {
+	auto handle = OpenXMLFile(fs, file_path);
+	// A large XML file parses straight from its handle, so its bytes never sit beside the DOM
+	bool parse_from_handle =
+	    mode == ParseMode::XML && schema_options.opaque_type_name != "HTML" && ParsesFromHandle(*handle);
 	string content;
-	if (!ReadXMLFile(*OpenXMLFile(fs, file_path), bind_data.max_file_size, content)) {
+	bool fits = parse_from_handle ? handle->GetFileSize() <= bind_data.max_file_size
+	                              : ReadXMLFile(*handle, bind_data.max_file_size, content);
+	if (!fits) {
 		string().swap(content);
 		if (schema_options.streaming && mode == ParseMode::XML && !HasComplexXPath(schema_options.record_element)) {
 			inferred_columns = SAXStreamReader::InferSchemaFromStream(fs, file_path, schema_options);
@@ -248,7 +254,7 @@ static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const
 	}
 	// One parse serves both the validity check (CheckXML parses identically) and inference,
 	// instead of parsing the file twice at bind.
-	XMLDocRAII doc(content);
+	XMLDocRAII doc = parse_from_handle ? ParseXMLFile(*handle, false) : XMLDocRAII(content);
 	if (!doc.IsValid()) {
 		if (doc.HadResourceError()) {
 			ThrowLibxmlOutOfMemory(file_path);
@@ -1003,8 +1009,10 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			// Load file if not already loaded
 			if (!lstate.file_loaded) {
 				auto file_handle = OpenXMLFile(fs, filename);
+				bool parse_from_handle = ParsesFromHandle(*file_handle);
 				string content;
-				bool fits = ReadXMLFile(*file_handle, bind_data.max_file_size, content);
+				bool fits = parse_from_handle ? file_handle->GetFileSize() <= bind_data.max_file_size
+				                              : ReadXMLFile(*file_handle, bind_data.max_file_size, content);
 
 				// A file over the size limit streams through SAX when the read allows it
 				bool use_sax = !fits && schema_options.streaming && !is_html &&
@@ -1043,11 +1051,10 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
 				} else {
-					// DOM mode: build the DOM from the content read above
-					// Parse DOM — DOM makes its own copy, so content string can be freed.
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
-					lstate.current_doc = XMLDocRAII(content, is_html);
+					lstate.current_doc = parse_from_handle ? ParseXMLFile(*file_handle, is_html)
+					                                       : XMLDocRAII(content, is_html);
 
 					if (!lstate.current_doc.IsValid()) {
 						if (lstate.current_doc.HadResourceError()) {

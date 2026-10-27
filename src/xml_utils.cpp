@@ -269,6 +269,15 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+	XMLInMemoryReader reader {content.data(), content.size(), 0};
+	Parse(XMLInMemoryReaderRead, &reader, is_html);
+}
+
+XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html) {
+	Parse(read, context, is_html);
+}
+
+void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html) {
 	XMLUtils::EnsureSecureParsing();
 
 	if (is_html) {
@@ -278,16 +287,14 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
 		// TODO: Future enhancement - consider making encoding configurable via parameter
 		// (with UTF-8 as default) or deriving it from database collation settings
-		XMLInMemoryReader reader {content.data(), content.size(), 0};
-		doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+		doc = htmlReadIO(read, XMLInMemoryReaderClose, context, nullptr, "UTF-8",
 		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
-			XMLInMemoryReader reader {content.data(), content.size(), 0};
-			doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
+			doc = xmlCtxtReadIO(parser_ctx, read, XMLInMemoryReaderClose, context, nullptr, nullptr,
 			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 			if (!doc) {
 				// Distinguish an allocation failure from malformed input before freeing

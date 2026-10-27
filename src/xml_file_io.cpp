@@ -1,6 +1,9 @@
 #include "xml_file_io.hpp"
 
 #include "duckdb/common/file_open_flags.hpp"
+#include "xml_in_memory_reader.hpp"
+
+#include <exception>
 
 namespace duckdb {
 
@@ -54,6 +57,35 @@ bool ReadXMLFile(FileHandle &handle, idx_t max_size, string &content) {
 			return true;
 		}
 	}
+}
+
+bool ParsesFromHandle(FileHandle &handle) {
+	return handle.CanSeek() && handle.GetFileSize() > (idx_t(16) << 20);
+}
+
+struct FileHandleReader {
+	FileHandle &handle;
+	std::exception_ptr error;
+};
+
+// libxml2 calls this from C frames, so a read error is held and rethrown once the parse returns.
+static int FileHandleReaderRead(void *context, char *buffer, int len) {
+	auto &reader = *static_cast<FileHandleReader *>(context);
+	try {
+		return NumericCast<int>(reader.handle.Read(buffer, UnsafeNumericCast<idx_t>(len)));
+	} catch (...) {
+		reader.error = std::current_exception();
+		return -1;
+	}
+}
+
+XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
+	FileHandleReader reader {handle, nullptr};
+	XMLDocRAII doc(FileHandleReaderRead, &reader, is_html);
+	if (reader.error) {
+		std::rethrow_exception(reader.error);
+	}
+	return doc;
 }
 
 } // namespace duckdb
