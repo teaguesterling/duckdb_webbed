@@ -632,6 +632,12 @@ Run `tmp/climb/c24`, 8 samples per arm, against C23. Guards: fingerprints, 0 mis
 
 RSS unchanged. No case regressed significantly. Accepted.
 
+### Rejected: C25, read attribute values in place
+
+Hypothesis (`sample` profile of C24): `xmlGetProp` copies each attribute value through `xmlNodeListGetString`, about 2% of CPU on ClinVar. A value held in one text node can be read from it directly, falling back to `xmlGetProp` for entity references and DTD defaults.
+
+Run `tmp/climb/c25`, 8 samples per arm, against C24. Wall moved -1.0% geomean over 40 cases (CPU -1.0%). Only `holdout_events_attr_prefixed` (-5.7%) and `holdout_uniprot_sax` (-10.8% wall on a noisy base, -4.1% CPU) cleared significance. Too little for a second attribute lookup with its own DTD rules. Rejected.
+
 ### Rejected: C22, look up interned names by pointer during inference
 
 Hypothesis (`sample` profile of C21): `InferColumnType` is 7–15% of CPU on the real SAX cases. Inside it, `GroupChildElements` hashes each child's name string (5% on PubMed) and `CollectAttributeNames` builds a `std::string` and a case-insensitive hash per attribute (5.5% on ClinVar). libxml2 interns names in the parser dictionary, so a map keyed on the name pointer in front of each lookup skips the string work on repeats.
