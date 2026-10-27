@@ -700,7 +700,7 @@ Leads from the `acc8` and `acc14` profiles that were read and not turned into ca
 | Lazy XPath context in `XMLDocRAII` | ≤1.1% | Too small to reach 3%. |
 | `XML_PARSE_COMPACT` for DOM parses | unmeasured | Compact text overlays `properties` and `nsDef` on text nodes. A `record_element` XPath that selects text nodes would send them through the attribute loops in `xml_schema_inference.cpp`, so it fails the correctness rule without per-site guards. |
 | Reuse one scratch document in `ExtractXMLFragmentList` | ~1-2% of `extract_elements_attributes` | Most of `xmlFreeDoc` there is freeing the copied subtree, which stays. Dumping the original node instead of a copy changes namespace output. |
-| Tree-less validity check for `xml_valid` | parse is 48% of `validity_stats` | libxml2's entity and DTD handling lives in the SAX2 tree handlers, so the result could diverge from the DOM parse. |
+| Tree-less `xml_stats` | 31% of `validity_stats` after C28 | Its `max_depth` counts a level below any element with a child node of any type, text included. Reproducing that from callbacks costs more code and risk than a niche function earns. |
 | Share one parse across scalar calls on the same row | parse is ~60% of `orders_objects` | DuckDB evaluates each function over the whole chunk in turn, so a per-thread last-document cache never hits. |
 | `InferColumnType`, SAX row emission, `HtmlToDuckBlocks` | 7-31% each, diffuse | Spread over many small callees (hash lookups, small copies, `Value` construction). No single change bounded above 3%. |
 | `ReadFileFully` and `OpenFile` in `manyfiles` cases | 15-23% | File system calls, outside scope. |
