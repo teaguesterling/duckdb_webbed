@@ -232,7 +232,6 @@ jobs:
       duckdb_version: main
       ci_tools_version: main
       extension_name: webbed
-      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
       skip_tests: true
 
@@ -247,7 +246,6 @@ jobs:
       duckdb_commit: d54cbbe3df17e8e5ce68312f483b4155836112aa
       ci_tools_version: v2.0-cyanoptera
       extension_name: webbed
-      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       # duckdb's scripts/ci/run_tests.py emits U+274C ❌ on test-batch
       # failure and Windows' default cp1252 stdout can't encode it,
       # masking the actual test result. Only windows_amd64_mingw is
@@ -282,7 +280,6 @@ jobs:
       duckdb_commit: bb5bdadda4ee51d39b359fe8f4d1960973191175
       ci_tools_version: main
       extension_name: webbed
-      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
       # Same guard as duckdb-stable-build.
       test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
@@ -303,7 +300,6 @@ jobs:
       # DuckDB. duckdb_version above is what the build targets.
       ci_tools_version: v1.5-variegata
       extension_name: webbed
-      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
 
   # Builds loadable artifacts for the PREVIOUS stable DuckDB, for users who have not
   # moved to the current one. Added when a user on v1.5.5 hit a usability gap
@@ -341,7 +337,6 @@ jobs:
       # DuckDB -- duckdb_version above is the build target.
       ci_tools_version: v1.5-variegata
       extension_name: webbed
-      vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
 
   # Guards against the LINKED_LIBS class of WASM bug (issue #96): the reusable
   # distribution workflow builds and uploads the .wasm but never inspects or
