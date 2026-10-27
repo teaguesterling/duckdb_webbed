@@ -457,6 +457,50 @@ Run `tmp/climb/runs/c17`, 8 samples per arm, against C16. Guard 56/56, `make tes
 
 Accepted. The bound is `SetValue` (11.6%) plus the skipped `Value` construction (1.4%).
 
+### Accepted: C18, stream records as DOM subtrees
+
+Hypothesis (profile `real-v15-xpcap`): the SAX accumulator rebuilt each record as strings and maps, then converted them to rows with its own code, so streaming paid for a second record model and disagreed with DOM on edge cases. Building only record subtrees and their ancestors with libxml2's tree builder, then extracting each with the DOM code, keeps memory bounded by one chunk of records and makes SAX output equal DOM's by construction.
+
+Target: wall down on the SAX cases, RSS flat or down. Guards: fingerprints, with any change moving SAX onto DOM's output. Guard 57/60. The other three (`stream/holdout_real_dblp_sax`, `real/holdout_pubmed_sax`, `real/pubmed_gz`) now match DOM, as `bench/FINDINGS.md` describes. `make test` passes.
+
+Run `tmp/climb/runs/c18` and `c18-holdout`, 8 samples per arm, against the XPath-cap commit, DuckDB 1.5.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `real/clinvar_sax` | 11.65→8.04 -31.0%* | -31.1%* | 2258→1897 MB -16.0%* | -32.2%* |
+| `real/wiki_pages` | 18.09→15.51 -14.2%* | -14.5%* | +5.5%* | -27.4%* |
+| `real/wiki_revisions` | 7.66→4.41 -42.4%* | -40.6%* | -9.6%* | -38.2%* |
+| `real/holdout_uniprot_sax` | 18.16→11.97 -34.1%* | -33.9%* | -3.1%* | -34.6%* |
+| `real/holdout_mesh_sax` | 10.16→7.11 -30.1%* | -30.2%* | -13.5%* | -31.4%* |
+| `real/holdout_pubmed_sax` | 7.97→5.87 -26.4%* | -28.1%* | -11.7%* | -29.4%* |
+| `stream/holdout_real_dblp_sax` | 5.20→3.59 -30.9%* | -30.8%* | -16.9%* | -30.2%* |
+| `stream/holdout_real_nasa_ns_sax` | 1.21→0.78 -35.4%* | -35.5%* | -9.4%* | -35.9%* |
+| `stream/orders_sax_infer` | 2.36→1.67 -29.5%* | -29.4%* | -11.6%* | -35.1%* |
+| `nested/claims_sax` | 2.03→1.59 -21.5%* | -21.5%* | +2.0% | -18.8%* |
+
+Geomean wall -28.3% over the 7 dev cases and -29.1% over the 7 holdout cases. Accepted.
+
+### Accepted: C19, group child elements in one pass
+
+Hypothesis (profile `real-v15-dom`): bind-time inference is 21 to 50% of CPU on the large real cases, and `CollectChildElements` is 11 to 22% of `InferColumnType`. For each distinct child name it rescanned every instance's children, copied each sibling's name into a `std::string`, stripped its prefix, and built a hash map per instance to count repeats. One pass now groups children by name in first-seen order, keyed on the name in the node's own storage, and keeps each name's most occurrences in one instance.
+
+Target: wall and CPU down on cases that infer, flat on cases with explicit `columns`. Guards: fingerprints, 0 mismatches over 69 cases. `make test` passes.
+
+Run `tmp/climb/runs/c19-dev` and `c19-holdout`, 8 samples per arm, against C18, DuckDB 1.5.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `real/wiki_pages` | 15.96→12.19 -23.6%* | -24.3%* | -0.1% | -10.4%* |
+| `real/holdout_mesh_dom` | 14.03→9.95 -29.1%* | -24.7%* | +0.4% | -8.3%* |
+| `real/irs990_union` | 4.42→3.65 -17.4%* | -18.6%* | +1.4% | -22.0%* |
+| `real/clinvar_sax` | 8.35→7.00 -16.2%* | -14.1%* | -0.3% | -4.2%* |
+| `real/holdout_mesh_sax` | 7.49→6.41 -14.4%* | -14.0%* | -0.0% | -3.8%* |
+| `bigunion/profiles_describe` | 2.87→2.51 -12.7%* | -19.0%* | -6.2%* | -22.3%* |
+| `records/holdout_orders_infer` | 0.58→0.47 -18.4%* | -13.8%* | +0.8% | -10.1%* |
+| `stream/orders_sax_items_columns` (explicit columns) | +2.7% | +1.6% | -1.4% | -0.0% |
+
+Geomean wall -8.8% over 23 dev cases and -9.0% over 14 holdout cases. RSS flat. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
