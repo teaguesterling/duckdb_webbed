@@ -545,6 +545,28 @@ Run `tmp/climb/runs/m1b-dev` and `m1b-holdout`, 8 samples per arm, against C20, 
 
 Geomean RSS -6.3% over 16 dev cases and -13.0% over 12 holdout cases, with wall -1.4% and -2.1%. The DOM path and explicit-columns cases are unchanged, since neither keeps a sample. Accepted.
 
+### Accepted: M2, parse large files from their handle
+
+Hypothesis (heap capture `tmp/climb/heap/v15-m1/holdout_mesh_dom.txt`): the DOM path reads a whole file into a string and parses the string, so 298 MiB of file bytes stay live beside the 2.6 GiB DOM at its peak, at bind and again at scan. Feeding libxml2 from the file handle through `xmlCtxtReadIO` drops the copy. A read error inside the callback is held and rethrown after the parse, since libxml2 calls it from C frames.
+
+A first version parsed every seekable file this way. It cost `manyfiles/catalog_medium` +4.1% wall and +3.3% CPU, because libxml2 reads 4 KB at a time where the string read was one call. Only files over 16 MiB parse from the handle now, which removed the cost (CPU -0.3%, p=0.57). With every file on the handle path, `make test` passed, so the callback covers the suite's inputs.
+
+Files over the default `maximum_file_size` (16 MiB) stream through SAX, so this helps reads that raise the limit or can't stream (complex XPath, HTML).
+
+Runs `tmp/climb/runs/m2-dev`, `m2-holdout` (unthresholded) and `m2t` (thresholded), 8 samples per arm, against M1, DuckDB 1.5. Guards: fingerprints, 0 mismatches over 69 cases.
+
+| Scenario | wall | CPU | RSS | instructions |
+| --- | ---: | ---: | ---: | ---: |
+| `real/holdout_mesh_dom` | -0.4% | -0.3% | 3395→3081 MB -9.2%* | +0.2% |
+| `nested/catalog_dom_infer` | -4.3%* | -0.8% | 414→382 MB -7.6%* | +0.2% |
+| `manyfiles/catalog_medium` (small files) | +1.9% | -0.3% | +1.8% | +0.2% |
+
+The unthresholded run's RSS gains on the small DOM cases (`records/*` -6%, `nested/org_*` -5%) came from files under 16 MiB, so the threshold gives those up. Accepted.
+
+### Rejected: M3, a short stand-in for long sample text
+
+Hypothesis: inference types sample text only as datetime, number, boolean, or VARCHAR, and a text over 1 KiB with interior whitespace can only be VARCHAR, so replacing it in the sample frees `wiki_pages`' 783 MiB under `xmlSAX2TextNode`. Measured with heap captures before benchmarking: high-water unchanged on `wiki_pages` (1925 MiB) and `holdout_uniprot_sax` (1321 MiB). That 783 MiB is node structs, 4.8M content text nodes at about 120 bytes each. Text bytes come through `xmlStrndup` and total 133 MiB. `wiki_pages` holds all 2656 pages of its file in the sample, 6.5M elements, so what remains is the DOM's per-node cost. Shrinking it needs a smaller sample or inference over something other than libxml2 nodes. Rejected.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
