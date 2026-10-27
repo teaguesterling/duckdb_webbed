@@ -2446,7 +2446,8 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 	}
 
 	auto &struct_children = StructType::GetChildTypes(struct_type);
-	child_list_t<Value> struct_values;
+	vector<Value> struct_values;
+	struct_values.reserve(struct_children.size());
 
 	// Extract each field of the struct
 	for (const auto &field : struct_children) {
@@ -2526,10 +2527,10 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			field_value = Value(field_type);
 		}
 
-		struct_values.push_back(make_pair(field_name, field_value));
+		struct_values.push_back(std::move(field_value));
 	}
 
-	return Value::STRUCT(struct_values);
+	return Value::STRUCT(struct_type, std::move(struct_values));
 }
 
 Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
