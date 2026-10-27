@@ -281,15 +281,14 @@ private:
 
 	static std::string StripNamespacePrefix(const std::string &name);
 
-	// Collect all child elements with a specific name from a parent node into the result vector.
-	// Handles namespace stripping based on options.
-	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name, const XMLSchemaOptions &options,
-	                                 std::vector<xmlNodePtr> &result);
-
-	// Collect the union of distinct child element names across all parent instances, preserving
-	// first-seen document order. Ensures optional fields absent from the first instance are included.
-	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
-	                                     std::vector<std::string> &result);
+	// Child elements across all instances, grouped by name in first-seen order, with each name's most
+	// occurrences in one instance.
+	struct ChildGroups {
+		std::vector<std::string> names;
+		std::vector<std::vector<xmlNodePtr>> nodes;
+		std::vector<int> max_counts;
+	};
+	static ChildGroups GroupChildElements(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options);
 
 	// Attribute names across all instances in first-seen order, empty under attr_mode 'discard'. A name
 	// already taken by a child element is skipped, since a STRUCT can't hold two fields with one name.
