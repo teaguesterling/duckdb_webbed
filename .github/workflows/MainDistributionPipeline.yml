@@ -62,6 +62,16 @@ jobs:
       # EMPTY THIS, and delete duckdb-legacy-build, when no supported user is still
       # on v1.5.5. Leaving it set indefinitely re-opens the blind spot it closes.
       DUCKDB_LEGACY: v1.5.5
+      # THE NEXT PAIR duckdb-next-build tests: a v2.0-cyanoptera commit and the version
+      # DuckDB staged for it (<staging>/<commit>/latest_alpha_version.txt). They must
+      # be a TRUE pair. ci-tools then downloads the prebuilt built as that version, so
+      # the engine and the extension stamp agree, and every log and artifact name says
+      # exactly what was tested. Passing the branch name instead made the stamp differ
+      # from the prebuilt's version, and every `require webbed` failed (2026-10-25).
+      # Both are exempt from the literal scans below AND required by the drift loop,
+      # so neither can go stale silently. BUMP THEM TOGETHER, from the staging file.
+      DUCKDB_NEXT: v2.0.1-alpha50125
+      DUCKDB_NEXT_COMMIT: bb5bdadda4ee51d39b359fe8f4d1960973191175
     steps:
       - uses: actions/checkout@v4
       - name: Compare the submodule pin with the registry default commit
@@ -79,7 +89,7 @@ jobs:
           echo "registry default commit -> ${DUCKDB_COMMIT} (${DUCKDB_VERSION})"
           echo "submodule pin           -> ${have}"
           [ "$DUCKDB_COMMIT" = "$have" ] || { echo "::error::duckdb submodule pin ${have} is not the registry default commit ${DUCKDB_COMMIT}; run: git -C duckdb fetch origin ${DUCKDB_CI_TOOLS} && git -C duckdb checkout ${DUCKDB_COMMIT}"; exit 1; }
-          for want in "duckdb_commit: ${DUCKDB_COMMIT}" "duckdb_version: ${DUCKDB_VERSION}" "ci_tools_version: ${DUCKDB_CI_TOOLS}" "duckdb_version: ${DUCKDB_VARIANT}"; do
+          for want in "duckdb_commit: ${DUCKDB_COMMIT}" "duckdb_version: ${DUCKDB_VERSION}" "ci_tools_version: ${DUCKDB_CI_TOOLS}" "duckdb_version: ${DUCKDB_VARIANT}" "duckdb_version: ${DUCKDB_NEXT}" "duckdb_commit: ${DUCKDB_NEXT_COMMIT}"; do
             c=$(grep -c "${want}$" "$wf" || true)
             [ "$c" -ge 1 ] || { echo "::error::no build job in this workflow uses ${want}; this job's constants have drifted"; exit 1; }
           done
@@ -104,7 +114,8 @@ jobs:
               [ "$v" = "$DUCKDB_VERSION" ] && continue
               [ "$v" = "$DUCKDB_VARIANT" ] && continue
               [ -n "$DUCKDB_LEGACY" ] && [ "$v" = "$DUCKDB_LEGACY" ] && continue
-              echo "::error::line ${lineno}: ${line} -- a DuckDB version literal that is not the shipped ${DUCKDB_VERSION} or ${DUCKDB_VARIANT}: derive it from the shipped version or bump it"
+              [ "$v" = "$DUCKDB_NEXT" ] && continue
+              echo "::error::line ${lineno}: ${line} -- a DuckDB version literal not in the allowed set (${DUCKDB_VERSION}, ${DUCKDB_VARIANT}, ${DUCKDB_LEGACY:-<none>}, ${DUCKDB_NEXT}); derive it from the shipped version or bump it"
               bad=1
             done
           done < <(grep -nE "$ver_re" "$wf" || true)
@@ -117,7 +128,8 @@ jobs:
             printf '%s\n' "$line" | grep -qE '^[[:space:]]*vcpkg_commit:' && continue
             for h in $(printf '%s\n' "$line" | grep -oE '[0-9a-f]{40}' || true); do
               [ "$h" = "$DUCKDB_COMMIT" ] && continue
-              echo "::error::line ${lineno}: ${line} -- a commit literal that is not the registry default ${DUCKDB_COMMIT}: derive it from the pinned commit or bump it"
+              [ "$h" = "$DUCKDB_NEXT_COMMIT" ] && continue
+              echo "::error::line ${lineno}: ${line} -- a commit literal not in the allowed set (${DUCKDB_COMMIT}, ${DUCKDB_NEXT_COMMIT}): derive it from the pinned commit or bump it"
               bad=1
             done
           done < <(grep -nE '[0-9a-f]{40}' "$wf" || true)
@@ -196,8 +208,24 @@ jobs:
   # here is not evidence for the line the registry ships, and red here is a
   # preview, not a verdict.
   #   gh workflow run MainDistributionPipeline.yml --ref <branch>
+  #
+  # COMPILE ONLY, ON PURPOSE. Its signal is "does webbed still build against DuckDB
+  # main", which is the drift that has actually broken this repo (the Identifier type
+  # change, absorbed by duckdb_compat.hpp). It cannot also run the tests:
+  #   - Following main means `duckdb_version: main`. Without duckdb_commit, ci-tools
+  #     uses duckdb_version as both the checkout ref and the version stamp.
+  #   - The engine treats a version without "-dev" as a release and expects the stamp
+  #     NormalizeVersionTag("main") = "vmain" (src/main/extension/extension_install.cpp),
+  #     but the stamp is "main", so every load is refused. Measured: job 121226073100,
+  #     2026-10-25, "ran tests: 0 passed, 130 skipped" with a green check.
+  #   - Splitting the two with `duckdb_commit: main` fails at configure: DuckDB main's
+  #     CMakeLists.txt takes DUCKDB_COMMIT as the commit hash and requires 10-64 hex
+  #     characters ("Invalid DuckDB commit 'main'", job 121265722800).
+  # So the tests are skipped explicitly, and the check name says so, rather than
+  # skipping silently behind a green check. Test coverage of the next DuckDB line is
+  # duckdb-next-build's job.
   duckdb-main-canary:
-    name: Build extension binaries (duckdb main canary)
+    name: Build extension binaries (duckdb main canary, compile only)
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
@@ -206,6 +234,7 @@ jobs:
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
       exclude_archs: 'windows_amd64_mingw'
+      skip_tests: true
 
   # The registry default line: the same commit, version and ci-tools branch as
   # community-extensions' build.yml. Artifacts are named from duckdb_version, so
@@ -235,51 +264,27 @@ jobs:
       # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
       # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
       test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
-  # V2.0 TEST COVERAGE. The job above matches the registry exactly, which is right
-  # for shipping -- but it currently runs ZERO tests. ci-tools @v2.0-cyanoptera
-  # drives the unittest binary through duckdb/scripts/ci/run_tests.py
-  # (duckdb_extension.Makefile:197-202), and under that wrapper `require webbed`
-  # is never satisfied, so all 123 files skip and the step still reports success:
-  #     require webbed: 123
-  #     ran tests: 0 passed, 123 skipped
-  # Filed upstream as duckdb/community-extensions#3086. Measured: ci-tools @main
-  # against the same 2.0-line DuckDB DOES run them -- `ran tests: 123 passed,
-  # 0 skipped` -- so the coverage is recoverable today rather than blocked on
-  # upstream. This job exists only for that signal; it ships nothing.
+  # THE NEXT LINE: a pinned commit on v2.0-cyanoptera, where the next 2.0.x patch is
+  # made, one step past the tag the job above ships. It ships nothing; Linux only.
+  # Fleet shape (duck_tails #73, measured there: "version v2.0.1-alpha50125",
+  # staged prebuilt used, "ran tests: 73 passed, 0 skipped").
   #
-  # Read `ran tests: N passed` in the log, not the check colour: a green Test
-  # step proves nothing while #3086 is open. Delete this job once the job above
-  # reports a non-zero count.
-  duckdb-v2-test-coverage:
-    name: Build extension binaries (v2.0 test coverage)
+  # Pinned to the DUCKDB_NEXT / DUCKDB_NEXT_COMMIT pair in duckdb-pin (see the note
+  # there). The job this replaces passed the branch name as duckdb_version: ci-tools
+  # downloaded the staged prebuilt (v2.0.1-alpha50125) but the extension was stamped
+  # with the branch name, so all 130 files failed `require webbed` from 2026-10-25.
+  duckdb-next-build:
+    name: Build extension binaries (DuckDB next, v2.0-cyanoptera)
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      # BRANCH NAME, deliberately -- not the registry's commit SHA. Measured on
-      # this repo, same ci-tools @main, only this input differing:
-      #   duckdb_version: v2.0-cyanoptera  -> ran tests: 123 passed, 0 skipped
-      #   duckdb_version: b15358c371daf... -> ran tests: 0 passed, 123 skipped
-      # Artifacts are named from duckdb_version, so the SHA form produces
-      # `webbed-b15358c371daf...-extension` and `require webbed` cannot load it;
-      # every test file then skips and the step still reports success. That is
-      # why the registry's own builds show zero tests for every extension.
-      # The cost of the branch form: this tests the cyanoptera tip rather than
-      # the exact commit the registry ships. Real test evidence on the 2.0 line
-      # beats none, and the shipping job above covers the exact commit's COMPILE.
-      duckdb_version: v2.0-cyanoptera
+      # The DUCKDB_NEXT pair from the duckdb-pin job; bump them together.
+      duckdb_version: v2.0.1-alpha50125
+      duckdb_commit: bb5bdadda4ee51d39b359fe8f4d1960973191175
       ci_tools_version: main
       extension_name: webbed
       vcpkg_commit: '68a1c387f660632f2f65cdb7e8cd093a08840e5d'
-      # Linux only: this job is a test signal, not an artifact source.
       exclude_archs: 'windows_amd64;windows_amd64_mingw;osx_amd64;osx_arm64;wasm_mvp;wasm_eh;wasm_threads;linux_arm64'
-
-      # Make a skipped test run FAIL on this leg. `T` is the test pattern ci-tools
-      # hands run_tests.py (`T ?=` in duckdb_extension.Makefile, so an env var wins)
-      # and test_env_variables reaches `make test_release` via ci_phase.py.
-      # `--require webbed` turns "could not load" into `require webbed: FAILED`
-      # instead of a silent skip. Verified on ci-tools main against b15358c371d:
-      # present -> exit 0 "16 passed, 2 skipped"; hidden -> exit 2 "0 passed, 18 failed".
-      # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
-      # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
+      # Same guard as duckdb-stable-build.
       test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
   # The v1.5 variant the registry still builds (scripts/build.py routes v1.5.6 to
   # each descriptor's variegata ref). Gating on PRs: v1.5.6 users are the bulk of
