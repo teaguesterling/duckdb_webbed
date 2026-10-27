@@ -3,6 +3,7 @@
 #include "xml_file_io.hpp"
 #include "duckdb/common/exception.hpp"
 #include <libxml/SAX2.h>
+#include <cctype>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -63,6 +64,43 @@ static void StreamStartElement(void *ctx, const xmlChar *localname, const xmlCha
 	                      attributes);
 }
 
+static bool IsBlankText(xmlNodePtr node) {
+	if (node->type != XML_TEXT_NODE || !node->content) {
+		return false;
+	}
+	for (const xmlChar *c = node->content; *c; c++) {
+		if (!std::isspace(*c)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Frees indentation between child elements in a kept inference sample, which inference never reads.
+// Mixed content keeps its whitespace.
+static void DropFormattingText(xmlNodePtr node) {
+	bool has_element = false;
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			has_element = true;
+		} else if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && !IsBlankText(child)) {
+			return;
+		}
+	}
+	if (!has_element) {
+		return;
+	}
+	xmlNodePtr child = node->children;
+	while (child) {
+		xmlNodePtr next = child->next;
+		if (IsBlankText(child)) {
+			xmlUnlinkNode(child);
+			xmlFreeNode(child);
+		}
+		child = next;
+	}
+}
+
 static void StreamEndElement(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI) {
 	auto &s = StreamState(ctx);
 	if (s.stopped) {
@@ -71,6 +109,9 @@ static void StreamEndElement(void *ctx, const xmlChar *localname, const xmlChar 
 	auto parser = static_cast<xmlParserCtxtPtr>(ctx);
 	xmlNodePtr node = parser->node;
 	xmlSAX2EndElementNs(ctx, localname, prefix, URI);
+	if (s.keep_records && s.record_depth != 0 && node) {
+		DropFormattingText(node);
+	}
 	bool holds_record = s.holds_record.back();
 	s.holds_record.pop_back();
 
