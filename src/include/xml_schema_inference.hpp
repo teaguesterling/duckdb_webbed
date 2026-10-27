@@ -306,8 +306,10 @@ private:
 	// list inference used.
 	static void WriteNodeValue(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
 	                           const XMLSchemaOptions &options, const std::string &datetime_format = "");
-	static Value ExtractScalarFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                   const std::string &datetime_format = "");
+	static void WriteScalarFromNode(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+	                                const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out, idx_t row,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format);
 	static void WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
 	                                const XMLSchemaOptions &options, const std::string &datetime_format);
 	static void WriteListFromNode(xmlNodePtr node, const LogicalType &list_type, Vector &out, idx_t row,

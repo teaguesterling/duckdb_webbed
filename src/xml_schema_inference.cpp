@@ -1872,8 +1872,9 @@ idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLCo
 			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
 				xmlFree(attr_value);
+				WriteConverted(str_value, column.type, column_out, row, options, column.winning_datetime_format);
+				written = true;
 			} else {
 				value = Value(); // NULL
 			}
@@ -1960,7 +1961,8 @@ idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLCo
 
 			// Only convert text value if we haven't already extracted a structured value
 			if (!written && value.IsNull()) {
-				value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
+				WriteConverted(element_text, column.type, column_out, row, options, column.winning_datetime_format);
+				written = true;
 			}
 		}
 
@@ -2053,8 +2055,9 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
-			value = ConvertToValue(str_value, column_type, options, col_fmt);
 			xmlFree(attr_value);
+			WriteConverted(str_value, column_type, column_out, row, options, col_fmt);
+			written = true;
 		} else {
 			// Special handling for LIST columns - collect ALL matching children
 			if (column_type.id() == LogicalTypeId::LIST) {
@@ -2366,15 +2369,28 @@ void XMLSchemaInference::WriteNodeValue(xmlNodePtr node, const LogicalType &targ
 		WriteStructFromNode(node, target_type, out, row, options, datetime_format);
 		return;
 	default:
-		out.SetValue(row, ExtractScalarFromNode(node, target_type, options, datetime_format));
+		WriteScalarFromNode(node, target_type, out, row, options, datetime_format);
 	}
 }
 
-Value XMLSchemaInference::ExtractScalarFromNode(xmlNodePtr node, const LogicalType &target_type,
-                                                const XMLSchemaOptions &options, const std::string &datetime_format) {
-	if (!node) {
-		return Value();
+void XMLSchemaInference::WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out,
+                                        idx_t row, const XMLSchemaOptions &options,
+                                        const std::string &datetime_format) {
+	// A plain VARCHAR needs no conversion, so it skips the Value. Aliased VARCHARs such as XML keep the cast.
+	if (target_type != LogicalType::VARCHAR || out.GetType() != LogicalType::VARCHAR) {
+		out.SetValue(row, ConvertToValue(text, target_type, options, datetime_format));
+		return;
 	}
+	if (text.empty() || IsNullString(text, options)) {
+		FlatVector::SetNull(out, row, true);
+		return;
+	}
+	CompatFlatData<string_t>(out)[row] = StringVector::AddString(out, text);
+	CompatFlatValidity(out).SetValid(row);
+}
+
+void XMLSchemaInference::WriteScalarFromNode(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+                                             const XMLSchemaOptions &options, const std::string &datetime_format) {
 	// For primitive types, extract text content and convert.
 	// When target is VARCHAR and the node has element children (e.g., the column was widened
 	// from STRUCT to VARCHAR by union_by_name), serialize the XML fragment instead of
@@ -2401,25 +2417,21 @@ Value XMLSchemaInference::ExtractScalarFromNode(xmlNodePtr node, const LogicalTy
 					xmlNodeDump(buffer, child->doc, child, 0, 0);
 				}
 				const xmlChar *content = xmlBufferContent(buffer);
-				Value result;
-				if (content) {
-					std::string fragment = (const char *)content;
-					result = ConvertToValue(fragment, target_type, options, datetime_format);
-				} else {
-					result = Value(); // NULL
-				}
+				std::string fragment = content ? (const char *)content : "";
 				xmlBufferFree(buffer);
-				return result;
+				WriteConverted(fragment, target_type, out, row, options, datetime_format);
+				return;
 			}
 		}
 	}
 	xmlChar *text_content = xmlNodeGetContent(node);
-	if (text_content) {
-		std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
-		xmlFree(text_content);
-		return ConvertToValue(text, target_type, options, datetime_format);
+	if (!text_content) {
+		FlatVector::SetNull(out, row, true);
+		return;
 	}
-	return Value(); // NULL value
+	std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
+	xmlFree(text_content);
+	WriteConverted(text, target_type, out, row, options, datetime_format);
 }
 
 // True when the node has an attribute or child element named name (child elements match case-insensitively,
@@ -2478,7 +2490,7 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 			if (content) {
 				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
 				if (!text.empty()) {
-					field_out.SetValue(row, ConvertToValue(text, field_type, options, datetime_format));
+					WriteConverted(text, field_type, field_out, row, options, datetime_format);
 					found = true;
 				}
 				xmlFree(content);
@@ -2489,7 +2501,7 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 		                                   ? nullptr
 		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
 			std::string str_value = (const char *)attr_value;
-			field_out.SetValue(row, ConvertToValue(str_value, field_type, options, datetime_format));
+			WriteConverted(str_value, field_type, field_out, row, options, datetime_format);
 			xmlFree(attr_value);
 			found = true;
 		} else {
