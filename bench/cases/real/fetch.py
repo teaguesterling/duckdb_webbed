@@ -12,9 +12,13 @@ Large single-file sources stream through decompression up to a byte budget,
 then stop after the next closing record tag and close the root. That leaves a
 well-formed prefix of the release and downloads only what the prefix needs.
 
+The xl datasets cut the same sources about ten times larger, plus an
+OpenStreetMap extract. Fetch them by name: they are skipped by default.
+
 Common Crawl pages may not be redistributed. Keep the data root private.
 """
 
+import bz2
 import contextlib
 import gzip
 import hashlib
@@ -70,10 +74,11 @@ def download(url, out):
     os.replace(out + ".tmp", out)
 
 
-def gunzip_stream(url):
-    """Yield decompressed chunks of a remote gzip file, across concatenated members."""
+def decompress_stream(url):
+    """Yield decompressed chunks of a remote gzip or bzip2 file, across concatenated members."""
+    new = bz2.BZ2Decompressor if url.endswith(".bz2") else lambda: zlib.decompressobj(wbits=31)
     with stream(url) as resp:
-        d = zlib.decompressobj(wbits=31)
+        d = new()
         while True:
             block = resp.read(CHUNK)
             if not block:
@@ -83,7 +88,7 @@ def gunzip_stream(url):
                 if not d.eof:
                     break
                 block = d.unused_data
-                d = zlib.decompressobj(wbits=31)
+                d = new()
 
 
 def cut(url, out, record, root, budget):
@@ -92,7 +97,7 @@ def cut(url, out, record, root, budget):
     written = 0
     tail = b""
     with open(out + ".tmp", "wb") as f:
-        for chunk in gunzip_stream(url):
+        for chunk in decompress_stream(url):
             buf = tail + chunk
             if written + len(buf) >= budget:
                 pos = buf.find(end, max(0, budget - written - len(end)))
@@ -112,21 +117,27 @@ def cut(url, out, record, root, budget):
     os.replace(out + ".tmp", out)
 
 
-def fetch_clinvar(dest):
+def fetch_clinvar(dest, budget=200 * MB):
     cut("https://ftp.ncbi.nlm.nih.gov/pub/clinvar/xml/ClinVarVCVRelease_2026-10.xml.gz",
-        os.path.join(dest, "vcv.xml"), "VariationArchive", "ClinVarVariationRelease", 200 * MB)
+        os.path.join(dest, "vcv.xml"), "VariationArchive", "ClinVarVariationRelease", budget)
 
 
-def fetch_uniprot(dest):
+def fetch_uniprot(dest, budget=300 * MB):
     # current_release moves on each UniProt release. A moved release changes the pin.
     cut("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.xml.gz",
-        os.path.join(dest, "sprot.xml"), "entry", "uniprot", 300 * MB)
+        os.path.join(dest, "sprot.xml"), "entry", "uniprot", budget)
 
 
-def fetch_wiki(dest):
+def fetch_wiki(dest, budget=300 * MB):
     # Dated runs rotate off dumps.wikimedia.org after a few months.
     cut("https://dumps.wikimedia.org/simplewiki/20260901/simplewiki-20260901-stub-meta-history.xml.gz",
-        os.path.join(dest, "stub_history.xml"), "page", "mediawiki", 300 * MB)
+        os.path.join(dest, "stub_history.xml"), "page", "mediawiki", budget)
+
+
+def fetch_osm(dest):
+    # The planet directory keeps each month's first dump. The cut streams only its prefix.
+    cut("https://planet.openstreetmap.org/planet/2026/planet-261005.osm.bz2",
+        os.path.join(dest, "planet.osm"), "node", "osm", 3000 * MB)
 
 
 def fetch_pubmed(dest):
@@ -206,14 +217,19 @@ DATASETS = {
     "cldr": (fetch_cldr, "a7638133ac808614579a05e6c3865fe3680bdfdc8cd97b8756884b67a4165987"),
     "mesh": (fetch_mesh, "dcb6d465ed22dc28ed7d6b41be38c08184cc08750e7a3f94237ae62c0c61472c"),
     "cc": (fetch_cc, "4c8d600b503f7ccc03fae388ca09c09512414cd3edbfd3af7d33c32b8cd98a01"),
+    "clinvar_xl": (lambda dest: fetch_clinvar(dest, 3000 * MB), ""),
+    "uniprot_xl": (lambda dest: fetch_uniprot(dest, 3000 * MB), ""),
+    "wiki_xl": (lambda dest: fetch_wiki(dest, 3000 * MB), ""),
+    "osm": (fetch_osm, ""),
 }
+XL = {"clinvar_xl", "uniprot_xl", "wiki_xl", "osm"}
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     root = sys.argv[1]
-    names = sys.argv[2:] or list(DATASETS)
+    names = sys.argv[2:] or [n for n in DATASETS if n not in XL]
     failed = False
     for name in names:
         fetch, pin = DATASETS[name]
