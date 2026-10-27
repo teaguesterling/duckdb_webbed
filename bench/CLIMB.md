@@ -592,6 +592,12 @@ Run `tmp/climb/c21`, 8 samples per arm, against M2, DuckDB 1.5. Guards: fingerpr
 
 No case regressed. Flat scalar records gain least (`records/*` -1% to -10%), since their scalars still pass through `Value`. Accepted.
 
+### Rejected: C22, look up interned names by pointer during inference
+
+Hypothesis (`sample` profile of C21): `InferColumnType` is 7–15% of CPU on the real SAX cases. Inside it, `GroupChildElements` hashes each child's name string (5% on PubMed) and `CollectAttributeNames` builds a `std::string` and a case-insensitive hash per attribute (5.5% on ClinVar). libxml2 interns names in the parser dictionary, so a map keyed on the name pointer in front of each lookup skips the string work on repeats.
+
+Run `tmp/climb/c22`, 8 samples per arm, against C21. Instructions fell 1–3% on every inference-heavy case (p<0.05), but wall moved -1.1% geomean over 39 cases. The largest gains were within noise: `holdout_mesh_dom` -3.9%, `holdout_uniprot_sax` -4.1% (p=0.22), `clinvar_sax` -3.3% (p=0.11). Too little for a second index in each lookup. Rejected.
+
 ### Accepted: C23, write plain VARCHAR text without a Value
 
 Hypothesis (`sample` profile of C21): scalar fields still build a `Value`, which `SetValue` then copies into the vector. On `wiki_revisions`, `Value(std::string)`, `~Value`, and `SetValue` together are about 10% of CPU. A plain VARCHAR needs no conversion, so its text can go straight to `StringVector::AddString`. Typed and aliased targets (such as XML) keep `ConvertToValue` and `SetValue`, so their casts and error routing are unchanged.
@@ -637,12 +643,6 @@ RSS unchanged. No case regressed significantly. Accepted.
 Hypothesis (`sample` profile of C24): `xmlGetProp` copies each attribute value through `xmlNodeListGetString`, about 2% of CPU on ClinVar. A value held in one text node can be read from it directly, falling back to `xmlGetProp` for entity references and DTD defaults.
 
 Run `tmp/climb/c25`, 8 samples per arm, against C24. Wall moved -1.0% geomean over 40 cases (CPU -1.0%). Only `holdout_events_attr_prefixed` (-5.7%) and `holdout_uniprot_sax` (-10.8% wall on a noisy base, -4.1% CPU) cleared significance. Too little for a second attribute lookup with its own DTD rules. Rejected.
-
-### Rejected: C22, look up interned names by pointer during inference
-
-Hypothesis (`sample` profile of C21): `InferColumnType` is 7–15% of CPU on the real SAX cases. Inside it, `GroupChildElements` hashes each child's name string (5% on PubMed) and `CollectAttributeNames` builds a `std::string` and a case-insensitive hash per attribute (5.5% on ClinVar). libxml2 interns names in the parser dictionary, so a map keyed on the name pointer in front of each lookup skips the string work on repeats.
-
-Run `tmp/climb/c22`, 8 samples per arm, against C21. Instructions fell 1–3% on every inference-heavy case (p<0.05), but wall moved -1.1% geomean over 39 cases. The largest gains were within noise: `holdout_mesh_dom` -3.9%, `holdout_uniprot_sax` -4.1% (p=0.22), `clinvar_sax` -3.3% (p=0.11). Too little for a second index in each lookup. Rejected.
 
 ### Set Aside Without Measuring
 
