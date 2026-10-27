@@ -670,6 +670,26 @@ Hypothesis (`sample` profile of C26): the two dictionary locks C26 keeps, the do
 
 Run `tmp/climb/runs/c27`, 8 samples per arm, against C26 over the scalar family and six small-file DOM cases. `validity_stats` -10.8%*, `minify_pretty` -6.1%*, `to_json` -5.6%* wall, but the holdout scalar cases moved -1% to +5% without significance, and instructions rose 3 to 9% on every scalar case from the copied names. Geomean wall -1.9%, CPU -1.6%. Rejected.
 
+### Accepted: C28, check well-formedness without building a tree
+
+Hypothesis (`sample` profile of C26): `IsValidXML` is 58% of `scalar/validity_stats`, nearly all of it a full DOM parse whose nodes are freed unread. `xml_valid`, `xml_well_formed`, and `parse_xml`'s check need only the parser's verdict. A second per-thread context keeps libxml2's document and DTD callbacks, so declared entities still resolve, and drops the element, text, comment, and PI callbacks. Both element callback pairs must go: `xmlSAXVersion` also installs the SAX1 `startElement`, and leaving it set drops the parser into SAX1 mode, which skips namespace processing.
+
+Differential check against C26: `xml_valid` over 42,114 documents agrees on every one (44 hand-written edge cases covering DTD entities, undeclared entities, undefined prefixes, namespaced duplicate attributes, CDATA, comments, PIs, and encodings; every `test/xml` file, plus each truncated at 22 points; 40,000 bench documents with one byte inserted or removed). Guards: fingerprints, 0 mismatches over 68 cases. ThreadSanitizer is clean on the suite and an 8-thread stress with entities.
+
+Run `tmp/climb/runs/c28`, 8 samples per arm, against C26.
+
+| Scenario | wall | CPU | instructions |
+| --- | ---: | ---: | ---: |
+| `scalar/validity_stats` | -32.6%* | -30.9%* | -24.2%* |
+| `scalar/parse_xml_batch` | -11.9%* | -15.4%* | -16.8%* |
+| `scalar/extract_text_xpaths` | -9.9%* | -8.0%* | -0.7% |
+| `scalar/extract_elements_attributes` | -7.7%* | -2.0% | -0.9% |
+| `scalar/to_json` | -4.1%* | -3.2%* | -1.7% |
+| `nested/catalog_dom_infer` | -0.0% | -0.0% | +0.0% |
+| geomean, 12 cases | -6.5% | -6.1% | -4.4% |
+
+RSS unchanged. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:

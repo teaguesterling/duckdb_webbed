@@ -239,6 +239,10 @@ XMLDocRAII::XMLDocRAII(xmlDocPtr adopted) : doc(adopted) {
 struct ThreadParserContext {
 	static constexpr size_t MAX_DICT_ENTRIES = 1 << 16;
 	xmlParserCtxtPtr ctxt = nullptr;
+	bool build_tree;
+
+	explicit ThreadParserContext(bool build_tree) : build_tree(build_tree) {
+	}
 
 	~ThreadParserContext() {
 		Discard();
@@ -248,9 +252,26 @@ struct ThreadParserContext {
 			Discard();
 		}
 		if (!ctxt) {
-			ctxt = xmlNewParserCtxt();
+			ctxt = build_tree ? xmlNewParserCtxt() : NewCheckOnlyContext();
 		}
 		return ctxt;
+	}
+	// Keeps the document and DTD callbacks, so declared entities still resolve, and drops the ones that build
+	// element, text, and comment nodes. Well-formedness checks run in the parser regardless of callbacks.
+	static xmlParserCtxtPtr NewCheckOnlyContext() {
+		xmlSAXHandler sax;
+		xmlSAXVersion(&sax, 2);
+		sax.startElementNs = nullptr;
+		sax.endElementNs = nullptr;
+		sax.startElement = nullptr;
+		sax.endElement = nullptr;
+		sax.characters = nullptr;
+		sax.ignorableWhitespace = nullptr;
+		sax.cdataBlock = nullptr;
+		sax.comment = nullptr;
+		sax.processingInstruction = nullptr;
+		sax.reference = nullptr;
+		return xmlNewSAXParserCtxt(&sax, nullptr);
 	}
 	void Discard() {
 		if (ctxt) {
@@ -260,7 +281,8 @@ struct ThreadParserContext {
 	}
 };
 
-static thread_local ThreadParserContext thread_parser_context;
+static thread_local ThreadParserContext thread_parser_context(true);
+static thread_local ThreadParserContext thread_check_context(false);
 
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
@@ -450,8 +472,23 @@ bool XMLUtils::IsValidXML(const std::string &xml_str) {
 			return false;
 		}
 	}
-	XMLDocRAII xml_doc(xml_str);
-	return xml_doc.IsValid();
+	XMLUtils::EnsureSecureParsing();
+	xmlParserCtxtPtr parser_ctx = thread_check_context.Acquire();
+	if (!parser_ctx) {
+		return false;
+	}
+	XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+	xmlDocPtr checked = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr,
+	                                  nullptr, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+	if (!checked) {
+		const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
+		if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
+			thread_check_context.Discard();
+		}
+		return false;
+	}
+	xmlFreeDoc(checked);
+	return true;
 }
 
 bool XMLUtils::IsWellFormedXML(const std::string &xml_str) {
