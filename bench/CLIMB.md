@@ -644,6 +644,26 @@ Hypothesis (`sample` profile of C24): `xmlGetProp` copies each attribute value t
 
 Run `tmp/climb/c25`, 8 samples per arm, against C24. Wall moved -1.0% geomean over 40 cases (CPU -1.0%). Only `holdout_events_attr_prefixed` (-5.7%) and `holdout_uniprot_sax` (-10.8% wall on a noisy base, -4.1% CPU) cleared significance. Too little for a second attribute lookup with its own DTD rules. Rejected.
 
+### Accepted: C26, one parser context per thread for in-memory parses
+
+Hypothesis: the comparison against main showed `scalar/extract_text_xpaths` +18% and `scalar/validity_stats` +23% wall. Bisecting by build put the step at C18, which changes nothing on the scalar paths. Single-threaded, the arms before and after C18 tie (7.14 s and 7.15 s minimum). libxml2 changes every dictionary reference count under one process-wide mutex, and each in-memory parse takes it three or four times: context dictionary create and free, plus the document's reference and release. Threads waited on it for 18% of sampled thread time before C18 and 26% after, so C18 only shifted the timing. Reusing one parser context per thread in `XMLDocRAII(const std::string &)` leaves two locked operations per parse and skips the context allocation. Documents share the context's dictionary, so they must be freed on the parsing thread, which holds for every caller (all function-local). The context is replaced when its dictionary passes 65,536 names, and after an allocation failure.
+
+Run `tmp/climb/runs/c26`, 8 samples per arm, against the rebased head. Guards: fingerprints, 0 mismatches over the scalar family. A parallel stress over 2 million unique element names returns identical results.
+
+| Scenario | wall | CPU | instructions |
+| --- | ---: | ---: | ---: |
+| `scalar/extract_text_xpaths` | -21.6%* | -19.7%* | -6.6%* |
+| `scalar/minify_pretty` | -18.7%* | -16.0%* | -5.6%* |
+| `scalar/validity_stats` | -17.8%* | -18.7%* | -5.0%* |
+| `scalar/to_json` | -15.5%* | -16.7%* | -7.8%* |
+| `scalar/holdout_extract_text_xpaths` | -12.6%* | -13.0%* | -3.4%* |
+| `scalar/extract_elements_attributes` | -11.3%* | -10.0%* | -1.8% |
+| `scalar/parse_xml_batch` | -3.4%* | -7.3%* | -2.2% |
+| `nested/catalog_dom_infer` | +1.3% | +1.1% | +0.0% |
+| geomean, 12 cases | -10.5% | -10.6% | -3.1% |
+
+RSS unchanged. Accepted.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:

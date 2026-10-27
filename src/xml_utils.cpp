@@ -233,6 +233,35 @@ XMLDocRAII::XMLDocRAII(xmlDocPtr adopted) : doc(adopted) {
 	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
+// libxml2 changes every dictionary reference count under one process-wide mutex, and a fresh parser
+// context creates and frees its own dictionary. Reusing one context per thread drops those per-parse
+// locks. Its documents share its dictionary, so they must be freed on the thread that parsed them.
+struct ThreadParserContext {
+	static constexpr size_t MAX_DICT_ENTRIES = 1 << 16;
+	xmlParserCtxtPtr ctxt = nullptr;
+
+	~ThreadParserContext() {
+		Discard();
+	}
+	xmlParserCtxtPtr Acquire() {
+		if (ctxt && xmlDictSize(xmlCtxtGetDict(ctxt)) > MAX_DICT_ENTRIES) {
+			Discard();
+		}
+		if (!ctxt) {
+			ctxt = xmlNewParserCtxt();
+		}
+		return ctxt;
+	}
+	void Discard() {
+		if (ctxt) {
+			xmlFreeParserCtxt(ctxt);
+			ctxt = nullptr;
+		}
+	}
+};
+
+static thread_local ThreadParserContext thread_parser_context;
+
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
 	// XML_PARSE_NOERROR: suppress error reports to stderr
@@ -243,7 +272,7 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	//   NONET is belt-and-suspenders for the network case.
 	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
 	XMLUtils::EnsureSecureParsing();
-	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+	xmlParserCtxtPtr parser_ctx = thread_parser_context.Acquire();
 	if (parser_ctx) {
 		XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
 		doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
@@ -251,14 +280,13 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
-			// Capture whether the failure was an allocation failure rather than malformed
-			// input. The error object belongs to the parser context, so read it before free.
+			// Capture whether the failure was an allocation failure rather than malformed input.
 			const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
 			if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
 				resource_error = true;
+				thread_parser_context.Discard();
 			}
 		}
-		xmlFreeParserCtxt(parser_ctx);
 	} else {
 		// The parser context itself could not be allocated, which only happens when
 		// libxml2 is out of memory. Treat it as a resource failure, not malformed input.
