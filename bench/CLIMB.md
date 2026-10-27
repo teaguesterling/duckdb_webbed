@@ -664,6 +664,12 @@ Run `tmp/climb/runs/c26`, 8 samples per arm, against the rebased head. Guards: f
 
 RSS unchanged. Accepted.
 
+### Rejected: C27, small in-memory documents without the shared dictionary
+
+Hypothesis (`sample` profile of C26): the two dictionary locks C26 keeps, the document's reference in `xmlSAX2StartDocument` and its release in `xmlFreeDoc`, still wait for 22% of sampled thread time on `scalar/extract_text_xpaths` and 19% on `validity_stats`. `XML_PARSE_NODICT` leaves the document without a dictionary, so neither lock runs. C4 rejected it for large documents, where a `strdup` per name costs more than the lock, so this applies it only below 64 KiB.
+
+Run `tmp/climb/runs/c27`, 8 samples per arm, against C26 over the scalar family and six small-file DOM cases. `validity_stats` -10.8%*, `minify_pretty` -6.1%*, `to_json` -5.6%* wall, but the holdout scalar cases moved -1% to +5% without significance, and instructions rose 3 to 9% on every scalar case from the copied names. Geomean wall -1.9%, CPU -1.6%. Rejected.
+
 ### Set Aside Without Measuring
 
 Leads from the `acc8` and `acc14` profiles that were read and not turned into candidates:
