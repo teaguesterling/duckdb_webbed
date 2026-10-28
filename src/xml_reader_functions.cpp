@@ -192,8 +192,8 @@ static void ParseForceVarcharParameter(const Value &val, const char *function_na
 			names.insert(child.ToString());
 		}
 	} else {
-		throw BinderException("%s \"force_varchar\" parameter must be VARCHAR or LIST(VARCHAR), got: %s",
-		                      function_name, val.type().ToString());
+		throw BinderException("%s \"force_varchar\" parameter must be VARCHAR or LIST(VARCHAR), got: %s", function_name,
+		                      val.type().ToString());
 	}
 }
 
@@ -2400,7 +2400,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_single, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
-	                                           {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                           {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"streaming", LogicalType::BOOLEAN},
@@ -2441,7 +2441,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_array, {
 	                                          {"columns", LogicalType::ANY},
 	                                          {"all_varchar", LogicalType::BOOLEAN},
-	                                          {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                          {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                          {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                          {"nullstr", LogicalType::ANY},
 	                                          {"streaming", LogicalType::BOOLEAN},
@@ -2497,7 +2497,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_single, {
 	                                            {"columns", LogicalType::ANY},
 	                                            {"all_varchar", LogicalType::BOOLEAN},
-	                                            {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                            {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                            {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                            {"nullstr", LogicalType::ANY},
 	                                            {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2537,7 +2537,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_array, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
-	                                           {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                           {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2675,7 +2675,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                     {"sample_size", LogicalType::INTEGER},
 	                                     {"unnest_as", LogicalType::VARCHAR},
 	                                     {"all_varchar", LogicalType::BOOLEAN},
-	                                     {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                     {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                     {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                     {"nullstr", LogicalType::ANY},
 	                                     {"columns", LogicalType::ANY},
@@ -2715,7 +2715,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                      {"sample_size", LogicalType::INTEGER},
 	                                      {"unnest_as", LogicalType::VARCHAR},
 	                                      {"all_varchar", LogicalType::BOOLEAN},
-	                                      {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
+	                                      {"force_varchar", LogicalType::ANY},   // VARCHAR or LIST(VARCHAR)
 	                                      {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                      {"nullstr", LogicalType::ANY},
 	                                      {"columns", LogicalType::ANY},
