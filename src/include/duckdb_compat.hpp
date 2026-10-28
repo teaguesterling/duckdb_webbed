@@ -377,8 +377,7 @@ inline unique_ptr<ParsedExpression> CompatConstant(Value value) {
 template <class FV, class = void>
 struct CompatHasGetDataMutable : std::false_type {};
 template <class FV>
-struct CompatHasGetDataMutable<FV, decltype(void(FV::GetDataMutable(std::declval<Vector &>())))> : std::true_type {
-};
+struct CompatHasGetDataMutable<FV, decltype(void(FV::GetDataMutable(std::declval<Vector &>())))> : std::true_type {};
 
 template <class T, class FV>
 inline T *CompatFlatDataImpl(Vector &vector, std::true_type) {
