@@ -18,6 +18,8 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/parallel/task_executor.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/main/config.hpp"
 
 #include <algorithm>
@@ -352,14 +354,21 @@ private:
 	FileInferenceState &state;
 };
 
+// A parsed DOM runs to several times its file's size, and libxml2 allocates it outside the buffer manager.
+static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 16;
+
 // Files parsed at once during bind-time inference: the xml_inference_threads setting when set,
-// otherwise every file, which the scheduler bounds by `threads`.
-static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count) {
-	Value limit;
-	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, limit) && !limit.IsNull()) {
-		return MinValue<idx_t>(limit.GetValue<uint64_t>(), file_count);
+// otherwise `threads`, lowered so that a DOM per parse at maximum_file_size fits in memory_limit.
+static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t max_file_size) {
+	idx_t limit = NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
+	Value setting;
+	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, setting) && !setting.IsNull()) {
+		limit = setting.GetValue<uint64_t>();
+	} else {
+		auto per_file = MaxValue<idx_t>(max_file_size, 1) * INFERENCE_BYTES_PER_FILE_BYTE;
+		limit = MinValue<idx_t>(limit, BufferManager::GetBufferManager(context).GetMaxMemory() / per_file);
 	}
-	return file_count;
+	return MaxValue<idx_t>(MinValue<idx_t>(limit, file_count), 1);
 }
 
 // Infer every file's columns on the DuckDB task scheduler, so at most `threads` files, or
@@ -372,7 +381,7 @@ static std::vector<FileInferenceResult> InferFilesColumns(ClientContext &context
                                                           const XMLSchemaOptions &schema_options, ParseMode mode) {
 	FileInferenceState state(fs, files, bind_data, schema_options, mode);
 	TaskExecutor executor(context);
-	auto task_count = InferenceTaskCount(context, files.size());
+	auto task_count = InferenceTaskCount(context, files.size(), bind_data.max_file_size);
 	for (idx_t task_idx = 0; task_idx < task_count; task_idx++) {
 		executor.ScheduleTask(make_uniq<FileInferenceTask>(executor, state));
 	}
@@ -2209,10 +2218,11 @@ static void CheckInferenceThreads(ClientContext &context, SetScope scope, Value 
 
 void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());
-	config.AddExtensionOption(INFERENCE_THREADS_SETTING,
-	                          "Maximum number of files read_xml and read_html parse at once while inferring a "
-	                          "schema at bind. Unset uses all threads. Lower it to cap bind-time memory.",
-	                          LogicalType::UBIGINT, Value(), CheckInferenceThreads);
+	config.AddExtensionOption(
+	    INFERENCE_THREADS_SETTING,
+	    "Maximum number of files read_xml and read_html parse at once while inferring a "
+	    "schema at bind. Unset uses the threads setting, lowered to fit memory_limit at maximum_file_size.",
+	    LogicalType::UBIGINT, Value(), CheckInferenceThreads);
 
 	// Register read_xml_objects table function (supports both VARCHAR and VARCHAR[])
 	TableFunctionSet read_xml_objects_set("read_xml_objects");
