@@ -1803,7 +1803,11 @@ bool XMLSchemaInference::IsXsiNilTrue(const char *value) {
 }
 
 void XMLSchemaInference::ApplyXsiNil(xmlDocPtr doc) {
-	xmlNodePtr root = doc ? xmlDocGetRootElement(doc) : nullptr;
+	// The HTML parser never binds namespaces, so no attribute can be in the XSI namespace
+	if (!doc || doc->type == XML_HTML_DOCUMENT_NODE) {
+		return;
+	}
+	xmlNodePtr root = xmlDocGetRootElement(doc);
 	xmlNodePtr node = root;
 	while (node) {
 		bool descend = true;
