@@ -2,6 +2,7 @@
 #include "xml_utils.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
+#include <cstring>
 #include <sstream>
 #include <unordered_set>
 
@@ -159,6 +160,20 @@ static std::string SAXAttributeValue(const xmlChar **attributes, int i) {
 	return value;
 }
 
+// Index of the element's xsi:nil attribute, or -1. Matched by namespace URI because the prefix is
+// arbitrary and nested fragments are reconstructed without attribute prefixes.
+static int FindXsiNilAttribute(int nb_attributes, const xmlChar **attributes) {
+	for (int i = 0; i < nb_attributes; i++) {
+		const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
+		const char *attr_uri = reinterpret_cast<const char *>(attributes[i * 5 + 2]);
+		if (attr_uri && strcmp(attr_localname, "nil") == 0 &&
+		    strcmp(attr_uri, XMLSchemaInference::XSI_NAMESPACE_URI) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 // ─── Helper: check if element matches the record tag ────────────────────────
 
 static bool MatchesRecordTag(const std::string &element_name, const std::string &record_tag) {
@@ -198,6 +213,15 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 	acc->current_depth++;
 	acc->element_stack.push_back(name);
 
+	if (acc->nil_depth > 0) {
+		// Inside an xsi:nil element: its content is discarded
+		return;
+	}
+	int nil_attr = FindXsiNilAttribute(nb_attributes, attributes);
+	if (nil_attr >= 0 && XMLSchemaInference::IsXsiNilTrue(SAXAttributeValue(attributes, nil_attr).c_str())) {
+		acc->nil_depth = acc->current_depth;
+	}
+
 	// In keep mode, record each prefixed namespace declaration so reparsed nested-XML fragments can
 	// resolve their prefixes. Skip the default namespace (null prefix): extraction matches by local
 	// name, so only prefixes need resolving.
@@ -233,6 +257,9 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			// Extract attributes from the record element itself, unless attr_mode='discard'
 			if (!sax_ctx->discard_attrs) {
 				for (int i = 0; i < nb_attributes; i++) {
+					if (i == nil_attr) {
+						continue;
+					}
 					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
 
@@ -271,6 +298,9 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 			// attr_mode='discard' to match DOM, where attributes are dropped entirely.
 			if (!sax_ctx->discard_attrs) {
 				for (int i = 0; i < nb_attributes; i++) {
+					if (i == nil_attr) {
+						continue;
+					}
 					const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 					const char *attr_prefix_ptr = reinterpret_cast<const char *>(attributes[i * 5 + 1]);
 
@@ -295,6 +325,9 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 
 			// Add attributes to raw XML (escape attribute values)
 			for (int i = 0; i < nb_attributes; i++) {
+				if (i == nil_attr) {
+					continue;
+				}
 				const char *attr_localname = reinterpret_cast<const char *>(attributes[i * 5]);
 				std::string attr_value = SAXAttributeValue(attributes, i);
 				acc->nested_xml += " " + std::string(attr_localname) + "=\"" + XmlEscapeAttr(attr_value) + "\"";
@@ -314,6 +347,16 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
 			acc->element_stack.pop_back();
 		}
 		return;
+	}
+
+	if (acc->nil_depth > 0) {
+		if (acc->current_depth > acc->nil_depth) {
+			// Closing an element inside an xsi:nil element, whose start was never recorded
+			acc->current_depth--;
+			acc->element_stack.pop_back();
+			return;
+		}
+		acc->nil_depth = 0;
 	}
 
 	std::string name = ResolveElementName(localname, prefix, acc->namespace_mode);
@@ -393,7 +436,7 @@ void SAXCharacters(void *ctx, const xmlChar *ch, int len) {
 	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
 	auto *acc = sax_ctx->accumulator;
 
-	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD) {
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || acc->nil_depth > 0) {
 		return;
 	}
 
@@ -421,7 +464,7 @@ void SAXCdataBlock(void *ctx, const xmlChar *ch, int len) {
 	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
 	auto *acc = sax_ctx->accumulator;
 
-	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD) {
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || acc->nil_depth > 0) {
 		return;
 	}
 
@@ -455,7 +498,7 @@ void SAXComment(void *ctx, const xmlChar *value) {
 	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
 	auto *acc = sax_ctx->accumulator;
 
-	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || !value) {
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || acc->nil_depth > 0 || !value) {
 		return;
 	}
 	if (acc->current_depth - acc->record_depth <= 1) {
@@ -470,7 +513,7 @@ void SAXProcessingInstruction(void *ctx, const xmlChar *target, const xmlChar *d
 	auto *sax_ctx = static_cast<SAXCallbackContext *>(ctx);
 	auto *acc = sax_ctx->accumulator;
 
-	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || !target) {
+	if (sax_ctx->stop_parsing || acc->state != SAXAccumulatorState::IN_RECORD || acc->nil_depth > 0 || !target) {
 		return;
 	}
 	if (acc->current_depth - acc->record_depth <= 1) {
