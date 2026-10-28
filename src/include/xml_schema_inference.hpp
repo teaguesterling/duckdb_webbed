@@ -266,6 +266,14 @@ public:
 	// looking up the attribute on the node (used by both DOM and SAX extraction paths).
 	static std::string AttributeNameFromColumn(const std::string &column_name, const XMLSchemaOptions &options);
 
+	// xsi:nil="true" elements are treated as empty by both read paths. The xsi:nil attribute
+	// never becomes a column. Other xsi: attributes stay ordinary attributes.
+	static constexpr const char *XSI_NAMESPACE_URI = "http://www.w3.org/2001/XMLSchema-instance";
+	// True for the xs:boolean lexical forms of true ("true" or "1", surrounding whitespace allowed)
+	static bool IsXsiNilTrue(const char *value);
+	// Remove every xsi:nil attribute, and the content of each element where it is true
+	static void ApplyXsiNil(xmlDocPtr doc);
+
 	// Merge two column types from union_by_name inference across files.
 	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
 	// when a complex type collides with a non-matching kind. Scalar promotion uses

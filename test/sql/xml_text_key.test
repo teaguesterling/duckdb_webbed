@@ -8,19 +8,19 @@ require webbed
 query T
 SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata');
 ----
-[{'field': F1, 'value': {'#text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'#text': NULL, 'nil': true, 'type': NULL}}]
+[{'field': F1, 'value': {'#text': bar, 'type': 'xsd:string'}}, {'field': F2, 'value': {'#text': NULL, 'type': NULL}}]
 
 # Custom key, DOM extraction
 query T
 SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata', text_key='_text', streaming=false);
 ----
-[{'field': F1, 'value': {'_text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'nil': true, 'type': NULL}}]
+[{'field': F1, 'value': {'_text': bar, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'type': NULL}}]
 
 # Custom key, SAX extraction
 query T
 SELECT "values" FROM read_xml('test/xml/type_fidelity/text_key/c.xml', record_element='CustomMetadata', text_key='_text', streaming=true, maximum_file_size=1);
 ----
-[{'field': F1, 'value': {'_text': bar, 'nil': NULL, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'nil': true, 'type': NULL}}]
+[{'field': F1, 'value': {'_text': bar, 'type': 'xsd:string'}}, {'field': F2, 'value': {'_text': NULL, 'type': NULL}}]
 
 # Custom key on a top-level column with a typed text value
 query T

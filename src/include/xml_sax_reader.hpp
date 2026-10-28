@@ -75,6 +75,9 @@ struct SAXRecordAccumulator {
 	bool field_has_children = false; // Whether the current direct child has element children
 	std::string field_text_run;      // Direct child text since its last child element, not yet in nested_xml
 
+	// Depth of the open xsi:nil="true" element whose content is being discarded (0 = none)
+	int nil_depth = 0;
+
 	// Output signal
 	bool row_ready = false;
 

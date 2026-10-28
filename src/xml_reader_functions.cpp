@@ -1018,6 +1018,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 						throw InvalidInputException("File %s contains invalid XML", filename);
 					}
 
+					XMLSchemaInference::ApplyXsiNil(lstate.current_doc.doc);
 					xmlNodePtr root = xmlDocGetRootElement(lstate.current_doc.doc);
 					if (!root) {
 						if (bind_data.ignore_errors) {
