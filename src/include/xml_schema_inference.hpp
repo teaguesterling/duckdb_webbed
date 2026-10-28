@@ -267,7 +267,7 @@ public:
 	static std::string AttributeNameFromColumn(const std::string &column_name, const XMLSchemaOptions &options);
 
 	// xsi:nil="true" elements are treated as empty by both read paths. The xsi:nil attribute
-		// never becomes a column. Other xsi: attributes stay ordinary attributes.
+	// never becomes a column. Other xsi: attributes stay ordinary attributes.
 	static constexpr const char *XSI_NAMESPACE_URI = "http://www.w3.org/2001/XMLSchema-instance";
 	// True for the xs:boolean lexical forms of true ("true" or "1", surrounding whitespace allowed)
 	static bool IsXsiNilTrue(const char *value);
