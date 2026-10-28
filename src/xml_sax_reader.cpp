@@ -52,9 +52,7 @@ static void StreamStartElement(void *ctx, const xmlChar *localname, const xmlCha
 	if (s.record_depth == 0) {
 		if (IsRecordStart(s, localname, prefix)) {
 			s.record_depth = s.depth;
-			if (s.keep_records) {
-				std::fill(s.holds_record.begin(), s.holds_record.end(), true);
-			}
+			std::fill(s.holds_record.begin(), s.holds_record.end(), true);
 		} else if (!s.root_element.empty() && s.root_depth == 0 &&
 		           NameEquals(s.root_element, localname, prefix, s.keep_prefix)) {
 			s.root_depth = s.depth;
