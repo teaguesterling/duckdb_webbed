@@ -1,0 +1,85 @@
+# name: test/sql/xml_xsi_nil.test
+# description: an xsi:nil="true" element reads as an empty element, and xsi:nil never becomes a column
+# group: [sql]
+
+require webbed
+
+# Regression: xsi:nil was an ordinary attribute, so b inferred as STRUCT("#text", nil)
+query TTT
+SELECT typeof(b), a, b FROM read_xml('test/xml/xsi_nil/mixed.xml', record_element='r', streaming=false) ORDER BY a;
+----
+INTEGER	x	NULL
+INTEGER	y	2
+
+query TTT
+SELECT typeof(b), a, b FROM read_xml('test/xml/xsi_nil/mixed.xml', record_element='r', streaming=true, maximum_file_size=1) ORDER BY a;
+----
+INTEGER	x	NULL
+INTEGER	y	2
+
+# An element that is only ever nil infers as an empty element does
+query TT
+SELECT typeof(b), b FROM read_xml('test/xml/xsi_nil/union/1.xml', record_element='r', streaming=false);
+----
+VARCHAR	NULL
+
+query TT
+SELECT typeof(b), b FROM read_xml('test/xml/xsi_nil/union/1.xml', record_element='r', streaming=true, maximum_file_size=1);
+----
+VARCHAR	NULL
+
+# Nil in one file, a value in another
+query TTT
+SELECT typeof(b), a, b FROM read_xml('test/xml/xsi_nil/union/*.xml', record_element='r', union_by_name=true, streaming=false) ORDER BY a;
+----
+INTEGER	x	NULL
+INTEGER	y	2
+
+query TTT
+SELECT typeof(b), a, b FROM read_xml('test/xml/xsi_nil/union/*.xml', record_element='r', union_by_name=true, streaming=true, maximum_file_size=1) ORDER BY a;
+----
+INTEGER	x	NULL
+INTEGER	y	2
+
+# Any prefix bound to the XSI namespace. A nil element keeps its other attributes and drops its
+# content. xsi:nil="false" is dropped too, while nil in another namespace and xsi:type stay data.
+query TTTTTTT
+SELECT * FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', streaming=false);
+----
+1	{'#text': NULL, 'unit': kg}	{'qty': NULL}	NULL	{'#text': a, 'nil': yes}	{'#text': 7, 'type': 'xsd:int'}	4
+2	{'#text': 5, 'unit': g}	{'qty': 3}	NULL	{'#text': b, 'nil': NULL}	{'#text': 8, 'type': NULL}	5
+
+query TTTTTTT
+SELECT * FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', streaming=true, maximum_file_size=1);
+----
+1	{'#text': NULL, 'unit': kg}	{'qty': NULL}	NULL	{'#text': a, 'nil': yes}	{'#text': 7, 'type': 'xsd:int'}	4
+2	{'#text': 5, 'unit': g}	{'qty': 3}	NULL	{'#text': b, 'nil': NULL}	{'#text': 8, 'type': NULL}	5
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', namespaces='keep')) WHERE column_name LIKE '%nil%';
+----
+0
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', namespaces='keep', streaming=true, maximum_file_size=1)) WHERE column_name LIKE '%nil%';
+----
+0
+
+query TT
+SELECT "@id", amount FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', attr_mode='prefixed', streaming=true, maximum_file_size=1);
+----
+1	{'#text': NULL, 'unit': kg}
+2	{'#text': 5, 'unit': g}
+
+# attr_mode='discard' drops unit, and the nil element still reads as NULL
+query TT
+SELECT typeof(amount), amount FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', attr_mode='discard', streaming=false);
+----
+INTEGER	NULL
+INTEGER	5
+
+query TT
+SELECT typeof(amount), amount FROM read_xml('test/xml/xsi_nil/cases.xml', record_element='r', attr_mode='discard', streaming=true, maximum_file_size=1);
+----
+INTEGER	NULL
+INTEGER	5

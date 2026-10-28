@@ -124,6 +124,7 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 		return columns;
 	}
 
+	ApplyXsiNil(doc.doc);
 	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
 	if (!root) {
 		columns.emplace_back("content", LogicalType::VARCHAR, false, "", 1.0);
@@ -1771,6 +1772,60 @@ std::string XMLSchemaInference::CleanNodeText(xmlNodePtr node, bool preserve_whi
 	return result;
 }
 
+bool XMLSchemaInference::IsXsiNilTrue(const char *value) {
+	if (!value) {
+		return false;
+	}
+	std::string trimmed = CleanTextContent(value, true);
+	return trimmed == "true" || trimmed == "1";
+}
+
+void XMLSchemaInference::ApplyXsiNil(xmlDocPtr doc) {
+	// The HTML parser never binds namespaces, so no attribute can be in the XSI namespace
+	if (!doc || doc->type == XML_HTML_DOCUMENT_NODE) {
+		return;
+	}
+	ApplyXsiNil(xmlDocGetRootElement(doc));
+}
+
+void XMLSchemaInference::ApplyXsiNil(xmlNodePtr root) {
+	xmlNodePtr node = root;
+	while (node) {
+		bool descend = true;
+		xmlAttrPtr nil_attr = xmlHasNsProp(node, BAD_CAST "nil", BAD_CAST XSI_NAMESPACE_URI);
+		// xmlHasNsProp can also return a DTD attribute declaration, which is not on the node
+		if (nil_attr && nil_attr->type == XML_ATTRIBUTE_NODE) {
+			xmlChar *value = xmlNodeGetContent(reinterpret_cast<xmlNodePtr>(nil_attr));
+			bool is_nil = IsXsiNilTrue(reinterpret_cast<const char *>(value));
+			xmlFree(value);
+			xmlRemoveProp(nil_attr);
+			if (is_nil) {
+				while (node->children) {
+					xmlNodePtr child = node->children;
+					xmlUnlinkNode(child);
+					xmlFreeNode(child);
+				}
+				descend = false;
+			}
+		}
+
+		// Walk element children only: an entity reference's children belong to the DTD
+		xmlNodePtr next = nullptr;
+		if (descend) {
+			for (next = node->children; next && next->type != XML_ELEMENT_NODE; next = next->next) {
+			}
+		}
+		while (!next && node && node != root) {
+			for (next = node->next; next && next->type != XML_ELEMENT_NODE; next = next->next) {
+			}
+			if (!next) {
+				node = node->parent;
+			}
+		}
+		node = next;
+	}
+}
+
 std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
 	return CleanTextContent(text.data(), text.size(), preserve_whitespace);
 }
@@ -2005,6 +2060,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 		return rows; // Invalid document
 	}
 
+	ApplyXsiNil(doc.doc);
 	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
 	if (!root) {
 		return rows; // No root element
@@ -2127,6 +2183,7 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 		return rows; // Invalid document
 	}
 
+	ApplyXsiNil(doc.doc);
 	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
 	if (!root) {
 		return rows; // No root element

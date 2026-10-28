@@ -118,6 +118,7 @@ static void StreamEndElement(void *ctx, const xmlChar *localname, const xmlChar 
 		if (!s.keep_records) {
 			xmlUnlinkNode(node);
 		}
+		XMLSchemaInference::ApplyXsiNil(node);
 		s.records.push_back(node);
 		s.records_completed++;
 		if (s.max_records > 0 && s.records_completed >= s.max_records) {

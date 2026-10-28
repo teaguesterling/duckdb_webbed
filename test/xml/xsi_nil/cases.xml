@@ -1,0 +1,18 @@
+<root xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns:o="urn:other" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <r id="1">
+    <amount i:nil="1" unit="kg"/>
+    <detail i:nil="true"><qty>9</qty></detail>
+    <never i:nil="true"/>
+    <flag o:nil="yes">a</flag>
+    <typed i:type="xsd:int">7</typed>
+    <off i:nil="false">4</off>
+  </r>
+  <r id="2" i:nil="false">
+    <amount unit="g">5</amount>
+    <detail><qty>3</qty></detail>
+    <never/>
+    <flag>b</flag>
+    <typed>8</typed>
+    <off>5</off>
+  </r>
+</root>
