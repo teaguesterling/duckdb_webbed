@@ -669,7 +669,7 @@ void XMLScalarFunctions::XMLNamespacesFunction(DataChunk &args, ExpressionState 
 // The libxml2 out-of-memory path cannot be reached from a SQL test, so this exercises it directly:
 // an always-failing allocator makes xmlNewParserCtxt return NULL, which must surface as
 // XMLValidity::ResourceError (not Malformed), and the resource-failure flag must survive XMLDocRAII
-// moves (the read_xml DOM path relies on `gstate.current_doc = XMLDocRAII(...)`). Allocator setup is
+// moves (the read_xml DOM path relies on `lstate.current_doc = XMLDocRAII(content, is_html)`). Allocator setup is
 // process-global, so it is installed and restored within this single call. On platforms where
 // xmlMemSetup is a no-op (e.g. macOS system libxml2) the injected failure has no effect and the
 // allocation-failure half is reported as skipped rather than failing.

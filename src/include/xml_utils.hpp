@@ -51,8 +51,9 @@ struct XMLDocRAII {
 	XMLDocRAII() = default;
 	// Take ownership of an already parsed document
 	explicit XMLDocRAII(xmlDocPtr adopted);
-	// Parses with this thread's reused parser context, so the document must be freed on this thread
-	XMLDocRAII(const std::string &xml_str);
+	// Parses with this thread's reused parser context and shares its dictionary, so the document must be freed on
+	// this thread. Keep it function-local. Scan state that outlives a task uses the is_html overload.
+	explicit XMLDocRAII(const std::string &xml_str);
 	XMLDocRAII(const std::string &content, bool is_html);
 	// Parse input pulled through a libxml2 read callback
 	XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html);
