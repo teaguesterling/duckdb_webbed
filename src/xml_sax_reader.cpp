@@ -214,7 +214,6 @@ void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefi
 	acc->element_stack.push_back(name);
 
 	if (acc->nil_depth > 0) {
-		// Inside an xsi:nil element: its content is discarded
 		return;
 	}
 	int nil_attr = FindXsiNilAttribute(nb_attributes, attributes);
