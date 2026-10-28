@@ -1,5 +1,5 @@
 # name: test/sql/xml_xpath_node_limit.test
-# description: An XPath node set past libxml2's 10 million node cap raises instead of matching nothing
+# description: An XPath node set past libxml2's 10 million node cap raises instead of matching nothing, even under ignore_errors
 # group: [sql]
 
 require webbed
@@ -10,7 +10,7 @@ CREATE TABLE big AS SELECT '<r>' || repeat('<a>x</a>', 5000001) || '</r>' AS doc
 statement error
 SELECT len(xml_extract_elements(doc, '//node()[1]')) FROM big;
 ----
-selects more nodes than libxml2 allows
+ran out of memory or selects more nodes than libxml2 allows
 
 # A plain descendant name stays under the cap
 query I
@@ -30,9 +30,14 @@ COPY (SELECT doc FROM big) TO '__TEST_DIR__/big.xml' (HEADER false, QUOTE '', DE
 statement error
 SELECT count(*) FROM read_xml('__TEST_DIR__/big.xml', record_element := '//a[1]', maximum_file_size := 100000000);
 ----
-selects more nodes than libxml2 allows
+ran out of memory or selects more nodes than libxml2 allows
 
 query I
 SELECT count(*) FROM read_xml('__TEST_DIR__/big.xml', record_element := 'a', maximum_file_size := 100000000);
 ----
 5000001
+
+statement error
+SELECT count(*) FROM read_xml('__TEST_DIR__/big.xml', record_element := '//a[1]', maximum_file_size := 100000000, ignore_errors := true);
+----
+ran out of memory or selects more nodes than libxml2 allows
