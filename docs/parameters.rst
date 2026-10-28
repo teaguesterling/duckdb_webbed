@@ -80,6 +80,10 @@ Type Handling Parameters
      - BOOLEAN
      - false
      - Force all scalar types to VARCHAR. Preserves nested structure (STRUCT, LIST) but converts leaf values.
+   * - ``force_varchar``
+     - VARCHAR or VARCHAR[]
+     - []
+     - Element names to keep as VARCHAR while every other column is still inferred (the ``all_varchar`` rule for those elements only). Names match exactly what ``DESCRIBE`` shows, at any depth like ``force_list``; a STRUCT or LIST keeps its shape with VARCHAR values. Unmatched names are ignored.
    * - ``datetime_format``
      - VARCHAR or VARCHAR[]
      - 'auto'

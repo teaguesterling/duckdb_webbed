@@ -382,7 +382,8 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 	throw InvalidInputException(
 	    "read_xml: value '%s' does not match column type %s, which was inferred from the first %d "
 	    "sampled values. Increase sample_size (or set sample_size := -1 to sample every value), set "
-	    "all_varchar := true, or set ignore_errors := true to skip such values. (issue #102)",
+	    "force_varchar := '<element>' to keep this element as text (or all_varchar := true for every "
+	    "column), or set ignore_errors := true to skip such values. (issue #102)",
 	    text, target_type.ToString(), options.sample_size);
 }
 

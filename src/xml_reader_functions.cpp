@@ -18,6 +18,7 @@
 #include "duckdb/function/scalar/strftime_format.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace {
 
@@ -167,6 +168,96 @@ static void ParseNullstrParameter(const Value &val, const char *function_name, s
 	} else {
 		throw BinderException("%s \"nullstr\" parameter must be VARCHAR or LIST(VARCHAR), got: %s", function_name,
 		                      val.type().ToString());
+	}
+}
+
+// Parse force_varchar parameter (VARCHAR or LIST(VARCHAR)) into a set of element names.
+// Same accepted forms as force_list, but the names stay plain: they are matched against the
+// inferred column and STRUCT field names, not used as XPath.
+static void ParseForceVarcharParameter(const Value &val, const char *function_name,
+                                       std::unordered_set<std::string> &names) {
+	auto type_id = val.type().id();
+	if (type_id == LogicalTypeId::VARCHAR) {
+		names.insert(val.ToString());
+	} else if (type_id == LogicalTypeId::LIST) {
+		auto &list_children = ListValue::GetChildren(val);
+		for (const auto &child : list_children) {
+			if (child.IsNull()) {
+				continue;
+			}
+			if (child.type().id() != LogicalTypeId::VARCHAR) {
+				throw BinderException("%s \"force_varchar\" list elements must be VARCHAR, got: %s", function_name,
+				                      child.type().ToString());
+			}
+			names.insert(child.ToString());
+		}
+	} else {
+		throw BinderException("%s \"force_varchar\" parameter must be VARCHAR or LIST(VARCHAR), got: %s",
+		                      function_name, val.type().ToString());
+	}
+}
+
+// The all_varchar rule for a single type: every scalar inside becomes VARCHAR, while LIST and
+// STRUCT keep their shape. VARCHAR, including the XML and HTML aliases, comes back unchanged.
+static LogicalType ToVarcharLeaves(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::VARCHAR:
+		return type;
+	case LogicalTypeId::LIST:
+		return LogicalType::LIST(ToVarcharLeaves(ListType::GetChildType(type)));
+	case LogicalTypeId::STRUCT: {
+		auto children = StructType::GetChildTypes(type);
+		for (auto &child : children) {
+			child.second = ToVarcharLeaves(child.second);
+		}
+		return LogicalType::STRUCT(std::move(children));
+	}
+	default:
+		return LogicalType::VARCHAR;
+	}
+}
+
+// Walk a column type below its top level and give every STRUCT field named in force_varchar the
+// all_varchar rule. STRUCT field names are the element names inference saw, so this matches the
+// same names force_list does, at any depth.
+static LogicalType ApplyForceVarcharToFields(const LogicalType &type, const std::unordered_set<std::string> &names) {
+	switch (type.id()) {
+	case LogicalTypeId::LIST:
+		return LogicalType::LIST(ApplyForceVarcharToFields(ListType::GetChildType(type), names));
+	case LogicalTypeId::STRUCT: {
+		auto children = StructType::GetChildTypes(type);
+		for (auto &child : children) {
+			if (names.count(CompatIdentifierName(child.first)) > 0) {
+				child.second = ToVarcharLeaves(child.second);
+			} else {
+				child.second = ApplyForceVarcharToFields(child.second, names);
+			}
+		}
+		return LogicalType::STRUCT(std::move(children));
+	}
+	default:
+		return type;
+	}
+}
+
+// Apply force_varchar to the inferred schema. Runs after inference (and the union_by_name merge),
+// before the types are stored for extraction, which dispatches on them. A top-level match also
+// drops the column's datetime format; a nested match keeps it, since sibling fields may still need
+// it and a VARCHAR field ignores it.
+static void ApplyForceVarchar(const std::unordered_set<std::string> &names, const vector<CompatName> &column_names,
+                              vector<LogicalType> &column_types, std::vector<std::string> &datetime_formats) {
+	if (names.empty()) {
+		return;
+	}
+	for (idx_t i = 0; i < column_types.size(); i++) {
+		if (names.count(CompatIdentifierName(column_names[i])) > 0) {
+			column_types[i] = ToVarcharLeaves(column_types[i]);
+			if (i < datetime_formats.size()) {
+				datetime_formats[i].clear();
+			}
+		} else {
+			column_types[i] = ApplyForceVarcharToFields(column_types[i], names);
+		}
 	}
 }
 
@@ -431,6 +522,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
+	std::unordered_set<std::string> force_varchar;
 
 	for (auto &kv : input.named_parameters) {
 		if (kv.first == "ignore_errors") {
@@ -518,6 +610,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "force_varchar") {
+			ParseForceVarcharParameter(kv.second, function_name, force_varchar);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -604,6 +698,11 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	if (has_explicit_columns && schema_options.all_varchar) {
 		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option. "
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
+		                      function_name);
+	}
+	if (has_explicit_columns && !force_varchar.empty()) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"force_varchar\" option. "
+		                      "Use \"force_varchar\" with schema inference, or specify explicit column types.",
 		                      function_name);
 	}
 
@@ -713,13 +812,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 				// across multiple files (fixes non-determinism from unordered_map iteration)
 				result->has_explicit_schema = true;
 				result->column_names = CompatNamesToStrings(names);
-				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(names.size());
 				for (size_t i = 0; i < names.size(); i++) {
 					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
+				ApplyForceVarchar(force_varchar, names, return_types, result->column_datetime_formats);
+				result->column_types = return_types;
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				if (mode == ParseMode::HTML) {
@@ -1413,6 +1513,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
+	std::unordered_set<std::string> force_varchar;
 
 	for (auto &kv : input.named_parameters) {
 		if (kv.first == "ignore_errors") {
@@ -1500,6 +1601,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "force_varchar") {
+			ParseForceVarcharParameter(kv.second, "read_xml", force_varchar);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -1585,6 +1688,10 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	if (has_explicit_columns && schema_options.all_varchar) {
 		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
+	}
+	if (has_explicit_columns && !force_varchar.empty()) {
+		throw BinderException("read_xml cannot use both \"columns\" parameter and \"force_varchar\" option. "
+		                      "Use \"force_varchar\" with schema inference, or specify explicit column types.");
 	}
 
 	// Store schema options in bind_data for use during execution
@@ -1683,13 +1790,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 				// across multiple files (fixes non-determinism from unordered_map iteration)
 				result->has_explicit_schema = true;
 				result->column_names = CompatNamesToStrings(names);
-				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(names.size());
 				for (size_t i = 0; i < names.size(); i++) {
 					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
+				ApplyForceVarchar(force_varchar, names, return_types, result->column_datetime_formats);
+				result->column_types = return_types;
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				return_types.push_back(XMLTypes::XMLType());
@@ -1907,6 +2015,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 	XMLSchemaOptions schema_options;
 	schema_options.opaque_type_name = (mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
+	std::unordered_set<std::string> force_varchar;
 
 	for (auto &kv : input.named_parameters) {
 		if (kv.first == "ignore_errors") {
@@ -1977,6 +2086,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "force_varchar") {
+			ParseForceVarcharParameter(kv.second, function_name, force_varchar);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -2054,6 +2165,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 	if (has_explicit_columns && schema_options.all_varchar) {
 		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option.", function_name);
 	}
+	if (has_explicit_columns && !force_varchar.empty()) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"force_varchar\" option.", function_name);
+	}
 
 	result->schema_options = schema_options;
 
@@ -2090,12 +2204,13 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 				result->has_explicit_schema = true;
 				result->column_names = CompatNamesToStrings(names);
-				result->column_types = return_types;
 				// Store per-column datetime formats for use during extraction
 				result->column_datetime_formats.resize(inferred_columns.size());
 				for (size_t i = 0; i < inferred_columns.size(); i++) {
 					result->column_datetime_formats[i] = inferred_columns[i].winning_datetime_format;
 				}
+				ApplyForceVarchar(force_varchar, names, return_types, result->column_datetime_formats);
+				result->column_types = return_types;
 			} else {
 				// Fallback to simple schema
 				if (mode == ParseMode::HTML) {
@@ -2285,6 +2400,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_single, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
+	                                           {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"streaming", LogicalType::BOOLEAN},
@@ -2325,6 +2441,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_array, {
 	                                          {"columns", LogicalType::ANY},
 	                                          {"all_varchar", LogicalType::BOOLEAN},
+	                                          {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                          {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                          {"nullstr", LogicalType::ANY},
 	                                          {"streaming", LogicalType::BOOLEAN},
@@ -2380,6 +2497,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_single, {
 	                                            {"columns", LogicalType::ANY},
 	                                            {"all_varchar", LogicalType::BOOLEAN},
+	                                            {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                            {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                            {"nullstr", LogicalType::ANY},
 	                                            {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2419,6 +2537,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_array, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
+	                                           {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2556,6 +2675,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                     {"sample_size", LogicalType::INTEGER},
 	                                     {"unnest_as", LogicalType::VARCHAR},
 	                                     {"all_varchar", LogicalType::BOOLEAN},
+	                                     {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                     {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                     {"nullstr", LogicalType::ANY},
 	                                     {"columns", LogicalType::ANY},
@@ -2595,6 +2715,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                      {"sample_size", LogicalType::INTEGER},
 	                                      {"unnest_as", LogicalType::VARCHAR},
 	                                      {"all_varchar", LogicalType::BOOLEAN},
+	                                      {"force_varchar", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                      {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                      {"nullstr", LogicalType::ANY},
 	                                      {"columns", LogicalType::ANY},

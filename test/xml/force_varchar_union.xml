@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<packages>
+  <package>
+    <name>gamma</name>
+    <version>2</version>
+  </package>
+  <package>
+    <name>delta</name>
+    <version>3</version>
+  </package>
+</packages>

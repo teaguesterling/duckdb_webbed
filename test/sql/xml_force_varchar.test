@@ -1,0 +1,171 @@
+# name: test/sql/xml_force_varchar.test
+# description: Test force_varchar parameter that keeps the named elements as VARCHAR while every other column is still inferred
+# group: [sql]
+
+require webbed
+
+# Test 1: Without force_varchar, 1.10 and 1.100 are both inferred as DOUBLE and collapse to 1.1
+query II
+SELECT version, release.version FROM read_xml('test/xml/force_varchar.xml');
+----
+1.1	1.1
+1.1	1.1
+
+# Test 2: force_varchar keeps the raw text, so the two versions stay distinct
+query I
+SELECT version FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'version');
+----
+1.10
+1.100
+
+# Test 3: Only the named element changes; the other columns are still inferred
+query TTTTTT
+DESCRIBE SELECT * FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'version');
+----
+build	VARCHAR	YES	NULL	NULL	NULL
+name	VARCHAR	YES	NULL	NULL	NULL
+version	VARCHAR	YES	NULL	NULL	NULL
+downloads	INTEGER	YES	NULL	NULL	NULL
+rating	DOUBLE[]	YES	NULL	NULL	NULL
+release	STRUCT("version" VARCHAR, date DATE)	YES	NULL	NULL	NULL
+
+# Test 4: A name matches at every depth, so the field inside release is VARCHAR too while its date sibling stays a DATE
+query II
+SELECT release.version, release.date FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'version');
+----
+1.10	2024-01-15
+1.100	2024-03-02
+
+# Test 5: A STRUCT column keeps its shape with every value inside as VARCHAR
+query T
+SELECT typeof(release) FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'release') LIMIT 1;
+----
+STRUCT("version" VARCHAR, date VARCHAR)
+
+query I
+SELECT release FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'release');
+----
+{'version': 1.10, 'date': 2024-01-15}
+{'version': 1.100, 'date': 2024-03-02}
+
+# Test 6: Fields of a forced STRUCT cast back in SQL
+query I
+SELECT release.date::DATE FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'release');
+----
+2024-01-15
+2024-03-02
+
+# Test 7: A LIST column becomes VARCHAR[]
+query TI
+SELECT typeof(rating), rating FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'rating');
+----
+VARCHAR[]	[4.50, 3.0]
+VARCHAR[]	[5.00, 4.25]
+
+# Test 8: With force_list on the same name, both apply
+query T
+SELECT typeof(downloads) FROM read_xml('test/xml/force_varchar.xml', force_list := 'downloads', force_varchar := 'downloads') LIMIT 1;
+----
+VARCHAR[]
+
+# Test 9: An unknown name and a wrong-case name are ignored without error
+query T
+SELECT typeof(version) FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'missing') LIMIT 1;
+----
+DOUBLE
+
+query T
+SELECT typeof(version) FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'Version') LIMIT 1;
+----
+DOUBLE
+
+# Test 10: Attribute columns are matched by the name DESCRIBE shows, including the prefixed form
+query TT
+SELECT "@build", typeof("@build") FROM read_xml('test/xml/force_varchar.xml', attr_mode := 'prefixed', force_varchar := '@build');
+----
+0042	VARCHAR
+0107	VARCHAR
+
+# Test 11: The single-string and list forms give the same result
+query TTT
+SELECT typeof(version), typeof(rating), typeof(release)
+FROM read_xml('test/xml/force_varchar.xml', force_varchar := ['version', 'rating']) LIMIT 1;
+----
+VARCHAR	VARCHAR[]	STRUCT("version" VARCHAR, date DATE)
+
+query I
+SELECT count(*) FROM (
+    SELECT * FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'version')
+    EXCEPT
+    SELECT * FROM read_xml('test/xml/force_varchar.xml', force_varchar := ['version'])
+);
+----
+0
+
+# Test 12: Using both columns and force_varchar raises an error
+statement error
+SELECT * FROM read_xml('test/xml/force_varchar.xml', columns := {'version': 'VARCHAR'}, force_varchar := 'version');
+----
+cannot use both "columns" parameter and "force_varchar" option
+
+# Test 13: A non-string value is rejected
+statement error
+SELECT * FROM read_xml('test/xml/force_varchar.xml', force_varchar := 42);
+----
+"force_varchar" parameter must be VARCHAR or LIST(VARCHAR)
+
+# Test 14: With all_varchar it is accepted and has no extra effect
+query TT
+SELECT typeof(version), typeof(downloads) FROM read_xml('test/xml/force_varchar.xml', all_varchar := true, force_varchar := 'version') LIMIT 1;
+----
+VARCHAR	VARCHAR
+
+# Test 15: nullstr still turns matching values into NULL
+query I
+SELECT version FROM read_xml('test/xml/force_varchar.xml', force_varchar := 'version', nullstr := '1.10');
+----
+NULL
+1.100
+
+# Test 16: Streaming (SAX) mode gives the same result, forced with a small maximum_file_size
+query IIII
+SELECT version, downloads, rating, release
+FROM read_xml('test/xml/force_varchar.xml', force_varchar := ['version', 'rating'], maximum_file_size := 100);
+----
+1.10	1200	[4.50, 3.0]	{'version': 1.10, 'date': 2024-01-15}
+1.100	85	[5.00, 4.25]	{'version': 1.100, 'date': 2024-03-02}
+
+# Test 17: union_by_name across files where version is inferred differently (DOUBLE in one, INTEGER in the other)
+query T
+SELECT typeof(version) FROM read_xml(['test/xml/force_varchar.xml', 'test/xml/force_varchar_union.xml'], union_by_name := true) LIMIT 1;
+----
+DOUBLE
+
+query TT
+SELECT name, version FROM read_xml(['test/xml/force_varchar.xml', 'test/xml/force_varchar_union.xml'], union_by_name := true, force_varchar := 'version');
+----
+alpha	1.10
+beta	1.100
+gamma	2
+delta	3
+
+# Test 18: read_html
+query TTT
+SELECT salary, typeof(salary), typeof(age) FROM read_html('test/html/all_varchar_data.html', record_element := 'employee', force_varchar := 'salary');
+----
+75000.50	VARCHAR	INTEGER
+85000.00	VARCHAR	INTEGER
+
+# Test 19: parse_xml
+query II
+SELECT v, n FROM parse_xml('<root><r><v>1.10</v><n>2</n></r><r><v>1.100</v><n>3</n></r></root>', force_varchar := 'v');
+----
+1.10	2
+1.100	3
+
+# Test 20: parse_html
+query TT
+SELECT span, typeof(b) FROM parse_html('<div><p><span>1.10</span><b>4</b></p><p><span>1.100</span><b>5</b></p></div>', record_element := 'p', force_varchar := 'span');
+----
+1.10	INTEGER
+1.100	INTEGER

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<packages>
+  <package build="0042">
+    <name>alpha</name>
+    <version>1.10</version>
+    <downloads>1200</downloads>
+    <rating>4.50</rating>
+    <rating>3.0</rating>
+    <release>
+      <version>1.10</version>
+      <date>2024-01-15</date>
+    </release>
+  </package>
+  <package build="0107">
+    <name>beta</name>
+    <version>1.100</version>
+    <downloads>85</downloads>
+    <rating>5.00</rating>
+    <rating>4.25</rating>
+    <release>
+      <version>1.100</version>
+      <date>2024-03-02</date>
+    </release>
+  </package>
+</packages>

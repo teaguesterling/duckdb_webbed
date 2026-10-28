@@ -709,6 +709,7 @@ read_xml('pattern',
     max_depth=10,                 -- Maximum parsing depth
     unnest_as='struct',           -- How to unnest nested elements
     all_varchar=false,            -- Force all scalar types to VARCHAR (nested preserved)
+    force_varchar=['version'],    -- Element names kept as VARCHAR while the rest is inferred
     datetime_format='auto',       -- Date/time format: 'auto', 'none', 'us', 'eu', 'iso', or strftime string
     nullstr='N/A',                -- String value(s) to interpret as NULL
     attr_mode='columns',          -- Attribute handling: 'columns' (default), 'prefixed', or 'discard'
@@ -733,6 +734,7 @@ read_xml('pattern',
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
 - **`all_varchar`**: Force all scalar datatypes to VARCHAR, preserving nested structure. For example, `STRUCT(a INT, b FLOAT, c INT[], d STRUCT(f INT))` becomes `STRUCT(a VARCHAR, b VARCHAR, c VARCHAR[], d STRUCT(f VARCHAR))`. Useful for preventing data loss during type inference or when you want to handle type conversion yourself (default: false)
+- **`force_varchar`**: Element name(s) to keep as VARCHAR while every other column is still inferred, applying the `all_varchar` rule to just those elements. Useful when inference would lose text, e.g. versions `1.10` and `1.100` both read as the DOUBLE `1.1`. Accepts a single name (`force_varchar='version'`) or a list (`force_varchar=['version', 'build']`). Names match exactly (case-sensitive) what `DESCRIBE` shows, at any depth like `force_list`: a nested STRUCT field with that name becomes VARCHAR while its siblings keep their types, and a STRUCT or LIST column keeps its shape with VARCHAR values. Unmatched names are ignored. Cannot be combined with `columns` (default: none)
 - **`datetime_format`**: Controls date/time detection and parsing. Accepts `'auto'` (default — tries common formats), `'none'` (disables temporal detection), preset names (`'us'`, `'eu'`, `'iso'`, `'us_timestamp'`, `'eu_timestamp'`, `'iso_timestamp'`, `'iso_timestamptz'`, `'12hour'`, `'24hour'`), custom strftime format strings (`'%m/%d/%Y'`), or a list of formats (`['%m/%d/%Y', '%Y-%m-%d %H:%M:%S']`). Ambiguous dates default to US (month-first) ordering.
 - **`nullstr`**: String value(s) to interpret as NULL. Accepts a single VARCHAR (e.g., `nullstr='N/A'`) or a list of VARCHAR (e.g., `nullstr=['N/A', '-', 'NULL']`). Matching values are excluded from type inference and converted to NULL during extraction. Matching is case-sensitive. When used with `all_varchar=true`, matched values still become NULL (default: none)
 - **`attr_mode`**: How to handle XML attributes: `'columns'` (default) makes each attribute a column under its bare name, `'prefixed'` prepends `attr_prefix` to attribute column names, `'discard'` drops attributes
