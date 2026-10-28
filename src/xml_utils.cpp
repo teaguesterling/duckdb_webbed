@@ -2895,6 +2895,22 @@ static void WalkHTMLTable(xmlNodePtr table, VISIT &&visit) {
 	}
 }
 
+static std::string HTMLNodeText(xmlNodePtr node) {
+	XMLCharPtr text(xmlNodeGetContent(node));
+	return text ? std::string(reinterpret_cast<const char *>(text.get())) : "";
+}
+
+// The text of `.//td` under a row, or `.//td | .//th` with th, in document order.
+static std::vector<std::string> HTMLRowCells(xmlNodePtr row, bool include_th) {
+	std::vector<std::string> cells;
+	WalkHTMLTable(row, [&](xmlNodePtr node, const HTMLTableScope &) {
+		if (IsHTMLElement(node, "td") || (include_th && IsHTMLElement(node, "th"))) {
+			cells.push_back(HTMLNodeText(node));
+		}
+	});
+	return cells;
+}
+
 std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) {
 	std::vector<HTMLTable> tables;
 
@@ -2918,107 +2934,47 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 			HTMLTable table;
 			table.line_number = table_node->line;
 
-			// Extract header row from thead/th or first tr/th
-			xmlXPathContextPtr local_ctx = xmlXPathNewContext(html_doc.doc);
-			if (local_ctx) {
-				// Set context to this table node
-				local_ctx->node = table_node;
+			// Header cells are `.//thead//th | .//tr[1]//th`, body rows `.//tr` outside `tfoot`, and footer rows
+			// `.//tfoot//tr`. The walks evaluate these directly: libxml2 merges union operands pairwise, which is
+			// quadratic in the row count of a large table.
+			std::vector<xmlNodePtr> foot_rows;
+			WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
+				if ((scope.thead > 0 || scope.first_tr > 0) && IsHTMLElement(node, "th")) {
+					table.headers.push_back(HTMLNodeText(node));
+				} else if (scope.tfoot > 0 && IsHTMLElement(node, "tr")) {
+					foot_rows.push_back(node);
+				}
+			});
 
-				// Header cells are `.//thead//th | .//tr[1]//th`. The walks below evaluate these
-				// unions directly: libxml2 merges union operands pairwise, which is quadratic in
-				// the row count of a large table.
+			// Extract data rows (all rows for tables without th headers)
+			bool has_th_headers = !table.headers.empty();
+			// tfoot rows are excluded here and collected separately below.
+			bool table_in_tfoot = false;
+			for (xmlNodePtr anc = table_node->parent; anc; anc = anc->parent) {
+				if (IsHTMLElement(anc, "tfoot")) {
+					table_in_tfoot = true;
+					break;
+				}
+			}
+			if (!table_in_tfoot) {
 				WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
-					if ((scope.thead > 0 || scope.first_tr > 0) && IsHTMLElement(node, "th")) {
-						XMLCharPtr text(xmlNodeGetContent(node));
-						table.headers.push_back(text ? std::string(reinterpret_cast<const char *>(text.get())) : "");
+					if (scope.tfoot > 0 || !IsHTMLElement(node, "tr")) {
+						return;
+					}
+					if (!has_th_headers || scope.tbody > 0 || !HasHTMLChild(node, "th")) {
+						auto row_data = HTMLRowCells(node, false);
+						if (!row_data.empty()) {
+							table.rows.push_back(std::move(row_data));
+						}
 					}
 				});
+			}
 
-				// Extract data rows (all rows for tables without th headers)
-				bool has_th_headers = !table.headers.empty();
-				// tfoot rows are excluded here and collected separately below.
-				bool table_in_tfoot = false;
-				for (xmlNodePtr anc = table_node->parent; anc; anc = anc->parent) {
-					if (IsHTMLElement(anc, "tfoot")) {
-						table_in_tfoot = true;
-						break;
-					}
+			for (xmlNodePtr row_node : foot_rows) {
+				auto row_data = HTMLRowCells(row_node, true);
+				if (!row_data.empty()) {
+					table.footers.push_back(std::move(row_data));
 				}
-				std::vector<xmlNodePtr> row_nodes;
-				if (!table_in_tfoot) {
-					WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
-						if (scope.tfoot > 0 || !IsHTMLElement(node, "tr")) {
-							return;
-						}
-						if (!has_th_headers || scope.tbody > 0 || !HasHTMLChild(node, "th")) {
-							row_nodes.push_back(node);
-						}
-					});
-				}
-
-				{
-					for (xmlNodePtr row_node : row_nodes) {
-						std::vector<std::string> row_data;
-
-						// Extract td elements from this row
-						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
-						if (row_ctx) {
-							row_ctx->node = row_node;
-							xmlXPathObjectPtr cells_obj = EvalXPathChecked(row_ctx, ".//td");
-
-							if (cells_obj && cells_obj->nodesetval) {
-								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
-									xmlNodePtr cell_node = cells_obj->nodesetval->nodeTab[k];
-									XMLCharPtr text(xmlNodeGetContent(cell_node));
-									if (text) {
-										row_data.push_back(std::string(reinterpret_cast<const char *>(text.get())));
-									} else {
-										row_data.push_back("");
-									}
-								}
-							}
-
-							if (cells_obj)
-								xmlXPathFreeObject(cells_obj);
-							xmlXPathFreeContext(row_ctx);
-						}
-
-						if (!row_data.empty()) {
-							table.rows.push_back(row_data);
-						}
-					}
-				}
-
-				// <tfoot> rows, gathered the same way as body rows
-				xmlXPathObjectPtr foot_obj = EvalXPathChecked(local_ctx, ".//tfoot//tr");
-				if (foot_obj && foot_obj->nodesetval) {
-					for (int j = 0; j < foot_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr row_node = foot_obj->nodesetval->nodeTab[j];
-						std::vector<std::string> row_data;
-						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
-						if (row_ctx) {
-							row_ctx->node = row_node;
-							xmlXPathObjectPtr cells_obj = EvalXPathChecked(row_ctx, ".//td | .//th");
-							if (cells_obj && cells_obj->nodesetval) {
-								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
-									XMLCharPtr text(xmlNodeGetContent(cells_obj->nodesetval->nodeTab[k]));
-									row_data.push_back(text ? std::string(reinterpret_cast<const char *>(text.get()))
-									                        : "");
-								}
-							}
-							if (cells_obj)
-								xmlXPathFreeObject(cells_obj);
-							xmlXPathFreeContext(row_ctx);
-						}
-						if (!row_data.empty()) {
-							table.footers.push_back(row_data);
-						}
-					}
-				}
-				if (foot_obj)
-					xmlXPathFreeObject(foot_obj);
-
-				xmlXPathFreeContext(local_ctx);
 			}
 
 			// Set table metadata
