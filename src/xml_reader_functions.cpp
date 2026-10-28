@@ -230,7 +230,7 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const XMLReadFunctionData &bind_data,
                              const XMLSchemaOptions &schema_options, ParseMode mode,
                              std::vector<XMLColumnInfo> &inferred_columns) {
-	auto handle = OpenXMLFile(fs, file_path);
+	auto handle = OpenXMLFile(fs, file_path, bind_data.compression);
 	// A large XML file parses straight from its handle, so its bytes never sit beside the DOM
 	bool parse_from_handle =
 	    mode == ParseMode::XML && schema_options.opaque_type_name != "HTML" && ParsesFromHandle(*handle);
@@ -472,6 +472,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
+		} else if (kv.first == "compression") {
+			result->compression = FileCompressionTypeFromString(kv.second.ToString());
 		} else if (kv.first == "filename") {
 			result->include_filename = kv.second.GetValue<bool>();
 		}
@@ -603,6 +605,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
+		} else if (kv.first == "compression") {
+			result->compression = FileCompressionTypeFromString(kv.second.ToString());
+			schema_options.compression = result->compression;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();
 		} else if (kv.first == "record_element") {
@@ -902,7 +907,7 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 
 		try {
 			string content;
-			if (!ReadXMLFile(*OpenXMLFile(fs, filename), bind_data.max_file_size, content)) {
+			if (!ReadXMLFile(*OpenXMLFile(fs, filename, bind_data.compression), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
@@ -999,7 +1004,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 		try {
 			// Load file if not already loaded
 			if (!lstate.file_loaded) {
-				auto file_handle = OpenXMLFile(fs, filename);
+				auto file_handle = OpenXMLFile(fs, filename, bind_data.compression);
 				bool parse_from_handle = ParsesFromHandle(*file_handle);
 				string content;
 				bool fits = parse_from_handle ? file_handle->GetFileSize() <= bind_data.max_file_size
@@ -1291,6 +1296,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
+		} else if (kv.first == "compression") {
+			result->compression = FileCompressionTypeFromString(kv.second.ToString());
 		} else if (kv.first == "filename") {
 			include_filename = kv.second.GetValue<bool>();
 		}
@@ -1345,7 +1352,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 
 		try {
 			string content;
-			if (!ReadXMLFile(*OpenXMLFile(fs, filename), bind_data.max_file_size, content)) {
+			if (!ReadXMLFile(*OpenXMLFile(fs, filename, bind_data.compression), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
 					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
 					                            bind_data.max_file_size);
@@ -1474,6 +1481,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
+		} else if (kv.first == "compression") {
+			result->compression = FileCompressionTypeFromString(kv.second.ToString());
+			schema_options.compression = result->compression;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();
 		} else if (kv.first == "record_element") {
@@ -2233,6 +2243,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_xml_objects_single, {
 	                                                    {"ignore_errors", LogicalType::BOOLEAN},
 	                                                    {"maximum_file_size", LogicalType::BIGINT},
+	                                                    {"compression", LogicalType::VARCHAR},
 	                                                    {"filename", LogicalType::BOOLEAN},
 	                                                });
 	read_xml_objects_single.init_local = ReadDocumentInitLocal;
@@ -2245,6 +2256,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_xml_objects_array, {
 	                                                   {"ignore_errors", LogicalType::BOOLEAN},
 	                                                   {"maximum_file_size", LogicalType::BIGINT},
+	                                                   {"compression", LogicalType::VARCHAR},
 	                                                   {"filename", LogicalType::BOOLEAN},
 	                                               });
 	read_xml_objects_array.init_local = ReadDocumentInitLocal;
@@ -2271,6 +2283,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_xml_single, {
 	                                            {"ignore_errors", LogicalType::BOOLEAN},
 	                                            {"maximum_file_size", LogicalType::BIGINT},
+	                                            {"compression", LogicalType::VARCHAR},
 	                                            {"union_by_name", LogicalType::BOOLEAN},
 	                                            {"filename", LogicalType::BOOLEAN},
 	                                        });
@@ -2311,6 +2324,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_xml_array, {
 	                                           {"ignore_errors", LogicalType::BOOLEAN},
 	                                           {"maximum_file_size", LogicalType::BIGINT},
+	                                           {"compression", LogicalType::VARCHAR},
 	                                           {"union_by_name", LogicalType::BOOLEAN},
 	                                           {"filename", LogicalType::BOOLEAN},
 	                                       });
@@ -2366,6 +2380,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_html_single, {
 	                                             {"ignore_errors", LogicalType::BOOLEAN},
 	                                             {"maximum_file_size", LogicalType::BIGINT},
+	                                             {"compression", LogicalType::VARCHAR},
 	                                             {"union_by_name", LogicalType::BOOLEAN},
 	                                             {"filename", LogicalType::BOOLEAN},
 	                                         });
@@ -2405,6 +2420,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_html_array, {
 	                                            {"ignore_errors", LogicalType::BOOLEAN},
 	                                            {"maximum_file_size", LogicalType::BIGINT},
+	                                            {"compression", LogicalType::VARCHAR},
 	                                            {"union_by_name", LogicalType::BOOLEAN},
 	                                            {"filename", LogicalType::BOOLEAN},
 	                                        });
@@ -2459,6 +2475,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_html_objects_single, {
 	                                                     {"ignore_errors", LogicalType::BOOLEAN},
 	                                                     {"maximum_file_size", LogicalType::BIGINT},
+	                                                     {"compression", LogicalType::VARCHAR},
 	                                                     {"filename", LogicalType::BOOLEAN},
 	                                                 });
 	read_html_objects_single.init_local = ReadDocumentInitLocal;
@@ -2471,6 +2488,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	DeclareNamedParameters(read_html_objects_array, {
 	                                                    {"ignore_errors", LogicalType::BOOLEAN},
 	                                                    {"maximum_file_size", LogicalType::BIGINT},
+	                                                    {"compression", LogicalType::VARCHAR},
 	                                                    {"filename", LogicalType::BOOLEAN},
 	                                                });
 	read_html_objects_array.init_local = ReadDocumentInitLocal;

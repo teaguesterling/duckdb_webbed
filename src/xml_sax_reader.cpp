@@ -305,7 +305,7 @@ std::vector<XMLColumnInfo> SAXStreamReader::InferSchemaFromStream(FileSystem &fs
 	idx_t sample_count = static_cast<idx_t>(options.sample_size > 0 ? options.sample_size : 50);
 	XMLDocRAII doc;
 	{
-		XMLRecordStream stream(OpenXMLFile(fs, filename), filename, options, sample_count, true);
+		XMLRecordStream stream(OpenXMLFile(fs, filename, options.compression), filename, options, sample_count, true);
 		while (stream.ParseChunk()) {
 		}
 		if (stream.Records().empty()) {
@@ -454,7 +454,7 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 		widen[i] = v.IsNull();
 	};
 
-	XMLRecordStream stream(OpenXMLFile(fs, filename), filename, options);
+	XMLRecordStream stream(OpenXMLFile(fs, filename, options.compression), filename, options);
 	bool more;
 	do {
 		more = stream.ParseChunk();

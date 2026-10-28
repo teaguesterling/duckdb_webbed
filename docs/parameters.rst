@@ -168,6 +168,12 @@ Compressed Files
 
 A compressed file's decompressed size isn't known before it is read, so the reader decompresses up to ``maximum_file_size`` to decide between DOM and SAX. A file that overflows the limit is then read again from the start through SAX.
 
+``compression`` overrides detection by name: ``'auto'`` (the default), ``'none'`` to read a file's bytes as they are, ``'gzip'``, or ``'zstd'``.
+
+.. code-block:: sql
+
+   SELECT * FROM read_xml('legacy/feed.xml.gz', compression := 'none');
+
 Multi-File Parameters
 ---------------------
 

@@ -5,8 +5,8 @@
 
 namespace duckdb {
 
-//! Open an input file, decompressing it when its name ends in .gz, or .zst once the parquet extension is loaded.
-unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path);
+//! Open an input file. AUTO_DETECT decompresses a name ending in .gz, or .zst once the parquet extension is loaded.
+unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path, FileCompressionType compression);
 
 //! Read a whole file into content. Returns false when the file holds more than max_size bytes. A compressed file
 //! only reveals that by decompressing up to the limit, so Reset the handle before reading it again.

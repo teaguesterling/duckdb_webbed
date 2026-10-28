@@ -73,3 +73,38 @@ query I
 SELECT count(*) FROM read_html_objects('__TEST_DIR__/comp.html.gz');
 ----
 1
+
+# compression overrides detection by name
+statement ok
+COPY (SELECT '<rows><row><name>plain</name></row></rows>' AS xml) TO '__TEST_DIR__/plain_named.xml.gz' (FORMAT 'csv', HEADER false, QUOTE '', COMPRESSION none);
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/plain_named.xml.gz', record_element := 'row');
+----
+
+query I
+SELECT name FROM read_xml('__TEST_DIR__/plain_named.xml.gz', record_element := 'row', compression := 'none');
+----
+plain
+
+query I
+SELECT count(*) FROM read_xml_objects('__TEST_DIR__/plain_named.xml.gz', compression := 'none');
+----
+1
+
+statement ok
+COPY (SELECT '<rows><row><name>gz</name></row></rows>' AS xml) TO '__TEST_DIR__/gz_unnamed.xml' (FORMAT 'csv', HEADER false, QUOTE '', COMPRESSION gzip);
+
+query I
+SELECT name FROM read_xml('__TEST_DIR__/gz_unnamed.xml', record_element := 'row', compression := 'gzip');
+----
+gz
+
+query I
+SELECT count(*) FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row', compression := 'gzip', streaming := true, maximum_file_size := 4000);
+----
+200
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/comp.xml', compression := 'brotli');
+----

@@ -110,7 +110,8 @@ private:
 struct XMLReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool ignore_errors = false;
-	idx_t max_file_size = 16777216;        // 16MB default (files above this use SAX streaming)
+	idx_t max_file_size = 16777216; // 16MB default (files above this use SAX streaming)
+	FileCompressionType compression = FileCompressionType::AUTO_DETECT;
 	ParseMode parse_mode = ParseMode::XML; // Parsing mode (XML or HTML)
 
 	// For _objects functions

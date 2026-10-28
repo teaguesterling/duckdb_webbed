@@ -7,8 +7,8 @@
 
 namespace duckdb {
 
-unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path) {
-	return fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | FileCompressionType::AUTO_DETECT);
+unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path, FileCompressionType compression) {
+	return fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | compression);
 }
 
 // Reads in chunks of at most 1 GiB, because some platforms cap one read at INT_MAX bytes. A short read is legal on
