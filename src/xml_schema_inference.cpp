@@ -2373,9 +2373,11 @@ void XMLSchemaInference::WriteNodeValue(xmlNodePtr node, const LogicalType &targ
 
 void XMLSchemaInference::WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out, idx_t row,
                                         const XMLSchemaOptions &options, const std::string &datetime_format) {
-	// A plain VARCHAR needs no conversion, so it skips the Value. Aliased VARCHARs such as XML keep the cast.
+	// A plain VARCHAR needs no conversion, so it skips the Value. Aliased VARCHARs such as XML keep the cast, and
+	// invalid UTF-8 goes through Value, which raises the error.
 	if (target_type.id() != LogicalTypeId::VARCHAR || target_type.HasAlias() ||
-	    out.GetType().id() != LogicalTypeId::VARCHAR || out.GetType().HasAlias()) {
+	    out.GetType().id() != LogicalTypeId::VARCHAR || out.GetType().HasAlias() ||
+	    !Value::StringIsValid(text.c_str(), text.size())) {
 		out.SetValue(row, ConvertToValue(text, target_type, options, datetime_format));
 		return;
 	}
