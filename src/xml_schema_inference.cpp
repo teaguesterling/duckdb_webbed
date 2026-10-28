@@ -1840,7 +1840,6 @@ std::string XMLSchemaInference::CleanTextContent(const char *text, size_t size, 
 
 idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema, int remaining_depth,
                                       const XMLSchemaOptions &options, DataChunk &out, idx_t col, idx_t row) {
-
 	// If remaining_depth < 0, serialize the record as XML
 	if (remaining_depth < 0) {
 		if (col >= out.ColumnCount()) {
@@ -1912,7 +1911,8 @@ idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLCo
 					if (has_element_children) {
 						// Container element - check for structured types first
 						if (column.type.id() == LogicalTypeId::STRUCT) {
-							WriteNodeValue(child, column.type, column_out, row, options, column.winning_datetime_format);
+							WriteNodeValue(child, column.type, column_out, row, options,
+							               column.winning_datetime_format);
 							written = true;
 							break;
 						}
@@ -2037,9 +2037,8 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
                                                 const std::vector<LogicalType> &column_types,
                                                 const XMLSchemaOptions &options,
-                                                const std::vector<std::string> &column_datetime_formats,
-                                                DataChunk &out, idx_t col, idx_t row) {
-
+                                                const std::vector<std::string> &column_datetime_formats, DataChunk &out,
+                                                idx_t col, idx_t row) {
 	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
@@ -2140,7 +2139,8 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 	chunk.Initialize(Allocator::DefaultAllocator(), vector<LogicalType>(column_types.begin(), column_types.end()), 1);
 	for (xmlNodePtr record : record_elements) {
 		chunk.Reset();
-		auto end = WriteRecordWithSchema(record, column_names, column_types, options, column_datetime_formats, chunk, 0, 0);
+		auto end =
+		    WriteRecordWithSchema(record, column_names, column_types, options, column_datetime_formats, chunk, 0, 0);
 		rows.push_back(ReadFirstRow(chunk, end));
 	}
 
@@ -2371,9 +2371,8 @@ void XMLSchemaInference::WriteNodeValue(xmlNodePtr node, const LogicalType &targ
 	}
 }
 
-void XMLSchemaInference::WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out,
-                                        idx_t row, const XMLSchemaOptions &options,
-                                        const std::string &datetime_format) {
+void XMLSchemaInference::WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out, idx_t row,
+                                        const XMLSchemaOptions &options, const std::string &datetime_format) {
 	// A plain VARCHAR needs no conversion, so it skips the Value. Aliased VARCHARs such as XML keep the cast.
 	if (target_type.id() != LogicalTypeId::VARCHAR || target_type.HasAlias() ||
 	    out.GetType().id() != LogicalTypeId::VARCHAR || out.GetType().HasAlias()) {
@@ -2459,9 +2458,8 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 	return true;
 }
 
-void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out,
-                                             idx_t row, const XMLSchemaOptions &options,
-                                             const std::string &datetime_format) {
+void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
+                                             const XMLSchemaOptions &options, const std::string &datetime_format) {
 	CompatFlatValidity(out).SetValid(row);
 	auto &struct_children = StructType::GetChildTypes(struct_type);
 	for (idx_t field_idx = 0; field_idx < struct_children.size(); field_idx++) {

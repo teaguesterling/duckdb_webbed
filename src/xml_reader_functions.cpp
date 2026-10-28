@@ -1036,8 +1036,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				} else {
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
-					lstate.current_doc = parse_from_handle ? ParseXMLFile(*file_handle, is_html)
-					                                       : XMLDocRAII(content, is_html);
+					lstate.current_doc =
+					    parse_from_handle ? ParseXMLFile(*file_handle, is_html) : XMLDocRAII(content, is_html);
 
 					if (!lstate.current_doc.IsValid()) {
 						if (lstate.current_doc.HadResourceError()) {
@@ -1099,8 +1099,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					while (lstate.sax_pending_chunk < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
 						auto &chunk = *pending[lstate.sax_pending_chunk];
 						CompatSetOutputCardinality(chunk, chunk.size());
-						auto count = MinValue<idx_t>(chunk.size() - lstate.sax_pending_pos,
-						                             STANDARD_VECTOR_SIZE - output_idx);
+						auto count =
+						    MinValue<idx_t>(chunk.size() - lstate.sax_pending_pos, STANDARD_VECTOR_SIZE - output_idx);
 						for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
 							VectorOperations::Copy(chunk.data[col], output.data[col], lstate.sax_pending_pos + count,
 							                       lstate.sax_pending_pos, output_idx);

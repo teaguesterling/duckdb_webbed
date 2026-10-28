@@ -403,8 +403,8 @@ static std::string FieldText(xmlNodePtr field, const XMLSchemaOptions &options) 
 	std::string text;
 	xmlChar *content = xmlNodeGetContent(field);
 	if (content) {
-		text = XMLSchemaInference::CleanTextContent(reinterpret_cast<const char *>(content),
-		                                            options.preserve_whitespace);
+		text =
+		    XMLSchemaInference::CleanTextContent(reinterpret_cast<const char *>(content), options.preserve_whitespace);
 		xmlFree(content);
 	}
 	return text;
