@@ -1,14 +1,15 @@
 #include "xml_file_io.hpp"
 
 #include "duckdb/common/file_open_flags.hpp"
+#include "duckdb_compat.hpp"
 #include "xml_in_memory_reader.hpp"
 
 #include <exception>
 
 namespace duckdb {
 
-unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path, FileCompressionType compression) {
-	return fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | compression);
+unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path, const string &compression) {
+	return fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | CompatFileCompressionTypeFromString(compression));
 }
 
 // Reads in chunks of at most 1 GiB, because some platforms cap one read at INT_MAX bytes. A short read is legal on

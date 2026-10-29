@@ -473,7 +473,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 		} else if (kv.first == "compression") {
-			result->compression = CompatFileCompressionTypeFromString(kv.second.ToString());
+			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
 			result->include_filename = kv.second.GetValue<bool>();
 		}
@@ -606,7 +606,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
-			result->compression = CompatFileCompressionTypeFromString(kv.second.ToString());
+			result->compression = kv.second.ToString();
 			schema_options.compression = result->compression;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();
@@ -1298,7 +1298,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 		} else if (kv.first == "maximum_file_size") {
 			result->max_file_size = kv.second.GetValue<idx_t>();
 		} else if (kv.first == "compression") {
-			result->compression = CompatFileCompressionTypeFromString(kv.second.ToString());
+			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
 			include_filename = kv.second.GetValue<bool>();
 		}
@@ -1483,7 +1483,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			result->max_file_size = kv.second.GetValue<idx_t>();
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
-			result->compression = CompatFileCompressionTypeFromString(kv.second.ToString());
+			result->compression = kv.second.ToString();
 			schema_options.compression = result->compression;
 		} else if (kv.first == "root_element") {
 			schema_options.root_element = kv.second.ToString();

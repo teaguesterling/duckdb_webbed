@@ -108,3 +108,4 @@ SELECT count(*) FROM read_xml('__TEST_DIR__/comp.xml.gz', record_element := 'row
 statement error
 SELECT * FROM read_xml('__TEST_DIR__/comp.xml', compression := 'brotli');
 ----
+brotli
