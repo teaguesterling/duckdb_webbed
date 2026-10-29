@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/enums/file_compression_type.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -170,6 +171,29 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 // pin: only this one is OK in all three.
 inline bool CompatIsFinite(timestamp_t ts) {
 	return ts != timestamp_t::infinity() && ts != timestamp_t::ninfinity();
+}
+
+// --- FileCompressionType from a parameter string ---
+//
+// v1.5: enum class, parsed by the free function FileCompressionTypeFromString(const string &),
+//       which throws on an unknown name.
+// v2.0: a class wrapping the scheme's name (so extensions can register their own), built by an
+//       implicit FileCompressionType(string) constructor that normalizes the same aliases.
+//       FileCompressionTypeFromString is REMOVED.
+//
+// Probed by the constructor, the thing that changed. The v1.5 call takes a template-dependent
+// argument so its unqualified lookup is deferred to instantiation: on v2.0 the name does not
+// exist and that overload is never instantiated.
+template <class STR>
+inline FileCompressionType CompatFileCompressionTypeImpl(const STR &input, std::true_type) {
+	return FileCompressionType(input);
+}
+template <class STR>
+inline FileCompressionType CompatFileCompressionTypeImpl(const STR &input, std::false_type) {
+	return FileCompressionTypeFromString(input);
+}
+inline FileCompressionType CompatFileCompressionTypeFromString(const string &input) {
+	return CompatFileCompressionTypeImpl(input, std::is_constructible<FileCompressionType, string>());
 }
 
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
