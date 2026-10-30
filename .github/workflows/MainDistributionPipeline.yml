@@ -201,6 +201,57 @@ jobs:
           fi
           echo "duckdb-pin: OK, pin ${have:0:10} == ${DUCKDB_COMMIT:0:10} (${DUCKDB_VERSION}); jobs ship it and ${DUCKDB_VARIANT}; ${mode}" | tee -a "$summary"
 
+  # Resolves duckdb `main` to a TRUE (commit, version) pair, once per run, so the
+  # canary below can load the extension it builds and therefore run the tests.
+  #
+  # WHY A RESOLVER IS NEEDED. Two simpler shapes were measured, and both fail:
+  #   - `duckdb_version: main` alone. Without duckdb_commit, ci-tools uses
+  #     duckdb_version as both the checkout ref and the version stamp. A version
+  #     with no pre-release suffix reads as a release, so the engine expects the
+  #     stamp NormalizeVersionTag("main") = "vmain"
+  #     (src/main/extension/extension_install.cpp) while the stamp is "main". Every
+  #     load is refused and every test skips behind a green check. Measured: job
+  #     121226073100, 2026-10-25, "ran tests: 0 passed, 130 skipped".
+  #   - `duckdb_commit: main`, to split the ref from the stamp. DuckDB main's
+  #     CMakeLists.txt takes DUCKDB_COMMIT as a hash and requires 10-64 hex
+  #     characters, so configure fails: "Invalid DuckDB commit 'main'" (job
+  #     121265722800).
+  # The pair below defeats both. The commit is a real hash, and the version carries
+  # a `-dev` suffix, which stops the engine reading it as a release AND keeps the
+  # string inside ci_phase.py's STAGED_DUCKDB_VERSION_PATTERN.
+  #
+  # `--filter=tree:0`, not `blob:none`: `rev-list --count` walks the whole commit
+  # history, so the commits are needed and only the trees can be dropped.
+  #
+  # Fleet shape: the same job runs in urlpattern and plinking_duck.
+  duckdb-main-ref:
+    name: Canary build — resolve DuckDB main
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.resolve.outputs.commit }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+          # Commits only: rev-list --count needs the whole history, not its trees.
+          git clone --quiet --filter=tree:0 --no-checkout --single-branch --branch main \
+              https://github.com/duckdb/duckdb.git "$tmp/duckdb"
+          commit=$(git -C "$tmp/duckdb" rev-parse HEAD)
+          release=$(git -C "$tmp/duckdb" show HEAD:scripts/ci/release_version.txt | tr -d '[:space:]')
+          count=$(git -C "$tmp/duckdb" rev-list --count HEAD)
+          version="v${release}.0-dev${count}"
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.0-dev[0-9]+$ ]]; then
+            echo "::error::could not build a dev version for duckdb main at $commit (got '$version')"
+            exit 1
+          fi
+          echo "duckdb main -> $commit, version $version"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   # ADVISORY canary on DuckDB main, the line beyond the shipped v2.0-cyanoptera.
   # Pushes to main and on demand only; it never gates a PR. DuckDB main and
   # v2.0-cyanoptera have diverged both ways (main still has the
@@ -209,31 +260,28 @@ jobs:
   # preview, not a verdict.
   #   gh workflow run MainDistributionPipeline.yml --ref <branch>
   #
-  # COMPILE ONLY, ON PURPOSE. Its signal is "does webbed still build against DuckDB
-  # main", which is the drift that has actually broken this repo (the Identifier type
-  # change, absorbed by duckdb_compat.hpp). It cannot also run the tests:
-  #   - Following main means `duckdb_version: main`. Without duckdb_commit, ci-tools
-  #     uses duckdb_version as both the checkout ref and the version stamp.
-  #   - The engine treats a version without "-dev" as a release and expects the stamp
-  #     NormalizeVersionTag("main") = "vmain" (src/main/extension/extension_install.cpp),
-  #     but the stamp is "main", so every load is refused. Measured: job 121226073100,
-  #     2026-10-25, "ran tests: 0 passed, 130 skipped" with a green check.
-  #   - Splitting the two with `duckdb_commit: main` fails at configure: DuckDB main's
-  #     CMakeLists.txt takes DUCKDB_COMMIT as the commit hash and requires 10-64 hex
-  #     characters ("Invalid DuckDB commit 'main'", job 121265722800).
-  # So the tests are skipped explicitly, and the check name says so, rather than
-  # skipping silently behind a green check. Test coverage of the next DuckDB line is
-  # duckdb-next-build's job.
+  # IT NOW RUNS THE TESTS. This leg was compile-only until the resolver above
+  # existed, because `duckdb_version: main` made every load fail and every test
+  # skip behind a green check. Compile-only was the honest shape then, and the
+  # check name said so. It is not the shape now.
+  #
+  # The `if` lives on duckdb-main-ref above, not here: `needs` makes this leg skip
+  # whenever the resolver skips. One consequence -- this leg CANNOT run on a pull
+  # request, so a PR can never show a canary fix working. The proof is the next
+  # push to main.
   duckdb-main-canary:
-    name: Build extension binaries (duckdb main canary, compile only)
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    name: Build extension binaries (duckdb main canary)
+    needs: duckdb-main-ref
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main
     with:
-      duckdb_version: main
+      duckdb_version: ${{ needs.duckdb-main-ref.outputs.version }}
+      duckdb_commit: ${{ needs.duckdb-main-ref.outputs.commit }}
       ci_tools_version: main
       extension_name: webbed
       exclude_archs: 'windows_amd64_mingw'
-      skip_tests: true
+      # Same guard as duckdb-stable-build. A skipped test run must FAIL here: a
+      # silent skip is exactly how this leg read green while testing nothing.
+      test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
 
   # The registry default line: the same commit, version and ci-tools branch as
   # community-extensions' build.yml. Artifacts are named from duckdb_version, so
