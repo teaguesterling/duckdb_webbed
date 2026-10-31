@@ -25,3 +25,17 @@ query T
 SELECT * FROM read_xml('test/xml/sax_record_selection.xml', max_depth := 0, maximum_file_size := 10);
 ----
 <meta><n>skip</n></meta><items><item><a>1</a></item><item><a>2</a></item></items>
+
+# Records inside an entity expansion stay out of record selection on both paths, as DOM's tree walk skips entity content
+statement ok
+COPY (SELECT '<!DOCTYPE r [<!ENTITY f "<z>q</z>txt"><!ENTITY e "<item><a>9</a>&f;</item>">]><r>' || repeat('&e;<item><a>0</a></item><item><b>&f;</b></item>', 3) || '</r>') TO '__TEST_DIR__/entity_records.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query III
+SELECT count(*), count(a), count(*) FILTER (WHERE b = 'qtxt') FROM read_xml('__TEST_DIR__/entity_records.xml', record_element := 'item', maximum_file_size := 1000000);
+----
+6	3	3
+
+query III
+SELECT count(*), count(a), count(*) FILTER (WHERE b = 'qtxt') FROM read_xml('__TEST_DIR__/entity_records.xml', record_element := 'item', maximum_file_size := 10);
+----
+6	3	3

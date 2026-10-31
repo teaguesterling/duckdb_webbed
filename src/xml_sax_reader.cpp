@@ -40,11 +40,22 @@ static bool IsRecordStart(const XMLRecordStream::State &s, const xmlChar *localn
 	return s.depth == 2;
 }
 
+// libxml2 parses an entity's content once through these callbacks into a list it keeps as the entity's children, so
+// that content is built in full and never selected or freed as records.
+static bool InEntity(void *ctx) {
+	return static_cast<xmlParserCtxtPtr>(ctx)->inputNr > 1;
+}
+
 static void StreamStartElement(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI,
                                int nb_namespaces, const xmlChar **namespaces, int nb_attributes, int nb_defaulted,
                                const xmlChar **attributes) {
 	auto &s = StreamState(ctx);
 	if (s.stopped) {
+		return;
+	}
+	if (InEntity(ctx)) {
+		xmlSAX2StartElementNs(ctx, localname, prefix, URI, nb_namespaces, namespaces, nb_attributes, nb_defaulted,
+		                      attributes);
 		return;
 	}
 	s.depth++;
@@ -104,6 +115,10 @@ static void StreamEndElement(void *ctx, const xmlChar *localname, const xmlChar 
 	if (s.stopped) {
 		return;
 	}
+	if (InEntity(ctx)) {
+		xmlSAX2EndElementNs(ctx, localname, prefix, URI);
+		return;
+	}
 	auto parser = static_cast<xmlParserCtxtPtr>(ctx);
 	xmlNodePtr node = parser->node;
 	xmlSAX2EndElementNs(ctx, localname, prefix, URI);
@@ -141,10 +156,10 @@ static void StreamEndElement(void *ctx, const xmlChar *localname, const xmlChar 
 	s.depth--;
 }
 
-// Content outside a record is never read, so it is never built.
+// Content outside a record is never read, so it is never built, except an entity's content.
 static bool InRecord(void *ctx) {
 	auto &s = StreamState(ctx);
-	return !s.stopped && s.record_depth > 0;
+	return !s.stopped && (s.record_depth > 0 || InEntity(ctx));
 }
 
 static void StreamCharacters(void *ctx, const xmlChar *ch, int len) {
