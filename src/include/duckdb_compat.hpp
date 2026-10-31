@@ -3,6 +3,7 @@
 #include "duckdb.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/enums/file_compression_type.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -170,6 +171,29 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 // pin: only this one is OK in all three.
 inline bool CompatIsFinite(timestamp_t ts) {
 	return ts != timestamp_t::infinity() && ts != timestamp_t::ninfinity();
+}
+
+// --- FileCompressionType from a parameter string ---
+//
+// v1.5: enum class, parsed by the free function FileCompressionTypeFromString(const string &),
+//       which throws on an unknown name.
+// v2.0: a class wrapping the scheme's name (so extensions can register their own), built by an
+//       implicit FileCompressionType(string) constructor that normalizes the same aliases.
+//       FileCompressionTypeFromString is REMOVED.
+//
+// Probed by the constructor, the thing that changed. The v1.5 call takes a template-dependent
+// argument so its unqualified lookup is deferred to instantiation: on v2.0 the name does not
+// exist and that overload is never instantiated.
+template <class STR>
+inline FileCompressionType CompatFileCompressionTypeImpl(const STR &input, std::true_type) {
+	return FileCompressionType(input);
+}
+template <class STR>
+inline FileCompressionType CompatFileCompressionTypeImpl(const STR &input, std::false_type) {
+	return FileCompressionTypeFromString(input);
+}
+inline FileCompressionType CompatFileCompressionTypeFromString(const string &input) {
+	return CompatFileCompressionTypeImpl(input, std::is_constructible<FileCompressionType, string>());
 }
 
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
@@ -369,6 +393,41 @@ inline unique_ptr<ParsedExpression> CompatConstantImpl(Value value, std::false_t
 template <class CE = ConstantExpression>
 inline unique_ptr<ParsedExpression> CompatConstant(Value value) {
 	return CompatConstantImpl<CE>(std::move(value), CompatHasFromValue<CE>());
+}
+
+// --- writable flat vector data and validity --------------------------------
+// v2.0 makes FlatVector::GetData and Validity const and adds GetDataMutable and ValidityMutable;
+// v1.5 returns mutable data from GetData and Validity. Probe GetDataMutable, the thing that changed.
+template <class FV, class = void>
+struct CompatHasGetDataMutable : std::false_type {};
+template <class FV>
+struct CompatHasGetDataMutable<FV, decltype(void(FV::GetDataMutable(std::declval<Vector &>())))> : std::true_type {};
+
+template <class T, class FV>
+inline T *CompatFlatDataImpl(Vector &vector, std::true_type) {
+	return FV::template GetDataMutable<T>(vector);
+}
+template <class T, class FV>
+inline T *CompatFlatDataImpl(Vector &vector, std::false_type) {
+	return FV::template GetData<T>(vector);
+}
+template <class FV>
+inline ValidityMask &CompatFlatValidityImpl(Vector &vector, std::true_type) {
+	return FV::ValidityMutable(vector);
+}
+template <class FV>
+inline ValidityMask &CompatFlatValidityImpl(Vector &vector, std::false_type) {
+	return FV::Validity(vector);
+}
+//! A flat vector's data, writable, on either DuckDB line.
+template <class T, class FV = FlatVector>
+inline T *CompatFlatData(Vector &vector) {
+	return CompatFlatDataImpl<T, FV>(vector, CompatHasGetDataMutable<FV>());
+}
+//! A flat vector's validity mask, writable, on either DuckDB line.
+template <class FV = FlatVector>
+inline ValidityMask &CompatFlatValidity(Vector &vector) {
+	return CompatFlatValidityImpl<FV>(vector, CompatHasGetDataMutable<FV>());
 }
 
 namespace compat_detail {

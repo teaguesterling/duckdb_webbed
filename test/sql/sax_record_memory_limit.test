@@ -1,0 +1,24 @@
+# name: test/sql/sax_record_memory_limit.test
+# description: A streamed record may span at most a quarter of memory_limit, since libxml2 builds it outside the buffer manager
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<root><item><t>' || repeat('a', 20000000) || '</t></item><item><t>b</t></item></root>') TO '__TEST_DIR__/big_record.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query I
+SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+20000000
+
+statement ok
+SET memory_limit = '40MB';
+
+statement error
+SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+a quarter of memory_limit
+
+statement ok
+RESET memory_limit;

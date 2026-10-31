@@ -2,173 +2,93 @@
 
 #include "duckdb.hpp"
 #include "xml_schema_inference.hpp"
+#include "duckdb/common/file_system.hpp"
 #include <libxml/parser.h>
-#include <libxml/xmlstring.h>
-#include <map>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace duckdb {
 
-// State machine for accumulating one XML record from SAX events
-enum class SAXAccumulatorState {
-	SEEKING_RECORD, // Waiting for the start of a record element
-	IN_RECORD,      // Inside a record element, accumulating data
-	RECORD_COMPLETE // A complete record has been accumulated
-};
-
-// A single occurrence of a record field, tagged by payload kind. Occurrences are stored in
-// document order so a field mixing bare-text and nested-XML siblings keeps its original sequence.
-struct FieldOccurrence {
-	bool is_xml;           // true = nested-XML fragment, false = text payload
-	std::string payload;   // serialized XML fragment (is_xml) or cleaned text (!is_xml)
-	std::string own_attrs; // the field element's OWN attributes, pre-serialized and escaped as
-	                       // ` name="value"...` (empty if none), spliced into the reconstructed
-	                       // open tag so a direct child like <CustomFunctionReference id=".."/>
-	                       // keeps its attributes under streaming (DOM parity).
-};
-
-// Accumulates field data from SAX events for a single XML record
-struct SAXRecordAccumulator {
-	// Current state
-	SAXAccumulatorState state = SAXAccumulatorState::SEEKING_RECORD;
-
-	// Configuration
-	std::string record_tag;     // Tag name to match as record element (empty = auto-detect at depth 2)
-	std::string namespace_mode; // "strip" or "keep"
-	int record_depth = 0;       // Depth at which records appear (0 = not yet determined)
-
-	// Element tracking
-	std::vector<std::string> element_stack; // Stack of element names
-	int current_depth = 0;                  // Current nesting depth
-
-	// Accumulated data for current record. Each field maps to its occurrences in document order,
-	// each tagged as text or nested-XML so the rich-typing path (STRUCT, LIST<STRUCT>) can re-parse
-	// the inner XML while preserving the original sequence of mixed text/XML siblings.
-	std::unordered_map<std::string, std::vector<FieldOccurrence>> current_fields; // field_name -> ordered occurrences
-	std::unordered_map<std::string, std::string> current_attributes;              // attr_name -> value
-
-	// First-seen insertion order of current_fields / current_attributes keys, so synthetic XML
-	// built for schema inference reflects document order (deterministic column order).
-	std::vector<std::string> field_order;
-	std::vector<std::string> attribute_order;
-
-	// Namespace declarations (prefix -> URI) seen anywhere in the document, accumulated globally so
-	// reparsed nested-XML fragments can resolve prefixed names. Intentionally NOT cleared by Reset()
-	// since root-level xmlns: declarations appear before the first record.
-	std::map<std::string, std::string> namespace_declarations;
-
-	// Text accumulation (SAX may split text across multiple characters() callbacks)
-	std::string current_text;
-	std::string current_element_name; // Name of the element whose text we're accumulating
-
-	// Own attributes of the direct child of the record currently being accumulated (relative_depth==1),
-	// serialized as ` name="value"...` (escaped). Held from the child's start until its close, then
-	// stored on the FieldOccurrence so reconstruction can splice them into the field's open tag.
-	std::string current_field_attrs;
-
-	// Nested XML accumulation (for elements deeper than record_depth+1). The direct child's own text is
-	// also appended, so a mixed-content child keeps the text between its elements.
-	std::string nested_xml;
-	int nested_depth = 0;            // How deep we are in nested elements (0 = direct child of record)
-	bool field_has_children = false; // Whether the current direct child has element children
-	std::string field_text_run;      // Direct child text since its last child element, not yet in nested_xml
-
-	// Depth of the open xsi:nil="true" element whose content is being discarded (0 = none)
-	int nil_depth = 0;
-
-	// Output signal
-	bool row_ready = false;
-
-	// Reset accumulator for next record
-	void Reset();
-
-	// Get a field's occurrences in document order (empty vector if the field is absent)
-	const std::vector<FieldOccurrence> &GetOccurrences(const std::string &name) const;
-
-	// Serialize accumulated namespace declarations as ` xmlns:prefix="uri"...` (empty if none),
-	// ready to splice into a synthetic wrapper element's open tag.
-	std::string BuildNamespaceDeclarations() const;
-
-	// Check if an attribute exists
-	bool HasAttribute(const std::string &name) const;
-
-	// Get an attribute value (empty string if not found)
-	std::string GetAttribute(const std::string &name) const;
-};
-
-// SAX2 callback context passed as void* ctx to libxml2 SAX handlers
-struct SAXCallbackContext {
-	SAXRecordAccumulator *accumulator = nullptr;
-	idx_t max_rows = 0;                                             // Maximum records to accumulate (0 = unlimited)
-	idx_t rows_completed = 0;                                       // Number of completed records so far
-	bool stop_parsing = false;                                      // Signal to stop the push parser
-	std::vector<SAXRecordAccumulator> *completed_records = nullptr; // Where to store completed records
-	bool preserve_whitespace = true;
-	bool discard_attrs = false; // precomputed from XMLSchemaOptions::attr_mode == "discard" (hot-path flag)
-};
-
-// SAX2 callback functions (static, matching libxml2 signatures)
-void SAXStartElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI,
-                       int nb_namespaces, const xmlChar **namespaces, int nb_attributes, int nb_defaulted,
-                       const xmlChar **attributes);
-
-void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix, const xmlChar *URI);
-
-void SAXCharacters(void *ctx, const xmlChar *ch, int len);
-
-void SAXCdataBlock(void *ctx, const xmlChar *ch, int len);
-
-// Comments and processing instructions are preserved when reconstructing a nested XML
-// fragment, so streamed output matches the DOM serializer byte for byte (issue #158).
-// Declared here with the other callbacks rather than given internal linkage: these are
-// libxml2 callbacks, not file-local helpers like XmlEscapeText or ResolveElementName.
-void SAXComment(void *ctx, const xmlChar *value);
-
-void SAXProcessingInstruction(void *ctx, const xmlChar *target, const xmlChar *data);
-
-// Main SAX streaming reader class
-class SAXStreamReader {
+// Streams an XML file through libxml2's tree builder, building only record subtrees and their
+// ancestors.
+class XMLRecordStream {
 public:
-	// Create a SAX handler struct with our callbacks
-	static xmlSAXHandler CreateSAXHandler();
+	// keep_records leaves completed records in the document for TakeDocument. max_records > 0 stops
+	// the parse once that many records complete. prefix holds bytes already read from file, parsed first.
+	XMLRecordStream(std::unique_ptr<FileHandle> file, const std::string &filename, const XMLSchemaOptions &options,
+	                idx_t max_records = 0, bool keep_records = false, std::string prefix = std::string());
+	~XMLRecordStream();
 
-	// Describe the libxml2 error on a push-parser context, for inclusion in a
-	// thrown message. XML_PARSE_NOERROR suppresses libxml2's own reporting but
-	// the context still records the last error; read it before freeing the ctx.
+	XMLRecordStream(const XMLRecordStream &) = delete;
+	XMLRecordStream &operator=(const XMLRecordStream &) = delete;
+
+	// Parse the next chunk of the file, adding any records it completes to Records(). Returns false
+	// once the document ends or max_records is reached. Throws on malformed XML.
+	bool ParseChunk();
+
+	const std::vector<xmlNodePtr> &Records() const {
+		return state.records;
+	}
+
+	// Free the records returned so far, along with finished elements outside any record.
+	void ReleaseRecords();
+
+	// Hand over the document holding the kept records. Valid once parsing stops.
+	xmlDocPtr TakeDocument();
+
 	static std::string DescribeParseError(xmlParserCtxtPtr ctx);
 
-	// Read records from file using SAX push parsing via DuckDB FileSystem.
-	// Returns accumulated records as vectors of (field_name -> value) maps.
-	// Reads file in 64KB chunks.
-	static std::vector<SAXRecordAccumulator> ReadRecords(FileSystem &fs, const std::string &filename,
-	                                                     const XMLSchemaOptions &options, idx_t max_rows = 0);
+	// Callback state, public for the libxml2 handlers in the implementation file.
+	struct State {
+		std::string record_tag;
+		std::string root_element;
+		bool root_is_record = false;
+		bool keep_prefix = false;
+		bool keep_records = false;
+		idx_t max_records = 0;
+		idx_t max_record_bytes = 0;
+		// Input bytes handed to the parser before the current chunk, and that count when the open record started.
+		idx_t fed_bytes = 0;
+		idx_t record_start_bytes = 0;
 
-	// SAX-based schema inference: accumulate first N records,
-	// build synthetic XML, feed to existing InferSchema.
+		int depth = 0;
+		int record_depth = 0;
+		int root_depth = 0;
+		bool root_done = false;
+		bool stopped = false;
+		idx_t records_completed = 0;
+		// Per open element: whether a record started inside it, so keep_records leaves it in place.
+		std::vector<bool> holds_record;
+
+		std::vector<xmlNodePtr> records;
+		std::vector<xmlNodePtr> garbage;
+	};
+
+private:
+	static constexpr idx_t CHUNK_SIZE = 65536;
+
+	std::string filename;
+	std::unique_ptr<FileHandle> file;
+	xmlSAXHandler handler;
+	xmlParserCtxtPtr ctxt = nullptr;
+	State state;
+	std::vector<char> buffer;
+	std::string prefix;
+	idx_t prefix_offset = 0;
+	bool finished = false;
+};
+
+class SAXStreamReader {
+public:
+	// Infer the schema from the first sample_size records.
 	static std::vector<XMLColumnInfo> InferSchemaFromStream(FileSystem &fs, const std::string &filename,
 	                                                        const XMLSchemaOptions &options);
 
-	// Opt-in second bind-time pass (triggered by sample_size <= 0, the SAX equivalent of the DOM
-	// path's "sample every value"): stream the WHOLE file once more and widen to VARCHAR any
-	// narrow-typed column whose value, somewhere beyond the sample window, does not cast to the
-	// type inferred from the sample. Records are tested and discarded per chunk, so memory stays
-	// O(1) in the file size — unlike raising sample_size, which buffers the records. `columns` is
-	// updated in place. (#102 runtime out-of-sample widening, SAX path.)
+	// Opt-in second bind-time pass (sample_size <= 0): stream the whole file and widen to VARCHAR any
+	// column whose out-of-sample values don't cast to the sampled type, and append child elements first
+	// seen past the sample. Memory stays bounded by one chunk of records.
 	static void WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
 	                                            const XMLSchemaOptions &options, std::vector<XMLColumnInfo> &columns);
-
-	// Convert accumulated record data to a row of Values
-	static std::vector<Value> AccumulatorToRow(const SAXRecordAccumulator &accumulator,
-	                                           const std::vector<std::string> &column_names,
-	                                           const std::vector<LogicalType> &column_types,
-	                                           const XMLSchemaOptions &options,
-	                                           const std::vector<std::string> &column_datetime_formats = {},
-	                                           const std::vector<XMLColumnInfo> &inferred_schema = {});
-
-private:
-	static constexpr idx_t SAX_CHUNK_SIZE = 65536; // 64KB read chunks
 };
 
 } // namespace duckdb

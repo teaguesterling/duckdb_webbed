@@ -17,7 +17,6 @@
 #include <functional>
 #include <map>
 #include <mutex>
-#include <regex>
 #include <set>
 #include <unordered_set>
 
@@ -63,15 +62,21 @@ xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, 
 }
 
 } // namespace
-// Escape a UTF-8 string for safe embedding inside a JSON string literal (GitHub Issue #78).
-// libxml2 returns entity-decoded text (e.g. &quot; -> ", &#10; -> newline), so characters that
-// are illegal raw inside a JSON string must be re-escaped here at emit time. Only " , \ and the
-// C0 control range (0x00-0x1F) require escaping per RFC 8259; raw UTF-8 multibyte sequences and
-// characters such as / < > & are valid unescaped and are passed through untouched.
-static std::string EscapeJSONString(const std::string &input) {
-	std::string out;
-	out.reserve(input.size() + 8);
-	for (unsigned char c : input) {
+// Append input to out as JSON string contents. libxml2 returns entity-decoded text, so
+// characters illegal raw in a JSON string are re-escaped here. Only ", \ and the C0 control
+// range (0x00-0x1F) need escaping per RFC 8259, so runs of other bytes are appended whole.
+static void AppendJSONEscaped(std::string &out, const std::string &input) {
+	static const char *hex = "0123456789abcdef";
+	const char *p = input.data();
+	const char *end = p + input.size();
+	const char *run = p;
+	for (; p < end; p++) {
+		auto c = static_cast<unsigned char>(*p);
+		if (c >= 0x20 && c != '"' && c != '\\') {
+			continue;
+		}
+		out.append(run, static_cast<size_t>(p - run));
+		run = p + 1;
 		switch (c) {
 		case '"':
 			out += "\\\"";
@@ -95,18 +100,19 @@ static std::string EscapeJSONString(const std::string &input) {
 			out += "\\t";
 			break;
 		default:
-			if (c < 0x20) {
-				// Remaining C0 control characters: emit as \u00XX (lowercase hex).
-				static const char *hex = "0123456789abcdef";
-				out += "\\u00";
-				out += hex[(c >> 4) & 0xF];
-				out += hex[c & 0xF];
-			} else {
-				out += static_cast<char>(c);
-			}
+			out += "\\u00";
+			out += hex[(c >> 4) & 0xF];
+			out += hex[c & 0xF];
 			break;
 		}
 	}
+	out.append(run, static_cast<size_t>(end - run));
+}
+
+static std::string EscapeJSONString(const std::string &input) {
+	std::string out;
+	out.reserve(input.size() + 8);
+	AppendJSONEscaped(out, input);
 	return out;
 }
 
@@ -139,8 +145,16 @@ xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::stri
 	if (!compiled) {
 		throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
 	}
+	xmlResetError(&xpath_ctx->lastError);
 	xmlXPathObjectPtr result = xmlXPathCompiledEval(compiled, xpath_ctx);
 	xmlXPathFreeCompExpr(compiled);
+	// libxml2 reports a node set past its 10 million node cap the same way as a failed allocation. Other evaluation
+	// errors, such as an undefined namespace prefix, still read as no match.
+	if (!result && xpath_ctx->lastError.code == XML_ERR_NO_MEMORY) {
+		throw OutOfMemoryException("XPath expression '%s' ran out of memory or selects more nodes than libxml2 allows "
+		                           "(10 million). Use a narrower path, or a simple record_element name.",
+		                           xpath);
+	}
 	return result;
 }
 
@@ -202,6 +216,74 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 	xmlFree(nsList);
 }
 
+// A silent, per-context error handler keeps XPath errors off the global handler.
+static xmlXPathContextPtr NewDocumentXPathContext(xmlDocPtr doc) {
+	if (!doc) {
+		return nullptr;
+	}
+	xmlXPathContextPtr xpath_ctx = xmlXPathNewContext(doc);
+	if (xpath_ctx) {
+		xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
+		RegisterDocumentNamespaces(doc, xpath_ctx);
+	}
+	return xpath_ctx;
+}
+
+XMLDocRAII::XMLDocRAII(xmlDocPtr adopted) : doc(adopted) {
+	xpath_ctx = NewDocumentXPathContext(doc);
+}
+
+// libxml2 changes every dictionary reference count under one process-wide mutex, and a fresh parser
+// context creates and frees its own dictionary. Reusing one context per thread drops those per-parse
+// locks. Its documents share its dictionary, so they must be freed on the thread that parsed them.
+struct ThreadParserContext {
+	static constexpr size_t MAX_DICT_ENTRIES = 1 << 16;
+	xmlParserCtxtPtr ctxt = nullptr;
+	bool build_tree;
+
+	explicit ThreadParserContext(bool build_tree) : build_tree(build_tree) {
+	}
+
+	~ThreadParserContext() {
+		Discard();
+	}
+	xmlParserCtxtPtr Acquire() {
+		if (ctxt && xmlDictSize(xmlCtxtGetDict(ctxt)) > MAX_DICT_ENTRIES) {
+			Discard();
+		}
+		if (!ctxt) {
+			ctxt = build_tree ? xmlNewParserCtxt() : NewCheckOnlyContext();
+		}
+		return ctxt;
+	}
+	// Keeps the document and DTD callbacks, so declared entities still resolve, and drops the ones that build
+	// element, text, and comment nodes. Well-formedness checks run in the parser regardless of callbacks.
+	static xmlParserCtxtPtr NewCheckOnlyContext() {
+		xmlSAXHandler sax;
+		xmlSAXVersion(&sax, 2);
+		sax.startElementNs = nullptr;
+		sax.endElementNs = nullptr;
+		sax.startElement = nullptr;
+		sax.endElement = nullptr;
+		sax.characters = nullptr;
+		sax.ignorableWhitespace = nullptr;
+		sax.cdataBlock = nullptr;
+		sax.comment = nullptr;
+		sax.processingInstruction = nullptr;
+		sax.reference = nullptr;
+		return xmlNewSAXParserCtxt(&sax, nullptr);
+	}
+	void Discard() {
+		if (ctxt) {
+			xmlFreeParserCtxt(ctxt);
+			ctxt = nullptr;
+		}
+	}
+};
+
+static thread_local ThreadParserContext thread_parser_context(true);
+static thread_local ThreadParserContext thread_check_context(false);
+
 XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	// Parse the XML with options to suppress error messages (thread-safe, per-operation config)
 	// XML_PARSE_NOERROR: suppress error reports to stderr
@@ -212,7 +294,7 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	//   NONET is belt-and-suspenders for the network case.
 	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
 	XMLUtils::EnsureSecureParsing();
-	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+	xmlParserCtxtPtr parser_ctx = thread_parser_context.Acquire();
 	if (parser_ctx) {
 		XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
 		doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
@@ -220,32 +302,32 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 
 		// Check if parsing failed (NULL doc means fatal error)
 		if (!doc) {
-			// Capture whether the failure was an allocation failure rather than malformed
-			// input. The error object belongs to the parser context, so read it before free.
+			// Capture whether the failure was an allocation failure rather than malformed input.
 			const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
 			if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
 				resource_error = true;
+				thread_parser_context.Discard();
 			}
 		}
-		xmlFreeParserCtxt(parser_ctx);
 	} else {
 		// The parser context itself could not be allocated, which only happens when
 		// libxml2 is out of memory. Treat it as a resource failure, not malformed input.
 		resource_error = true;
 	}
 
-	if (doc) {
-		xpath_ctx = xmlXPathNewContext(doc);
-		// Set silent error handler on XPath context (thread-safe, per-context)
-		if (xpath_ctx) {
-			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
-			// Register all namespace declarations from the document so XPath with prefixes works
-			RegisterDocumentNamespaces(doc, xpath_ctx);
-		}
-	}
+	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
 XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+	XMLInMemoryReader reader {content.data(), content.size(), 0};
+	Parse(XMLInMemoryReaderRead, &reader, is_html);
+}
+
+XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html) {
+	Parse(read, context, is_html);
+}
+
+void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html) {
 	XMLUtils::EnsureSecureParsing();
 
 	if (is_html) {
@@ -255,16 +337,14 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
 		// TODO: Future enhancement - consider making encoding configurable via parameter
 		// (with UTF-8 as default) or deriving it from database collation settings
-		XMLInMemoryReader reader {content.data(), content.size(), 0};
-		doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+		doc = htmlReadIO(read, XMLInMemoryReaderClose, context, nullptr, "UTF-8",
 		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
 		if (parser_ctx) {
-			XMLInMemoryReader reader {content.data(), content.size(), 0};
-			doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
+			doc = xmlCtxtReadIO(parser_ctx, read, XMLInMemoryReaderClose, context, nullptr, nullptr,
 			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
 			if (!doc) {
 				// Distinguish an allocation failure from malformed input before freeing
@@ -282,15 +362,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
 		}
 	}
 
-	if (doc) {
-		xpath_ctx = xmlXPathNewContext(doc);
-		// Set silent error handler on XPath context (thread-safe, per-context)
-		if (xpath_ctx) {
-			xmlXPathSetErrorHandler(xpath_ctx, XMLSilentXPathErrorHandler, nullptr);
-			// Register all namespace declarations from the document so XPath with prefixes works
-			RegisterDocumentNamespaces(doc, xpath_ctx);
-		}
-	}
+	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
 XMLDocRAII::~XMLDocRAII() {
@@ -389,12 +461,34 @@ void XMLUtils::CleanupLibXML() {
 }
 
 bool XMLUtils::IsValidXML(const std::string &xml_str) {
-	// Validity is determined solely by this thread's own parse result (doc != nullptr).
-	// A shared process-global flag must never gate the result: another thread's failed
-	// parse could otherwise poison this check and mislabel a valid document as invalid
-	// under concurrent execution.
-	XMLDocRAII xml_doc(xml_str);
-	return xml_doc.IsValid();
+	// A well-formed document has a root element, so it contains `<`. That is byte 0x3C in every
+	// encoding libxml2 detects without a declaration except EBCDIC, which it detects only from the
+	// leading bytes 4C 6F A7 94. Rejecting other strings without a '<' byte skips a parse (and its
+	// error formatting) for the plain values to_xml checks per field.
+	if (!memchr(xml_str.data(), '<', xml_str.size())) {
+		static const char ebcdic_decl[] = {'\x4C', '\x6F', '\xA7', '\x94'};
+		bool maybe_ebcdic = xml_str.size() >= 4 && memcmp(xml_str.data(), ebcdic_decl, 4) == 0;
+		if (!maybe_ebcdic) {
+			return false;
+		}
+	}
+	XMLUtils::EnsureSecureParsing();
+	xmlParserCtxtPtr parser_ctx = thread_check_context.Acquire();
+	if (!parser_ctx) {
+		return false;
+	}
+	XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+	xmlDocPtr checked = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr,
+	                                  nullptr, XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+	if (!checked) {
+		const xmlError *last_error = xmlCtxtGetLastError(parser_ctx);
+		if (last_error && last_error->code == XML_ERR_NO_MEMORY) {
+			thread_check_context.Discard();
+		}
+		return false;
+	}
+	xmlFreeDoc(checked);
+	return true;
 }
 
 bool XMLUtils::IsWellFormedXML(const std::string &xml_str) {
@@ -1301,68 +1395,54 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 	// Create a set for fast lookup of force_list elements
 	std::unordered_set<std::string> force_list_set(options.force_list.begin(), options.force_list.end());
 
-	std::function<std::string(xmlNodePtr, bool)> node_to_json = [&](xmlNodePtr node, bool is_root) -> std::string {
-		if (!node || node->type != XML_ELEMENT_NODE) {
-			return "null";
-		}
-
-		// Get node name based on namespace handling mode
-		std::string node_name;
-		std::string local_name = std::string((const char *)node->name);
-
+	auto qualified_name = [&](const xmlChar *local, xmlNsPtr ns) {
+		std::string local_name(reinterpret_cast<const char *>(local));
 		if (options.namespaces == "strip") {
 			// Strip namespaces: use local name only
-			node_name = local_name;
-		} else if (options.namespaces == "expand" && node->ns && node->ns->href) {
+			return local_name;
+		} else if (options.namespaces == "expand" && ns && ns->href) {
 			// Expand: use full URI as prefix
-			node_name = std::string((const char *)node->ns->href) + ":" + local_name;
-		} else if (options.namespaces == "keep" && node->ns && node->ns->prefix) {
+			return std::string(reinterpret_cast<const char *>(ns->href)) + ":" + local_name;
+		} else if (options.namespaces == "keep" && ns && ns->prefix) {
 			// Keep: preserve namespace prefix
-			node_name = std::string((const char *)node->ns->prefix) + ":" + local_name;
-		} else {
-			// No namespace or keep mode without prefix
-			node_name = local_name;
+			return std::string(reinterpret_cast<const char *>(ns->prefix)) + ":" + local_name;
 		}
+		return local_name;
+	};
+	auto append_quoted = [](std::string &out, const std::string &text) {
+		out += '"';
+		AppendJSONEscaped(out, text);
+		out += '"';
+	};
 
-		std::string result = "{";
+	// An element that ends up empty under empty_elements 'null' or 'string' truncates back to
+	// where it started.
+	std::function<void(xmlNodePtr, bool, std::string &)> write_node = [&](xmlNodePtr node, bool is_root,
+	                                                                      std::string &out) {
+		size_t start = out.size();
+		if (is_root) {
+			out += '{';
+			append_quoted(out, qualified_name(node->name, node->ns));
+			out += ':';
+		}
+		out += '{';
 
 		// Add attributes if any
 		bool has_content = false;
 		for (xmlAttrPtr attr = node->properties; attr; attr = attr->next) {
-			if (has_content)
-				result += ",";
-
-			std::string attr_local_name = std::string((const char *)attr->name);
-			std::string attr_name;
-
-			if (options.namespaces == "strip") {
-				// Strip namespaces from attributes
-				attr_name = attr_local_name;
-			} else if (options.namespaces == "expand" && attr->ns && attr->ns->href) {
-				// Expand: use full URI as prefix
-				attr_name = std::string((const char *)attr->ns->href) + ":" + attr_local_name;
-			} else if (options.namespaces == "keep" && attr->ns && attr->ns->prefix) {
-				// Keep: preserve namespace prefix
-				attr_name = std::string((const char *)attr->ns->prefix) + ":" + attr_local_name;
-			} else {
-				// No namespace or keep mode without prefix
-				attr_name = attr_local_name;
+			if (has_content) {
+				out += ',';
 			}
-
 			XMLCharPtr attr_value(xmlNodeListGetString(xml_doc.doc, attr->children, 1));
-			std::string attr_val = attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "";
-
-			result +=
-			    "\"" + EscapeJSONString(options.attr_prefix + attr_name) + "\":\"" + EscapeJSONString(attr_val) + "\"";
+			append_quoted(out, options.attr_prefix + qualified_name(attr->name, attr->ns));
+			out += ':';
+			append_quoted(out, attr_value ? std::string(reinterpret_cast<const char *>(attr_value.get())) : "");
 			has_content = true;
 		}
 
 		// Add namespace declarations if xmlns_key is set and this is the root
 		if (is_root && !options.xmlns_key.empty()) {
-			// Collect all namespace declarations
 			std::map<std::string, std::string> namespaces;
-
-			// Get all namespace definitions on this node
 			for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
 				std::string prefix = ns->prefix ? std::string((const char *)ns->prefix) : "";
 				std::string href = ns->href ? std::string((const char *)ns->href) : "";
@@ -1370,21 +1450,23 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 					namespaces[prefix] = href;
 				}
 			}
-
-			// Add xmlns metadata if any namespaces found
 			if (!namespaces.empty()) {
-				if (has_content)
-					result += ",";
-				result += "\"" + EscapeJSONString(options.xmlns_key) + "\":{";
+				if (has_content) {
+					out += ',';
+				}
+				append_quoted(out, options.xmlns_key);
+				out += ":{";
 				bool first_ns = true;
 				for (const auto &ns_pair : namespaces) {
-					if (!first_ns)
-						result += ",";
-					result +=
-					    "\"" + EscapeJSONString(ns_pair.first) + "\":\"" + EscapeJSONString(ns_pair.second) + "\"";
+					if (!first_ns) {
+						out += ',';
+					}
+					append_quoted(out, ns_pair.first);
+					out += ':';
+					append_quoted(out, ns_pair.second);
 					first_ns = false;
 				}
-				result += "}";
+				out += '}';
 				has_content = true;
 			}
 		}
@@ -1394,7 +1476,7 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		std::string direct_text;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if ((child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) && child->content) {
-				direct_text += std::string((const char *)child->content);
+				direct_text += reinterpret_cast<const char *>(child->content);
 			}
 		}
 
@@ -1403,52 +1485,42 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		direct_text.erase(direct_text.find_last_not_of(" \t\n\r") + 1);
 
 		if (!direct_text.empty()) {
-			if (has_content)
-				result += ",";
-			result += "\"" + EscapeJSONString(options.text_key) + "\":\"" + EscapeJSONString(direct_text) + "\"";
+			if (has_content) {
+				out += ',';
+			}
+			append_quoted(out, options.text_key);
+			out += ':';
+			append_quoted(out, direct_text);
 			has_content = true;
 		}
 
-		// Add children elements
-		std::map<std::string, std::vector<std::string>> children_by_name;
+		std::map<std::string, std::vector<xmlNodePtr>> children_by_name;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				// Get child name using same namespace logic as parent
-				std::string child_local_name = std::string((const char *)child->name);
-				std::string child_name;
-
-				if (options.namespaces == "strip") {
-					child_name = child_local_name;
-				} else if (options.namespaces == "expand" && child->ns && child->ns->href) {
-					child_name = std::string((const char *)child->ns->href) + ":" + child_local_name;
-				} else if (options.namespaces == "keep" && child->ns && child->ns->prefix) {
-					child_name = std::string((const char *)child->ns->prefix) + ":" + child_local_name;
-				} else {
-					child_name = child_local_name;
-				}
-
-				std::string child_json = node_to_json(child, false);
-				children_by_name[child_name].push_back(child_json);
+				children_by_name[qualified_name(child->name, child->ns)].push_back(child);
 			}
 		}
 
 		for (const auto &child_group : children_by_name) {
-			if (has_content)
-				result += ",";
+			if (has_content) {
+				out += ',';
+			}
+			append_quoted(out, child_group.first);
+			out += ':';
 
 			// Check if this element should be forced to a list OR has multiple instances
 			bool should_be_array = force_list_set.count(child_group.first) > 0 || child_group.second.size() > 1;
-
 			if (should_be_array) {
-				result += "\"" + EscapeJSONString(child_group.first) + "\":[";
+				out += '[';
 				for (size_t i = 0; i < child_group.second.size(); i++) {
-					if (i > 0)
-						result += ",";
-					result += child_group.second[i];
+					if (i > 0) {
+						out += ',';
+					}
+					write_node(child_group.second[i], false, out);
 				}
-				result += "]";
+				out += ']';
 			} else {
-				result += "\"" + EscapeJSONString(child_group.first) + "\":" + child_group.second[0];
+				write_node(child_group.second[0], false, out);
 			}
 			has_content = true;
 		}
@@ -1456,26 +1528,29 @@ std::string XMLUtils::XMLToJSON(const std::string &xml_str, const XMLToJSONOptio
 		// Handle empty elements if no content was added
 		if (!has_content) {
 			if (options.empty_elements == "null") {
-				return "null";
+				out.resize(start);
+				out += "null";
+				return;
 			} else if (options.empty_elements == "string") {
-				return "\"\"";
+				out.resize(start);
+				out += "\"\"";
+				return;
 			}
 			// Default "object" case - return empty object
 		}
 
-		result += "}";
-
-		// For the root element, wrap it with the element name
+		out += '}';
 		if (is_root) {
-			return "{\"" + EscapeJSONString(node_name) + "\":" + result + "}";
+			out += '}';
 		}
-
-		return result;
 	};
 
 	xmlNodePtr root = xmlDocGetRootElement(xml_doc.doc);
 	if (root) {
-		return node_to_json(root, true);
+		std::string json;
+		json.reserve(xml_str.size());
+		write_node(root, true, json);
+		return json;
 	}
 
 	return "{}";
@@ -2320,6 +2395,17 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	}
 }
 
+// Write a string directly into the flat result vector. A string that is not valid UTF-8 goes
+// through Value, which raises the error.
+static void SetStringResult(Vector &result, idx_t i, const std::string &str) {
+	if (!Value::StringIsValid(str.c_str(), str.size())) {
+		result.SetValue(i, Value(str));
+		return;
+	}
+	CompatFlatData<string_t>(result)[i] = StringVector::AddString(result, str);
+	CompatFlatValidity(result).SetValid(i);
+}
+
 void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t count, const std::string &node_name) {
 	auto list_suffix = "_list";
 	auto element_name = node_name;
@@ -2390,7 +2476,7 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + list_suffix + "></" + node_name + list_suffix + ">";
 
-		result.SetValue(i, Value(xml_result));
+		SetStringResult(result, i, xml_result);
 	}
 }
 
@@ -2465,7 +2551,7 @@ void XMLUtils::ConvertStructToXML(Vector &input_vector, Vector &result, idx_t co
 		std::string xml_result = xml_ptr ? std::string(reinterpret_cast<const char *>(xml_ptr.get()))
 		                                 : "<" + node_name + "></" + node_name + ">";
 
-		result.SetValue(i, Value(xml_result));
+		SetStringResult(result, i, xml_result);
 	}
 }
 
@@ -2737,6 +2823,94 @@ std::vector<HTMLImage> XMLUtils::ExtractHTMLImages(const std::string &html_str) 
 	return images;
 }
 
+// Ancestor depths inside an HTML table while walking its descendants in document order.
+struct HTMLTableScope {
+	int thead = 0;
+	int tbody = 0;
+	int tfoot = 0;
+	int first_tr = 0;
+};
+
+// Matches an unprefixed XPath name test, which in libxml2 also requires a null namespace.
+static bool IsHTMLElement(xmlNodePtr node, const char *name) {
+	return node->type == XML_ELEMENT_NODE && node->ns == nullptr && xmlStrEqual(node->name, BAD_CAST name);
+}
+
+static bool HasHTMLChild(xmlNodePtr node, const char *name) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (IsHTMLElement(child, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool IsFirstHTMLRow(xmlNodePtr tr) {
+	for (xmlNodePtr sib = tr->prev; sib; sib = sib->prev) {
+		if (IsHTMLElement(sib, "tr")) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// Visits every descendant of table in document order (the XPath descendant axis), passing the
+// counts of thead/tbody/tfoot/first-row ancestors strictly between the table and the node.
+template <class VISIT>
+static void WalkHTMLTable(xmlNodePtr table, VISIT &&visit) {
+	HTMLTableScope scope;
+	auto adjust = [&](xmlNodePtr node, int delta) {
+		if (node->type != XML_ELEMENT_NODE || node->ns != nullptr) {
+			return;
+		}
+		if (IsHTMLElement(node, "thead")) {
+			scope.thead += delta;
+		} else if (IsHTMLElement(node, "tbody")) {
+			scope.tbody += delta;
+		} else if (IsHTMLElement(node, "tfoot")) {
+			scope.tfoot += delta;
+		} else if (IsHTMLElement(node, "tr") && IsFirstHTMLRow(node)) {
+			scope.first_tr += delta;
+		}
+	};
+	xmlNodePtr cur = table->children;
+	while (cur) {
+		visit(cur, scope);
+		adjust(cur, 1);
+		if (cur->type != XML_ENTITY_REF_NODE && cur->children) {
+			cur = cur->children;
+			continue;
+		}
+		while (cur) {
+			adjust(cur, -1);
+			if (cur->next) {
+				cur = cur->next;
+				break;
+			}
+			cur = cur->parent;
+			if (cur == table) {
+				cur = nullptr;
+			}
+		}
+	}
+}
+
+static std::string HTMLNodeText(xmlNodePtr node) {
+	XMLCharPtr text(xmlNodeGetContent(node));
+	return text ? std::string(reinterpret_cast<const char *>(text.get())) : "";
+}
+
+// The text of `.//td` under a row, or `.//td | .//th` with th, in document order.
+static std::vector<std::string> HTMLRowCells(xmlNodePtr row, bool include_th) {
+	std::vector<std::string> cells;
+	WalkHTMLTable(row, [&](xmlNodePtr node, const HTMLTableScope &) {
+		if (IsHTMLElement(node, "td") || (include_th && IsHTMLElement(node, "th"))) {
+			cells.push_back(HTMLNodeText(node));
+		}
+	});
+	return cells;
+}
+
 std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) {
 	std::vector<HTMLTable> tables;
 
@@ -2760,109 +2934,47 @@ std::vector<HTMLTable> XMLUtils::ExtractHTMLTables(const std::string &html_str) 
 			HTMLTable table;
 			table.line_number = table_node->line;
 
-			// Extract header row from thead/th or first tr/th
-			xmlXPathContextPtr local_ctx = xmlXPathNewContext(html_doc.doc);
-			if (local_ctx) {
-				// Set context to this table node
-				local_ctx->node = table_node;
-
-				// Look for header cells (th elements)
-				xmlXPathObjectPtr header_obj = EvalXPathChecked(local_ctx, ".//thead//th | .//tr[1]//th");
-
-				if (header_obj && header_obj->nodesetval && header_obj->nodesetval->nodeNr > 0) {
-					// Found th elements - use as headers
-					for (int j = 0; j < header_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr th_node = header_obj->nodesetval->nodeTab[j];
-						XMLCharPtr text(xmlNodeGetContent(th_node));
-						if (text) {
-							table.headers.push_back(std::string(reinterpret_cast<const char *>(text.get())));
-						} else {
-							table.headers.push_back("");
-						}
-					}
+			// Header cells are `.//thead//th | .//tr[1]//th`, body rows `.//tr` outside `tfoot`, and footer rows
+			// `.//tfoot//tr`. The walks evaluate these directly: libxml2 merges union operands pairwise, which is
+			// quadratic in the row count of a large table.
+			std::vector<xmlNodePtr> foot_rows;
+			WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
+				if ((scope.thead > 0 || scope.first_tr > 0) && IsHTMLElement(node, "th")) {
+					table.headers.push_back(HTMLNodeText(node));
+				} else if (scope.tfoot > 0 && IsHTMLElement(node, "tr")) {
+					foot_rows.push_back(node);
 				}
+			});
 
-				if (header_obj)
-					xmlXPathFreeObject(header_obj);
-
-				// Extract data rows (all rows for tables without th headers)
-				bool has_th_headers = !table.headers.empty();
-				// tfoot rows are excluded here and collected separately below; without the
-				// filter they land in the body as ordinary data rows.
-				std::string data_xpath = has_th_headers ? ".//tbody//tr[not(ancestor::tfoot)] | "
-				                                          ".//tr[not(th)][not(ancestor::tfoot)]"
-				                                        : ".//tbody//tr[not(ancestor::tfoot)] | "
-				                                          ".//tr[not(ancestor::tfoot)]";
-
-				xmlXPathObjectPtr rows_obj = EvalXPathChecked(local_ctx, data_xpath);
-
-				if (rows_obj && rows_obj->nodesetval) {
-					for (int j = 0; j < rows_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr row_node = rows_obj->nodesetval->nodeTab[j];
-						std::vector<std::string> row_data;
-
-						// Extract td elements from this row
-						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
-						if (row_ctx) {
-							row_ctx->node = row_node;
-							xmlXPathObjectPtr cells_obj = EvalXPathChecked(row_ctx, ".//td");
-
-							if (cells_obj && cells_obj->nodesetval) {
-								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
-									xmlNodePtr cell_node = cells_obj->nodesetval->nodeTab[k];
-									XMLCharPtr text(xmlNodeGetContent(cell_node));
-									if (text) {
-										row_data.push_back(std::string(reinterpret_cast<const char *>(text.get())));
-									} else {
-										row_data.push_back("");
-									}
-								}
-							}
-
-							if (cells_obj)
-								xmlXPathFreeObject(cells_obj);
-							xmlXPathFreeContext(row_ctx);
-						}
-
+			// Extract data rows (all rows for tables without th headers)
+			bool has_th_headers = !table.headers.empty();
+			// tfoot rows are excluded here and collected separately below.
+			bool table_in_tfoot = false;
+			for (xmlNodePtr anc = table_node->parent; anc; anc = anc->parent) {
+				if (IsHTMLElement(anc, "tfoot")) {
+					table_in_tfoot = true;
+					break;
+				}
+			}
+			if (!table_in_tfoot) {
+				WalkHTMLTable(table_node, [&](xmlNodePtr node, const HTMLTableScope &scope) {
+					if (scope.tfoot > 0 || !IsHTMLElement(node, "tr")) {
+						return;
+					}
+					if (!has_th_headers || scope.tbody > 0 || !HasHTMLChild(node, "th")) {
+						auto row_data = HTMLRowCells(node, false);
 						if (!row_data.empty()) {
-							table.rows.push_back(row_data);
+							table.rows.push_back(std::move(row_data));
 						}
 					}
+				});
+			}
+
+			for (xmlNodePtr row_node : foot_rows) {
+				auto row_data = HTMLRowCells(row_node, true);
+				if (!row_data.empty()) {
+					table.footers.push_back(std::move(row_data));
 				}
-
-				if (rows_obj)
-					xmlXPathFreeObject(rows_obj);
-
-				// <tfoot> rows, gathered the same way as body rows
-				xmlXPathObjectPtr foot_obj = EvalXPathChecked(local_ctx, ".//tfoot//tr");
-				if (foot_obj && foot_obj->nodesetval) {
-					for (int j = 0; j < foot_obj->nodesetval->nodeNr; j++) {
-						xmlNodePtr row_node = foot_obj->nodesetval->nodeTab[j];
-						std::vector<std::string> row_data;
-						xmlXPathContextPtr row_ctx = xmlXPathNewContext(html_doc.doc);
-						if (row_ctx) {
-							row_ctx->node = row_node;
-							xmlXPathObjectPtr cells_obj = EvalXPathChecked(row_ctx, ".//td | .//th");
-							if (cells_obj && cells_obj->nodesetval) {
-								for (int k = 0; k < cells_obj->nodesetval->nodeNr; k++) {
-									XMLCharPtr text(xmlNodeGetContent(cells_obj->nodesetval->nodeTab[k]));
-									row_data.push_back(text ? std::string(reinterpret_cast<const char *>(text.get()))
-									                        : "");
-								}
-							}
-							if (cells_obj)
-								xmlXPathFreeObject(cells_obj);
-							xmlXPathFreeContext(row_ctx);
-						}
-						if (!row_data.empty()) {
-							table.footers.push_back(row_data);
-						}
-					}
-				}
-				if (foot_obj)
-					xmlXPathFreeObject(foot_obj);
-
-				xmlXPathFreeContext(local_ctx);
 			}
 
 			// Set table metadata
@@ -3071,29 +3183,53 @@ std::string XMLUtils::HTMLEscape(const std::string &text) {
 std::set<std::string> DetectXPathPrefixes(const std::string &xpath) {
 	std::set<std::string> prefixes;
 
-	// Regex pattern to match namespace prefixes in XPath
-	// Matches: prefix:name where prefix is NCName (valid XML name without colon)
-	// NCName pattern: [A-Za-z_][A-Za-z0-9._-]*
-	// We look for prefix: followed by a valid name character (not ::)
-	static const std::regex prefix_pattern(
-	    R"((?:^|[/\[\(@,|])([A-Za-z_][A-Za-z0-9._-]*):(?!:)([A-Za-z_*][A-Za-z0-9._-]*))", std::regex::optimize);
-
 	// XPath axes to exclude (these use :: not single :)
 	static const std::set<std::string> xpath_axes = {
 	    "ancestor",  "ancestor-or-self",  "attribute", "child",  "descendant", "descendant-or-self",
 	    "following", "following-sibling", "namespace", "parent", "preceding",  "preceding-sibling",
 	    "self"};
 
-	std::sregex_iterator iter(xpath.begin(), xpath.end(), prefix_pattern);
-	std::sregex_iterator end;
+	// Finds `prefix:name` at the start or after one of / [ ( @ , |, where prefix is
+	// [A-Za-z_][A-Za-z0-9._-]* and name starts with [A-Za-z_*] (so `axis::` never matches). Each
+	// match consumes its name, and scanning resumes after it.
+	auto is_name_start = [](char c) {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+	};
+	auto is_name_char = [&](char c) {
+		return is_name_start(c) || (c >= '0' && c <= '9') || c == '.' || c == '-';
+	};
+	auto is_delimiter = [](char c) {
+		return c == '/' || c == '[' || c == '(' || c == '@' || c == ',' || c == '|';
+	};
 
-	while (iter != end) {
-		std::string prefix = (*iter)[1].str();
-		// Don't include XPath axis specifiers
-		if (xpath_axes.find(prefix) == xpath_axes.end()) {
-			prefixes.insert(prefix);
+	const size_t n = xpath.size();
+	size_t i = 0;
+	while (i < n) {
+		size_t name_start;
+		if (i == 0 && is_name_start(xpath[0])) {
+			name_start = 0;
+		} else if (is_delimiter(xpath[i]) && i + 1 < n && is_name_start(xpath[i + 1])) {
+			name_start = i + 1;
+		} else {
+			i++;
+			continue;
 		}
-		++iter;
+		size_t colon = name_start + 1;
+		while (colon < n && is_name_char(xpath[colon])) {
+			colon++;
+		}
+		if (colon + 1 < n && xpath[colon] == ':' && (is_name_start(xpath[colon + 1]) || xpath[colon + 1] == '*')) {
+			std::string prefix = xpath.substr(name_start, colon - name_start);
+			if (xpath_axes.find(prefix) == xpath_axes.end()) {
+				prefixes.insert(std::move(prefix));
+			}
+			i = colon + 2;
+			while (i < n && is_name_char(xpath[i])) {
+				i++;
+			}
+			continue;
+		}
+		i++;
 	}
 
 	return prefixes;
@@ -3246,20 +3382,38 @@ std::string GetCommonNamespaceURI(const std::string &prefix) {
 std::set<std::string> DetectDocumentPrefixes(const std::string &xml_str) {
 	std::set<std::string> prefixes;
 
-	// Pattern to match prefixed element or attribute names: prefix:name
-	static const std::regex prefix_pattern(R"(<([A-Za-z_][A-Za-z0-9._-]*):|\s([A-Za-z_][A-Za-z0-9._-]*):)",
-	                                       std::regex::optimize);
+	// Finds `<prefix:` (element) and `<whitespace>prefix:` (attribute), where prefix is
+	// [A-Za-z_][A-Za-z0-9._-]*. This runs on every document in namespaces := 'auto', where a
+	// std::regex scan dominated the query.
+	auto is_name_start = [](char c) {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+	};
+	auto is_name_char = [&](char c) {
+		return is_name_start(c) || (c >= '0' && c <= '9') || c == '.' || c == '-';
+	};
+	auto is_space = [](char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+	};
 
-	std::sregex_iterator iter(xml_str.begin(), xml_str.end(), prefix_pattern);
-	std::sregex_iterator end;
-
-	while (iter != end) {
-		// Match is in group 1 (element) or group 2 (attribute)
-		std::string prefix = (*iter)[1].matched ? (*iter)[1].str() : (*iter)[2].str();
-		if (!prefix.empty() && prefix != "xmlns") {
-			prefixes.insert(prefix);
+	const size_t n = xml_str.size();
+	size_t i = 0;
+	while (i < n) {
+		char c = xml_str[i];
+		if ((c == '<' || is_space(c)) && i + 1 < n && is_name_start(xml_str[i + 1])) {
+			size_t name_end = i + 2;
+			while (name_end < n && is_name_char(xml_str[name_end])) {
+				name_end++;
+			}
+			if (name_end < n && xml_str[name_end] == ':') {
+				std::string prefix = xml_str.substr(i + 1, name_end - i - 1);
+				if (prefix != "xmlns") {
+					prefixes.insert(std::move(prefix));
+				}
+				i = name_end + 1;
+				continue;
+			}
 		}
-		++iter;
+		i++;
 	}
 
 	return prefixes;

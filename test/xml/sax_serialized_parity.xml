@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<doc>
+<item><title>An <i>O</i>(<i>n</i> <i>log</i> <i>n</i>) bound</title><m:math xmlns:m="urn:m"><m:mrow><m:mi>x</m:mi><m:mn>2</m:mn></m:mrow></m:math></item>
+<item><title>plain</title><m:math xmlns:m="urn:m"><m:mrow><m:mi>y</m:mi><m:mn>3</m:mn></m:mrow></m:math></item>
+</doc>

@@ -10,6 +10,7 @@
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <regex>
 #include <unordered_set>
 #include <libxml/xpath.h>
@@ -34,44 +35,68 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 	return name;
 }
 
-// Helper: Collect all child elements with a specific name from a parent node
-void XMLSchemaInference::CollectChildElements(xmlNodePtr parent, const std::string &child_name,
-                                              const XMLSchemaOptions &options, std::vector<xmlNodePtr> &result) {
-	if (!parent) {
-		return;
-	}
-	for (xmlNodePtr sibling = parent->children; sibling; sibling = sibling->next) {
-		if (sibling->type == XML_ELEMENT_NODE) {
-			std::string sibling_name((const char *)sibling->name);
-			if (options.namespaces == "strip") {
-				sibling_name = StripNamespacePrefix(sibling_name);
-			}
-			if (sibling_name == child_name) {
-				result.push_back(sibling);
-			}
-		}
-	}
-}
+namespace {
 
-// Helper: Collect the union of distinct child element names across all parent instances,
-// preserving first-seen document order so optional fields absent from the first instance
-// are still represented in the inferred struct.
-void XMLSchemaInference::CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances,
-                                                  const XMLSchemaOptions &options, std::vector<std::string> &result) {
-	std::unordered_set<std::string> seen;
-	for (xmlNodePtr instance : instances) {
-		for (xmlNodePtr child = instance->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				std::string child_name((const char *)child->name);
-				if (options.namespaces == "strip") {
-					child_name = StripNamespacePrefix(child_name);
-				}
-				if (seen.insert(child_name).second) {
-					result.push_back(child_name);
+// A name inside a node's own storage, so grouping children doesn't allocate per child.
+struct NameRef {
+	const char *data;
+	size_t size;
+
+	bool operator==(const NameRef &other) const {
+		return size == other.size && memcmp(data, other.data, size) == 0;
+	}
+};
+
+struct NameRefHash {
+	size_t operator()(const NameRef &name) const {
+		return Hash(name.data, name.size);
+	}
+};
+
+} // namespace
+
+XMLSchemaInference::ChildGroups XMLSchemaInference::GroupChildElements(const std::vector<xmlNodePtr> &instances,
+                                                                       const XMLSchemaOptions &options) {
+	ChildGroups groups;
+	bool strip = options.namespaces == "strip";
+	std::unordered_map<NameRef, idx_t, NameRefHash> index;
+	std::vector<idx_t> last_instance;
+	std::vector<int> count_in_instance;
+	for (idx_t i = 0; i < instances.size(); i++) {
+		for (xmlNodePtr child = instances[i]->children; child; child = child->next) {
+			if (child->type != XML_ELEMENT_NODE) {
+				continue;
+			}
+			const char *name = (const char *)child->name;
+			if (strip) {
+				const char *colon = strchr(name, ':');
+				if (colon) {
+					name = colon + 1;
 				}
 			}
+			NameRef key {name, strlen(name)};
+			auto entry = index.find(key);
+			idx_t group;
+			if (entry == index.end()) {
+				group = groups.names.size();
+				index.emplace(key, group);
+				groups.names.emplace_back(key.data, key.size);
+				groups.nodes.emplace_back();
+				groups.max_counts.push_back(0);
+				last_instance.push_back(i);
+				count_in_instance.push_back(0);
+			} else {
+				group = entry->second;
+			}
+			if (last_instance[group] != i) {
+				last_instance[group] = i;
+				count_in_instance[group] = 0;
+			}
+			groups.max_counts[group] = std::max(groups.max_counts[group], ++count_in_instance[group]);
+			groups.nodes[group].push_back(child);
 		}
 	}
+	return groups;
 }
 
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xml_content,
@@ -81,15 +106,18 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchema(const std::string &xm
 	return columns;
 }
 
-// NEW: Main InferSchema function using 3-phase approach
 std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::string &xml_content,
                                                                    const XMLSchemaOptions &options) {
-	std::vector<XMLColumnInfo> columns;
-
 	// Parse document using appropriate parser based on opaque type name
 	// HTML mode uses libxml2's HTML parser which handles malformed content better
 	bool is_html = (options.opaque_type_name == "HTML");
 	XMLDocRAII doc(xml_content, is_html);
+	return InferSchemaFromDocument(doc, options);
+}
+
+std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAII &doc,
+                                                                       const XMLSchemaOptions &options) {
+	std::vector<XMLColumnInfo> columns;
 	if (!doc.IsValid()) {
 		// Fallback
 		columns.emplace_back("content", LogicalType::VARCHAR, false, "", 1.0);
@@ -162,6 +190,62 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::st
 }
 
 // Phase 1: Identify Record Elements
+static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std::vector<xmlNodePtr> &out) {
+	if (xmlStrEqual(node->name, name)) {
+		out.push_back(node);
+	}
+	// Elements only nest inside elements: entity references are left unexpanded, and the XPath
+	// descendant axis does not enter them either.
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollectElementsByLocalName(child, name, out);
+		}
+	}
+}
+
+// Resolve record_element to its nodes in document order. A bare tag, or `//tag`, matches by local
+// name regardless of namespace: the node set of //*[local-name()='tag'], found by walking the tree
+// instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
+// cannot sit inside that XPath literal (a quote or NUL) still goes to XPath, which rejects it.
+static std::vector<xmlNodePtr> FindRecordElements(XMLDocRAII &doc, const std::string &record_element) {
+	auto is_simple = [](const std::string &tag) {
+		return tag.find_first_of("/[@") == std::string::npos;
+	};
+	std::string xpath_expr = record_element;
+	std::string tag;
+	bool simple = false;
+	if (is_simple(record_element)) {
+		tag = record_element;
+		simple = true;
+	} else if (record_element.substr(0, 2) == "//" && is_simple(record_element.substr(2))) {
+		tag = record_element.substr(2);
+		simple = true;
+	}
+	if (simple) {
+		if (tag.find_first_of(std::string("'\0", 2)) == std::string::npos) {
+			std::vector<xmlNodePtr> nodes;
+			xmlNodePtr root = xmlDocGetRootElement(doc.doc);
+			if (root) {
+				CollectElementsByLocalName(root, BAD_CAST tag.c_str(), nodes);
+			}
+			return nodes;
+		}
+		xpath_expr = "//*[local-name()='" + tag + "']";
+	}
+
+	std::vector<xmlNodePtr> nodes;
+	xmlXPathObjectPtr xpath_obj = EvalXPathChecked(doc.xpath_ctx, xpath_expr);
+	if (xpath_obj && xpath_obj->nodesetval) {
+		for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
+			nodes.push_back(xpath_obj->nodesetval->nodeTab[i]);
+		}
+	}
+	if (xpath_obj) {
+		xmlXPathFreeObject(xpath_obj);
+	}
+	return nodes;
+}
+
 std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
                                                                    const XMLSchemaOptions &options) {
 	std::vector<xmlNodePtr> record_elements;
@@ -179,33 +263,7 @@ std::vector<xmlNodePtr> XMLSchemaInference::IdentifyRecordElements(XMLDocRAII &d
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
-		std::string xpath_expr = options.record_element;
-
-		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
-		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
-		    xpath_expr.find('@') == std::string::npos) {
-			// Simple tag name - use local-name() for namespace-agnostic matching
-			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
-		} else if (xpath_expr.substr(0, 2) == "//") {
-			// XPath starting with // - check if it's just a simple tag name after //
-			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
-			    tag_part.find('@') == std::string::npos) {
-				// Simple tag name after // - use local-name()
-				xpath_expr = "//*[local-name()='" + tag_part + "']";
-			}
-		}
-
-		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(doc.xpath_ctx, xpath_expr);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
-			}
-		}
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+		record_elements = FindRecordElements(doc, options.record_element);
 	}
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {
@@ -476,16 +534,12 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 		// Collect text content for type detection
 		if (text_samples.size() < XmlSampleLimit(options)) {
-			xmlChar *content = xmlNodeGetContent(node);
-			if (content) {
-				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
-				if (!text.empty() && !IsNullString(text, options)) {
-					text_samples.push_back(text);
-					if (!has_attributes) {
-						sample_values.push_back(text);
-					}
+			std::string text = CleanNodeText(node, options.preserve_whitespace);
+			if (!text.empty() && !IsNullString(text, options)) {
+				text_samples.push_back(text);
+				if (!has_attributes) {
+					sample_values.push_back(text);
 				}
-				xmlFree(content);
 			}
 		}
 	}
@@ -520,13 +574,9 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			if (samples.size() >= XmlSampleLimit(options)) {
 				break;
 			}
-			xmlChar *content = xmlNodeGetContent(instance);
-			if (content) {
-				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
-				if (!text.empty() && !IsNullString(text, options)) {
-					samples.push_back(text);
-				}
-				xmlFree(content);
+			std::string text = CleanNodeText(instance, options.preserve_whitespace);
+			if (!text.empty() && !IsNullString(text, options)) {
+				samples.push_back(text);
 			}
 		}
 		if (!has_text) {
@@ -554,53 +604,27 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 
 	// Column repeats in a record OR forced to be list → LIST type
 	if (column.repeats_in_record || force_as_list) {
-		// Analyze the structure across ALL instances to determine element type
-		// Check what child elements exist across ALL instances and track max count per record
-		std::unordered_map<std::string, int> child_max_counts;
-		for (xmlNodePtr instance : column.instances) {
-			std::unordered_map<std::string, int> instance_counts;
-			for (xmlNodePtr child = instance->children; child; child = child->next) {
-				if (child->type == XML_ELEMENT_NODE) {
-					std::string child_name((const char *)child->name);
-					if (options.namespaces == "strip") {
-						child_name = StripNamespacePrefix(child_name);
-					}
-					instance_counts[child_name]++;
-				}
-			}
-			// Track maximum occurrence across all instances
-			for (const auto &pair : instance_counts) {
-				child_max_counts[pair.first] = std::max(child_max_counts[pair.first], pair.second);
-			}
-		}
+		auto children = GroupChildElements(column.instances, options);
 
 		// Build STRUCT type: first attributes, then child elements
 		child_list_t<LogicalType> struct_fields;
-		// Iterate over children across ALL instances in document order so that optional
-		// fields absent from the first occurrence are still included in the struct.
-		std::vector<std::string> ordered_child_names;
-		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
 
 		// 1. Add attributes from every instance as VARCHAR STRUCT fields (unless we're discarding them)
-		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, children.names)) {
 			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 		}
 
 		// 2. If no child elements but has text content, add #text field with inferred type
-		if (child_max_counts.empty() && !struct_fields.empty()) {
+		if (children.names.empty() && !struct_fields.empty()) {
 			// Collect text samples from all instances for type inference
 			std::vector<std::string> list_text_samples;
 			for (xmlNodePtr instance : column.instances) {
 				if (list_text_samples.size() >= XmlSampleLimit(options)) {
 					break;
 				}
-				xmlChar *content = xmlNodeGetContent(instance);
-				if (content) {
-					std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
-					if (!text.empty()) {
-						list_text_samples.push_back(text);
-					}
-					xmlFree(content);
+				std::string text = CleanNodeText(instance, options.preserve_whitespace);
+				if (!text.empty()) {
+					list_text_samples.push_back(text);
 				}
 			}
 			if (!list_text_samples.empty()) {
@@ -613,18 +637,13 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		}
 
 		// 3. Add child elements as STRUCT fields (if any)
-		if (!child_max_counts.empty()) {
-			for (const std::string &child_name : ordered_child_names) {
-				// Create a ColumnAnalysis for this nested child
+		if (!children.names.empty()) {
+			for (idx_t g = 0; g < children.names.size(); g++) {
+				const std::string &child_name = children.names[g];
 				ColumnAnalysis nested_col(child_name, false);
-
-				// Collect ALL instances of this child element from ALL parent instances
-				for (xmlNodePtr instance : column.instances) {
-					CollectChildElements(instance, child_name, options, nested_col.instances);
-				}
-
-				nested_col.occurrence_count = child_max_counts[child_name];
-				nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+				nested_col.instances = std::move(children.nodes[g]);
+				nested_col.occurrence_count = children.max_counts[g];
+				nested_col.repeats_in_record = children.max_counts[g] > 1;
 
 				// Recursively infer type with decreased depth.
 				// nested_winning_fmt is still discarded: no per-field format map is threaded
@@ -637,8 +656,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 		}
 
-		if (!child_max_counts.empty()) {
-			add_mixed_text_field(ordered_child_names, struct_fields);
+		if (!children.names.empty()) {
+			add_mixed_text_field(children.names, struct_fields);
 		}
 
 		if (!struct_fields.empty()) {
@@ -650,52 +669,23 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	// Single complex element per record → could be STRUCT
-	// Analyze children across ALL instances
-	std::unordered_map<std::string, int> child_max_counts;
+	auto children = GroupChildElements(column.instances, options);
 
-	// Check what child elements exist across ALL instances and track max count per record
-	for (xmlNodePtr instance : column.instances) {
-		std::unordered_map<std::string, int> instance_counts;
-		for (xmlNodePtr child = instance->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE) {
-				std::string child_name((const char *)child->name);
-				if (options.namespaces == "strip") {
-					child_name = StripNamespacePrefix(child_name);
-				}
-				instance_counts[child_name]++;
-			}
-		}
-		// Track maximum occurrence across all instances
-		for (const auto &pair : instance_counts) {
-			child_max_counts[pair.first] = std::max(child_max_counts[pair.first], pair.second);
-		}
-	}
-
-	if (!child_max_counts.empty()) {
+	if (!children.names.empty()) {
 		// Build STRUCT type from children IN DOCUMENT ORDER
 		child_list_t<LogicalType> struct_fields;
 
-		// Iterate over children across ALL instances in document order so that optional
-		// fields absent from the first occurrence are still included in the struct.
-		std::vector<std::string> ordered_child_names;
-		CollectChildNamesInOrder(column.instances, options, ordered_child_names);
-
 		// Attributes come first as VARCHAR fields, as in the repeated-element branch
-		for (const auto &attr_name : CollectAttributeNames(column.instances, options, ordered_child_names)) {
+		for (const auto &attr_name : CollectAttributeNames(column.instances, options, children.names)) {
 			struct_fields.push_back(make_pair(CompatMakeIdentifier(attr_name), LogicalType::VARCHAR));
 		}
 
-		for (const std::string &child_name : ordered_child_names) {
-			// Create a ColumnAnalysis for this nested child
+		for (idx_t g = 0; g < children.names.size(); g++) {
+			const std::string &child_name = children.names[g];
 			ColumnAnalysis nested_col(child_name, false);
-
-			// Collect ALL instances of this child element from ALL parent instances
-			for (xmlNodePtr instance : column.instances) {
-				CollectChildElements(instance, child_name, options, nested_col.instances);
-			}
-
-			nested_col.occurrence_count = child_max_counts[child_name];
-			nested_col.repeats_in_record = (child_max_counts[child_name] > 1);
+			nested_col.instances = std::move(children.nodes[g]);
+			nested_col.occurrence_count = children.max_counts[g];
+			nested_col.repeats_in_record = children.max_counts[g] > 1;
 
 			// Recursively infer type with decreased depth.
 			// nested_winning_fmt2 is discarded, as above; extraction falls back to the shared
@@ -705,7 +695,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			struct_fields.push_back(make_pair(CompatMakeIdentifier(child_name), child_type));
 		}
 
-		add_mixed_text_field(ordered_child_names, struct_fields);
+		add_mixed_text_field(children.names, struct_fields);
 
 		if (!struct_fields.empty()) {
 			return LogicalType::STRUCT(struct_fields);
@@ -735,13 +725,9 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			}
 			// Collect text content samples for type inference
 			if (cross_record_text_samples.size() < XmlSampleLimit(options)) {
-				xmlChar *content = xmlNodeGetContent(instance);
-				if (content) {
-					std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
-					if (!text.empty()) {
-						cross_record_text_samples.push_back(text);
-					}
-					xmlFree(content);
+				std::string text = CleanNodeText(instance, options.preserve_whitespace);
+				if (!text.empty()) {
+					cross_record_text_samples.push_back(text);
 				}
 			}
 		}
@@ -793,34 +779,7 @@ std::vector<ElementPattern> XMLSchemaInference::AnalyzeDocumentStructure(const s
 
 	// If record_element is specified, use XPath to find those elements
 	if (!options.record_element.empty()) {
-		std::string xpath_expr = options.record_element;
-
-		// If it's a simple tag name (no XPath syntax), convert to namespace-agnostic form
-		// This allows "item" to match elements regardless of namespace
-		if (xpath_expr.find('/') == std::string::npos && xpath_expr.find('[') == std::string::npos &&
-		    xpath_expr.find('@') == std::string::npos) {
-			// Simple tag name - use local-name() for namespace-agnostic matching
-			xpath_expr = "//*[local-name()='" + xpath_expr + "']";
-		} else if (xpath_expr.substr(0, 2) == "//") {
-			// XPath starting with // - check if it's just a simple tag name after //
-			std::string tag_part = xpath_expr.substr(2);
-			if (tag_part.find('/') == std::string::npos && tag_part.find('[') == std::string::npos &&
-			    tag_part.find('@') == std::string::npos) {
-				// Simple tag name after // - use local-name()
-				xpath_expr = "//*[local-name()='" + tag_part + "']";
-			}
-		}
-
-		xmlXPathObjectPtr xpath_obj = EvalXPathChecked(xml_doc.xpath_ctx, xpath_expr);
-
-		if (xpath_obj && xpath_obj->nodesetval) {
-			for (int i = 0; i < xpath_obj->nodesetval->nodeNr; i++) {
-				record_elements.push_back(xpath_obj->nodesetval->nodeTab[i]);
-			}
-		}
-
-		if (xpath_obj)
-			xmlXPathFreeObject(xpath_obj);
+		record_elements = FindRecordElements(xml_doc, options.record_element);
 	}
 	// If a specific root element is specified, find it
 	else if (!options.root_element.empty()) {
@@ -975,16 +934,12 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	pattern.occurrence_count++;
 
 	// Check for text content
-	xmlChar *content = xmlNodeGetContent(node);
-	if (content) {
-		std::string text_content = CleanTextContent((const char *)content, options.preserve_whitespace);
-		if (!text_content.empty()) {
-			pattern.has_text = true;
-			if (pattern.sample_values.size() < XmlSampleLimit(options)) { // #102: was hardcoded 20
-				pattern.sample_values.push_back(text_content);
-			}
+	std::string text_content = CleanNodeText(node, options.preserve_whitespace);
+	if (!text_content.empty()) {
+		pattern.has_text = true;
+		if (pattern.sample_values.size() < XmlSampleLimit(options)) { // #102: was hardcoded 20
+			pattern.sample_values.push_back(text_content);
 		}
-		xmlFree(content);
 	}
 
 	// Check for attributes
@@ -1631,7 +1586,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 
 		// DuckDB STRUCT requires case-insensitive uniqueness of field names (LogicalType::Verify
 		// asserts this), so we must merge case-insensitively. The first-seen casing wins.
-		// ExtractStructFromNode does case-insensitive matching against XML element names to keep
+		// WriteStructFromNode does case-insensitive matching against XML element names to keep
 		// extraction consistent with this merge semantic.
 		case_insensitive_map_t<idx_t> b_index;
 		for (idx_t i = 0; i < b_children.size(); i++) {
@@ -1794,6 +1749,29 @@ std::string XMLSchemaInference::AttributeNameFromColumn(const std::string &colum
 	return column_name;
 }
 
+// Cleaned text content of node, empty when it has none. An element holding a single text run is read in place,
+// skipping the copy xmlNodeGetContent makes.
+std::string XMLSchemaInference::CleanNodeText(xmlNodePtr node, bool preserve_whitespace) {
+	if (node->type == XML_ELEMENT_NODE) {
+		xmlNodePtr child = node->children;
+		if (!child) {
+			return "";
+		}
+		if (!child->next && (child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE)) {
+			auto text = reinterpret_cast<const char *>(child->content);
+			return text ? CleanTextContent(text, strlen(text), preserve_whitespace) : "";
+		}
+	}
+	xmlChar *content = xmlNodeGetContent(node);
+	if (!content) {
+		return "";
+	}
+	auto text = reinterpret_cast<const char *>(content);
+	std::string result = CleanTextContent(text, strlen(text), preserve_whitespace);
+	xmlFree(content);
+	return result;
+}
+
 bool XMLSchemaInference::IsXsiNilTrue(const char *value) {
 	if (!value) {
 		return false;
@@ -1807,7 +1785,10 @@ void XMLSchemaInference::ApplyXsiNil(xmlDocPtr doc) {
 	if (!doc || doc->type == XML_HTML_DOCUMENT_NODE) {
 		return;
 	}
-	xmlNodePtr root = xmlDocGetRootElement(doc);
+	ApplyXsiNil(xmlDocGetRootElement(doc));
+}
+
+void XMLSchemaInference::ApplyXsiNil(xmlNodePtr root) {
 	xmlNodePtr node = root;
 	while (node) {
 		bool descend = true;
@@ -1846,6 +1827,10 @@ void XMLSchemaInference::ApplyXsiNil(xmlDocPtr doc) {
 }
 
 std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool preserve_whitespace) {
+	return CleanTextContent(text.data(), text.size(), preserve_whitespace);
+}
+
+std::string XMLSchemaInference::CleanTextContent(const char *text, size_t size, bool preserve_whitespace) {
 	// UTF-8-safe trim: only strip ASCII whitespace.
 	// We avoid StringUtil::Trim() because its RTrim has a `ch > 0` guard
 	// that treats UTF-8 continuation bytes (negative as signed char) as
@@ -1854,77 +1839,92 @@ std::string XMLSchemaInference::CleanTextContent(const std::string &text, bool p
 		return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 	};
 
-	auto lstart = std::find_if_not(text.begin(), text.end(),
-	                               [&](char c) { return is_ascii_space(static_cast<unsigned char>(c)); });
-	auto rend = std::find_if_not(text.rbegin(), text.rend(), [&](char c) {
-		            return is_ascii_space(static_cast<unsigned char>(c));
-	            }).base();
-	if (lstart >= rend) {
+	const char *begin = text;
+	const char *end = begin + size;
+	while (begin < end && is_ascii_space(static_cast<unsigned char>(*begin))) {
+		begin++;
+	}
+	while (end > begin && is_ascii_space(static_cast<unsigned char>(end[-1]))) {
+		end--;
+	}
+	if (begin == end) {
 		return "";
 	}
 
+	// Both paths append whole runs between the bytes they rewrite rather than one byte at a time.
+	std::string result;
+	result.reserve(static_cast<size_t>(end - begin));
 	if (preserve_whitespace) {
 		// Preserve internal whitespace, normalize CRLF/CR to LF (XML 1.0 §2.11)
-		std::string result;
-		result.reserve(static_cast<size_t>(rend - lstart));
-		for (auto it = lstart; it != rend; ++it) {
-			if (*it == '\r') {
-				result += '\n';
-				// Skip LF after CR (CRLF pair)
-				auto next = it + 1;
-				if (next != rend && *next == '\n') {
-					++it;
-				}
-			} else {
-				result += *it;
+		const char *p = begin;
+		while (p < end) {
+			auto cr = static_cast<const char *>(memchr(p, '\r', static_cast<size_t>(end - p)));
+			if (!cr) {
+				result.append(p, static_cast<size_t>(end - p));
+				break;
+			}
+			result.append(p, static_cast<size_t>(cr - p));
+			result += '\n';
+			p = cr + 1;
+			// Skip LF after CR (CRLF pair)
+			if (p < end && *p == '\n') {
+				p++;
 			}
 		}
 		return result;
 	}
 
-	// Collapse runs of ASCII whitespace to a single space (original behavior)
-	std::string result;
-	result.reserve(static_cast<size_t>(rend - lstart));
-	bool in_space = false;
-	for (auto it = lstart; it != rend; ++it) {
-		if (is_ascii_space(static_cast<unsigned char>(*it))) {
-			if (!in_space) {
-				result += ' ';
-				in_space = true;
+	// Collapse runs of ASCII whitespace to a single space (original behavior). The trimmed range
+	// starts and ends with a non-space byte.
+	const char *p = begin;
+	while (p < end) {
+		const char *run = p;
+		while (p < end && !is_ascii_space(static_cast<unsigned char>(*p))) {
+			p++;
+		}
+		result.append(run, static_cast<size_t>(p - run));
+		if (p < end) {
+			result += ' ';
+			while (p < end && is_ascii_space(static_cast<unsigned char>(*p))) {
+				p++;
 			}
-		} else {
-			result += *it;
-			in_space = false;
 		}
 	}
 	return result;
 }
 
-std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
-                                                           int remaining_depth, const XMLSchemaOptions &options) {
-	std::vector<Value> row;
-
+idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema, int remaining_depth,
+                                      const XMLSchemaOptions &options, DataChunk &out, idx_t col, idx_t row) {
 	// If remaining_depth < 0, serialize the record as XML
 	if (remaining_depth < 0) {
+		if (col >= out.ColumnCount()) {
+			return col;
+		}
+		auto &column_out = out.data[col];
 		xmlBufferPtr buffer = xmlBufferCreate();
 		if (buffer) {
 			xmlNodeDump(buffer, record->doc, record, 0, 1);
 			const xmlChar *content = xmlBufferContent(buffer);
 			if (content) {
 				std::string xml_string((const char *)content);
-				row.push_back(Value(xml_string));
+				column_out.SetValue(row, Value(xml_string));
 			} else {
-				row.push_back(Value()); // NULL
+				column_out.SetValue(row, Value()); // NULL
 			}
 			xmlBufferFree(buffer);
 		} else {
-			row.push_back(Value()); // NULL
+			column_out.SetValue(row, Value()); // NULL
 		}
-		return row;
+		return col + 1;
 	}
 
 	for (const auto &column : schema) {
+		if (col >= out.ColumnCount()) {
+			break;
+		}
+		auto &column_out = out.data[col++];
 		Value value;
+		bool written = false;
 
 		if (column.is_attribute) {
 			// Extract attribute value (strip attr_prefix in 'prefixed' mode)
@@ -1933,8 +1933,9 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
-				value = ConvertToValue(str_value, column.type, options, column.winning_datetime_format);
 				xmlFree(attr_value);
+				WriteConverted(str_value, column.type, column_out, row, options, column.winning_datetime_format);
+				written = true;
 			} else {
 				value = Value(); // NULL
 			}
@@ -1945,23 +1946,8 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 
 			// Special handling for LIST columns - collect ALL matching children
 			if (column.type.id() == LogicalTypeId::LIST) {
-				vector<Value> list_values;
-				auto element_type = ListType::GetChildType(column.type);
-
-				// Collect all children with matching name
-				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
-					if (child_iter->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child_iter->name, (const xmlChar *)column.name.c_str()) == 0) {
-						AppendListItems(child_iter, element_type, options, column.winning_datetime_format, list_values);
-					}
-				}
-
-				if (!list_values.empty()) {
-					value = Value::LIST(element_type, list_values);
-				} else {
-					value = Value(); // Empty list becomes NULL
-				}
-				row.push_back(value);
+				WriteChildList(record, column.name, column.type, column_out, row, options,
+				               column.winning_datetime_format);
 				continue;
 			}
 
@@ -1980,8 +1966,9 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 					if (has_element_children) {
 						// Container element - check for structured types first
 						if (column.type.id() == LogicalTypeId::STRUCT) {
-							value = ExtractValueFromNode(child, column.type, options, column.winning_datetime_format);
-							element_text = "";
+							WriteNodeValue(child, column.type, column_out, row, options,
+							               column.winning_datetime_format);
+							written = true;
 							break;
 						}
 
@@ -2023,11 +2010,7 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 						}
 					} else {
 						// Leaf element - return text content
-						xmlChar *text_content = xmlNodeGetContent(child);
-						if (text_content) {
-							element_text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
-							xmlFree(text_content);
-						}
+						element_text = CleanNodeText(child, options.preserve_whitespace);
 					}
 					break;
 				}
@@ -2035,14 +2018,27 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecord(xmlNodePtr record, co
 			}
 
 			// Only convert text value if we haven't already extracted a structured value
-			if (value.IsNull()) {
-				value = ConvertToValue(element_text, column.type, options, column.winning_datetime_format);
+			if (!written && value.IsNull()) {
+				WriteConverted(element_text, column.type, column_out, row, options, column.winning_datetime_format);
+				written = true;
 			}
 		}
 
-		row.push_back(value);
+		if (!written) {
+			column_out.SetValue(row, value);
+		}
 	}
 
+	return col;
+}
+
+// Reads the first row's leading columns back as Values for parse_xml, which buffers a whole document.
+static std::vector<Value> ReadFirstRow(DataChunk &chunk, idx_t column_count) {
+	CompatSetOutputCardinality(chunk, 1);
+	std::vector<Value> row;
+	for (idx_t col = 0; col < column_count; col++) {
+		row.push_back(chunk.GetValue(col, 0));
+	}
 	return row;
 }
 
@@ -2080,25 +2076,35 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 	}
 	int remaining_depth = effective_depth - 2;
 
-	// Extract data from each record element using single-record function
+	vector<LogicalType> types;
+	for (const auto &column : schema) {
+		types.push_back(column.type);
+	}
+	DataChunk chunk;
+	chunk.Initialize(Allocator::DefaultAllocator(), types, 1);
 	for (xmlNodePtr record : record_elements) {
-		rows.push_back(ExtractSingleRecord(record, schema, remaining_depth, options));
+		chunk.Reset();
+		rows.push_back(ReadFirstRow(chunk, WriteRecord(record, schema, remaining_depth, options, chunk, 0, 0)));
 	}
 
 	return rows;
 }
 
-std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
-    xmlNodePtr record, const std::vector<std::string> &column_names, const std::vector<LogicalType> &column_types,
-    const XMLSchemaOptions &options, const std::vector<std::string> &column_datetime_formats) {
-	std::vector<Value> row;
-
+idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
+                                                const std::vector<LogicalType> &column_types,
+                                                const XMLSchemaOptions &options,
+                                                const std::vector<std::string> &column_datetime_formats, DataChunk &out,
+                                                idx_t col, idx_t row) {
 	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
 		const std::string &col_fmt = (col_idx < column_datetime_formats.size()) ? column_datetime_formats[col_idx] : "";
-
+		if (col >= out.ColumnCount()) {
+			break;
+		}
+		auto &column_out = out.data[col++];
 		Value value;
+		bool written = false;
 
 		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode). attr_mode='discard'
 		// ignores attributes, so a column can only come from an element.
@@ -2107,27 +2113,13 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
-			value = ConvertToValue(str_value, column_type, options, col_fmt);
 			xmlFree(attr_value);
+			WriteConverted(str_value, column_type, column_out, row, options, col_fmt);
+			written = true;
 		} else {
 			// Special handling for LIST columns - collect ALL matching children
 			if (column_type.id() == LogicalTypeId::LIST) {
-				vector<Value> list_values;
-				auto element_type = ListType::GetChildType(column_type);
-
-				for (xmlNodePtr child_iter = record->children; child_iter; child_iter = child_iter->next) {
-					if (child_iter->type == XML_ELEMENT_NODE &&
-					    xmlStrcmp(child_iter->name, (const xmlChar *)column_name.c_str()) == 0) {
-						AppendListItems(child_iter, element_type, options, col_fmt, list_values);
-					}
-				}
-
-				if (!list_values.empty()) {
-					value = Value::LIST(element_type, list_values);
-				} else {
-					value = Value(); // Empty list becomes NULL
-				}
-				row.push_back(value);
+				WriteChildList(record, column_name, column_type, column_out, row, options, col_fmt);
 				continue;
 			}
 
@@ -2138,16 +2130,12 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 				    xmlStrcmp(child->name, (const xmlChar *)column_name.c_str()) == 0) {
 					if (!col_fmt.empty()) {
 						// Has a datetime format: extract raw text and convert with format
-						xmlChar *text_content = xmlNodeGetContent(child);
-						if (text_content) {
-							std::string text =
-							    CleanTextContent((const char *)text_content, options.preserve_whitespace);
-							xmlFree(text_content);
-							value = ConvertToValue(text, column_type, options, col_fmt);
-						}
+						value = ConvertToValue(CleanNodeText(child, options.preserve_whitespace), column_type, options,
+						                       col_fmt);
 					} else {
 						// No format: use standard recursive extraction
-						value = ExtractValueFromNode(child, column_type, options, col_fmt);
+						WriteNodeValue(child, column_type, column_out, row, options, col_fmt);
+						written = true;
 					}
 					break;
 				}
@@ -2158,17 +2146,20 @@ std::vector<Value> XMLSchemaInference::ExtractSingleRecordWithSchema(
 			if (child == nullptr) {
 				std::string record_name = (const char *)record->name;
 				if (record_name == column_name) {
-					value = ExtractValueFromNode(record, column_type, options, col_fmt);
+					WriteNodeValue(record, column_type, column_out, row, options, col_fmt);
+					written = true;
 				} else {
 					value = Value(column_type); // NULL for truly missing columns
 				}
 			}
 		}
 
-		row.push_back(value);
+		if (!written) {
+			column_out.SetValue(row, value);
+		}
 	}
 
-	return row;
+	return col;
 }
 
 std::vector<std::vector<Value>>
@@ -2201,10 +2192,13 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 	// Use same record identification logic as InferSchema/ExtractData
 	std::vector<xmlNodePtr> record_elements = IdentifyRecordElements(doc, root, options);
 
-	// Extract data from each record element using single-record function
+	DataChunk chunk;
+	chunk.Initialize(Allocator::DefaultAllocator(), vector<LogicalType>(column_types.begin(), column_types.end()), 1);
 	for (xmlNodePtr record : record_elements) {
-		rows.push_back(
-		    ExtractSingleRecordWithSchema(record, column_names, column_types, options, column_datetime_formats));
+		chunk.Reset();
+		auto end =
+		    WriteRecordWithSchema(record, column_names, column_types, options, column_datetime_formats, chunk, 0, 0);
+		rows.push_back(ReadFirstRow(chunk, end));
 	}
 
 	return rows;
@@ -2415,106 +2409,83 @@ Value XMLSchemaInference::ConvertToValuePublic(const std::string &text, const Lo
 	return ConvertToValue(text, target_type, options, datetime_format);
 }
 
-// Wrap the fragment in its element so the parser sees a single root and so extraction receives a
-// node whose ->children are the original siblings. extra_ns_decls injects any xmlns: declarations
-// the fragment's prefixed names depend on (the originating decls are not part of the captured
-// fragment), without which strict parsing would fail and the value would be lost. extra_attrs
-// carries the element's own attributes (already escaped) so they become STRUCT fields.
-static std::string WrapXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                   const std::string &extra_ns_decls, const std::string &extra_attrs) {
-	std::string wrapped;
-	wrapped.reserve(inner_xml.size() + wrapper_name.size() * 2 + extra_ns_decls.size() + extra_attrs.size() + 5);
-	wrapped.append("<")
-	    .append(wrapper_name)
-	    .append(extra_ns_decls)
-	    .append(extra_attrs)
-	    .append(">")
-	    .append(inner_xml)
-	    .append("</")
-	    .append(wrapper_name)
-	    .append(">");
-	return wrapped;
-}
-
-Value XMLSchemaInference::ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                      const LogicalType &target_type, const XMLSchemaOptions &options,
-                                                      const std::string &extra_ns_decls, const std::string &extra_attrs,
-                                                      const std::string &datetime_format) {
-	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
-	if (!doc.doc) {
-		return Value(target_type);
-	}
-	xmlNodePtr root = xmlDocGetRootElement(doc.doc);
-	if (!root) {
-		return Value(target_type);
-	}
-	return ExtractValueFromNode(root, target_type, options, datetime_format);
-}
-
-Value XMLSchemaInference::ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type,
-                                               const XMLSchemaOptions &options, const std::string &datetime_format) {
+void XMLSchemaInference::WriteNodeValue(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+                                        const XMLSchemaOptions &options, const std::string &datetime_format) {
 	if (!node) {
-		return Value(); // NULL value
+		out.SetValue(row, Value());
+		return;
 	}
-
 	switch (target_type.id()) {
 	case LogicalTypeId::LIST:
 		// The column's winning format applies to its elements too (issue #159).
-		return ExtractListFromNode(node, target_type, options, datetime_format);
+		WriteListFromNode(node, target_type, out, row, options, datetime_format);
+		return;
 	case LogicalTypeId::STRUCT:
-		return ExtractStructFromNode(node, target_type, options, datetime_format);
-	default: {
-		// For primitive types, extract text content and convert.
-		// When target is VARCHAR and the node has element children (e.g., the column was widened
-		// from STRUCT to VARCHAR by union_by_name), serialize the XML fragment instead of
-		// concatenating descendant text. Without this, structured payloads collapse to joined text.
-		if (target_type.id() == LogicalTypeId::VARCHAR) {
-			bool has_element_children = false;
-			for (xmlNodePtr child = node->children; child; child = child->next) {
-				if (child->type == XML_ELEMENT_NODE) {
-					has_element_children = true;
-					break;
-				}
-			}
-			if (has_element_children) {
-				xmlBufferPtr buffer = xmlBufferCreate();
-				if (buffer) {
-					// Dump element children plus any real text content (mixed content like
-					// "foo <b/> bar"). Skip whitespace-only text nodes that libxml2 inserts
-					// between elements during pretty-print parsing, and use format=0 to avoid
-					// re-adding pretty-print whitespace.
-					for (xmlNodePtr child = node->children; child; child = child->next) {
-						if (child->type == XML_TEXT_NODE && xmlIsBlankNode(child)) {
-							continue;
-						}
-						xmlNodeDump(buffer, child->doc, child, 0, 0);
-					}
-					const xmlChar *content = xmlBufferContent(buffer);
-					Value result;
-					if (content) {
-						std::string fragment = (const char *)content;
-						result = ConvertToValue(fragment, target_type, options, datetime_format);
-					} else {
-						result = Value(); // NULL
-					}
-					xmlBufferFree(buffer);
-					return result;
-				}
-			}
-		}
-		xmlChar *text_content = xmlNodeGetContent(node);
-		if (text_content) {
-			std::string text = CleanTextContent((const char *)text_content, options.preserve_whitespace);
-			xmlFree(text_content);
-			return ConvertToValue(text, target_type, options, datetime_format);
-		}
-		return Value(); // NULL value
-	}
+		WriteStructFromNode(node, target_type, out, row, options, datetime_format);
+		return;
+	default:
+		WriteScalarFromNode(node, target_type, out, row, options, datetime_format);
 	}
 }
 
+void XMLSchemaInference::WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out, idx_t row,
+                                        const XMLSchemaOptions &options, const std::string &datetime_format) {
+	// A plain VARCHAR needs no conversion, so it skips the Value. Aliased VARCHARs such as XML keep the cast, and
+	// invalid UTF-8 goes through Value, which raises the error.
+	if (target_type.id() != LogicalTypeId::VARCHAR || target_type.HasAlias() ||
+	    out.GetType().id() != LogicalTypeId::VARCHAR || out.GetType().HasAlias() ||
+	    !Value::StringIsValid(text.c_str(), text.size())) {
+		out.SetValue(row, ConvertToValue(text, target_type, options, datetime_format));
+		return;
+	}
+	if (text.empty() || IsNullString(text, options)) {
+		FlatVector::SetNull(out, row, true);
+		return;
+	}
+	CompatFlatData<string_t>(out)[row] = StringVector::AddString(out, text);
+	CompatFlatValidity(out).SetValid(row);
+}
+
+void XMLSchemaInference::WriteScalarFromNode(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+                                             const XMLSchemaOptions &options, const std::string &datetime_format) {
+	// For primitive types, extract text content and convert.
+	// When target is VARCHAR and the node has element children (e.g., the column was widened
+	// from STRUCT to VARCHAR by union_by_name), serialize the XML fragment instead of
+	// concatenating descendant text. Without this, structured payloads collapse to joined text.
+	if (target_type.id() == LogicalTypeId::VARCHAR) {
+		bool has_element_children = false;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type == XML_ELEMENT_NODE) {
+				has_element_children = true;
+				break;
+			}
+		}
+		if (has_element_children) {
+			xmlBufferPtr buffer = xmlBufferCreate();
+			if (buffer) {
+				// Dump element children plus any real text content (mixed content like
+				// "foo <b/> bar"). Skip whitespace-only text nodes that libxml2 inserts
+				// between elements during pretty-print parsing, and use format=0 to avoid
+				// re-adding pretty-print whitespace.
+				for (xmlNodePtr child = node->children; child; child = child->next) {
+					if (child->type == XML_TEXT_NODE && xmlIsBlankNode(child)) {
+						continue;
+					}
+					xmlNodeDump(buffer, child->doc, child, 0, 0);
+				}
+				const xmlChar *content = xmlBufferContent(buffer);
+				std::string fragment = content ? (const char *)content : "";
+				xmlBufferFree(buffer);
+				WriteConverted(fragment, target_type, out, row, options, datetime_format);
+				return;
+			}
+		}
+	}
+	WriteConverted(CleanNodeText(node, options.preserve_whitespace), target_type, out, row, options, datetime_format);
+}
+
 // True when the node has an attribute or child element named name (child elements match case-insensitively,
-// like the field lookup in ExtractStructFromNode).
+// like the field lookup in WriteStructFromNode).
 static bool HasAttributeOrChildNamed(xmlNodePtr node, const std::string &name) {
 	if (xmlHasProp(node, (const xmlChar *)name.c_str())) {
 		return true;
@@ -2546,21 +2517,13 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 	return true;
 }
 
-Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type,
-                                                const XMLSchemaOptions &options, const std::string &datetime_format) {
-	if (!node || struct_type.id() != LogicalTypeId::STRUCT) {
-		return Value(); // NULL value
-	}
-
+void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
+                                             const XMLSchemaOptions &options, const std::string &datetime_format) {
+	CompatFlatValidity(out).SetValid(row);
 	auto &struct_children = StructType::GetChildTypes(struct_type);
-	child_list_t<Value> struct_values;
-
-	// Extract each field of the struct
-	for (const auto &field : struct_children) {
-		const auto &field_name = field.first;
-		const auto &field_type = field.second;
-
-		Value field_value;
+	for (idx_t field_idx = 0; field_idx < struct_children.size(); field_idx++) {
+		const auto &field_type = struct_children[field_idx].second;
+		auto &field_out = CompatStructGetField(out, field_idx);
 		bool found = false;
 
 		// The text_key field (inference names it from options.text_key) holds the node's own text,
@@ -2569,17 +2532,13 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		// duckdb::Identifier on v2.0, where it will not bind to a `const std::string&`
 		// parameter. CompatIdentifierName reads the raw name out of either (the string
 		// overload is a pass-through), so both helpers take a plain name on both lines.
-		const auto &field_name_str = CompatIdentifierName(field_name);
+		const auto &field_name_str = CompatIdentifierName(struct_children[field_idx].first);
 		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
 		    IsOwnTextField(node, field_name_str)) {
-			xmlChar *content = xmlNodeGetContent(node);
-			if (content) {
-				std::string text = CleanTextContent((const char *)content, options.preserve_whitespace);
-				if (!text.empty()) {
-					field_value = ConvertToValue(text, field_type, options, datetime_format);
-					found = true;
-				}
-				xmlFree(content);
+			std::string text = CleanNodeText(node, options.preserve_whitespace);
+			if (!text.empty()) {
+				WriteConverted(text, field_type, field_out, row, options, datetime_format);
+				found = true;
 			}
 		}
 		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
@@ -2587,7 +2546,7 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 		                                   ? nullptr
 		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
 			std::string str_value = (const char *)attr_value;
-			field_value = ConvertToValue(str_value, field_type, options, datetime_format);
+			WriteConverted(str_value, field_type, field_out, row, options, datetime_format);
 			xmlFree(attr_value);
 			found = true;
 		} else {
@@ -2595,72 +2554,72 @@ Value XMLSchemaInference::ExtractStructFromNode(xmlNodePtr node, const LogicalTy
 			// DuckDB STRUCTs enforce case-insensitive uniqueness of field names. Cross-file
 			// union_by_name widening (MergeXMLColumnType) keeps the first-seen casing, so an
 			// XML element from another file with a different case must still resolve to it.
-			if (field_type.id() == LogicalTypeId::LIST) {
-				// Field is a LIST: collect ALL matching child elements
-				auto element_type = ListType::GetChildType(field_type);
-				vector<Value> list_values;
-
-				xmlNodePtr child = node->children;
-				while (child) {
-					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
-						AppendListItems(child, element_type, options, datetime_format, list_values);
-						found = true;
-					}
-					child = child->next;
+			// A LIST field collects every matching child, any other field takes the first.
+			const bool is_list = field_type.id() == LogicalTypeId::LIST;
+			const idx_t list_start = is_list ? ListVector::GetListSize(field_out) : 0;
+			for (xmlNodePtr child = node->children; child; child = child->next) {
+				if (child->type != XML_ELEMENT_NODE ||
+				    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) != 0) {
+					continue;
 				}
-
-				if (found) {
-					field_value = Value::LIST(element_type, list_values);
+				found = true;
+				if (!is_list) {
+					WriteNodeValue(child, field_type, field_out, row, options, datetime_format);
+					break;
 				}
-			} else {
-				// Field is not a LIST: extract only the first matching child
-				xmlNodePtr child = node->children;
-				while (child) {
-					if (child->type == XML_ELEMENT_NODE &&
-					    xmlStrcasecmp(child->name, (const xmlChar *)field_name_str.c_str()) == 0) {
-						field_value = ExtractValueFromNode(child, field_type, options, datetime_format);
-						found = true;
-						break;
-					}
-					child = child->next;
-				}
+				AppendListItems(child, ListType::GetChildType(field_type), field_out, options, datetime_format);
+			}
+			if (found && is_list) {
+				CompatFlatValidity(field_out).SetValid(row);
+				CompatFlatData<list_entry_t>(field_out)[row] =
+				    list_entry_t(list_start, ListVector::GetListSize(field_out) - list_start);
 			}
 		}
 
-		// If field not found, use NULL
 		if (!found) {
-			field_value = Value(field_type);
+			FlatVector::SetNull(field_out, row, true);
 		}
-
-		struct_values.push_back(make_pair(field_name, field_value));
 	}
-
-	return Value::STRUCT(struct_values);
 }
 
-Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type,
-                                              const XMLSchemaOptions &options, const std::string &datetime_format) {
-	if (!node || list_type.id() != LogicalTypeId::LIST) {
-		return Value(); // NULL value
-	}
-
-	auto element_type = ListType::GetChildType(list_type);
-	vector<Value> list_values;
-
-	// Collect all child elements of the same type
-	xmlNodePtr child = node->children;
-
-	while (child) {
+void XMLSchemaInference::WriteListFromNode(xmlNodePtr node, const LogicalType &list_type, Vector &out, idx_t row,
+                                           const XMLSchemaOptions &options, const std::string &datetime_format) {
+	auto &element_type = ListType::GetChildType(list_type);
+	const idx_t list_start = ListVector::GetListSize(out);
+	for (xmlNodePtr child = node->children; child; child = child->next) {
 		if (child->type == XML_ELEMENT_NODE) {
-			// Extract each child element according to the list element type
-			Value element_value = ExtractValueFromNode(child, element_type, options, datetime_format);
-			list_values.push_back(element_value);
+			AppendListItem(child, element_type, out, options, datetime_format);
 		}
-		child = child->next;
 	}
+	CompatFlatValidity(out).SetValid(row);
+	CompatFlatData<list_entry_t>(out)[row] = list_entry_t(list_start, ListVector::GetListSize(out) - list_start);
+}
 
-	return Value::LIST(element_type, list_values);
+void XMLSchemaInference::AppendListItem(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+                                        const XMLSchemaOptions &options, const std::string &datetime_format) {
+	const idx_t size = ListVector::GetListSize(list);
+	ListVector::Reserve(list, size + 1);
+	WriteNodeValue(node, element_type, CompatListGetChild(list), size, options, datetime_format);
+	ListVector::SetListSize(list, size + 1);
+}
+
+// Writes the LIST of every child of record named name, or NULL when there is none.
+void XMLSchemaInference::WriteChildList(xmlNodePtr record, const std::string &name, const LogicalType &list_type,
+                                        Vector &out, idx_t row, const XMLSchemaOptions &options,
+                                        const std::string &datetime_format) {
+	const idx_t list_start = ListVector::GetListSize(out);
+	for (xmlNodePtr child = record->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, (const xmlChar *)name.c_str()) == 0) {
+			AppendListItems(child, ListType::GetChildType(list_type), out, options, datetime_format);
+		}
+	}
+	const idx_t length = ListVector::GetListSize(out) - list_start;
+	if (length == 0) {
+		FlatVector::SetNull(out, row, true);
+		return;
+	}
+	CompatFlatValidity(out).SetValid(row);
+	CompatFlatData<list_entry_t>(out)[row] = list_entry_t(list_start, length);
 }
 
 // Append the items one occurrence of a repeated element contributes to a LIST. Usually that is one
@@ -2668,16 +2627,15 @@ Value XMLSchemaInference::ExtractListFromNode(xmlNodePtr node, const LogicalType
 // (<l><i>1</i><i>2</i></l>) holds its items as those children instead, and reading it as a single
 // typed scalar would concatenate their text into '12'. A VARCHAR list keeps such an occurrence as
 // one serialized fragment, which is lossless, and STRUCT or LIST items extract their own children.
-void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &element_type,
-                                         const XMLSchemaOptions &options, const std::string &datetime_format,
-                                         std::vector<Value> &items) {
+void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+                                         const XMLSchemaOptions &options, const std::string &datetime_format) {
 	const bool scalar_item = element_type.id() != LogicalTypeId::VARCHAR &&
 	                         element_type.id() != LogicalTypeId::STRUCT && element_type.id() != LogicalTypeId::LIST;
 	if (scalar_item && !HasDirectText(node)) {
 		bool wrapped = false;
 		for (xmlNodePtr child = node->children; child; child = child->next) {
 			if (child->type == XML_ELEMENT_NODE) {
-				items.push_back(ExtractValueFromNode(child, element_type, options, datetime_format));
+				AppendListItem(child, element_type, list, options, datetime_format);
 				wrapped = true;
 			}
 		}
@@ -2685,22 +2643,7 @@ void XMLSchemaInference::AppendListItems(xmlNodePtr node, const LogicalType &ele
 			return;
 		}
 	}
-	items.push_back(ExtractValueFromNode(node, element_type, options, datetime_format));
-}
-
-void XMLSchemaInference::AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-                                                        const LogicalType &element_type,
-                                                        const XMLSchemaOptions &options,
-                                                        const std::string &extra_ns_decls,
-                                                        const std::string &extra_attrs,
-                                                        const std::string &datetime_format, std::vector<Value> &items) {
-	XMLDocRAII doc(WrapXmlFragment(wrapper_name, inner_xml, extra_ns_decls, extra_attrs));
-	xmlNodePtr root = doc.doc ? xmlDocGetRootElement(doc.doc) : nullptr;
-	if (!root) {
-		items.push_back(Value(element_type));
-		return;
-	}
-	AppendListItems(root, element_type, options, datetime_format, items);
+	AppendListItem(node, element_type, list, options, datetime_format);
 }
 
 Value XMLSchemaInference::ExtractXMLArrayFromNode(xmlNodePtr node) {

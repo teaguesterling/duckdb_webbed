@@ -1,0 +1,29 @@
+# name: test/sql/sax_serialized_parity.test
+# description: Streaming matches DOM on mixed-content text and serialized subtrees. Regression for: SAX dropped whitespace-only text between inline elements ("O(nlogn)") and stripped namespace prefixes from serialized XML.
+# group: [sql]
+
+require webbed
+
+query T
+SELECT title."#text" FROM read_xml('test/xml/sax_serialized_parity.xml', record_element := 'item', all_varchar := true, maximum_file_size := 1000000);
+----
+An O(n log n) bound
+plain
+
+query T
+SELECT title."#text" FROM read_xml('test/xml/sax_serialized_parity.xml', record_element := 'item', all_varchar := true, maximum_file_size := 10);
+----
+An O(n log n) bound
+plain
+
+query T
+SELECT math FROM read_xml('test/xml/sax_serialized_parity.xml', record_element := 'item', max_depth := 2, all_varchar := true, maximum_file_size := 1000000);
+----
+<m:mrow><m:mi>x</m:mi><m:mn>2</m:mn></m:mrow>
+<m:mrow><m:mi>y</m:mi><m:mn>3</m:mn></m:mrow>
+
+query T
+SELECT math FROM read_xml('test/xml/sax_serialized_parity.xml', record_element := 'item', max_depth := 2, all_varchar := true, maximum_file_size := 10);
+----
+<m:mrow><m:mi>x</m:mi><m:mn>2</m:mn></m:mrow>
+<m:mrow><m:mi>y</m:mi><m:mn>3</m:mn></m:mrow>

@@ -61,6 +61,8 @@ struct XMLSchemaOptions {
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
 	idx_t maximum_file_size = 16777216; // 16MB default (files above this use SAX streaming)
+	string compression = "auto";
+	idx_t max_record_bytes = 0; // Input bytes one streamed record may span (0 = unbounded)
 
 	// SAX streaming controls
 	bool streaming = true; // Enable SAX mode for files exceeding maximum_file_size (default: true)
@@ -185,6 +187,8 @@ public:
 	// types through ResolveUnknownTypes before using them.
 	static std::vector<XMLColumnInfo> InferSchemaForMerge(const std::string &xml_content,
 	                                                      const XMLSchemaOptions &options);
+	// InferSchemaForMerge over an already parsed document, for callers that parsed it to check validity.
+	static std::vector<XMLColumnInfo> InferSchemaFromDocument(XMLDocRAII &doc, const XMLSchemaOptions &options);
 
 	// Extract structured data according to inferred schema
 	static std::vector<std::vector<Value>> ExtractData(const std::string &xml_content,
@@ -197,15 +201,13 @@ public:
 	                      const XMLSchemaOptions &options = XMLSchemaOptions {},
 	                      const std::vector<std::string> &column_datetime_formats = {});
 
-	// Extract one row from a record node using inferred schema
-	static std::vector<Value> ExtractSingleRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema,
-	                                              int remaining_depth, const XMLSchemaOptions &options);
-
-	// Extract one row using explicit column names/types
-	static std::vector<Value>
-	ExtractSingleRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
-	                              const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
-	                              const std::vector<std::string> &column_datetime_formats = {});
+	// Write one record into row of out starting at column col, returning the column after the last one written
+	static idx_t WriteRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema, int remaining_depth,
+	                         const XMLSchemaOptions &options, DataChunk &out, idx_t col, idx_t row);
+	static idx_t WriteRecordWithSchema(xmlNodePtr record, const std::vector<std::string> &column_names,
+	                                   const std::vector<LogicalType> &column_types, const XMLSchemaOptions &options,
+	                                   const std::vector<std::string> &column_datetime_formats, DataChunk &out,
+	                                   idx_t col, idx_t row);
 
 	// Identify record elements in a parsed document
 	static std::vector<xmlNodePtr> IdentifyRecordElements(XMLDocRAII &doc, xmlNodePtr root,
@@ -237,29 +239,10 @@ public:
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
 	                                  const XMLSchemaOptions &options, const std::string &datetime_format = "");
 
-	// Parse an XML fragment (the inner contents of a wrapper element) and extract a value of the
-	// given target type. Used by the SAX reader to materialize STRUCT / LIST<STRUCT> columns whose
-	// inner content was captured as raw XML during streaming.
-	// extra_ns_decls / extra_attrs are spliced verbatim into the synthetic wrapper's open tag
-	// (`<wrapper extra_ns_decls extra_attrs>inner</wrapper>`). extra_attrs carries the wrapped
-	// element's OWN attributes (e.g. ` id="1" UUID=".."`), which the SAX path captures separately
-	// from its inner content. An empty fragment is still parsed, so an empty element yields what DOM
-	// gives: a STRUCT of NULL fields or an empty LIST.
-	static Value ExtractValueFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-	                                         const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                         const std::string &extra_ns_decls = "",
-	                                         const std::string &extra_attrs = "",
-	                                         const std::string &datetime_format = "");
-
-	// Parse a captured list occurrence (the inner contents of one repeated element) and append the
-	// items it holds, by the same rule as DOM extraction (see AppendListItems).
-	static void AppendListItemsFromXmlFragment(const std::string &wrapper_name, const std::string &inner_xml,
-	                                           const LogicalType &element_type, const XMLSchemaOptions &options,
-	                                           const std::string &extra_ns_decls, const std::string &extra_attrs,
-	                                           const std::string &datetime_format, std::vector<Value> &items);
-
 	// Trim edges, optionally normalize EOL or collapse whitespace (used by both DOM and SAX paths)
 	static std::string CleanTextContent(const std::string &text, bool preserve_whitespace);
+	static std::string CleanTextContent(const char *text, size_t size, bool preserve_whitespace);
+	static std::string CleanNodeText(xmlNodePtr node, bool preserve_whitespace);
 
 	// Map a column name back to the underlying XML attribute name. In attr_mode='prefixed' the
 	// inferred column name is attr_prefix + attribute name, so the prefix must be stripped before
@@ -273,6 +256,8 @@ public:
 	static bool IsXsiNilTrue(const char *value);
 	// Remove every xsi:nil attribute, and the content of each element where it is true
 	static void ApplyXsiNil(xmlDocPtr doc);
+	// The same for one element's subtree, such as a streamed record
+	static void ApplyXsiNil(xmlNodePtr root);
 
 	// Merge two column types from union_by_name inference across files.
 	// Recursively unions STRUCT fields, recurses into LIST element types, falls back to VARCHAR
@@ -308,15 +293,14 @@ private:
 
 	static std::string StripNamespacePrefix(const std::string &name);
 
-	// Collect all child elements with a specific name from a parent node into the result vector.
-	// Handles namespace stripping based on options.
-	static void CollectChildElements(xmlNodePtr parent, const std::string &child_name, const XMLSchemaOptions &options,
-	                                 std::vector<xmlNodePtr> &result);
-
-	// Collect the union of distinct child element names across all parent instances, preserving
-	// first-seen document order. Ensures optional fields absent from the first instance are included.
-	static void CollectChildNamesInOrder(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options,
-	                                     std::vector<std::string> &result);
+	// Child elements across all instances, grouped by name in first-seen order, with each name's most
+	// occurrences in one instance.
+	struct ChildGroups {
+		std::vector<std::string> names;
+		std::vector<std::vector<xmlNodePtr>> nodes;
+		std::vector<int> max_counts;
+	};
+	static ChildGroups GroupChildElements(const std::vector<xmlNodePtr> &instances, const XMLSchemaOptions &options);
 
 	// Attribute names across all instances in first-seen order, empty under attr_mode 'discard'. A name
 	// already taken by a child element is skipped, since a STRUCT can't hold two fields with one name.
@@ -334,15 +318,23 @@ private:
 	// LIST elements convert with the same format as the column's own scalar values (issue #159).
 	// Empty means none was recorded, in which case the conversion falls back to the candidate
 	// list inference used.
-	static Value ExtractValueFromNode(xmlNodePtr node, const LogicalType &target_type, const XMLSchemaOptions &options,
-	                                  const std::string &datetime_format = "");
-	static Value ExtractStructFromNode(xmlNodePtr node, const LogicalType &struct_type, const XMLSchemaOptions &options,
-	                                   const std::string &datetime_format = "");
-	static Value ExtractListFromNode(xmlNodePtr node, const LogicalType &list_type, const XMLSchemaOptions &options,
-	                                 const std::string &datetime_format = "");
+	static void WriteNodeValue(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format = "");
+	static void WriteScalarFromNode(xmlNodePtr node, const LogicalType &target_type, Vector &out, idx_t row,
+	                                const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteConverted(const std::string &text, const LogicalType &target_type, Vector &out, idx_t row,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
+	                                const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteListFromNode(xmlNodePtr node, const LogicalType &list_type, Vector &out, idx_t row,
+	                              const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void WriteChildList(xmlNodePtr record, const std::string &name, const LogicalType &list_type, Vector &out,
+	                           idx_t row, const XMLSchemaOptions &options, const std::string &datetime_format);
 	static Value ExtractXMLArrayFromNode(xmlNodePtr node);
-	static void AppendListItems(xmlNodePtr node, const LogicalType &element_type, const XMLSchemaOptions &options,
-	                            const std::string &datetime_format, std::vector<Value> &items);
+	static void AppendListItems(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+	                            const XMLSchemaOptions &options, const std::string &datetime_format);
+	static void AppendListItem(xmlNodePtr node, const LogicalType &element_type, Vector &list,
+	                           const XMLSchemaOptions &options, const std::string &datetime_format);
 };
 
 } // namespace duckdb

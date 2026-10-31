@@ -27,7 +27,7 @@ These parameters are available for both ``read_xml`` and ``read_html``:
    * - ``maximum_file_size``
      - BIGINT
      - 16777216
-     - Maximum file size in bytes for DOM parsing (16MB default). Files above this use SAX streaming when ``streaming=true``.
+     - Maximum file size in bytes for DOM parsing (16MB default). Files above this use SAX streaming when ``streaming=true``. For a compressed file this is the decompressed size.
    * - ``auto_detect``
      - BOOLEAN
      - true
@@ -95,7 +95,7 @@ Type Handling Parameters
    * - ``streaming``
      - BOOLEAN
      - true
-     - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
+     - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. A single record may span at most a quarter of ``memory_limit``, since its tree takes about three times its size outside the buffer manager. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
    * - ``preserve_whitespace``
      - BOOLEAN
      - true
@@ -157,6 +157,23 @@ Empty Element Handling
      - 'null'
      - How an empty element (no text, children or attributes) affects type inference. With ``'null'`` or ``'object'``, the column takes its type from the element's other occurrences, in the same file or in other files, and is VARCHAR only when the element is empty everywhere. ``'string'`` types the column VARCHAR whenever the element is empty somewhere. The empty element itself reads as NULL, or as a struct of NULL fields in a STRUCT column
 
+Compressed Files
+----------------
+
+``read_xml``, ``read_html``, ``read_xml_objects``, and ``read_html_objects`` decompress files ending in ``.gz``, and ``.zst`` once the ``parquet`` extension is loaded. Compressed and plain files can mix in one glob.
+
+.. code-block:: sql
+
+   SELECT * FROM read_xml('dumps/*.xml.gz', record_element := 'record');
+
+A compressed file's decompressed size isn't known before it is read, so the reader decompresses up to ``maximum_file_size`` to decide between DOM and SAX. A file that overflows the limit continues through SAX from the bytes already decompressed.
+
+``compression`` overrides detection by name: ``'auto'`` (the default), ``'none'`` to read a file's bytes as they are, ``'gzip'``, or ``'zstd'``. A name DuckDB doesn't recognize fails when a file is opened.
+
+.. code-block:: sql
+
+   SELECT * FROM read_xml('legacy/feed.xml.gz', compression := 'none');
+
 Multi-File Parameters
 ---------------------
 
@@ -172,6 +189,18 @@ Multi-File Parameters
      - BOOLEAN
      - false
      - Combine columns by name when reading multiple files with different schemas
+
+Schema inference over several files (``union_by_name`` or ``sample_files``) parses the files in parallel at bind time. Each file being inferred holds its parsed document in memory, outside DuckDB's buffer manager, so peak memory grows with the number parsed at once. By default that number is DuckDB's ``threads``, lowered so that 32 times ``maximum_file_size`` per file fits in ``memory_limit``. The ``xml_inference_threads`` setting replaces that default:
+
+.. code-block:: sql
+
+   -- Parse one file at a time during inference: lowest memory, slowest bind
+   SET xml_inference_threads = 1;
+
+   -- Back to the default, bounded by threads and memory_limit
+   RESET xml_inference_threads;
+
+The cap changes neither the inferred schema nor which error a failing bind raises. Files are merged in list order either way.
 
 
 .. _datetime-format:
