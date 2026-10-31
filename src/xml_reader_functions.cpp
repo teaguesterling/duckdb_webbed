@@ -354,8 +354,9 @@ private:
 	FileInferenceState &state;
 };
 
-// A parsed DOM runs to several times its file's size, and libxml2 allocates it outside the buffer manager.
-static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 16;
+// A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
+// elements, and libxml2 allocates it outside the buffer manager.
+static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 32;
 
 // Files parsed at once during bind-time inference: the xml_inference_threads setting when set,
 // otherwise `threads`, lowered so that a DOM per parse at maximum_file_size fits in memory_limit.
@@ -365,8 +366,9 @@ static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t 
 	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, setting) && !setting.IsNull()) {
 		limit = setting.GetValue<uint64_t>();
 	} else {
-		auto per_file = MaxValue<idx_t>(max_file_size, 1) * INFERENCE_BYTES_PER_FILE_BYTE;
-		limit = MinValue<idx_t>(limit, BufferManager::GetBufferManager(context).GetMaxMemory() / per_file);
+		// Divided in two steps so a huge maximum_file_size can't overflow the product
+		auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
+		limit = MinValue<idx_t>(limit, memory / INFERENCE_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(max_file_size, 1));
 	}
 	return MaxValue<idx_t>(MinValue<idx_t>(limit, file_count), 1);
 }

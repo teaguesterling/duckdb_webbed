@@ -197,3 +197,14 @@ statement error
 SET xml_inference_threads=0;
 ----
 xml_inference_threads must be at least 1
+
+# A maximum_file_size near the top of its range leaves the memory bound at one task instead of overflowing it
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', maximum_file_size := 1152921504606846976);
+----
+2
+
+query I
+SELECT count(*) FROM read_xml('test/xml/simple.xml', maximum_file_size := 9223372036854775807);
+----
+2

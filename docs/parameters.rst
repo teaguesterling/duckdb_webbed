@@ -190,7 +190,7 @@ Multi-File Parameters
      - false
      - Combine columns by name when reading multiple files with different schemas
 
-Schema inference over several files (``union_by_name`` or ``sample_files``) parses the files in parallel at bind time. Each file being inferred holds its parsed document in memory, outside DuckDB's buffer manager, so peak memory grows with the number parsed at once. By default that number is DuckDB's ``threads``, lowered so that 16 times ``maximum_file_size`` per file fits in ``memory_limit``. The ``xml_inference_threads`` setting replaces that default:
+Schema inference over several files (``union_by_name`` or ``sample_files``) parses the files in parallel at bind time. Each file being inferred holds its parsed document in memory, outside DuckDB's buffer manager, so peak memory grows with the number parsed at once. By default that number is DuckDB's ``threads``, lowered so that 32 times ``maximum_file_size`` per file fits in ``memory_limit``. The ``xml_inference_threads`` setting replaces that default:
 
 .. code-block:: sql
 
