@@ -166,7 +166,7 @@ Compressed Files
 
    SELECT * FROM read_xml('dumps/*.xml.gz', record_element := 'record');
 
-A compressed file's decompressed size isn't known before it is read, so the reader decompresses up to ``maximum_file_size`` to decide between DOM and SAX. A file that overflows the limit is then read again from the start through SAX.
+A compressed file's decompressed size isn't known before it is read, so the reader decompresses up to ``maximum_file_size`` to decide between DOM and SAX. A file that overflows the limit continues through SAX from the bytes already decompressed.
 
 ``compression`` overrides detection by name: ``'auto'`` (the default), ``'none'`` to read a file's bytes as they are, ``'gzip'``, or ``'zstd'``. A name DuckDB doesn't recognize fails when a file is opened.
 

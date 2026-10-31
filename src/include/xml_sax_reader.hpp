@@ -14,9 +14,9 @@ namespace duckdb {
 class XMLRecordStream {
 public:
 	// keep_records leaves completed records in the document for TakeDocument. max_records > 0 stops
-	// the parse once that many records complete.
+	// the parse once that many records complete. prefix holds bytes already read from file, parsed first.
 	XMLRecordStream(std::unique_ptr<FileHandle> file, const std::string &filename, const XMLSchemaOptions &options,
-	                idx_t max_records = 0, bool keep_records = false);
+	                idx_t max_records = 0, bool keep_records = false, std::string prefix = std::string());
 	~XMLRecordStream();
 
 	XMLRecordStream(const XMLRecordStream &) = delete;
@@ -69,6 +69,8 @@ private:
 	xmlParserCtxtPtr ctxt = nullptr;
 	State state;
 	std::vector<char> buffer;
+	std::string prefix;
+	idx_t prefix_offset = 0;
 	bool finished = false;
 };
 

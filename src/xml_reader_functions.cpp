@@ -1038,12 +1038,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				lstate.remaining_depth = effective_depth - 2;
 
 				if (use_sax) {
-					string().swap(content);
-					// Measuring a compressed file consumed it up to the limit
-					if (!file_handle->CanSeek()) {
-						file_handle->Reset();
-					}
-					lstate.sax_stream = make_uniq<XMLRecordStream>(std::move(file_handle), filename, schema_options);
+					// Measuring a non-seekable input consumed its first bytes, so the stream starts from them
+					lstate.sax_stream = make_uniq<XMLRecordStream>(std::move(file_handle), filename, schema_options, 0,
+					                                               false, std::move(content));
 					lstate.sax_pending.clear();
 					lstate.sax_pending_chunk = 0;
 					lstate.sax_pending_pos = 0;

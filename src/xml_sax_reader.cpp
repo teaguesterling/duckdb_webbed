@@ -193,8 +193,9 @@ static void StreamReference(void *ctx, const xmlChar *name) {
 }
 
 XMLRecordStream::XMLRecordStream(std::unique_ptr<FileHandle> file_p, const std::string &filename_p,
-                                 const XMLSchemaOptions &options, idx_t max_records, bool keep_records)
-    : filename(filename_p), file(std::move(file_p)), buffer(CHUNK_SIZE) {
+                                 const XMLSchemaOptions &options, idx_t max_records, bool keep_records,
+                                 std::string prefix_p)
+    : filename(filename_p), file(std::move(file_p)), buffer(CHUNK_SIZE), prefix(std::move(prefix_p)) {
 	std::string tag = options.record_element;
 	if (tag.size() >= 2 && tag[0] == '/' && tag[1] == '/') {
 		tag = tag.substr(2);
@@ -248,9 +249,21 @@ bool XMLRecordStream::ParseChunk() {
 	if (finished) {
 		return false;
 	}
-	auto bytes_read = file->Read(buffer.data(), CHUNK_SIZE);
+	const char *data = buffer.data();
+	idx_t bytes_read;
+	if (prefix_offset < prefix.size()) {
+		data = prefix.data() + prefix_offset;
+		bytes_read = MinValue<idx_t>(prefix.size() - prefix_offset, CHUNK_SIZE);
+		prefix_offset += bytes_read;
+	} else {
+		bytes_read = NumericCast<idx_t>(file->Read(buffer.data(), CHUNK_SIZE));
+	}
 	bool terminate = bytes_read == 0;
-	int result = xmlParseChunk(ctxt, terminate ? nullptr : buffer.data(), static_cast<int>(bytes_read), terminate);
+	int result = xmlParseChunk(ctxt, terminate ? nullptr : data, static_cast<int>(bytes_read), terminate);
+	if (!prefix.empty() && prefix_offset == prefix.size()) {
+		std::string().swap(prefix);
+		prefix_offset = 0;
+	}
 	// Reaching max_records stops the parse mid-document, which libxml2 reports as an error.
 	if (state.stopped) {
 		finished = true;
