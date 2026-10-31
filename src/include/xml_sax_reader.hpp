@@ -46,6 +46,10 @@ public:
 		bool keep_prefix = false;
 		bool keep_records = false;
 		idx_t max_records = 0;
+		idx_t max_record_bytes = 0;
+		// Input bytes handed to the parser before the current chunk, and that count when the open record started.
+		idx_t fed_bytes = 0;
+		idx_t record_start_bytes = 0;
 
 		int depth = 0;
 		int record_depth = 0;

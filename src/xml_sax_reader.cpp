@@ -2,6 +2,7 @@
 #include "xml_utils.hpp"
 #include "xml_file_io.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include <libxml/SAX2.h>
 #include <cctype>
 #include <unordered_map>
@@ -63,6 +64,7 @@ static void StreamStartElement(void *ctx, const xmlChar *localname, const xmlCha
 	if (s.record_depth == 0) {
 		if (IsRecordStart(s, localname, prefix)) {
 			s.record_depth = s.depth;
+			s.record_start_bytes = s.fed_bytes;
 			std::fill(s.holds_record.begin(), s.holds_record.end(), true);
 		} else if (!s.root_element.empty() && s.root_depth == 0 &&
 		           NameEquals(s.root_element, localname, prefix, s.keep_prefix)) {
@@ -211,6 +213,7 @@ XMLRecordStream::XMLRecordStream(std::unique_ptr<FileHandle> file_p, const std::
 	state.keep_prefix = options.namespaces == "keep";
 	state.keep_records = keep_records;
 	state.max_records = max_records;
+	state.max_record_bytes = options.max_record_bytes;
 
 	memset(&handler, 0, sizeof(handler));
 	xmlSAXVersion(&handler, 2);
@@ -260,9 +263,16 @@ bool XMLRecordStream::ParseChunk() {
 	}
 	bool terminate = bytes_read == 0;
 	int result = xmlParseChunk(ctxt, terminate ? nullptr : data, static_cast<int>(bytes_read), terminate);
+	state.fed_bytes += bytes_read;
 	if (!prefix.empty() && prefix_offset == prefix.size()) {
 		std::string().swap(prefix);
 		prefix_offset = 0;
+	}
+	if (state.record_depth != 0 && state.max_record_bytes > 0 &&
+	    state.fed_bytes - state.record_start_bytes > state.max_record_bytes) {
+		throw OutOfMemoryException("A record in '%s' spans more than %s of input, a quarter of memory_limit. Raise "
+		                           "memory_limit to read it.",
+		                           filename, StringUtil::BytesToHumanReadableString(state.max_record_bytes));
 	}
 	// Reaching max_records stops the parse mid-document, which libxml2 reports as an error.
 	if (state.stopped) {

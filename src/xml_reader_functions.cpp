@@ -358,6 +358,14 @@ private:
 // elements, and libxml2 allocates it outside the buffer manager.
 static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 32;
 
+// A streamed record's DOM takes a few times its bytes, outside the buffer manager, so one record may span at most
+// this share of memory_limit.
+static constexpr idx_t STREAMED_RECORD_MEMORY_FACTOR = 4;
+
+static idx_t StreamedRecordLimit(ClientContext &context) {
+	return BufferManager::GetBufferManager(context).GetMaxMemory() / STREAMED_RECORD_MEMORY_FACTOR;
+}
+
 // Files parsed at once during bind-time inference: the xml_inference_threads setting when set,
 // otherwise `threads`, lowered so that a DOM per parse at maximum_file_size fits in memory_limit.
 static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t max_file_size) {
@@ -590,6 +598,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
@@ -1464,6 +1473,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
