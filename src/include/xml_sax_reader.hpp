@@ -47,9 +47,19 @@ public:
 		bool keep_records = false;
 		idx_t max_records = 0;
 		idx_t max_record_bytes = 0;
-		// Input bytes handed to the parser before the current chunk, and that count when the open record started.
+		// Input bytes handed to the parser before the current chunk, and those it had consumed by then.
 		idx_t fed_bytes = 0;
+		idx_t consumed_bytes = 0;
+		// consumed_bytes when the open record's start tag began to buffer, and the expanded size of the entity
+		// references it holds, which libxml2 keeps as references and expands when the record is read.
 		idx_t record_start_bytes = 0;
+		idx_t record_entity_bytes = 0;
+		// The same for a kept inference sample, from its first record on.
+		bool sample_started = false;
+		idx_t sample_start_bytes = 0;
+		idx_t sample_entity_bytes = 0;
+		// A callback found the open record over max_record_bytes and stopped the parser.
+		bool record_too_large = false;
 
 		int depth = 0;
 		int record_depth = 0;
@@ -66,6 +76,8 @@ public:
 
 private:
 	static constexpr idx_t CHUNK_SIZE = 65536;
+
+	void CheckMemory();
 
 	std::string filename;
 	std::unique_ptr<FileHandle> file;
