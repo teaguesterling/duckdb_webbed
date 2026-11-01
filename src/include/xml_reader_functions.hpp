@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb_compat.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 #include "file_batch_index.hpp"
 #include "xml_sax_reader.hpp"
 #include "xml_schema_inference.hpp"
@@ -192,11 +193,24 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 	// SAX streaming state (used when streaming=true and file exceeds maximum_file_size)
 	bool use_sax = false;
 	std::unique_ptr<XMLRecordStream> sax_stream;
-	// Extracted rows that did not fit the output chunk, or all of a file's while ignore_errors withholds them
-	std::vector<unique_ptr<DataChunk>> sax_pending;
-	idx_t sax_pending_chunk = 0;     // Next pending chunk to emit; the vector is cleared once drained
-	idx_t sax_pending_pos = 0;       // Next row of that chunk to emit
-	bool sax_parse_complete = false; // Push parser reached EOF without error
+	// Extracted rows that did not fit the output chunk, or all of a file's while ignore_errors withholds them.
+	// Rows gather in sax_stage and move to sax_pending, which the buffer manager tracks and can spill.
+	unique_ptr<ColumnDataCollection> sax_pending;
+	unique_ptr<DataChunk> sax_stage;
+	ColumnDataScanState sax_scan;
+	unique_ptr<DataChunk> sax_scan_chunk; // Set while sax_pending is being emitted
+	idx_t sax_scan_pos = 0;               // Next row of sax_scan_chunk to emit
+	bool sax_parse_complete = false;      // Push parser reached EOF without error
+
+	bool HasPendingSAXRows() const {
+		return sax_pending || (sax_stage && sax_stage->size() > 0);
+	}
+	void ClearPendingSAXRows() {
+		sax_pending.reset();
+		sax_stage.reset();
+		sax_scan_chunk.reset();
+		sax_scan_pos = 0;
+	}
 
 	// Release all per-file resources (when a file is finished or skipped). Keeps file_index /
 	// last_batch_index so a just-produced chunk can still be tagged by get_partition_data.
@@ -205,9 +219,7 @@ struct XMLReadLocalState : public LocalTableFunctionState {
 		record_elements.clear();
 		current_record_index = 0;
 		sax_stream.reset();
-		sax_pending.clear();
-		sax_pending_chunk = 0;
-		sax_pending_pos = 0;
+		ClearPendingSAXRows();
 		sax_parse_complete = false;
 		use_sax = false;
 		file_loaded = false;
