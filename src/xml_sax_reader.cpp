@@ -326,8 +326,7 @@ void XMLRecordStream::CheckMemory() {
 		                           filename, limit_text);
 	}
 	if (state.record_too_large ||
-	    (state.record_depth != 0 &&
-	     state.fed_bytes - state.record_start_bytes + state.record_entity_bytes > limit)) {
+	    (state.record_depth != 0 && state.fed_bytes - state.record_start_bytes + state.record_entity_bytes > limit)) {
 		throw OutOfMemoryException("A record in '%s' spans more than %s of input, a quarter of memory_limit. Raise "
 		                           "memory_limit to read it.",
 		                           filename, limit_text);
