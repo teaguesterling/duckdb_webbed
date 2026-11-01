@@ -1,0 +1,115 @@
+diff --git a/src/duck_block_functions.cpp b/src/duck_block_functions.cpp
+index d525836..fb9712e 100644
+--- a/src/duck_block_functions.cpp
++++ b/src/duck_block_functions.cpp
+@@ -1200,13 +1200,12 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str,
+ 		return vector<Value>();
+ 	}
+ 
+-	// Parse HTML via the IO reader so an html value larger than 2 GiB doesn't overflow
++	// Parse HTML via HTMLReadBuffer so an html value larger than 2 GiB doesn't overflow
+ 	// htmlReadMemory's int length argument (#115), with the fail-closed entity loader and no
+ 	// network (EnsureSecureParsing + HTML_PARSE_NONET, #118).
+ 	XMLUtils::EnsureSecureParsing();
+-	XMLInMemoryReader reader {html_str.data(), html_str.size(), 0};
+-	htmlDocPtr doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+-	                            HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
++	htmlDocPtr doc = HTMLReadBuffer(html_str.data(), html_str.size(), "UTF-8",
++	                                HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+ 
+ 	if (!doc) {
+ 		return vector<Value>();
+diff --git a/src/include/xml_in_memory_reader.hpp b/src/include/xml_in_memory_reader.hpp
+index 1f98647..520adfd 100644
+--- a/src/include/xml_in_memory_reader.hpp
++++ b/src/include/xml_in_memory_reader.hpp
+@@ -1,8 +1,12 @@
+ #pragma once
+ 
++#include <climits>
+ #include <cstddef>
+ #include <cstring>
+ 
++#include <libxml/HTMLparser.h>
++#include <libxml/parser.h>
++
+ namespace duckdb {
+ 
+ // Feed libxml2's IO-based parsers (xmlCtxtReadIO / htmlReadIO) from an already-in-memory
+@@ -38,4 +42,24 @@ inline int XMLInMemoryReaderClose(void * /*context*/) {
+ 	return 0;
+ }
+ 
++// Parse an in-memory XML document with a caller-owned parser context. Buffers that fit the
++// int length of xmlCtxtReadMemory parse in place. Only larger ones go through the IO reader,
++// whose fixed-size reads copy the input chunk by chunk.
++inline xmlDocPtr XMLReadBuffer(xmlParserCtxtPtr ctx, const char *data, size_t size, int options) {
++	if (size <= static_cast<size_t>(INT_MAX)) {
++		return xmlCtxtReadMemory(ctx, data, static_cast<int>(size), nullptr, nullptr, options);
++	}
++	XMLInMemoryReader reader {data, size, 0};
++	return xmlCtxtReadIO(ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr, options);
++}
++
++// HTML counterpart of XMLReadBuffer, for htmlReadMemory's int length.
++inline htmlDocPtr HTMLReadBuffer(const char *data, size_t size, const char *encoding, int options) {
++	if (size <= static_cast<size_t>(INT_MAX)) {
++		return htmlReadMemory(data, static_cast<int>(size), nullptr, encoding, options);
++	}
++	XMLInMemoryReader reader {data, size, 0};
++	return htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, encoding, options);
++}
++
+ } // namespace duckdb
+diff --git a/src/xml_utils.cpp b/src/xml_utils.cpp
+index a56187c..36781cc 100644
+--- a/src/xml_utils.cpp
++++ b/src/xml_utils.cpp
+@@ -190,8 +190,7 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
+ 	XMLUtils::EnsureSecureParsing();
+ 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+ 	if (parser_ctx) {
+-		XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+-		doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
++		doc = XMLReadBuffer(parser_ctx, xml_str.data(), xml_str.size(),
+ 		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+ 
+ 		// Check if parsing failed (NULL doc means fatal error)
+@@ -231,16 +230,14 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+ 		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
+ 		// TODO: Future enhancement - consider making encoding configurable via parameter
+ 		// (with UTF-8 as default) or deriving it from database collation settings
+-		XMLInMemoryReader reader {content.data(), content.size(), 0};
+-		doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+-		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
++		doc = HTMLReadBuffer(content.data(), content.size(), "UTF-8",
++		                     HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+ 	} else {
+ 		// Parse as XML with error message suppression (thread-safe, per-operation config)
+ 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
+ 		xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+ 		if (parser_ctx) {
+-			XMLInMemoryReader reader {content.data(), content.size(), 0};
+-			doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
++			doc = XMLReadBuffer(parser_ctx, content.data(), content.size(),
+ 			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
+ 			if (!doc) {
+ 				// Distinguish an allocation failure from malformed input before freeing
+@@ -3011,14 +3008,13 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
+ 	// Wrap the string in a minimal HTML document to parse it
+ 	std::string wrapped = "<html><body>" + html_str + "</body></html>";
+ 
+-	// Parse using HTML parser with explicit UTF-8 encoding, via the IO reader so a wrapped
++	// Parse using HTML parser with explicit UTF-8 encoding, via HTMLReadBuffer so a wrapped
+ 	// value larger than 2 GiB doesn't overflow htmlReadMemory's int length argument.
+ 	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
+ 	// to ensure correct handling of international characters in HTML entities
+ 	XMLUtils::EnsureSecureParsing();
+-	XMLInMemoryReader reader {wrapped.data(), wrapped.size(), 0};
+-	xmlDocPtr raw_doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
+-	                               HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
++	xmlDocPtr raw_doc = HTMLReadBuffer(wrapped.data(), wrapped.size(), "UTF-8",
++	                                   HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+ 
+ 	if (!raw_doc) {
+ 		return html_str; // Fallback to original on error

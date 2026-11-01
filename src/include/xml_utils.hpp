@@ -49,8 +49,14 @@ struct XMLDocRAII {
 	bool resource_error = false;
 
 	XMLDocRAII() = default;
-	XMLDocRAII(const std::string &xml_str);
+	// Take ownership of an already parsed document
+	explicit XMLDocRAII(xmlDocPtr adopted);
+	// Parses with this thread's reused parser context and shares its dictionary, so the document must be freed on
+	// this thread. Keep it function-local. Scan state that outlives a task uses the is_html overload.
+	explicit XMLDocRAII(const std::string &xml_str);
 	XMLDocRAII(const std::string &content, bool is_html);
+	// Parse input pulled through a libxml2 read callback
+	XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html);
 	~XMLDocRAII();
 
 	// Delete copy operations for safety
@@ -75,6 +81,9 @@ struct XMLDocRAII {
 
 	// Get all declared namespace prefixes from the document
 	case_insensitive_map_t<string> GetDeclaredNamespaces() const;
+
+private:
+	void Parse(xmlInputReadCallback read, void *context, bool is_html);
 };
 
 // Custom deleters for libxml2 resources to use with DuckDB's smart pointers

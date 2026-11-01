@@ -1,0 +1,21 @@
+# name: test/sql/sax_namespace_ancestors.test
+# description: Streamed records keep prefixes declared on ancestors that close before the records are written
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<root>' || repeat('<g xmlns:p="urn:p">' || repeat('<item><v><p:x>1</p:x></v></item>', 50) || '</g>', 100) || '</root>') TO '__TEST_DIR__/ns_group.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement ok
+COPY (SELECT '<root xmlns:p="urn:p">' || repeat('<item><v><p:x>1</p:x></v></item>', 5000) || '</root>') TO '__TEST_DIR__/ns_root.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query II
+SELECT count(*), count(*) FILTER (WHERE v = '<p:x>1</p:x>') FROM read_xml('__TEST_DIR__/ns_group.xml', record_element := 'item', columns := {'v': 'VARCHAR'}, maximum_file_size := 1);
+----
+5000	5000
+
+query II
+SELECT count(*), count(*) FILTER (WHERE v = '<p:x>1</p:x>') FROM read_xml('__TEST_DIR__/ns_root.xml', record_element := 'item', columns := {'v': 'VARCHAR'}, maximum_file_size := 1);
+----
+5000	5000

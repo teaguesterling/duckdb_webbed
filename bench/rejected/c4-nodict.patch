@@ -1,0 +1,30 @@
+diff --git a/src/xml_utils.cpp b/src/xml_utils.cpp
+index 4fc662f..d8f8554 100644
+--- a/src/xml_utils.cpp
++++ b/src/xml_utils.cpp
+@@ -186,13 +186,15 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
+ 	//   XML_PARSE_DTDLOAD or XML_PARSE_DTDVALID, so external entities are never substituted or
+ 	//   fetched. The fail-closed entity loader (EnsureSecureParsing) is the primary XXE defense;
+ 	//   NONET is belt-and-suspenders for the network case.
++	// XML_PARSE_NODICT: a document sharing the parser's name dictionary references and releases it
++	//   under libxml2's process-wide dict mutex, which serializes parallel scalar calls.
+ 	// Note: We intentionally DO NOT use XML_PARSE_RECOVER to maintain strict parsing behavior
+ 	XMLUtils::EnsureSecureParsing();
+ 	xmlParserCtxtPtr parser_ctx = xmlNewParserCtxt();
+ 	if (parser_ctx) {
+ 		XMLInMemoryReader reader {xml_str.data(), xml_str.size(), 0};
+ 		doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
+-		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
++		                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_NODICT);
+ 
+ 		// Check if parsing failed (NULL doc means fatal error)
+ 		if (!doc) {
+@@ -241,7 +243,7 @@ XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+ 		if (parser_ctx) {
+ 			XMLInMemoryReader reader {content.data(), content.size(), 0};
+ 			doc = xmlCtxtReadIO(parser_ctx, XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, nullptr,
+-			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET);
++			                    XML_PARSE_NOERROR | XML_PARSE_NOWARNING | XML_PARSE_NONET | XML_PARSE_NODICT);
+ 			if (!doc) {
+ 				// Distinguish an allocation failure from malformed input before freeing
+ 				// the context (the error object is owned by the parser context).

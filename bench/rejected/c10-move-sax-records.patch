@@ -1,0 +1,23 @@
+diff --git a/src/xml_sax_reader.cpp b/src/xml_sax_reader.cpp
+index cef6f96..07036d0 100644
+--- a/src/xml_sax_reader.cpp
++++ b/src/xml_sax_reader.cpp
+@@ -296,7 +296,18 @@ void SAXEndElementNs(void *ctx, const xmlChar *localname, const xmlChar *prefix,
+ 
+ 			// Collect the completed record immediately (before next element starts)
+ 			if (sax_ctx->completed_records) {
++				// Move the per-record containers into the stored record and copy only the state that
++				// persists across records. Reset() clears the moved-from containers.
++				auto fields = std::move(acc->current_fields);
++				auto attributes = std::move(acc->current_attributes);
++				auto field_order = std::move(acc->field_order);
++				auto attribute_order = std::move(acc->attribute_order);
+ 				sax_ctx->completed_records->push_back(*acc);
++				auto &record = sax_ctx->completed_records->back();
++				record.current_fields = std::move(fields);
++				record.current_attributes = std::move(attributes);
++				record.field_order = std::move(field_order);
++				record.attribute_order = std::move(attribute_order);
+ 				acc->Reset();
+ 			}
+ 

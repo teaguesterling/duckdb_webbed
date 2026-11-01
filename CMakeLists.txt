@@ -59,6 +59,7 @@ set(EXTENSION_SOURCES
     src/xml_reader_functions.cpp
     src/xml_schema_inference.cpp
     src/xml_sax_reader.cpp
+    src/xml_file_io.cpp
     src/duck_block_functions.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

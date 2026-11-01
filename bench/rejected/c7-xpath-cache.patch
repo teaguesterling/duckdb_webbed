@@ -1,0 +1,82 @@
+diff --git a/src/xml_utils.cpp b/src/xml_utils.cpp
+index 0ee1b42..3b9395a 100644
+--- a/src/xml_utils.cpp
++++ b/src/xml_utils.cpp
+@@ -19,6 +19,7 @@
+ #include <mutex>
+ #include <regex>
+ #include <set>
++#include <unordered_map>
+ #include <unordered_set>
+ 
+ namespace duckdb {
+@@ -130,17 +131,63 @@ void XMLSilentXPathErrorHandler(void *ctx, const xmlError *error) {
+ 	// This is thread-safe because it's set per-context, not globally
+ }
+ 
++// Per-thread cache of compiled XPath expressions. Scalar functions evaluate the same constant
++// expression on every row, and compiling it is a measurable share of the call. A compiled
++// expression holds no document state (prefixes resolve at evaluation), so it is reusable across
++// documents. Expressions compile against a document-less context carrying the same silent error
++// handler as the per-document contexts.
++namespace {
++struct XPathCompileCache {
++	static constexpr size_t MAX_ENTRIES = 256;
++	xmlXPathContextPtr compile_ctx = nullptr;
++	std::unordered_map<std::string, xmlXPathCompExprPtr> entries;
++
++	~XPathCompileCache() {
++		Clear();
++		if (compile_ctx) {
++			xmlXPathFreeContext(compile_ctx);
++		}
++	}
++
++	void Clear() {
++		for (auto &entry : entries) {
++			xmlXPathFreeCompExpr(entry.second);
++		}
++		entries.clear();
++	}
++};
++} // namespace
++
++static xmlXPathCompExprPtr CompileXPathCached(const std::string &xpath) {
++	thread_local XPathCompileCache cache;
++	auto it = cache.entries.find(xpath);
++	if (it != cache.entries.end()) {
++		return it->second;
++	}
++	if (!cache.compile_ctx) {
++		cache.compile_ctx = xmlXPathNewContext(nullptr);
++		if (!cache.compile_ctx) {
++			throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
++		}
++		xmlXPathSetErrorHandler(cache.compile_ctx, XMLSilentXPathErrorHandler, nullptr);
++	}
++	xmlXPathCompExprPtr compiled = xmlXPathCtxtCompile(cache.compile_ctx, BAD_CAST xpath.c_str());
++	if (!compiled) {
++		throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
++	}
++	if (cache.entries.size() >= XPathCompileCache::MAX_ENTRIES) {
++		cache.Clear();
++	}
++	cache.entries.emplace(xpath, compiled);
++	return compiled;
++}
++
+ // See xml_utils.hpp for why this compiles before evaluating.
+ xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::string &xpath) {
+ 	if (!xpath_ctx) {
+ 		return nullptr;
+ 	}
+-	xmlXPathCompExprPtr compiled = xmlXPathCtxtCompile(xpath_ctx, BAD_CAST xpath.c_str());
+-	if (!compiled) {
+-		throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
+-	}
+-	xmlXPathObjectPtr result = xmlXPathCompiledEval(compiled, xpath_ctx);
+-	xmlXPathFreeCompExpr(compiled);
++	xmlXPathObjectPtr result = xmlXPathCompiledEval(CompileXPathCached(xpath), xpath_ctx);
+ 	return result;
+ }
+ 
