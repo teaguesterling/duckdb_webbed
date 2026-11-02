@@ -1,8 +1,159 @@
 Changelog
 =========
 
-v2.9.1 (Current)
-----------------
+v2.14.0 (Current)
+-----------------
+
+Faster XML reads and compressed input, contributed by **@bendrucker** (#212), with
+follow-up hardening of streaming memory and the duck_block writer (#215, #216).
+
+**Reads take about half the time.** Ben measured the branch against main at ``672d290`` (after
+v2.12.0) over 68 benchmark cases, interleaved, with the output checked against fingerprints. The geomean
+change on DuckDB 2.0 is wall -50.6%, CPU -42.5% and peak RSS -7.6%. On 1.5.6 it is wall
+-51.9% and CPU -44.6%. ``bench/CLIMB.md`` records each of the 22 accepted changes, its
+measurement, and the ideas that were rejected. The main changes are these:
+
+- Streaming (SAX) builds each record as a small DOM subtree and converts it with the DOM code,
+  so both paths return the same rows.
+- Bind-time inference over several files (``union_by_name``, ``sample_files``) runs in
+  parallel on DuckDB's task scheduler and merges in file order. The new
+  ``xml_inference_threads`` setting overrides the default thread count, which is ``threads``
+  lowered to fit ``memory_limit``.
+- Values go straight into result vectors, and hand-written scanners replace ``std::regex``.
+- In-memory parses use one libxml2 parser context per thread. The extension still sets no
+  libxml2 globals.
+
+**New: compressed input.** ``read_xml``, ``read_html`` and their ``_objects`` variants read
+gzip, and zstd once the ``parquet`` extension is loaded. A new ``compression`` parameter
+(``'auto'``, ``'none'``, ``'gzip'``, ``'zstd'``) overrides detection. Size limits and DOM/SAX
+routing use decompressed bytes.
+
+**Behaviour changes:**
+
+- A plain file whose name ends in ``.gz`` now needs ``compression := 'none'`` (#212).
+- Streaming reads honour ``root_element`` and ``max_depth := 0``, and keep whitespace-only
+  text between inline elements, to match DOM (#212).
+- A bare ``record_element`` is found by walking the tree, so a document past libxml2's
+  10M-node XPath cap reads every record. A ``record_element`` that still needs XPath and hits
+  the cap raises an out-of-memory error, which ``ignore_errors`` doesn't skip (#212).
+- On the SAX path, one record may span at most a quarter of ``memory_limit``, counted as
+  input bytes (#212). The cap also counts a record's start tag and its entity references at
+  their expanded size. No single element may be buffered past it (#215).
+- A SAX inference sample stops at a quarter of ``memory_limit``. A field first seen after
+  that point needs ``columns`` (#215).
+- Under ``ignore_errors``, the rows a SAX read holds until the file parses in full now count
+  against ``memory_limit`` and can spill to disk (#215).
+- ``duck_blocks_to_html`` drops attribute keys that aren't valid HTML names, and writes
+  ``</script`` and ``<!--`` in ``metadata`` content as ``<\/script`` and ``<\!--`` (#216).
+- ``html_escape()`` keeps the text after a NUL byte, and writes the NUL as U+FFFD (#216).
+
+**Security.** A crafted ``duck_block`` could inject script through ``duck_blocks_to_html``,
+by an attribute key or by ``metadata`` content (#216). The docs now say that the writer
+escapes but does not sanitize: ``javascript:`` URLs, captured ``on*`` attributes, ``raw``
+blocks and ``encoding = 'html'`` content render as given. A gzip file of under 2 MB could hold
+2 to 4 times ``memory_limit`` on the SAX path (#214, fixed in #215). Claude (Opus) found both
+in review. #217 tracks the remaining duck_block findings.
+
+**Tests** re-vendor the duck_block conformance macros from duck_block_utils ``65f03cb``.
+
+v2.13.0
+-------
+
+**Breaking change:** ``xsi:nil="true"`` elements read as empty elements (#210, thanks
+**@bendrucker**). Inferred structs no longer have a ``nil`` field. A DOM ``record_element``
+XPath that filters on ``@xsi:nil`` stops matching, because the attribute is removed before
+selection. Filter ``b IS NULL`` in SQL instead.
+
+v2.12.2
+-------
+
+- ``read_html_blocks`` keeps rows in file order (#201, thanks **@bendrucker**). Tests cover
+  the empty-file path (#204).
+- CI builds against ci-tools' shared vcpkg baseline instead of a custom pin (#209), and the
+  DuckDB ``main`` canary is compile-only (#207).
+
+v2.12.1
+-------
+
+- The SAX path discovers columns first seen after the sample, as well as widening types
+  (#184, #196).
+- Batch indices stay in range past 2329 files (#199, thanks **@bendrucker**).
+- CI builds against the registry's v2.0.0 (#200, thanks **@bendrucker**). A test run that
+  skips every file now fails instead of passing (#195).
+
+v2.12.0
+-------
+
+Three fixes for explicit ``columns`` reads that returned a wrong value rather than an error.
+Two are from **@bendrucker**.
+
+- ``TIME`` kept the AM/PM marker: ``01:30:00 PM`` reads as ``13:30:00``, not ``01:30:00``
+  (#158).
+- A wrapped typed list, such as ``INTEGER[]`` over ``<n><i>1</i><i>2</i></n>``, reads each
+  child as an item. It read ``[12]`` on DOM and ``[NULL]`` on SAX.
+- ``TIMESTAMP`` no longer drops a time zone name on DuckDB v2.0 (#194).
+
+**Behaviour change:** inputs that returned a wrong value now raise an error. Examples are
+``13:30:00 PM``, ``01:30:00PM``, ``1:30 PM`` and a ``TIMESTAMP`` with a zone name. Under
+``ignore_errors`` they read as NULL.
+
+v2.11.0
+-------
+
+XML correctness across the DOM and SAX readers, contributed by **@bendrucker** in three PRs.
+
+- DOM and SAX agree on empty ``STRUCT``/``LIST`` elements, ``nullstr`` on struct fields,
+  attribute-bearing scalars, prefixed children under ``namespaces := 'keep'``, and
+  ampersands in attribute values.
+- Inference keeps attributes on nested elements. An attribute-only element infers as a
+  ``STRUCT`` of its attributes, where it used to be ``XML``. ``text_key`` is filled, empty
+  elements infer as unknown, and mixed-content text is kept.
+- XPath returns scalar results instead of an empty list. ``parse_xml`` raises on malformed
+  input when columns are explicit. ``attr_mode := 'discard'`` works on both paths.
+- ``read_xml`` reads well-formed files over the 16 MiB SAX threshold, which v2.10.0 rejected
+  (#191).
+
+**Behaviour change:** some inferred schemas change, as for the attribute-only element above.
+
+**Build:** the community registry now builds against DuckDB v2.0 by default and v1.5.6 as a
+variant, and CI follows that layout.
+
+v2.10.0
+-------
+
+- New ``xml_extract_text_each(xml, context_path, relative_path)``. It returns one value per
+  context node, with ``NULL`` where the relative path is absent, so parallel calls line up
+  under ``unnest``. The README shows ``record_element`` as the usual better answer.
+- Docs: under streaming, the column set comes only from the first ``sample_size`` records
+  (#184, fixed in v2.12.1).
+- A dispatch-only ``duckdb-legacy-build`` CI job builds for the previous stable DuckDB.
+- Carries v2.9.5, which was tagged but never registered.
+
+v2.9.5
+------
+
+No user-facing change. The duck_block vocabulary is re-vendored from duck_block_utils v3.5.0
+(``e00db698``), which adds ``TYPE_DOCUMENT``, ``ATTR_ID`` and ``ATTR_NAME``. ``SPEC_VERSION``
+stays ``1.4``. The ``v2.0-cyanoptera`` CI leg became advisory. This release was not
+registered, so v2.10.0 carries it.
+
+v2.9.4
+------
+
+- SAX sets ``XML_PARSE_HUGE``, so very large or deeply nested documents parse. A parse
+  failure reports libxml2's message, code and byte offset.
+- Under SAX, ``sample_size <= 0`` runs a full-file pass that widens a column to ``VARCHAR``
+  when a value outside the sample doesn't fit its type.
+
+v2.9.3
+------
+
+No GitHub release notes. The tag has three merges: the DuckDB submodule moves to v1.5.6
+(#170), webbed's functions carry descriptions in ``duckdb_functions()`` (#169), and the
+automated review on #165 and #166 is addressed (#167).
+
+v2.9.1
+------
 
 Bug-fix release: four reported defects, one external contribution, and the vendored
 duck_block vocabulary moved to spec 1.4. **Three of these change behaviour** -- unusual for a
