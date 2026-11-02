@@ -64,7 +64,13 @@ static void StreamStartElement(void *ctx, const xmlChar *localname, const xmlCha
 	if (s.record_depth == 0) {
 		if (IsRecordStart(s, localname, prefix)) {
 			s.record_depth = s.depth;
-			s.record_start_bytes = s.fed_bytes;
+			// The start tag was still buffered when the last chunk ended, so it begins after what was consumed then
+			s.record_start_bytes = s.consumed_bytes;
+			s.record_entity_bytes = 0;
+			if (s.keep_records && !s.sample_started) {
+				s.sample_started = true;
+				s.sample_start_bytes = s.consumed_bytes;
+			}
 			std::fill(s.holds_record.begin(), s.holds_record.end(), true);
 		} else if (!s.root_element.empty() && s.root_depth == 0 &&
 		           NameEquals(s.root_element, localname, prefix, s.keep_prefix)) {
@@ -189,8 +195,30 @@ static void StreamProcessingInstruction(void *ctx, const xmlChar *target, const 
 }
 
 static void StreamReference(void *ctx, const xmlChar *name) {
-	if (InRecord(ctx)) {
-		xmlSAX2Reference(ctx, name);
+	if (!InRecord(ctx)) {
+		return;
+	}
+	xmlSAX2Reference(ctx, name);
+	auto &s = StreamState(ctx);
+	if (InEntity(ctx) || s.max_record_bytes == 0) {
+		return;
+	}
+	auto parser = static_cast<xmlParserCtxtPtr>(ctx);
+	xmlEntityPtr entity = xmlGetDocEntity(parser->myDoc, name);
+	if (!entity) {
+		return;
+	}
+	idx_t size = entity->expandedSize > 0 ? entity->expandedSize : static_cast<idx_t>(MaxValue(entity->length, 0));
+	s.record_entity_bytes += size;
+	if (s.keep_records) {
+		s.sample_entity_bytes += size;
+	}
+	// A record of many references can complete within one chunk, before ParseChunk checks it, so check here and let
+	// ParseChunk raise: an exception must not cross libxml2's frames.
+	if (s.fed_bytes - s.record_start_bytes + s.record_entity_bytes > s.max_record_bytes) {
+		s.record_too_large = true;
+		s.stopped = true;
+		xmlStopParser(parser);
 	}
 }
 
@@ -268,12 +296,9 @@ bool XMLRecordStream::ParseChunk() {
 		std::string().swap(prefix);
 		prefix_offset = 0;
 	}
-	if (state.record_depth != 0 && state.max_record_bytes > 0 &&
-	    state.fed_bytes - state.record_start_bytes > state.max_record_bytes) {
-		throw OutOfMemoryException("A record in '%s' spans more than %s of input, a quarter of memory_limit. Raise "
-		                           "memory_limit to read it.",
-		                           filename, StringUtil::BytesToHumanReadableString(state.max_record_bytes));
-	}
+	auto consumed = xmlByteConsumed(ctxt);
+	state.consumed_bytes = consumed > 0 ? MinValue<idx_t>(NumericCast<idx_t>(consumed), state.fed_bytes) : 0;
+	CheckMemory();
 	// Reaching max_records stops the parse mid-document, which libxml2 reports as an error.
 	if (state.stopped) {
 		finished = true;
@@ -284,6 +309,44 @@ bool XMLRecordStream::ParseChunk() {
 	}
 	finished = terminate;
 	return !finished;
+}
+
+// libxml2 builds the tree outside the buffer manager, so the input bytes behind what the stream holds stay under
+// max_record_bytes: bytes buffered but not yet parsed (a start tag, comment or PI is buffered whole before its
+// callback), the open record with its entity references expanded, and a kept inference sample.
+void XMLRecordStream::CheckMemory() {
+	auto limit = state.max_record_bytes;
+	if (limit == 0) {
+		return;
+	}
+	auto limit_text = StringUtil::BytesToHumanReadableString(limit);
+	if (state.fed_bytes - state.consumed_bytes > limit) {
+		throw OutOfMemoryException("Reading '%s' buffers more than %s of input for one element, a quarter of "
+		                           "memory_limit. Raise memory_limit to read it.",
+		                           filename, limit_text);
+	}
+	if (state.record_too_large ||
+	    (state.record_depth != 0 && state.fed_bytes - state.record_start_bytes + state.record_entity_bytes > limit)) {
+		throw OutOfMemoryException("A record in '%s' spans more than %s of input, a quarter of memory_limit. Raise "
+		                           "memory_limit to read it.",
+		                           filename, limit_text);
+	}
+	if (state.keep_records && state.records_completed > 0 && !state.stopped &&
+	    state.fed_bytes - state.sample_start_bytes + state.sample_entity_bytes > limit) {
+		// The sample is full: end it at the last complete record, dropping the one in progress
+		if (state.record_depth != 0) {
+			xmlNodePtr record = ctxt->node;
+			for (int d = state.depth; record && d > state.record_depth; d--) {
+				record = record->parent;
+			}
+			if (record) {
+				xmlUnlinkNode(record);
+				state.garbage.push_back(record);
+			}
+		}
+		state.stopped = true;
+		xmlStopParser(ctxt);
+	}
 }
 
 void XMLRecordStream::ReleaseRecords() {

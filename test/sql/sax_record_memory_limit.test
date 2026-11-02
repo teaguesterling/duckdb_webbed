@@ -12,6 +12,36 @@ SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record.xml', record_elemen
 ----
 20000000
 
+# The cap also counts the bytes libxml2 buffers before a start tag's callback fires: an attribute on a record, or on
+# an element outside any record, is held in full before the record starts.
+statement ok
+COPY (SELECT '<root><item a="' || repeat('a', 20000000) || '"><t>x</t></item></root>') TO '__TEST_DIR__/big_record_attr.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement ok
+COPY (SELECT '<root a="' || repeat('a', 20000000) || '"><item><t>x</t></item></root>') TO '__TEST_DIR__/big_root_attr.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+# An entity reference is kept as a reference and expanded when the record is read, so the cap counts its expanded size.
+# The padding keeps the expansion under libxml2's own amplification limit.
+statement ok
+COPY (SELECT '<!DOCTYPE root [<!ENTITY e0 "' || repeat('a', 1000) || '"><!ENTITY e1 "' || repeat('&e0;', 10) || '"><!ENTITY e2 "' || repeat('&e1;', 10) || '">]><root>' || repeat(chr(10), 4000000) || '<item><t>' || repeat('&e2;', 150) || '</t></item><item><t>b</t></item></root>') TO '__TEST_DIR__/big_record_entity.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query I
+SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record_entity.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+15000000
+
+# The inference sample keeps its records, so it stops once they span a quarter of memory_limit. A field first seen past
+# that point is not in the inferred schema.
+statement ok
+COPY (SELECT '<root>' || string_agg('<item><t>' || repeat('a', 4000000) || '</t>' || CASE WHEN i = 6 THEN '<late>1</late>' ELSE '' END || '</item>', '' ORDER BY i) || '</root>' FROM range(1, 7) r(i)) TO '__TEST_DIR__/big_sample.xml' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/big_sample.xml', record_element := 'item', maximum_file_size := 1)) WHERE column_name = 'late';
+----
+1
+
+# Every query without a limit runs above, before the first SET: on DuckDB v1.5, a read after RESET memory_limit
+# still saw the 40MB cap.
 statement ok
 SET memory_limit = '40MB';
 
@@ -19,6 +49,31 @@ statement error
 SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
 ----
 a quarter of memory_limit
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/big_record_attr.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+a quarter of memory_limit
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/big_root_attr.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+a quarter of memory_limit
+
+statement error
+SELECT max(length(t)) FROM read_xml('__TEST_DIR__/big_record_entity.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+a quarter of memory_limit
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM read_xml('__TEST_DIR__/big_sample.xml', record_element := 'item', maximum_file_size := 1)) WHERE column_name = 'late';
+----
+0
+
+query I
+SELECT count(*) FROM read_xml('__TEST_DIR__/big_sample.xml', record_element := 'item', columns := {'t': 'VARCHAR'}, maximum_file_size := 1);
+----
+6
 
 statement ok
 RESET memory_limit;

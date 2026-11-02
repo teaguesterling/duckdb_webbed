@@ -1050,9 +1050,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					// Measuring a non-seekable input consumed its first bytes, so the stream starts from them
 					lstate.sax_stream = make_uniq<XMLRecordStream>(std::move(file_handle), filename, schema_options, 0,
 					                                               false, std::move(content));
-					lstate.sax_pending.clear();
-					lstate.sax_pending_chunk = 0;
-					lstate.sax_pending_pos = 0;
+					lstate.ClearPendingSAXRows();
 					lstate.sax_parse_complete = false;
 					lstate.file_loaded = true;
 				} else {
@@ -1117,27 +1115,48 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 			};
 
 			if (lstate.use_sax) {
-				auto &pending = lstate.sax_pending;
+				auto flush_sax_stage = [&]() {
+					auto &stage = lstate.sax_stage;
+					if (!stage || stage->size() == 0) {
+						return;
+					}
+					if (!lstate.sax_pending) {
+						lstate.sax_pending = make_uniq<ColumnDataCollection>(BufferManager::GetBufferManager(context),
+						                                                     output.GetTypes());
+					}
+					lstate.sax_pending->Append(*stage);
+					stage->Reset();
+				};
 				auto emit_pending_sax_rows = [&]() {
-					while (lstate.sax_pending_chunk < pending.size() && output_idx < STANDARD_VECTOR_SIZE) {
-						auto &chunk = *pending[lstate.sax_pending_chunk];
-						CompatSetOutputCardinality(chunk, chunk.size());
+					if (!lstate.HasPendingSAXRows()) {
+						return;
+					}
+					flush_sax_stage();
+					auto &pending = *lstate.sax_pending;
+					if (!lstate.sax_scan_chunk) {
+						// Copy strings out of the collection's blocks, so emitted rows don't pin them
+						pending.InitializeScan(lstate.sax_scan, ColumnDataScanProperties::DISALLOW_ZERO_COPY);
+						lstate.sax_scan_chunk = make_uniq<DataChunk>();
+						pending.InitializeScanChunk(*lstate.sax_scan_chunk);
+						lstate.sax_scan_pos = 0;
+					}
+					auto &chunk = *lstate.sax_scan_chunk;
+					while (output_idx < STANDARD_VECTOR_SIZE) {
+						if (lstate.sax_scan_pos == chunk.size()) {
+							if (!pending.Scan(lstate.sax_scan, chunk)) {
+								lstate.ClearPendingSAXRows();
+								return;
+							}
+							lstate.sax_scan_pos = 0;
+						}
 						auto count =
-						    MinValue<idx_t>(chunk.size() - lstate.sax_pending_pos, STANDARD_VECTOR_SIZE - output_idx);
+						    MinValue<idx_t>(chunk.size() - lstate.sax_scan_pos, STANDARD_VECTOR_SIZE - output_idx);
 						for (idx_t col = 0; col < chunk.ColumnCount(); col++) {
-							VectorOperations::Copy(chunk.data[col], output.data[col], lstate.sax_pending_pos + count,
-							                       lstate.sax_pending_pos, output_idx);
+							VectorOperations::Copy(chunk.data[col], output.data[col], lstate.sax_scan_pos + count,
+							                       lstate.sax_scan_pos, output_idx);
 						}
 						output_idx += count;
-						lstate.sax_pending_pos += count;
-						if (lstate.sax_pending_pos == chunk.size()) {
-							pending[lstate.sax_pending_chunk++].reset();
-							lstate.sax_pending_pos = 0;
-						}
-					}
-					if (lstate.sax_pending_chunk == pending.size()) {
-						pending.clear();
-						lstate.sax_pending_chunk = 0;
+						lstate.sax_scan_pos += count;
 					}
 				};
 
@@ -1156,15 +1175,18 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 						bool more = lstate.sax_stream->ParseChunk();
 						for (auto record : lstate.sax_stream->Records()) {
-							if (pending.empty() && !bind_data.ignore_errors && output_idx < STANDARD_VECTOR_SIZE) {
+							if (!lstate.HasPendingSAXRows() && !bind_data.ignore_errors &&
+							    output_idx < STANDARD_VECTOR_SIZE) {
 								write_record(record, output, output_idx++);
 								continue;
 							}
-							if (pending.empty() || pending.back()->size() == STANDARD_VECTOR_SIZE) {
-								pending.push_back(make_uniq<DataChunk>());
-								pending.back()->Initialize(Allocator::Get(context), output.GetTypes());
+							if (!lstate.sax_stage) {
+								lstate.sax_stage = make_uniq<DataChunk>();
+								lstate.sax_stage->Initialize(Allocator::Get(context), output.GetTypes());
+							} else if (lstate.sax_stage->size() == STANDARD_VECTOR_SIZE) {
+								flush_sax_stage();
 							}
-							auto &chunk = *pending.back();
+							auto &chunk = *lstate.sax_stage;
 							write_record(record, chunk, chunk.size());
 							chunk.SetCardinality(chunk.size() + 1);
 						}
@@ -1178,7 +1200,7 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 				if (lstate.sax_parse_complete) {
 					emit_pending_sax_rows();
-					if (pending.empty()) {
+					if (!lstate.HasPendingSAXRows()) {
 						file_done = true;
 					}
 				}

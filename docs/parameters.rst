@@ -95,7 +95,7 @@ Type Handling Parameters
    * - ``streaming``
      - BOOLEAN
      - true
-     - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. A single record may span at most a quarter of ``memory_limit``, since its tree takes about three times its size outside the buffer manager. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
+     - Enable SAX-based streaming for files exceeding ``maximum_file_size``. When true (default), oversized files are parsed using SAX instead of raising an error. SAX processes XML as a stream without building a DOM tree, reducing peak memory to proportional to a single record. A single record may span at most a quarter of ``memory_limit``, since its tree takes about three times its size outside the buffer manager. The record's start tag and its entity references, counted at their expanded size, are part of that span, and no single element may be buffered past it. Schema inference ends its sample once the sampled records reach the same size, so a field first seen after that point needs ``columns``. Set to false to error on oversized files (original behavior). Only supports simple tag names for ``record_element``. Not available for HTML.
    * - ``preserve_whitespace``
      - BOOLEAN
      - true
