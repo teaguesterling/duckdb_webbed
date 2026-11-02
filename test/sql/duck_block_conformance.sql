@@ -2,7 +2,7 @@
 -- VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 --
 -- Source: teaguesterling/duckdb_duck_block_utils, vendor/duck_block_conformance.sql
--- Vendored at upstream commit: b917e77
+-- Vendored at upstream commit: 65f03cb (last change to this file: 332353b)
 --
 -- This is an intentional COPY, not a load of the real thing. webbed builds its
 -- own DuckDB from a pinned submodule reporting a dev version string (e.g.
@@ -111,7 +111,15 @@ CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
     AND elem.element_type IS NOT NULL
     AND list_contains(duck_block_declared_encodings(), elem.encoding)
     AND elem.level IS NOT NULL
-    AND elem.level >= 1
+    -- LEVEL 0 IS THE EXPLICIT DOCUMENT ROOT, and nothing else may sit there. Mirrors
+    -- src/validation.cpp's `is_document_root`: the extension has accepted this shape
+    -- since the 1.4 amendment of 2026-09-16, and these macros refused it, so the two
+    -- encodings of one rule disagreed. A negative level is still refused, because
+    -- neither arm below admits one.
+    AND (
+        elem.level >= 1
+        OR (elem.level = 0 AND elem.kind = 'block' AND elem.element_type = 'document')
+    )
     AND elem.element_order IS NOT NULL
     AND elem.element_order >= 0
 );
@@ -133,7 +141,8 @@ CREATE OR REPLACE MACRO duck_block_is_valid(elem) AS (
 CREATE OR REPLACE MACRO duck_block_declared_types() AS (
     [
         'blockquote', 'blocks', 'bold', 'bool', 'caption', 'cite', 'code', 'deflist',
-        'div', 'figure', 'generic', 'heading', 'hr', 'image', 'inlines', 'italic',
+        'div', 'document', 'figure', 'generic', 'heading', 'hr', 'image', 'inlines',
+        'italic',
         'lineblock', 'linebreak', 'link', 'list', 'list_item', 'map', 'math', 'metadata',
         'note', 'page_break', 'paragraph', 'plain', 'quoted', 'raw', 'section',
         'smallcaps', 'softbreak', 'space', 'span', 'strikethrough', 'string', 'subscript',
@@ -172,6 +181,23 @@ CREATE OR REPLACE MACRO duck_blocks_errors(blocks) AS TABLE (
            'Invalid kind ' || chr(39) || coalesce(el.kind, 'NULL') || chr(39)
              || '; see duck_block_kind_names()' AS message
       FROM e WHERE NOT list_contains(duck_block_declared_kinds(), el.kind)
+    UNION ALL
+    -- Rules over the LIST (field = 'list'): the two expressible without an ancestor
+    -- stack. L1: element_order dense from 0 in LIST POSITION order (not sorted by
+    -- order -- a list whose orders are out of sequence is the thing being caught).
+    SELECT el.element_order, 'list',
+           'element_order starts at ' || el.element_order || '; must start at 0'
+      FROM e WHERE pos = 1 AND el.element_order <> 0
+    UNION ALL
+    SELECT ord, 'list', 'element_order gap after ' || prev
+      FROM (SELECT el.element_order AS ord, lag(el.element_order) OVER (ORDER BY pos) AS prev FROM e)
+     WHERE prev IS NOT NULL AND ord <> prev + 1
+    UNION ALL
+    -- L2: the shallowest element is at level 1. L4/L5 (required ancestors) need a
+    -- stack and are reported by duck_blocks_validate() only.
+    SELECT (SELECT el.element_order FROM e ORDER BY el.level, pos LIMIT 1), 'list',
+           'shallowest element is at level ' || min(el.level) || '; top level is 1'
+      FROM e HAVING min(el.level) > 1
     UNION ALL
     SELECT el.element_order, 'element_type', 'element_type is NULL'
       FROM e WHERE el.element_type IS NULL
@@ -237,6 +263,14 @@ CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
     FROM e WHERE el.element_type = 'table'
       AND coalesce(el.content, '') <> '' AND position('"headers"' IN el.content) = 0
     UNION ALL
+    -- A `list` carrying content is the pre-structural shape: items in a JSON array
+    -- instead of `list_item` children. The list case is more damaging than the table
+    -- one -- a nested list comes back as one run-together string that a consumer
+    -- cannot tell from real text.
+    SELECT el.element_order, 'list_not_structural',
+           'list carries content; its items belong in list_item children at level + 1'
+    FROM e WHERE el.element_type = 'list' AND coalesce(el.content, '') <> ''
+    UNION ALL
     SELECT el.element_order, 'deflist_superseded',
            'deflist is superseded by list with list_type=''definition'''
     FROM e WHERE el.element_type = 'deflist'
@@ -245,6 +279,23 @@ CREATE OR REPLACE MACRO duck_blocks_warnings(blocks) AS TABLE (
            'heading without attributes[''heading_level'']: do NOT fall back to level'
     FROM e WHERE el.element_type = 'heading'
       AND coalesce(el.attributes['heading_level'], '') = ''
+    UNION ALL
+    -- POSITION. Metadata keeps its SOURCE position: front matter at the front,
+    -- everything the source did not position at the end. The role is authoritative and
+    -- the position corroborates it, so a role that contradicts the position means one
+    -- of the two is lying and a consumer cannot tell which.
+    SELECT el.element_order, 'frontmatter_not_first',
+           'metadata with role=''frontmatter'' has body blocks before it; front matter '
+           'is at the front, or the role is wrong'
+    FROM e WHERE el.element_type = 'metadata' AND el.attributes['role'] = 'frontmatter'
+      AND EXISTS (SELECT 1 FROM e b WHERE b.el.kind = 'block' AND b.el.level = 1
+                  AND b.el.element_type <> 'metadata' AND b.el.element_order < e.el.element_order)
+    UNION ALL
+    SELECT el.element_order, 'body_after_metadata',
+           'a top-level block follows kind=''value'' metadata; values are appended '
+           'after the body, so nothing may come after them'
+    FROM e WHERE el.kind = 'block' AND el.level = 1
+      AND EXISTS (SELECT 1 FROM e v WHERE v.el.kind = 'value' AND v.el.element_order < e.el.element_order)
     UNION ALL
     SELECT el.element_order, 'undeclared_element_type',
            'element_type ' || el.element_type || ' is not in the vocabulary'
