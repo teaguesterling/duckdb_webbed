@@ -93,6 +93,20 @@ static std::map<std::string, std::string> ExtractAttributes(const Value &attrs_v
 // Render inline element to HTML
 static bool IsReservedAttr(const std::string &key);
 
+// A key is written as an attribute name unescaped, since names have no escaping, so it may hold none of the characters
+// that end or break a name in HTML's tokenizer. A key that could close the tag would let a block write any markup.
+static bool IsSafeAttrName(const std::string &key) {
+	if (key.empty()) {
+		return false;
+	}
+	for (unsigned char c : key) {
+		if (c <= 0x20 || c == 0x7F || c == '"' || c == '\'' || c == '>' || c == '<' || c == '/' || c == '=') {
+			return false;
+		}
+	}
+	return true;
+}
+
 // GitHub #142, writer half. Render the source attributes a block or inline
 // carries back onto its open tag, so read-then-write no longer silently drops
 // what the user's source had. Skips the vocabulary's semantic keys (never HTML
@@ -115,7 +129,7 @@ static std::string PassthroughAttrs(const std::map<std::string, std::string> &at
 	std::vector<std::string> done;
 	auto emit = [&](const std::string &k) {
 		auto it = attrs.find(k);
-		if (it == attrs.end() || it->second.empty() || IsReservedAttr(k) || excluded(k)) {
+		if (it == attrs.end() || it->second.empty() || IsReservedAttr(k) || excluded(k) || !IsSafeAttrName(k)) {
 			return;
 		}
 		if (std::find(done.begin(), done.end(), k) != done.end()) {
@@ -129,6 +143,27 @@ static std::string PassthroughAttrs(const std::map<std::string, std::string> &at
 	emit("class");
 	for (auto &kv : attrs) {
 		emit(kv.first);
+	}
+	return out;
+}
+
+// Text inside <script> is not entity-decoded, so YAML stays as written, but "</script" in any case ends the element
+// and "<!--" changes how the browser looks for that end. A backslash after the "<" breaks both and changes nothing
+// else.
+static std::string EscapeScriptData(const std::string &content) {
+	std::string out;
+	out.reserve(content.size());
+	for (size_t i = 0; i < content.size(); i++) {
+		out += content[i];
+		if (content[i] != '<') {
+			continue;
+		}
+		if (content.compare(i + 1, 3, "!--") == 0) {
+			out += '\\';
+		} else if (i + 8 <= content.size() && content[i + 1] == '/' &&
+		           StringUtil::CIEquals(content.substr(i + 2, 6), "script")) {
+			out += '\\';
+		}
 	}
 	return out;
 }
@@ -1922,7 +1957,7 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";
-				html << content; // No escaping - preserve YAML exactly
+				html << EscapeScriptData(content);
 				html << "\n</script>";
 			} else if (element_type == DuckBlockTypes::TYPE_PLAIN) {
 				// plain is bare escaped text with NO wrapper element -- that is what

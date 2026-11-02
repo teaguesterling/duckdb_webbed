@@ -1,0 +1,62 @@
+# name: test/sql/duck_block_writer_escaping.test
+# description: duck_blocks_to_html never lets a block's own fields write markup: attribute keys, metadata content and NUL bytes
+# group: [sql]
+
+require webbed
+
+statement ok
+CREATE MACRO para(attrs) AS {'kind':'block','element_type':'paragraph','content':'hi','level':1,'encoding':'text','attributes':attrs,'element_order':0};
+
+# A key that is not a valid HTML attribute name is dropped. A key that closed the tag would let the block write any
+# markup, including a script.
+query I
+SELECT duck_blocks_to_html([para(MAP{'x"><script>alert(2)</script><p y':'1', 'class':'ok'})]);
+----
+<p class="ok">hi</p>
+
+# Each character that ends or breaks an attribute name drops the key
+query I
+SELECT duck_blocks_to_html([para(MAP{'a b':'1', 'a=b':'1', 'a/b':'1', 'a''b':'1', 'a>b':'1', 'a<b':'1', 'a"b':'1', 'a' || chr(9) || 'b':'1', 'a' || chr(0) || 'b':'1', '':'1'})]);
+----
+<p>hi</p>
+
+# Valid names outside the common set still render
+query I
+SELECT duck_blocks_to_html([para(MAP{'data-x':'1', '@click':'f', 'xml:lang':'en', 'aria-label':'l'})]);
+----
+<p @click="f" aria-label="l" data-x="1" xml:lang="en">hi</p>
+
+# metadata is written into a <script> element, which only "</script" can end, so the writer breaks that sequence
+# (in any case) and "<!--", which changes how the browser looks for the end tag
+query I
+SELECT replace(duck_blocks_to_html([{'kind':'block','element_type':'metadata','content':'a: 1</script><script>alert(1)</SCRIPT>','level':1,'encoding':'yaml','attributes':NULL::MAP(VARCHAR, VARCHAR),'element_order':0}]), chr(10), '|');
+----
+<script type="application/vnd.frontmatter+yaml">|a: 1<\/script><script>alert(1)<\/SCRIPT>|</script>
+
+query I
+SELECT replace(duck_blocks_to_html([{'kind':'block','element_type':'metadata','content':'a: <!-- b','level':1,'encoding':'yaml','attributes':NULL::MAP(VARCHAR, VARCHAR),'element_order':0}]), chr(10), '|');
+----
+<script type="application/vnd.frontmatter+yaml">|a: <\!-- b|</script>
+
+# Plain YAML is unchanged
+query I
+SELECT replace(duck_blocks_to_html([{'kind':'block','element_type':'metadata','content':'title: a < b </p>','level':1,'encoding':'yaml','attributes':NULL::MAP(VARCHAR, VARCHAR),'element_order':0}]), chr(10), '|');
+----
+<script type="application/vnd.frontmatter+yaml">|title: a < b </p>|</script>
+
+# A NUL byte no longer ends the escaped text: it becomes U+FFFD, as an HTML parser reads it, and the rest is escaped
+query I
+SELECT html_escape('a' || chr(0) || '<script>');
+----
+a�&lt;script&gt;
+
+query I
+SELECT duck_blocks_to_html([{'kind':'block','element_type':'paragraph','content':'a' || chr(0) || '<b>','level':1,'encoding':'text','attributes':NULL::MAP(VARCHAR, VARCHAR),'element_order':0}]);
+----
+<p>a�&lt;b&gt;</p>
+
+# The rest of html_escape is unchanged: & < > " and CR are encoded, ' and UTF-8 are not
+query I
+SELECT html_escape('x' || chr(13) || 'y''z"&<>é');
+----
+x&#13;y'z&quot;&amp;&lt;&gt;é
