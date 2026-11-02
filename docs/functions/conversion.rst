@@ -523,6 +523,15 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
 
 **Returns:** HTML - The reconstructed HTML content
 
+.. warning::
+
+   ``duck_blocks_to_html`` escapes what blocks contain, but it does not sanitize them. Text, attribute values and
+   ``metadata`` content can't write markup, and attribute keys that aren't valid HTML names are dropped. URLs and
+   attributes pass through as given: a ``javascript:`` link, an ``onclick`` attribute captured with
+   ``capture_attributes := '*'``, ``raw`` blocks, and content with ``encoding = 'html'`` all render as given. ``html_to_duck_blocks`` drops ``<script>`` elements,
+   so a round trip can look like a sanitizer, but it isn't one. Pass the output through an HTML sanitizer before you
+   serve blocks from an untrusted source to a browser.
+
 **Examples:**
 
 .. code-block:: sql

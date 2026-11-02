@@ -3160,19 +3160,34 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 }
 
 std::string XMLUtils::HTMLEscape(const std::string &text) {
-	if (text.empty()) {
-		return text;
+	// The set xmlEncodeSpecialChars encodes (&, <, >, " and CR, not '), over the whole string: that function stops at
+	// the first NUL, which dropped everything after it. A NUL becomes U+FFFD, as an HTML parser reads it.
+	std::string result;
+	result.reserve(text.size());
+	for (char c : text) {
+		switch (c) {
+		case '&':
+			result += "&amp;";
+			break;
+		case '<':
+			result += "&lt;";
+			break;
+		case '>':
+			result += "&gt;";
+			break;
+		case '"':
+			result += "&quot;";
+			break;
+		case '\r':
+			result += "&#13;";
+			break;
+		case '\0':
+			result += "\xEF\xBF\xBD";
+			break;
+		default:
+			result += c;
+		}
 	}
-
-	// Use libxml2's xmlEncodeSpecialChars to encode HTML entities
-	// Note: xmlEncodeSpecialChars encodes &, <, >, and " (but not single quotes)
-	XMLCharPtr encoded(xmlEncodeSpecialChars(nullptr, BAD_CAST text.c_str()));
-
-	if (!encoded) {
-		return text; // Fallback to original on error
-	}
-
-	std::string result = std::string(reinterpret_cast<const char *>(encoded.get()));
 	return result;
 }
 
