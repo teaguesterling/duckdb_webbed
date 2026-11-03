@@ -1,0 +1,162 @@
+# name: test/sql/lexical_numeric_inference.test
+# description: Inference types a column INTEGER, BIGINT, or DOUBLE only when that type reproduces every sampled lexeme. Text the type would rewrite (007 -> 7, 1.10 -> 1.1) stays VARCHAR, in the sample and out of it.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# One column per lexeme class. Each column pairs the lexeme under test with a
+# plain numeric lexeme, so the class alone decides the type. The first record
+# carries the lexeme under test, and the query shows it as read.
+#
+# Before this change (DuckDB 2.0 pin):
+#
+#   column             type     first value read
+#   trailing_zero      DOUBLE   1.1
+#   exponent           DOUBLE   1000.0
+#   hex                INTEGER  16
+#   leading_dot        DOUBLE   0.5
+#   trailing_dot       DOUBLE   5.0
+#   negative_zero      INTEGER  0
+#   excess_digits      DOUBLE   3.141592653589793
+#   inexact_in_double  DOUBLE   9007199254740992.0
+#   beyond_bigint      DOUBLE   1.2345678901234567e+19
+#
+# leading_zero, plus_sign, special, and underscore were already VARCHAR on the
+# 2.0 pin, because its strict integer cast rejects them. On DuckDB 1.5 the same
+# cast accepts 007, so it typed INTEGER and read as 7. The rule no longer
+# depends on the cast's strictness.
+# =============================================================================
+
+query III
+SELECT column_name, column_type, value
+FROM (DESCRIBE SELECT * FROM read_xml('test/xml/schema_inference/lexical_numeric_classes.xml'))
+POSITIONAL JOIN (
+    UNPIVOT (SELECT COLUMNS(*)::VARCHAR FROM read_xml('test/xml/schema_inference/lexical_numeric_classes.xml') LIMIT 1)
+    ON COLUMNS(*) INTO NAME name VALUE value
+);
+----
+leading_zero	VARCHAR	007
+trailing_zero	VARCHAR	1.10
+exponent	VARCHAR	1e3
+plus_sign	VARCHAR	+5
+hex	VARCHAR	0x10
+leading_dot	VARCHAR	.5
+trailing_dot	VARCHAR	5.
+negative_zero	VARCHAR	-0
+special	VARCHAR	inf
+underscore	VARCHAR	1_000
+excess_digits	VARCHAR	3.14159265358979323846
+inexact_in_double	VARCHAR	9007199254740993
+beyond_bigint	VARCHAR	12345678901234567890
+ctl_integer	INTEGER	7
+ctl_bigint	BIGINT	9999999999
+ctl_negative	INTEGER	-3
+ctl_decimal	DOUBLE	1.5
+ctl_dot_zero	DOUBLE	1.0
+ctl_int_and_decimal	DOUBLE	1.0
+ctl_negative_decimal	DOUBLE	-0.5
+ctl_small_decimal	DOUBLE	1e-05
+ctl_seventeen_digits	DOUBLE	0.30000000000000004
+ctl_exact_bigint_in_double	DOUBLE	9007199254740992.0
+
+# The reported case: version numbers. 1.9 and 1.10 are different versions, and
+# DOUBLE would read both back as 1.9 and 1.1.
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p><v>1.9</v></p><p><v>1.10</v></p></root>');
+----
+VARCHAR	1.9
+VARCHAR	1.10
+
+# The same lexemes as attributes
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p v="007"/><p v="12"/></root>');
+----
+VARCHAR	007
+VARCHAR	12
+
+# Attribute values keep surrounding whitespace, so ' 5 ' is a lexeme no integer
+# renders. The 2.0 pin's strict cast already rejected it. Now the rule does.
+query II
+SELECT typeof(v), '[' || v || ']' FROM parse_xml('<root><p v=" 5 "/><p v="6"/></root>');
+----
+VARCHAR	[ 5 ]
+VARCHAR	[6]
+
+# Element text is trimmed before typing, for VARCHAR columns too, so the same
+# value as element text is the lexeme 5.
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p><v> 5 </v></p><p><v>6</v></p></root>');
+----
+INTEGER	5
+INTEGER	6
+
+# Inside a LIST, the element type follows the same rule
+query II
+SELECT typeof(v.i), v.i FROM parse_xml('<root><p><v><i>1.10</i><i>2.5</i></v></p></root>');
+----
+VARCHAR[]	[1.10, 2.5]
+
+# An integer lexeme next to a decimal still widens to DOUBLE. The double holds
+# the integer exactly, so CAST(v AS BIGINT) recovers the text.
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p><v>1</v></p><p><v>2.5</v></p></root>');
+----
+DOUBLE	1.0
+DOUBLE	2.5
+
+# =============================================================================
+# Out of sample. 59 records of plain lexemes, then count 007 and version 1.10
+# in record 60. A window that misses record 60 types the columns INTEGER and
+# DOUBLE. Record 60 then gets the #102 treatment every non-conforming value
+# gets: an error, or NULL under ignore_errors. Before this change it was read
+# silently as 7 and 1.1.
+# =============================================================================
+
+statement error
+SELECT count FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml', sample_size := 10);
+----
+value '007' does not match column type INTEGER
+
+# Under ignore_errors both 007 and 1.10 read as NULL, so DOUBLE rejects too.
+query III
+SELECT id, count, version
+FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml', sample_size := 10, ignore_errors := true)
+WHERE id >= 59 ORDER BY id;
+----
+59	59	59.5
+60	NULL	NULL
+
+# The default window covers record 60, so both columns stay VARCHAR and verbatim.
+query IIII
+SELECT typeof(count), typeof(version), count, version
+FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml')
+WHERE id = 60;
+----
+VARCHAR	VARCHAR	007	1.10
+
+# Streaming: a bounded window errors the same way.
+statement error
+SELECT count FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml',
+    record_element := 'record', maximum_file_size := 1, sample_size := 10);
+----
+value '007' does not match column type INTEGER
+
+# Streaming with sample_size := -1 types from the first 50 records, then the
+# verify pass widens both columns to VARCHAR when it reaches record 60.
+query IIII
+SELECT typeof(count), typeof(version), count, version
+FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml',
+    record_element := 'record', maximum_file_size := 1, sample_size := -1)
+WHERE id = 60;
+----
+VARCHAR	VARCHAR	007	1.10
+
+# A type given with columns := is a cast the caller asked for, so it still converts.
+query II
+SELECT count, version
+FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml',
+    columns := {'id': 'INTEGER', 'count': 'INTEGER', 'version': 'DOUBLE'})
+WHERE id = 60;
+----
+7	1.1

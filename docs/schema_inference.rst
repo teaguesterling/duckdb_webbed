@@ -114,11 +114,11 @@ The extension automatically detects these types:
      - true/false, yes/no, on/off
      - ``true``, ``false``, ``yes``, ``no``, ``on``, ``off``
    * - INTEGER/BIGINT
-     - Whole numbers
+     - Whole numbers, written the way DuckDB prints them
      - ``42``, ``-100``, ``999999``
    * - DOUBLE
-     - Decimal numbers
-     - ``3.14``, ``-0.5``, ``1.0e10``
+     - Decimal numbers, written the way DuckDB prints them
+     - ``3.14``, ``-0.5``, ``1.0``
    * - DATE
      - Date formats (ISO, US, EU)
      - ``2024-01-15``, ``03/15/2024``
@@ -155,6 +155,52 @@ Numbers and booleans are detected from the text itself, so the answer has to be 
 sampled lexeme can be read as. ``0`` and ``1`` are read as integers, not booleans, when they
 make up the column; and a column mixing a boolean lexeme with a numeric one has no common
 lexical type, so it widens to VARCHAR and keeps both spellings.
+
+A numeric type is chosen only when it can give back the exact text of every sample, because
+otherwise the original spelling is lost and no cast can restore it. These stay VARCHAR:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Lexeme class
+     - Example
+     - A numeric type would read
+   * - Leading zeros
+     - ``007``
+     - ``7``
+   * - Trailing fractional zeros
+     - ``1.10``
+     - ``1.1``
+   * - Exponent notation
+     - ``1e3``
+     - ``1000.0``
+   * - Sign, hex, digit separator
+     - ``+5``, ``0x10``, ``1_000``
+     - ``5``, ``16``, ``1000``
+   * - Bare decimal point
+     - ``.5``, ``5.``
+     - ``0.5``, ``5.0``
+   * - Negative zero integer
+     - ``-0``
+     - ``0``
+   * - More digits than a DOUBLE holds
+     - ``3.14159265358979323846``
+     - ``3.141592653589793``
+
+Element text is trimmed before typing, for VARCHAR columns too, so ``<v> 5 </v>`` is the lexeme
+``5``. Attribute values keep their whitespace, so ``v=" 5 "`` stays VARCHAR.
+
+A column of integers and decimals still types DOUBLE, so ``1`` and ``2.5`` read as ``1.0`` and
+``2.5``. The integer is exact in the double, so ``CAST(v AS BIGINT)`` recovers ``1``. An integer
+the double cannot hold exactly, such as ``9007199254740993`` next to ``2.5``, keeps the column
+VARCHAR.
+
+The same rule applies to values outside the sample. A value such as ``007`` that reaches an
+inferred INTEGER column gets the "does not match column type" error, or NULL under
+``ignore_errors``, as any other non-conforming value does (see "Out-of-Sample Values" below).
+Types given with ``columns`` are casts the caller asked for and are not checked this way:
+``columns := {'v': 'INTEGER'}`` still reads ``007`` as ``7``.
 
 Use the ``datetime_format`` parameter to control this behavior — see :doc:`parameters` for details.
 
@@ -230,7 +276,8 @@ Out-of-Sample Values
 
 Schema inference types each column from a sample of the input, then casts every value to that
 type during extraction. A value that appears **beyond the sample window** and does not fit the
-inferred type raises an error such as::
+inferred type, including one the type would rewrite such as ``007`` or ``1.10``, raises an error
+such as::
 
    Invalid Input Error: read_xml: value '24 495,40 Kč' does not match column type BIGINT,
    which was inferred from the first N sampled values.

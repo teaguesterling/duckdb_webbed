@@ -1,5 +1,6 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
+#include "xml_numeric_lexeme.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
@@ -1355,7 +1356,15 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
-	return GetMostSpecificType(detected_types);
+	// Each sample reproduces under its own type, but unifying can widen past that: `9007199254740993`
+	// is an exact BIGINT and an inexact DOUBLE once `2.5` joins it. Check the type the column gets.
+	auto column_type = GetMostSpecificType(detected_types);
+	for (const auto &sample : samples) {
+		if (!sample.empty() && !NumericTypeReproduces(sample, column_type)) {
+			return LogicalType::VARCHAR;
+		}
+	}
+	return column_type;
 }
 
 LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
@@ -1429,24 +1438,14 @@ bool XMLSchemaInference::IsBoolean(const std::string &value) {
 	       lower == "on" || lower == "off";
 }
 
+// A numeric type is a candidate only for text it reads back verbatim, so `007` and `1.10` stay
+// VARCHAR rather than landing as 7 and 1.1.
 bool XMLSchemaInference::IsInteger(const std::string &value) {
-	if (value.empty())
-		return false;
-
-	int64_t result;
-	return TryCast::Operation(string_t(value), result, true);
+	return NumericTypeReproduces(value, LogicalType::BIGINT);
 }
 
 bool XMLSchemaInference::IsDouble(const std::string &value) {
-	if (value.empty())
-		return false;
-
-	double result;
-	if (!TryCast::Operation(string_t(value), result, true)) {
-		return false;
-	}
-	// Strings like "inf" and "nan" parse as DOUBLE but are not numeric data
-	return std::isfinite(result);
+	return NumericTypeReproduces(value, LogicalType::DOUBLE);
 }
 
 // IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
@@ -2230,6 +2229,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return Value(); // NULL for unrecognized boolean
 		}
 		case LogicalTypeId::INTEGER: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			int32_t int_result;
 			if (TryCast::Operation(string_t(text), int_result, false)) {
 				return Value::INTEGER(int_result);
@@ -2237,6 +2239,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::BIGINT: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			int64_t bigint_result;
 			if (TryCast::Operation(string_t(text), bigint_result, false)) {
 				return Value::BIGINT(bigint_result);
@@ -2244,6 +2249,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::DOUBLE: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			double double_result;
 			if (TryCast::Operation(string_t(text), double_result, false)) {
 				return Value::DOUBLE(double_result);
