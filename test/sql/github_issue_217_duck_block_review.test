@@ -83,6 +83,45 @@ SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_b
 ----
 café
 
+# Latin-1 and ASCII labels decode as windows-1252, as browsers do, so 0x93 and 0x94 are curly quotes
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_label_smart_quotes.html') WHERE element_type = 'paragraph';
+----
+“q”
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_us_ascii_label_high_bytes.html') WHERE element_type = 'paragraph';
+----
+a“b”
+
+# Only a charset attribute counts, so the word "charset" in another meta's content doesn't
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_charset_word_in_content.html') WHERE element_type = 'paragraph';
+----
+α
+
+# A meta inside a comment is skipped, and so is one naming an unknown charset, for the next meta
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_meta_after_comment_and_unknown_charset.html') WHERE element_type = 'paragraph';
+----
+α
+
+# 0xA1 isn't a character in ISO-8859-6. libxml2 stops decoding there, which would drop the rest of the document.
+statement error
+SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html');
+----
+HTML document has bytes that aren't valid iso-8859-6
+
+query I
+SELECT count(*) FROM read_html_blocks('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html', ignore_errors := true);
+----
+0
+
+statement error
+SELECT * FROM read_html('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html');
+----
+HTML document has bytes that aren't valid iso-8859-6
+
 # Undeclared valid UTF-8 (GitHub #53) still reads as UTF-8
 query I
 SELECT count(*) > 0 FROM read_html_blocks('test/html/github_issue_53_utf8.html') WHERE content LIKE '%è%';

@@ -407,13 +407,16 @@ public:
 
 	// Every HTML parse goes through ParseHTMLDocument. It throws InvalidInputException when the document exceeds a
 	// libxml2 resource limit, such as LIBXML_MAX_TREE_DEPTH, because the parser stops there and recovery would
-	// silently return the truncated tree. It throws OutOfMemoryException when libxml2 cannot allocate. The returned
+	// silently return the truncated tree. It throws InvalidInputException too when bytes aren't valid in `encoding`,
+	// because libxml2 stops decoding there. It throws OutOfMemoryException when libxml2 cannot allocate. The returned
 	// document's encoding is UTF-8 whatever the input's was, so serialising it yields UTF-8.
 	static XMLDocPtr ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding);
 	static XMLDocPtr ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input);
-	// The encoding name to decode raw HTML file bytes with. `head` holds the file's first bytes, at least
-	// HTML_ENCODING_SNIFF_BYTES of them when the file is that long, and `valid_utf8` says whether the whole file is.
-	static std::string DetectHTMLFileEncoding(const char *head, idx_t head_size, bool valid_utf8);
+	// The encoding that raw HTML file bytes declare with a BOM or a <meta> in `head`, the file's first
+	// HTML_ENCODING_SNIFF_BYTES. Labels map the way browsers map them. "" when nothing usable is declared.
+	static std::string DeclaredHTMLEncoding(const char *head, idx_t head_size);
+	// The encoding for a file that declares none, given whether all of its bytes are valid UTF-8.
+	static const char *UndeclaredHTMLEncoding(bool valid_utf8);
 	static constexpr idx_t HTML_ENCODING_SNIFF_BYTES = 1024;
 
 	// HTML entity escaping/unescaping

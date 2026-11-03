@@ -121,30 +121,32 @@ static idx_t Utf8SequenceLength(unsigned char lead) {
 	return lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
 }
 
-// Reads the whole file once to choose its HTML encoding, then rewinds it for the parse. The choice needs to know
-// whether every byte is valid UTF-8, which a parse that streams cannot learn before it starts decoding.
-static std::string DetectHTMLHandleEncoding(FileHandle &handle) {
-	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
-	std::string head;
-	std::string buffer;
-	idx_t carry = 0;
-	bool valid_utf8 = true;
-	while (true) {
-		buffer.resize(carry + CHUNK_SIZE);
-		int64_t got = handle.Read(&buffer[carry], CHUNK_SIZE);
+// Fills `buffer` from the handle until it holds `size` bytes or the file ends, and returns how many it read.
+static idx_t ReadUpTo(FileHandle &handle, char *buffer, idx_t size) {
+	idx_t filled = 0;
+	while (filled < size) {
+		int64_t got = handle.Read(buffer + filled, size - filled);
 		if (got < 0) {
 			throw IOException("Could not read from file \"%s\"", handle.path);
 		}
-		idx_t filled = carry + UnsafeNumericCast<idx_t>(got);
-		if (head.size() < XMLUtils::HTML_ENCODING_SNIFF_BYTES) {
-			head.append(buffer, carry, MinValue<idx_t>(filled - carry, XMLUtils::HTML_ENCODING_SNIFF_BYTES - head.size()));
-		}
 		if (got == 0) {
-			valid_utf8 = valid_utf8 && (filled == 0 || Utf8Proc::Analyze(buffer.data(), filled) != UnicodeType::INVALID);
 			break;
 		}
-		if (!valid_utf8 && head.size() >= XMLUtils::HTML_ENCODING_SNIFF_BYTES) {
-			break;
+		filled += UnsafeNumericCast<idx_t>(got);
+	}
+	return filled;
+}
+
+// Whether the rest of the handle, after `carry` bytes already in `buffer`, is valid UTF-8. Reads until the first
+// invalid sequence.
+static bool RestIsValidUtf8(FileHandle &handle, std::string &buffer, idx_t carry) {
+	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
+	while (true) {
+		buffer.resize(carry + CHUNK_SIZE);
+		idx_t got = ReadUpTo(handle, &buffer[carry], CHUNK_SIZE);
+		idx_t filled = carry + got;
+		if (got == 0) {
+			return filled == 0 || Utf8Proc::Analyze(buffer.data(), filled) != UnicodeType::INVALID;
 		}
 		// Hold back a sequence the chunk cuts off. The next chunk checks it whole.
 		idx_t cut = filled;
@@ -158,14 +160,27 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle) {
 			}
 			break;
 		}
-		if (valid_utf8 && Utf8Proc::Analyze(buffer.data(), cut) == UnicodeType::INVALID) {
-			valid_utf8 = false;
+		if (Utf8Proc::Analyze(buffer.data(), cut) == UnicodeType::INVALID) {
+			return false;
 		}
 		carry = filled - cut;
 		buffer.erase(0, cut);
 	}
+}
+
+// Chooses the file's HTML encoding, then rewinds it for the parse. A BOM or <meta> in the first bytes decides it.
+// Otherwise the choice needs to know whether every byte is valid UTF-8, which a parse that streams cannot learn
+// before it starts decoding, and the rest of the file is read once to find out.
+static std::string DetectHTMLHandleEncoding(FileHandle &handle) {
+	std::string buffer(XMLUtils::HTML_ENCODING_SNIFF_BYTES, '\0');
+	idx_t head_size = ReadUpTo(handle, &buffer[0], buffer.size());
+	auto encoding = XMLUtils::DeclaredHTMLEncoding(buffer.data(), head_size);
+	if (encoding.empty()) {
+		buffer.resize(head_size);
+		encoding = XMLUtils::UndeclaredHTMLEncoding(RestIsValidUtf8(handle, buffer, head_size));
+	}
 	handle.Reset();
-	return XMLUtils::DetectHTMLFileEncoding(head.data(), head.size(), valid_utf8);
+	return encoding;
 }
 
 XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {

@@ -342,16 +342,27 @@ struct HTMLParserCtxtDeleter {
 	}
 };
 
+// A decoder error fails libxml2's input buffer. The parse ends there and RECOVER returns the tree so far. Later errors
+// can replace it as the last error, and a handler on the context records it when it happens.
+static void RecordHTMLDecodeError(void *data, const xmlError *error) {
+	if (error && error->domain == XML_FROM_IO && error->code == XML_ERR_INVALID_ENCODING) {
+		*static_cast<bool *>(data) = true;
+	}
+}
+
 XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding) {
 	EnsureSecureParsing();
 	std::unique_ptr<htmlParserCtxt, HTMLParserCtxtDeleter> ctxt(htmlNewParserCtxt());
 	if (!ctxt) {
 		throw OutOfMemoryException("libxml2 could not allocate an HTML parser context");
 	}
+	bool decode_failed = false;
+	xmlCtxtSetErrorHandler(ctxt.get(), RecordHTMLDecodeError, &decode_failed);
 	// RECOVER keeps malformed HTML parsing. HUGE stays off, so LIBXML_MAX_TREE_DEPTH and libxml2's other limits hold.
+	// Errors go to the context's handler, which prints nothing.
 	XMLDocPtr doc(htmlCtxtReadIO(ctxt.get(), read, XMLInMemoryReaderClose, context, nullptr, encoding.c_str(),
-	                             HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET));
-	// NOERROR only silences reporting. The context still records the error that stopped the parser.
+	                             HTML_PARSE_RECOVER | HTML_PARSE_NOWARNING | HTML_PARSE_NONET));
+	// A resource limit stops the parser, so no later error replaces it as the context's last error.
 	const xmlError *error = xmlCtxtGetLastError(ctxt.get());
 	if (error && error->code == XML_ERR_NO_MEMORY) {
 		throw OutOfMemoryException("libxml2 ran out of memory parsing an HTML document");
@@ -363,6 +374,11 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 			                            LIBXML_MAX_TREE_DEPTH);
 		}
 		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
+	}
+	// Without a decoder, UTF-8 input reports a bad byte per character and parses on.
+	if (decode_failed && !StringUtil::CIEquals(encoding, "UTF-8")) {
+		throw InvalidInputException("HTML document has bytes that aren't valid %s, where libxml2 stopped decoding it",
+		                            encoding);
 	}
 	if (doc) {
 		// libxml2 decoded the input to UTF-8. Recording that keeps a later dump from re-encoding to the source charset.
@@ -377,48 +393,157 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input) {
 	std::string encoding = "UTF-8";
 	if (input == HTMLInputEncoding::FILE_BYTES) {
-		bool valid_utf8 = Utf8Proc::Analyze(data, size) != UnicodeType::INVALID;
-		encoding = DetectHTMLFileEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES), valid_utf8);
+		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES));
+		if (encoding.empty()) {
+			encoding = UndeclaredHTMLEncoding(Utf8Proc::Analyze(data, size) != UnicodeType::INVALID);
+		}
 	}
 	XMLInMemoryReader reader {data, size, 0};
 	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
 }
 
-// The charset that a `charset` attribute or an http-equiv content charset parameter on a <meta> in `head` declares,
-// or "" when none does. A text scan suffices because it only has to find a declaration the HTML parser also honours.
-static std::string FindMetaCharset(const char *head, idx_t size) {
-	std::string lower(head, size);
-	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+// The encoding libxml2 decodes a declared charset label with, mapped the way the WHATWG Encoding Standard maps it, or ""
+// when libxml2 has no decoder for it. Browsers decode ASCII and Latin-1 labels as windows-1252, a superset that gives
+// 0x80-0x9F the punctuation authors meant. libxml2 maps them only for a charset it reads from <meta> itself.
+static std::string HTMLEncodingForLabel(const std::string &label) {
+	auto name = StringUtil::Lower(label);
+	StringUtil::Trim(name);
+	if (name.empty()) {
+		return "";
+	}
+	// A <meta> is read as ASCII, so the bytes cannot be UTF-16, and HTML treats that declaration as UTF-8.
+	if (StringUtil::StartsWith(name, "utf-16")) {
+		return "UTF-8";
+	}
+	switch (xmlParseCharEncoding(name.c_str())) {
+	case XML_CHAR_ENCODING_ASCII:
+	case XML_CHAR_ENCODING_8859_1:
+		return "windows-1252";
+	default:
+		break;
+	}
+	xmlCharEncodingHandlerPtr handler = nullptr;
+	if (xmlOpenCharEncodingHandler(name.c_str(), 0, &handler) != XML_ERR_OK) {
+		return "";
+	}
+	if (handler) {
+		xmlCharEncCloseFunc(handler);
+	}
+	return name;
+}
+
+static bool IsHTMLSpace(char c) {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+}
+
+// The charset parameter of an http-equiv content value, as in "text/html; charset=iso-8859-1", or "".
+static std::string ContentCharset(const std::string &content) {
 	size_t pos = 0;
-	while ((pos = lower.find("<meta", pos)) != std::string::npos) {
-		size_t tag_end = lower.find('>', pos);
-		if (tag_end == std::string::npos) {
-			tag_end = lower.size();
+	while ((pos = content.find("charset", pos)) != std::string::npos) {
+		size_t i = pos + 7;
+		while (i < content.size() && IsHTMLSpace(content[i])) {
+			i++;
 		}
-		size_t charset = lower.find("charset", pos);
-		if (charset != std::string::npos && charset < tag_end) {
-			size_t i = charset + 7;
-			while (i < tag_end && (isspace(static_cast<unsigned char>(lower[i])) || lower[i] == '=')) {
-				i++;
-			}
-			while (i < tag_end && (lower[i] == '"' || lower[i] == '\'')) {
-				i++;
-			}
-			size_t start = i;
-			while (i < tag_end && !isspace(static_cast<unsigned char>(lower[i])) && lower[i] != '"' &&
-			       lower[i] != '\'' && lower[i] != ';' && lower[i] != '/') {
-				i++;
-			}
-			if (i > start) {
-				return std::string(head + start, i - start);
-			}
+		if (i >= content.size() || content[i] != '=') {
+			pos = i;
+			continue;
 		}
-		pos = tag_end;
+		i++;
+		while (i < content.size() && IsHTMLSpace(content[i])) {
+			i++;
+		}
+		if (i < content.size() && (content[i] == '"' || content[i] == '\'')) {
+			auto end = content.find(content[i], i + 1);
+			return end == std::string::npos ? "" : content.substr(i + 1, end - i - 1);
+		}
+		size_t start = i;
+		while (i < content.size() && !IsHTMLSpace(content[i]) && content[i] != ';') {
+			i++;
+		}
+		return content.substr(start, i - start);
 	}
 	return "";
 }
 
-std::string XMLUtils::DetectHTMLFileEncoding(const char *head, idx_t head_size, bool valid_utf8) {
+// The encoding the first usable <meta> in `head` declares, through a charset attribute or an http-equiv content-type
+// content, or "". It follows the prescan in the HTML standard: comments are skipped, attributes are parsed, and a
+// <meta> naming an encoding libxml2 can't decode is passed over for a later one.
+static std::string FindMetaCharset(const char *head, idx_t size) {
+	std::string lower(head, size);
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+	size_t pos = 0;
+	while ((pos = lower.find('<', pos)) != std::string::npos) {
+		if (lower.compare(pos, 4, "<!--") == 0) {
+			auto end = lower.find("-->", pos + 4);
+			if (end == std::string::npos) {
+				return "";
+			}
+			pos = end + 3;
+			continue;
+		}
+		if (lower.compare(pos, 5, "<meta") != 0 || pos + 5 >= lower.size() ||
+		    !(IsHTMLSpace(lower[pos + 5]) || lower[pos + 5] == '/')) {
+			pos++;
+			continue;
+		}
+		size_t i = pos + 5;
+		std::string charset;
+		std::string content;
+		bool content_type = false;
+		while (i < lower.size() && lower[i] != '>') {
+			if (IsHTMLSpace(lower[i]) || lower[i] == '/') {
+				i++;
+				continue;
+			}
+			size_t name_start = i;
+			while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '=' && lower[i] != '>' &&
+			       lower[i] != '/') {
+				i++;
+			}
+			auto name = lower.substr(name_start, i - name_start);
+			while (i < lower.size() && IsHTMLSpace(lower[i])) {
+				i++;
+			}
+			std::string value;
+			if (i < lower.size() && lower[i] == '=') {
+				i++;
+				while (i < lower.size() && IsHTMLSpace(lower[i])) {
+					i++;
+				}
+				if (i < lower.size() && (lower[i] == '"' || lower[i] == '\'')) {
+					auto end = lower.find(lower[i], i + 1);
+					if (end == std::string::npos) {
+						end = lower.size();
+					}
+					value = lower.substr(i + 1, end - i - 1);
+					i = MinValue<size_t>(end + 1, lower.size());
+				} else {
+					size_t value_start = i;
+					while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '>') {
+						i++;
+					}
+					value = lower.substr(value_start, i - value_start);
+				}
+			}
+			if (name == "charset" && charset.empty()) {
+				charset = value;
+			} else if (name == "content" && content.empty()) {
+				content = value;
+			} else if (name == "http-equiv" && value == "content-type") {
+				content_type = true;
+			}
+		}
+		auto label = !charset.empty() ? charset : content_type ? ContentCharset(content) : "";
+		auto encoding = HTMLEncodingForLabel(label);
+		if (!encoding.empty()) {
+			return encoding;
+		}
+		pos = i;
+	}
+	return "";
+}
+
+std::string XMLUtils::DeclaredHTMLEncoding(const char *head, idx_t head_size) {
 	auto bytes = reinterpret_cast<const unsigned char *>(head);
 	if (head_size >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
 		return "UTF-8";
@@ -429,20 +554,10 @@ std::string XMLUtils::DetectHTMLFileEncoding(const char *head, idx_t head_size, 
 	if (head_size >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
 		return "UTF-16BE";
 	}
-	auto declared = FindMetaCharset(head, head_size);
-	if (!declared.empty()) {
-		// A <meta> was read as ASCII, so the bytes cannot be UTF-16, and HTML treats that declaration as UTF-8.
-		if (StringUtil::StartsWith(StringUtil::Lower(declared), "utf-16")) {
-			return "UTF-8";
-		}
-		xmlCharEncodingHandlerPtr handler = nullptr;
-		if (xmlOpenCharEncodingHandler(declared.c_str(), 0, &handler) == XML_ERR_OK) {
-			if (handler) {
-				xmlCharEncCloseFunc(handler);
-			}
-			return declared;
-		}
-	}
+	return FindMetaCharset(head, head_size);
+}
+
+const char *XMLUtils::UndeclaredHTMLEncoding(bool valid_utf8) {
 	return valid_utf8 ? "UTF-8" : "windows-1252";
 }
 
