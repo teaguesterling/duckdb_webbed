@@ -259,11 +259,16 @@ static std::string RenderInlineElementToHtml(const std::string &element_type, co
 	       ">" + XMLUtils::HTMLEscape(content) + "</span>";
 }
 
-// Guard against unbounded nesting from caller-constructed block/inline lists.
-// Elements deeper than this render flat rather than pushing, so output stays
-// balanced. Shared between the block-level container stack and the
-// inline-level one below -- same mechanism, same limit.
-static constexpr int32_t MAX_CONTAINER_DEPTH = 64;
+// A container's level bounds the render stack, since a container closes every open one at its level or deeper.
+// Rendering a deeper one flat would change the nesting a reader sees. The writer refuses it instead. Shared between the
+// block-level container stack and the inline-level one below.
+static void CheckContainerLevel(int32_t level) {
+	if (level > MAX_DUCK_BLOCK_CONTAINER_LEVEL) {
+		throw InvalidInputException("duck_blocks_to_html: a container at level %d nests containers deeper than %d "
+		                            "levels, the most an HTML document can hold",
+		                            level, MAX_DUCK_BLOCK_CONTAINER_LEVEL);
+	}
+}
 
 // An inline container currently open on the render stack, mirroring
 // OpenContainer at the block level (defined further down with the rest of
@@ -437,11 +442,8 @@ static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t paren
 
 		if (is_container) {
 			html << RenderInlineOpenTag(next_type, next_attrs);
-			if (static_cast<int32_t>(open_inlines.size()) < MAX_CONTAINER_DEPTH) {
-				open_inlines.push_back({RenderInlineCloseTag(next_type), next_level});
-			} else {
-				html << RenderInlineCloseTag(next_type);
-			}
+			CheckContainerLevel(next_level);
+			open_inlines.push_back({RenderInlineCloseTag(next_type), next_level});
 		} else {
 			html << RenderInlineElementToHtml(next_type, next_content, next_attrs);
 		}
@@ -1505,9 +1507,6 @@ static int32_t EffectiveLevel(const Value &level_val) {
 	return lvl < 1 ? 1 : lvl;
 }
 
-// MAX_CONTAINER_DEPTH is defined earlier (with the inline scope-stack
-// machinery, which it is shared with) and reused here for the block stack.
-
 // Map a section block's role to an output tag. The role comes from parsed HTML,
 // so it is validated against a fixed enum rather than interpolated: an unchecked
 // value would let a crafted document emit a tag it never contained.
@@ -1709,11 +1708,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</blockquote>", cur_level});
-				} else {
-					html << "</blockquote>";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</blockquote>", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_LIST) {
 				// list_type is canonical (spec 6.x, see the 3.0 -> 4.0 changelog
 				// entry in duck_block_vocabulary.hpp); attributes['ordered'] is a
@@ -1773,11 +1769,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				// the close costs it nothing -- it is simply closed at the next
 				// sibling or at the end-of-run drain instead of immediately, with
 				// identical output either way.
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</" + tag + ">", cur_level});
-				} else {
-					html << "</" << tag << ">";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</" + tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_LIST_ITEM) {
 				// A container by the established pattern (blockquote/section/div):
 				// open tag, own content if non-empty, ConsumeInlineChildren for any
@@ -1803,11 +1796,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					}
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</" + item_tag + ">", cur_level});
-				} else {
-					html << "</" << item_tag << ">";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</" + item_tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					html << TableJsonToHtml(content, PassthroughAttrs(attrs));
@@ -1863,22 +1853,16 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << XMLUtils::HTMLEscape(content);
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</" + tag + ">", cur_level});
-				} else {
-					html << "</" << tag << ">";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</" + tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_FIGURE) {
 				html << "<figure" << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
 					html << XMLUtils::HTMLEscape(content);
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</figure>", cur_level});
-				} else {
-					html << "</figure>";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</figure>", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_CAPTION) {
 				std::string caption_role =
 				    attrs.count(DuckBlockTypes::ATTR_ROLE) ? attrs[DuckBlockTypes::ATTR_ROLE] : "";
@@ -1888,11 +1872,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << XMLUtils::HTMLEscape(content);
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</" + caption_tag + ">", cur_level});
-				} else {
-					html << "</" << caption_tag << ">";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</" + caption_tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_DEFLIST) {
 				html << "<dl" << PassthroughAttrs(attrs) << ">";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
@@ -1955,11 +1936,8 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 					html << XMLUtils::HTMLEscape(content);
 				}
 				ConsumeInlineChildren(blocks_list, block_idx, consumed_indices, html, cur_level);
-				if (static_cast<int32_t>(open_containers.size()) < MAX_CONTAINER_DEPTH) {
-					open_containers.push_back({"</" + tag + ">", cur_level});
-				} else {
-					html << "</" << tag << ">";
-				}
+				CheckContainerLevel(cur_level);
+				open_containers.push_back({"</" + tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_METADATA) {
 				// Output as script block with frontmatter MIME type for round-trip preservation
 				html << "<script type=\"" << DuckBlockTypes::FRONTMATTER_MIME_TYPE << "\">\n";

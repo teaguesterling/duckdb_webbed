@@ -14,6 +14,10 @@ namespace duckdb {
 // with XML_ERR_RESOURCE_LIMIT.
 static constexpr int32_t LIBXML_MAX_TREE_DEPTH = 256;
 
+// The deepest duck_block container level read_html_blocks can emit. <html> and <body> take two of libxml2's levels,
+// and a body child is level 1. duck_blocks_to_html refuses a deeper container, so a reader's output round trips.
+static constexpr int32_t MAX_DUCK_BLOCK_CONTAINER_LEVEL = LIBXML_MAX_TREE_DEPTH - 2;
+
 // A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
 // elements, and libxml2 allocates it outside the buffer manager. Readers size their parallelism and refuse files by
 // this bound.

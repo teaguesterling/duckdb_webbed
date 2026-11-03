@@ -133,3 +133,26 @@ query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<p><span><div id="x">t</div></span></p>'))::VARCHAR LIKE '%<span id="x">t</span>%';
 ----
 true
+
+# ============================================================================
+# The writer keeps nesting as deep as the reader emits, and refuses deeper
+# ============================================================================
+
+# 254 nested blockquotes is the deepest document libxml2 parses whole, so level 254 is the deepest container
+query III
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 254) || 'deep' || repeat('</blockquote>', 254)) AS blocks)
+SELECT list_max([x.level FOR x IN blocks]), ([x.level FOR x IN blocks] = [y.level FOR y IN html_to_duck_blocks(duck_blocks_to_html(blocks))])::INTEGER, len(blocks) FROM b;
+----
+254	1	254
+
+# A container one level deeper than the reader can emit raises an error instead of rendering flat
+statement error
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'blockquote', content: NULL::VARCHAR, level: i::INTEGER, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: i::INTEGER} FOR i IN range(1, 256)] || [{kind: 'block', element_type: 'paragraph', content: 'x', level: 256, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 256}]);
+----
+nests containers deeper than 254 levels
+
+# Inline containers have the same bound
+statement error
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'paragraph', content: NULL::VARCHAR, level: 1, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 0}] || [{kind: 'inline', element_type: 'bold', content: NULL::VARCHAR, level: i::INTEGER, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: i::INTEGER} FOR i IN range(2, 257)] || [{kind: 'inline', element_type: 'text', content: 'x', level: 257, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 257}]);
+----
+nests containers deeper than 254 levels
