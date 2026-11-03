@@ -223,6 +223,23 @@ Convert HTML content into a list of structured document blocks. This function pa
   the rows still binds as duck_blocks. A string (``filename := 'src_path'``) names the column
   instead, as DuckDB's core readers allow, **but that shape is not the accepted type and will
   not bind as duck_blocks**; use ``true`` when the rows feed ``duck_block_utils``.
+- ``ignore_errors`` (``read_html_blocks`` and ``parse_html_blocks``): skip a file or input
+  that fails as a document, such as one past ``maximum_file_size`` or libxml2's depth limit,
+  and a path in a list that matches no file. Out of memory, IO errors and interrupts still
+  raise.
+- ``maximum_file_size`` (``read_html_blocks`` only): the largest file to read, in bytes. A
+  negative value raises an error.
+
+**Encoding:** ``read_html_blocks`` decodes each file by its byte order mark, then a
+``<meta charset>`` or ``http-equiv`` declaration, then its bytes. A file in neither UTF-8
+nor a declared charset reads as windows-1252.
+
+**Limits:** libxml2 parses at most 256 levels of nested elements. A deeper document raises
+an error naming the limit, so its blocks are never silently cut short. ``read_html_blocks``
+parses each file into memory outside DuckDB's buffer manager, at up to 32 times the file's
+size. A file whose parse would exceed ``memory_limit`` raises an Out of Memory error, and the
+reader runs as many files at once as fit in ``memory_limit``. The rows themselves live in
+buffer-managed memory, so a file with many blocks spills to disk instead of failing.
 
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 
@@ -338,7 +355,9 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
        incrementing a nesting counter.
    * - ``table``
      - TABLE elements. ``encoding`` is ``'json'``; ``content`` is a JSON object with
-       ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``.
+       ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``. Headers
+       come from ``<thead>``, or from a first row of only ``<th>`` cells. A table without
+       either has ``"headers":[]``, and its first row stays in ``rows``.
    * - ``hr``
      - HR elements. A marker: no ``content``, no children.
    * - ``image``
@@ -522,6 +541,10 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
 - ``blocks`` (LIST(duck_block)): A list of document blocks
 
 **Returns:** HTML - The reconstructed HTML content
+
+A container block or inline at a ``level`` above 254 raises an error. That is the deepest
+level ``html_to_duck_blocks`` emits under libxml2's 256-level limit, so any reader output
+renders with its nesting intact.
 
 .. warning::
 

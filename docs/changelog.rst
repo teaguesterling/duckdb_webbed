@@ -1,6 +1,30 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Fixes from the duck_block review in #217.
+
+- HTML deeper than libxml2's 256-level limit raises an error. It used to return a truncated
+  block list.
+- ``read_html_blocks`` decodes files by their byte order mark, ``<meta>`` charset or bytes, so
+  a Latin-1 or windows-1252 page no longer reads as U+FFFD.
+- ``read_html_blocks`` streams each file into its parse, buffers rows in buffer-managed memory,
+  and raises an Out of Memory error for a file whose parse would exceed ``memory_limit``. It
+  runs as many files in parallel as fit in ``memory_limit``.
+- The HTML walk is linear in document size. Inline ``<div>`` elements with attributes keep
+  them as ``span`` inlines.
+- ``duck_blocks_to_html`` nests containers up to level 254 and raises an error past it. It used
+  to flatten everything below 64 levels.
+- A table without ``<thead>`` takes headers only from a first row of ``<th>`` cells. A first row
+  of ``<td>`` cells stays in ``rows``.
+- ``read_xml``, ``read_html``, their ``_objects`` variants and ``read_html_blocks`` raise an
+  error naming a pattern or path that matches no file, even inside a list. ``ignore_errors``
+  skips it. A negative ``maximum_file_size`` raises an error.
+- ``ignore_errors`` on ``read_html_blocks`` skips document errors only, and
+  ``parse_html_blocks`` now honors it.
+
 v2.14.0 (Current)
 -----------------
 
