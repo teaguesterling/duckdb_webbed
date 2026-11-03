@@ -1717,6 +1717,16 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	// sides have an implicit cast path to the candidate; otherwise fall back to VARCHAR to preserve
 	// textual data. This avoids depending on TryGetMaxLogicalTypeUnchecked, which only exists on
 	// newer DuckDB.
+	// A BIGINT side may hold values past 2^53, which DOUBLE would round. Neither file's samples
+	// reach the merge, so it cannot check them the way InferTypeFromSamples does within a file.
+	// INTEGER values are always exact in a DOUBLE.
+	auto is_bigint_and_double = [](const LogicalType &x, const LogicalType &y) {
+		return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
+	};
+	if (is_bigint_and_double(a, b) || is_bigint_and_double(b, a)) {
+		return LogicalType::VARCHAR;
+	}
+
 	LogicalType candidate = CompatForceMaxLogicalType(a, b);
 	auto castable = [&candidate](const LogicalType &t) {
 		return t == candidate || CastRules::ImplicitCast(t, candidate) >= 0;

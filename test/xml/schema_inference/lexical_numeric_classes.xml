@@ -14,6 +14,8 @@
     <excess_digits>3.14159265358979323846</excess_digits>
     <inexact_in_double>9007199254740993</inexact_in_double>
     <beyond_bigint>12345678901234567890</beyond_bigint>
+    <inexact_short_integer>1000000000000010000</inexact_short_integer>
+    <inexact_dot_zero>1000000000000010000.0</inexact_dot_zero>
     <ctl_integer>7</ctl_integer>
     <ctl_bigint>9999999999</ctl_bigint>
     <ctl_negative>-3</ctl_negative>
@@ -39,6 +41,8 @@
     <excess_digits>2.5</excess_digits>
     <inexact_in_double>2.5</inexact_in_double>
     <beyond_bigint>1</beyond_bigint>
+    <inexact_short_integer>2.5</inexact_short_integer>
+    <inexact_dot_zero>2.5</inexact_dot_zero>
     <ctl_integer>12</ctl_integer>
     <ctl_bigint>1</ctl_bigint>
     <ctl_negative>4</ctl_negative>

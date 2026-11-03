@@ -99,6 +99,18 @@ bool DoubleReproduces(const std::string &text) {
 	if (!TryCast::Operation(string_t(text), value, true) || !std::isfinite(value)) {
 		return false;
 	}
+	// An integer value (`1`, `1.0`) is accepted only when the double equals it exactly, so a cast
+	// to BIGINT gives it back. Shortest round-trip digits alone would pass `1000000000000010000`,
+	// which the double stores as 1000000000000009984.
+	if (point == text.size() || (point + 2 == text.size() && text.back() == '0')) {
+		int64_t integer;
+		if (!TryCast::Operation(string_t(text.substr(0, point)), integer, true)) {
+			return false;
+		}
+		// 2^63 is the first double past the int64 range. Casting a double at or past it is undefined.
+		return value < 9223372036854775808.0 && value >= -9223372036854775808.0 &&
+		       static_cast<int64_t>(value) == integer;
+	}
 	auto lexeme = ReduceDecimal(text);
 	// At most 15 significant digits in the normal range always survive text -> double -> shortest
 	// text unchanged (DBL_DIG), so only longer lexemes need the rendering.
