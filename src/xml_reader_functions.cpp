@@ -370,9 +370,7 @@ static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t 
 	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, setting) && !setting.IsNull()) {
 		limit = setting.GetValue<uint64_t>();
 	} else {
-		// Divided in two steps so a huge maximum_file_size can't overflow the product
-		auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-		limit = MinValue<idx_t>(limit, memory / DOM_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(max_file_size, 1));
+		limit = MinValue<idx_t>(limit, DOMsThatFit(context, max_file_size));
 	}
 	return MaxValue<idx_t>(MinValue<idx_t>(limit, file_count), 1);
 }

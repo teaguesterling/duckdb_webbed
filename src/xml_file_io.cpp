@@ -1,6 +1,7 @@
 #include "xml_file_io.hpp"
 
 #include "duckdb/common/file_open_flags.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb_compat.hpp"
 #include "utf8proc_wrapper.hpp"
 #include "xml_in_memory_reader.hpp"
@@ -11,23 +12,46 @@
 
 namespace duckdb {
 
-vector<string> ExpandFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
-	vector<string> files;
+idx_t DOMsThatFit(ClientContext &context, idx_t file_size) {
+	// Divided in two steps so the product can't overflow
+	auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
+	return memory / DOM_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(file_size, 1);
+}
+
+vector<OpenFileInfo> GlobFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
+	vector<OpenFileInfo> files;
 	for (const auto &pattern : patterns) {
 		// Sorted for an order independent of the filesystem, as read_csv does. Readers keep it across threads.
-		vector<string> matched;
-		for (const auto &file_info : fs.Glob(pattern, nullptr)) {
-			matched.push_back(file_info.path);
-		}
+		auto matched = fs.Glob(pattern, nullptr);
 		if (matched.empty() && !skip_missing) {
 			throw IOException("No files found that match the pattern \"%s\"", pattern);
 		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &path : matched) {
-			files.push_back(std::move(path));
+		std::sort(matched.begin(), matched.end(),
+		          [](const OpenFileInfo &a, const OpenFileInfo &b) { return a.path < b.path; });
+		for (auto &file : matched) {
+			files.push_back(std::move(file));
 		}
 	}
 	return files;
+}
+
+vector<string> ExpandFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
+	vector<string> paths;
+	for (auto &file : GlobFilePatterns(fs, patterns, skip_missing)) {
+		paths.push_back(std::move(file.path));
+	}
+	return paths;
+}
+
+optional_idx GlobbedFileSize(const OpenFileInfo &file) {
+	if (!file.extended_info) {
+		return optional_idx();
+	}
+	auto entry = file.extended_info->options.find("file_size");
+	if (entry == file.extended_info->options.end() || entry->second.IsNull()) {
+		return optional_idx();
+	}
+	return optional_idx(entry->second.GetValue<idx_t>());
 }
 
 idx_t MaximumFileSizeParameter(const Value &value) {

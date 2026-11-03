@@ -2015,6 +2015,8 @@ static bool IsDocumentError(const std::exception &e) {
 
 struct HTMLBlocksReadFunctionData : public TableFunctionData {
 	vector<string> files;
+	// The size each file's glob reported, when the filesystem reports one.
+	vector<optional_idx> file_sizes;
 	bool include_filename = false;
 	// filename := 'src_path' names the column, as read_csv/read_json/read_parquet do.
 	std::string filename_column = "filename";
@@ -2178,7 +2180,10 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
-	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
+	for (auto &file : GlobFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>())) {
+		result->file_sizes.push_back(GlobbedFileSize(file));
+		result->files.push_back(std::move(file.path));
+	}
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -2248,22 +2253,26 @@ unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(Clie
 	auto result = make_uniq<HTMLBlocksReadGlobalState>();
 	auto &bind_data = input.bind_data->Cast<HTMLBlocksReadFunctionData>();
 	result->files = bind_data.files;
-	// Each thread parses one file at a time into a DOM outside the buffer manager, so cap the threads at the number
-	// of DOMs of the largest file that fit in memory_limit. A file past maximum_file_size is never parsed, and one
-	// that can't be opened here raises its error in the scan. Divided in two steps so the product can't overflow.
+	// Each thread parses one file at a time into a DOM outside the buffer manager. Threads are capped at the number
+	// of DOMs of the largest parsed file that fit in memory_limit. A file past maximum_file_size is never parsed. A
+	// size the glob didn't report is read here, and a file that can't be opened raises its error in the scan.
 	auto &fs = FileSystem::GetFileSystem(context);
-	idx_t largest = 1;
-	for (auto &file : result->files) {
-		try {
-			auto handle = fs.OpenFile(file, FileFlags::FILE_FLAGS_READ);
-			largest = MaxValue<idx_t>(largest, MinValue<idx_t>(fs.GetFileSize(*handle), bind_data.max_file_size));
-		} catch (std::exception &) {
-			continue;
+	idx_t largest = 0;
+	for (idx_t i = 0; i < result->files.size(); i++) {
+		auto size = bind_data.file_sizes[i];
+		if (!size.IsValid()) {
+			try {
+				auto handle = fs.OpenFile(result->files[i], FileFlags::FILE_FLAGS_READ);
+				size = optional_idx(fs.GetFileSize(*handle));
+			} catch (std::exception &) {
+				continue;
+			}
+		}
+		if (size.GetIndex() <= bind_data.max_file_size) {
+			largest = MaxValue<idx_t>(largest, size.GetIndex());
 		}
 	}
-	auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-	auto fit = memory / DOM_BYTES_PER_FILE_BYTE / largest;
-	result->max_threads = MaxValue<idx_t>(MinValue<idx_t>(fit, result->files.size()), 1);
+	result->max_threads = MaxValue<idx_t>(MinValue<idx_t>(DOMsThatFit(context, largest), result->files.size()), 1);
 	return std::move(result);
 }
 
@@ -2315,8 +2324,8 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 					lstate.have_file = false;
 					continue;
 				}
-				auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-				if (file_size > memory / DOM_BYTES_PER_FILE_BYTE) {
+				if (DOMsThatFit(context, file_size) == 0) {
+					auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
 					throw OutOfMemoryException(
 					    "Reading '%s' (%s) needs up to %llu times its size for the parsed document, more than "
 					    "memory_limit (%s). Raise memory_limit to read it.",

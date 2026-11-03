@@ -1,15 +1,29 @@
 #pragma once
 
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "xml_utils.hpp"
 
 namespace duckdb {
 
+// A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
+// elements, and libxml2 allocates it outside the buffer manager. Readers size their parallelism and refuse files by
+// this bound.
+static constexpr idx_t DOM_BYTES_PER_FILE_BYTE = 32;
+
+//! How many DOMs of a `file_size`-byte file fit in memory_limit at once, by DOM_BYTES_PER_FILE_BYTE. 0 when not one
+//! does. Readers cap the files they parse at once by it.
+idx_t DOMsThatFit(ClientContext &context, idx_t file_size);
+
 //! Expand each file pattern to its matches, sorted within a pattern and kept in list order across patterns. A pattern
 //! that matches nothing, a literal path included, raises an IOException naming it, unless
 //! skip_missing is set. Then it is skipped.
 vector<string> ExpandFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing);
+//! ExpandFilePatterns, keeping what the glob learned about each file.
+vector<OpenFileInfo> GlobFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing);
+//! The size a glob reported for a file, when the filesystem reports one.
+optional_idx GlobbedFileSize(const OpenFileInfo &file);
 
 //! The maximum_file_size parameter in bytes. A negative value raises an InvalidInputException.
 idx_t MaximumFileSizeParameter(const Value &value);

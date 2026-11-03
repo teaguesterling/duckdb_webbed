@@ -6,6 +6,10 @@
 
 namespace duckdb {
 
+// The deepest duck_block container level read_html_blocks can emit. <html> and <body> take two of libxml2's levels,
+// and a body child is level 1. duck_blocks_to_html refuses a deeper container, so a reader's output round trips.
+static constexpr int32_t MAX_DUCK_BLOCK_CONTAINER_LEVEL = LIBXML_MAX_TREE_DEPTH - 2;
+
 struct CaptureSpec; // defined in duck_block_functions.cpp; see capture_attributes
 
 // Receives each duck_block as the HTML walk produces it, in document order. A reader writes blocks into buffer-managed
