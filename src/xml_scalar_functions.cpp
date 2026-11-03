@@ -1854,7 +1854,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register html_unescape function
 	auto html_unescape_function =
-	    ScalarFunction("html_unescape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLUnescapeFunction);
+	    Fallible(ScalarFunction("html_unescape", {LogicalType::VARCHAR}, LogicalType::VARCHAR, HTMLUnescapeFunction));
 	register_scalar(loader, html_unescape_function, {"text"}, "Decode HTML entities in a string.",
 	                {"html_unescape('&lt;hello&amp;world&gt;')"});
 
@@ -2300,7 +2300,7 @@ void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &sta
 			file_handle->Read((void *)content.data(), file_size);
 
 			// Parse the HTML using the HTML parser to normalize it (removes DOCTYPE)
-			XMLDocRAII html_doc(content, true); // Use HTML parser
+			XMLDocRAII html_doc(content, true, HTMLInputEncoding::FILE_BYTES);
 			if (html_doc.IsValid()) {
 				std::string minified_html;
 				if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {

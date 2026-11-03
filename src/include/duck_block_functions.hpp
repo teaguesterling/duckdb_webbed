@@ -2,6 +2,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb_compat.hpp"
+#include "xml_utils.hpp"
 
 namespace duckdb {
 
@@ -22,7 +23,8 @@ public:
 	static void Register(ExtensionLoader &loader);
 
 	// Core parsing helper
-	static vector<Value> HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec);
+	static vector<Value> HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec,
+	                                      HTMLInputEncoding input = HTMLInputEncoding::DECODED_TEXT);
 
 private:
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)

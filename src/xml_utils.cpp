@@ -3,7 +3,10 @@
 #include "xml_in_memory_reader.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "yyjson.hpp"
+#include <libxml/encoding.h>
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
@@ -318,27 +321,136 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
-XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html, HTMLInputEncoding html_input) {
+	if (is_html) {
+		doc = XMLUtils::ParseHTMLDocument(content.data(), content.size(), html_input).release();
+		xpath_ctx = NewDocumentXPathContext(doc);
+		return;
+	}
 	XMLInMemoryReader reader {content.data(), content.size(), 0};
-	Parse(XMLInMemoryReaderRead, &reader, is_html);
+	Parse(XMLInMemoryReaderRead, &reader, false, std::string());
 }
 
-XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html) {
-	Parse(read, context, is_html);
+XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding) {
+	Parse(read, context, is_html, html_encoding);
 }
 
-void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html) {
+struct HTMLParserCtxtDeleter {
+	void operator()(htmlParserCtxtPtr ptr) const {
+		if (ptr)
+			htmlFreeParserCtxt(ptr);
+	}
+};
+
+XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding) {
+	EnsureSecureParsing();
+	std::unique_ptr<htmlParserCtxt, HTMLParserCtxtDeleter> ctxt(htmlNewParserCtxt());
+	if (!ctxt) {
+		throw OutOfMemoryException("libxml2 could not allocate an HTML parser context");
+	}
+	// RECOVER keeps malformed HTML parsing. HUGE stays off, so LIBXML_MAX_TREE_DEPTH and libxml2's other limits hold.
+	XMLDocPtr doc(htmlCtxtReadIO(ctxt.get(), read, XMLInMemoryReaderClose, context, nullptr, encoding.c_str(),
+	                             HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET));
+	// NOERROR only silences reporting. The context still records the error that stopped the parser.
+	const xmlError *error = xmlCtxtGetLastError(ctxt.get());
+	if (error && error->code == XML_ERR_NO_MEMORY) {
+		throw OutOfMemoryException("libxml2 ran out of memory parsing an HTML document");
+	}
+	if (error && error->code == XML_ERR_RESOURCE_LIMIT) {
+		std::string detail = error->message ? StringUtil::Replace(error->message, "\n", "") : "";
+		if (StringUtil::Contains(detail, "depth")) {
+			throw InvalidInputException("HTML document nests elements deeper than libxml2's limit of %d levels",
+			                            LIBXML_MAX_TREE_DEPTH);
+		}
+		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
+	}
+	if (doc) {
+		// libxml2 decoded the input to UTF-8. Recording that keeps a later dump from re-encoding to the source charset.
+		if (doc->encoding) {
+			xmlFree(const_cast<xmlChar *>(doc->encoding));
+		}
+		doc->encoding = xmlStrdup(BAD_CAST "UTF-8");
+	}
+	return doc;
+}
+
+XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input) {
+	std::string encoding = "UTF-8";
+	if (input == HTMLInputEncoding::FILE_BYTES) {
+		bool valid_utf8 = Utf8Proc::Analyze(data, size) != UnicodeType::INVALID;
+		encoding = DetectHTMLFileEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES), valid_utf8);
+	}
+	XMLInMemoryReader reader {data, size, 0};
+	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
+}
+
+// The charset that a `charset` attribute or an http-equiv content charset parameter on a <meta> in `head` declares,
+// or "" when none does. A text scan suffices because it only has to find a declaration the HTML parser also honours.
+static std::string FindMetaCharset(const char *head, idx_t size) {
+	std::string lower(head, size);
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+	size_t pos = 0;
+	while ((pos = lower.find("<meta", pos)) != std::string::npos) {
+		size_t tag_end = lower.find('>', pos);
+		if (tag_end == std::string::npos) {
+			tag_end = lower.size();
+		}
+		size_t charset = lower.find("charset", pos);
+		if (charset != std::string::npos && charset < tag_end) {
+			size_t i = charset + 7;
+			while (i < tag_end && (isspace(static_cast<unsigned char>(lower[i])) || lower[i] == '=')) {
+				i++;
+			}
+			while (i < tag_end && (lower[i] == '"' || lower[i] == '\'')) {
+				i++;
+			}
+			size_t start = i;
+			while (i < tag_end && !isspace(static_cast<unsigned char>(lower[i])) && lower[i] != '"' &&
+			       lower[i] != '\'' && lower[i] != ';' && lower[i] != '/') {
+				i++;
+			}
+			if (i > start) {
+				return std::string(head + start, i - start);
+			}
+		}
+		pos = tag_end;
+	}
+	return "";
+}
+
+std::string XMLUtils::DetectHTMLFileEncoding(const char *head, idx_t head_size, bool valid_utf8) {
+	auto bytes = reinterpret_cast<const unsigned char *>(head);
+	if (head_size >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+		return "UTF-8";
+	}
+	if (head_size >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+		return "UTF-16LE";
+	}
+	if (head_size >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+		return "UTF-16BE";
+	}
+	auto declared = FindMetaCharset(head, head_size);
+	if (!declared.empty()) {
+		// A <meta> was read as ASCII, so the bytes cannot be UTF-16, and HTML treats that declaration as UTF-8.
+		if (StringUtil::StartsWith(StringUtil::Lower(declared), "utf-16")) {
+			return "UTF-8";
+		}
+		xmlCharEncodingHandlerPtr handler = nullptr;
+		if (xmlOpenCharEncodingHandler(declared.c_str(), 0, &handler) == XML_ERR_OK) {
+			if (handler) {
+				xmlCharEncCloseFunc(handler);
+			}
+			return declared;
+		}
+	}
+	return valid_utf8 ? "UTF-8" : "windows-1252";
+}
+
+void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding) {
 	XMLUtils::EnsureSecureParsing();
 
 	if (is_html) {
-		// Parse as HTML using libxml2's HTML parser with error suppression
-		// HTML needs RECOVER flag to handle malformed HTML gracefully
-		// Specify UTF-8 encoding explicitly to prevent libxml2 from defaulting to Latin-1
-		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
-		// TODO: Future enhancement - consider making encoding configurable via parameter
-		// (with UTF-8 as default) or deriving it from database collation settings
-		doc = htmlReadIO(read, XMLInMemoryReaderClose, context, nullptr, "UTF-8",
-		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+		doc = XMLUtils::ParseHTMLDocument(read, context, html_encoding).release();
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
@@ -3114,21 +3226,11 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	// Wrap the string in a minimal HTML document to parse it
 	std::string wrapped = "<html><body>" + html_str + "</body></html>";
 
-	// Parse using HTML parser with explicit UTF-8 encoding, via the IO reader so a wrapped
-	// value larger than 2 GiB doesn't overflow htmlReadMemory's int length argument.
-	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
-	// to ensure correct handling of international characters in HTML entities
-	XMLUtils::EnsureSecureParsing();
-	XMLInMemoryReader reader {wrapped.data(), wrapped.size(), 0};
-	xmlDocPtr raw_doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
-	                               HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
-
-	if (!raw_doc) {
-		return html_str; // Fallback to original on error
+	// A depth or other limit error propagates. Only a parse that produced no document falls back to the input.
+	XMLDocPtr doc = ParseHTMLDocument(wrapped.data(), wrapped.size(), HTMLInputEncoding::DECODED_TEXT);
+	if (!doc) {
+		return html_str;
 	}
-
-	// Use RAII pattern to ensure proper cleanup
-	XMLDocPtr doc(raw_doc);
 
 	// Extract text content from body element
 	xmlNodePtr root = xmlDocGetRootElement(doc.get());

@@ -1,0 +1,101 @@
+# name: test/sql/github_issue_217_duck_block_review.test
+# description: Findings from the duck_block review in GitHub issue #217
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Depth limit. libxml2 holds at most 256 open elements, and <html> and <body> take two. A deeper document used to
+# come back truncated with no error.
+# ============================================================================
+
+# 254 nested blockquotes is the deepest that parses. Both the innermost text and the trailing paragraph survive.
+query I
+SELECT list_count(list_filter(html_to_duck_blocks(repeat('<blockquote>', 254) || 'deep' || repeat('</blockquote>', 254) || '<p>after</p>'), lambda b: b.content IN ('deep', 'after')));
+----
+2
+
+statement error
+SELECT html_to_duck_blocks(repeat('<blockquote>', 255) || 'deep' || repeat('</blockquote>', 255) || '<p>after</p>');
+----
+deeper than libxml2's limit of 256 levels
+
+statement ok
+COPY (SELECT repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256) || '<p>after</p>') TO '__TEST_DIR__/issue_217_deep.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement ok
+COPY (SELECT repeat('<blockquote>', 250) || 'deep' || repeat('</blockquote>', 250) || '<p>after</p>') TO '__TEST_DIR__/issue_217_deep_ok.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('__TEST_DIR__/issue_217_deep.html');
+----
+deeper than libxml2's limit of 256 levels
+
+query I
+SELECT count(*) FROM read_html_blocks('__TEST_DIR__/issue_217_deep_ok.html') WHERE content IN ('deep', 'after');
+----
+2
+
+statement error
+SELECT count(*) FROM parse_html_blocks(repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256));
+----
+deeper than libxml2's limit of 256 levels
+
+# The shared HTML parse raises the same error for read_html and the html_* scalars
+statement error
+SELECT * FROM read_html('__TEST_DIR__/issue_217_deep.html');
+----
+deeper than libxml2's limit of 256 levels
+
+statement error
+SELECT html_extract_text(repeat('<div>', 300) || 'x' || repeat('</div>', 300), '//div');
+----
+deeper than libxml2's limit of 256 levels
+
+statement error
+SELECT html_unescape(repeat('<div>', 300) || 'x' || repeat('</div>', 300));
+----
+deeper than libxml2's limit of 256 levels
+
+# ============================================================================
+# Character encoding of HTML files. A file's bytes are decoded per a BOM, then a <meta> charset, then as UTF-8 when
+# they are valid UTF-8, else as windows-1252. A VARCHAR is already decoded, so its <meta> is ignored.
+# ============================================================================
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_meta.html') WHERE element_type = 'paragraph';
+----
+café
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_http_equiv.html') WHERE element_type = 'paragraph';
+----
+naïve
+
+# Undeclared and not valid UTF-8: windows-1252, where 0x80 is the euro sign
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_cp1252_undeclared.html') WHERE element_type = 'paragraph';
+----
+café €
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom.html') WHERE element_type = 'paragraph';
+----
+café
+
+# Undeclared valid UTF-8 (GitHub #53) still reads as UTF-8
+query I
+SELECT count(*) > 0 FROM read_html_blocks('test/html/github_issue_53_utf8.html') WHERE content LIKE '%è%';
+----
+true
+
+query I
+SELECT html_extract_text(html, '//p') FROM read_html('test/html/encoding/github_issue_217_latin1_meta.html', columns := {'html': 'HTML'}, record_element := 'html');
+----
+[café]
+
+# A VARCHAR that declares Latin-1 is still UTF-8 text
+query I
+SELECT [b.content FOR b IN html_to_duck_blocks('<meta charset="iso-8859-1"><p>café</p>') IF b.element_type = 'paragraph'];
+----
+[café]

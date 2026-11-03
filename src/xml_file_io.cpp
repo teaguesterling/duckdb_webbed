@@ -2,7 +2,9 @@
 
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb_compat.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "xml_in_memory_reader.hpp"
+#include "xml_utils.hpp"
 
 #include <exception>
 
@@ -80,9 +82,68 @@ static int FileHandleReaderRead(void *context, char *buffer, int len) {
 	}
 }
 
+// Length of the UTF-8 sequence a lead byte starts, or 0 for a continuation byte.
+static idx_t Utf8SequenceLength(unsigned char lead) {
+	if (lead < 0x80) {
+		return 1;
+	}
+	if (lead < 0xC0) {
+		return 0;
+	}
+	return lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2;
+}
+
+// Reads the whole file once to choose its HTML encoding, then rewinds it for the parse. The choice needs to know
+// whether every byte is valid UTF-8, which a parse that streams cannot learn before it starts decoding.
+static std::string DetectHTMLHandleEncoding(FileHandle &handle) {
+	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
+	std::string head;
+	std::string buffer;
+	idx_t carry = 0;
+	bool valid_utf8 = true;
+	while (true) {
+		buffer.resize(carry + CHUNK_SIZE);
+		int64_t got = handle.Read(&buffer[carry], CHUNK_SIZE);
+		if (got < 0) {
+			throw IOException("Could not read from file \"%s\"", handle.path);
+		}
+		idx_t filled = carry + UnsafeNumericCast<idx_t>(got);
+		if (head.size() < XMLUtils::HTML_ENCODING_SNIFF_BYTES) {
+			head.append(buffer, carry, MinValue<idx_t>(filled - carry, XMLUtils::HTML_ENCODING_SNIFF_BYTES - head.size()));
+		}
+		if (got == 0) {
+			valid_utf8 = valid_utf8 && (filled == 0 || Utf8Proc::Analyze(buffer.data(), filled) != UnicodeType::INVALID);
+			break;
+		}
+		if (!valid_utf8 && head.size() >= XMLUtils::HTML_ENCODING_SNIFF_BYTES) {
+			break;
+		}
+		// Hold back a sequence the chunk cuts off. The next chunk checks it whole.
+		idx_t cut = filled;
+		for (idx_t back = 1; back <= 3 && back <= filled; back++) {
+			auto len = Utf8SequenceLength(static_cast<unsigned char>(buffer[filled - back]));
+			if (len == 0) {
+				continue;
+			}
+			if (len > back) {
+				cut = filled - back;
+			}
+			break;
+		}
+		if (valid_utf8 && Utf8Proc::Analyze(buffer.data(), cut) == UnicodeType::INVALID) {
+			valid_utf8 = false;
+		}
+		carry = filled - cut;
+		buffer.erase(0, cut);
+	}
+	handle.Reset();
+	return XMLUtils::DetectHTMLFileEncoding(head.data(), head.size(), valid_utf8);
+}
+
 XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
+	std::string html_encoding = is_html ? DetectHTMLHandleEncoding(handle) : "UTF-8";
 	FileHandleReader reader {handle, nullptr};
-	XMLDocRAII doc(FileHandleReaderRead, &reader, is_html);
+	XMLDocRAII doc(FileHandleReaderRead, &reader, is_html, html_encoding);
 	if (reader.error) {
 		std::rethrow_exception(reader.error);
 	}

@@ -1231,29 +1231,23 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 	}
 }
 
-vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec) {
+vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec,
+                                                   HTMLInputEncoding input) {
 	if (html_str.empty()) {
 		return vector<Value>();
 	}
 
-	// Parse HTML via the IO reader so an html value larger than 2 GiB doesn't overflow
-	// htmlReadMemory's int length argument (#115), with the fail-closed entity loader and no
-	// network (EnsureSecureParsing + HTML_PARSE_NONET, #118).
-	XMLUtils::EnsureSecureParsing();
-	XMLInMemoryReader reader {html_str.data(), html_str.size(), 0};
-	htmlDocPtr doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
-	                            HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
-
-	if (!doc) {
+	XMLDocPtr doc_handle = XMLUtils::ParseHTMLDocument(html_str.data(), html_str.size(), input);
+	if (!doc_handle) {
 		return vector<Value>();
 	}
+	xmlDocPtr doc = doc_handle.get();
 
-	// Create XPath context
-	xmlXPathContextPtr xpath_ctx = xmlXPathNewContext(doc);
-	if (!xpath_ctx) {
-		xmlFreeDoc(doc);
+	XMLXPathContextPtr xpath_handle(xmlXPathNewContext(doc));
+	if (!xpath_handle) {
 		return vector<Value>();
 	}
+	xmlXPathContextPtr xpath_ctx = xpath_handle.get();
 
 	vector<Value> blocks;
 	int32_t block_order = 0;
@@ -1282,7 +1276,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 	// <title> is plain text, so 'string' carries it directly; there is no
 	// duck_block_utils-side value/inlines construct for webbed to produce.
 	vector<std::pair<std::string, std::string>> head_metadata_fields; // key, value; document order
-	xmlXPathObjectPtr title_obj = EvalXPathChecked(xpath_ctx, "//head/title");
+	XMLXPathObjectPtr title_obj(EvalXPathChecked(xpath_ctx, "//head/title"));
 	if (title_obj && title_obj->nodesetval) {
 		for (int j = 0; j < title_obj->nodesetval->nodeNr; j++) {
 			xmlNodePtr node = title_obj->nodesetval->nodeTab[j];
@@ -1292,10 +1286,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 			head_metadata_fields.emplace_back("title", GetNodeTextContent(node));
 		}
 	}
-	if (title_obj) {
-		xmlXPathFreeObject(title_obj);
-	}
-	xmlXPathObjectPtr meta_obj = EvalXPathChecked(xpath_ctx, "//head/meta[@name and @content]");
+	XMLXPathObjectPtr meta_obj(EvalXPathChecked(xpath_ctx, "//head/meta[@name and @content]"));
 	if (meta_obj && meta_obj->nodesetval) {
 		for (int j = 0; j < meta_obj->nodesetval->nodeNr; j++) {
 			xmlNodePtr node = meta_obj->nodesetval->nodeTab[j];
@@ -1309,11 +1300,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 			head_metadata_fields.emplace_back(name, GetNodeAttribute(node, "content"));
 		}
 	}
-	if (meta_obj) {
-		xmlXPathFreeObject(meta_obj);
-	}
-
-	xmlXPathObjectPtr frontmatter_obj = EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH);
+	XMLXPathObjectPtr frontmatter_obj(EvalXPathChecked(xpath_ctx, FRONTMATTER_XPATH));
 	if (frontmatter_obj && frontmatter_obj->nodesetval) {
 		for (int j = 0; j < frontmatter_obj->nodesetval->nodeNr; j++) {
 			xmlNodePtr node = frontmatter_obj->nodesetval->nodeTab[j];
@@ -1336,9 +1323,7 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 			}
 		}
 	}
-	if (frontmatter_obj) {
-		xmlXPathFreeObject(frontmatter_obj);
-	}
+	frontmatter_obj.reset();
 
 	// Walk the document tree. The <body> is synthesised by libxml2's HTML parser
 	// even for bare fragments, so this reaches content in both cases.
@@ -1404,9 +1389,6 @@ vector<Value> DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, 
 		blocks.push_back(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
 		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
-
-	xmlXPathFreeContext(xpath_ctx);
-	xmlFreeDoc(doc);
 
 	return blocks;
 }
@@ -2240,7 +2222,7 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 				string content;
 				content.resize(file_size);
 				ReadFileFully(*file_handle, (char *)content.data(), file_size);
-				lstate.current_blocks = HtmlToDuckBlocks(content, bind_data.capture);
+				lstate.current_blocks = HtmlToDuckBlocks(content, bind_data.capture, HTMLInputEncoding::FILE_BYTES);
 			} catch (const std::exception &e) {
 				if (!bind_data.ignore_errors) {
 					throw;

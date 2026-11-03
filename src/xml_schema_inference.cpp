@@ -111,7 +111,7 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaForMerge(const std::st
 	// Parse document using appropriate parser based on opaque type name
 	// HTML mode uses libxml2's HTML parser which handles malformed content better
 	bool is_html = (options.opaque_type_name == "HTML");
-	XMLDocRAII doc(xml_content, is_html);
+	XMLDocRAII doc(xml_content, is_html, options.html_input);
 	return InferSchemaFromDocument(doc, options);
 }
 
@@ -2055,7 +2055,7 @@ std::vector<std::vector<Value>> XMLSchemaInference::ExtractData(const std::strin
 
 	// Parse document using appropriate parser based on opaque type name
 	bool is_html = (options.opaque_type_name == "HTML");
-	XMLDocRAII doc(xml_content, is_html);
+	XMLDocRAII doc(xml_content, is_html, options.html_input);
 	if (!doc.IsValid()) {
 		return rows; // Invalid document
 	}
@@ -2178,7 +2178,7 @@ XMLSchemaInference::ExtractDataWithSchema(const std::string &xml_content, const 
 
 	// Parse document using appropriate parser based on opaque type name
 	bool is_html = (options.opaque_type_name == "HTML");
-	XMLDocRAII doc(xml_content, is_html);
+	XMLDocRAII doc(xml_content, is_html, options.html_input);
 	if (!doc.IsValid()) {
 		return rows; // Invalid document
 	}

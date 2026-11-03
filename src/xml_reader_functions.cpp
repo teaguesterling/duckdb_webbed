@@ -601,6 +601,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
+	schema_options.html_input = HTMLInputEncoding::FILE_BYTES;
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {
@@ -1057,7 +1058,8 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
 					lstate.current_doc =
-					    parse_from_handle ? ParseXMLFile(*file_handle, is_html) : XMLDocRAII(content, is_html);
+					    parse_from_handle ? ParseXMLFile(*file_handle, is_html)
+					                      : XMLDocRAII(content, is_html, HTMLInputEncoding::FILE_BYTES);
 
 					if (!lstate.current_doc.IsValid()) {
 						if (lstate.current_doc.HadResourceError()) {
@@ -1498,6 +1500,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
+	schema_options.html_input = HTMLInputEncoding::FILE_BYTES;
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {
