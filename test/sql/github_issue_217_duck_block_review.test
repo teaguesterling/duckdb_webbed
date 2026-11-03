@@ -299,3 +299,13 @@ query I
 SELECT count(*) > 0 FROM read_html_blocks(['{TEST_DIR}/deep_217.html', 'test/html/simple.html'], ignore_errors := true);
 ----
 true
+
+# ============================================================================
+# A document that fits one chunk is emitted from the staging chunk, and a larger one through the collection. Both
+# kinds interleave, including documents of exactly one chunk and one row past it.
+# ============================================================================
+
+query III
+SELECT count(*), count(DISTINCT element_order), string_agg(content, ',' ORDER BY content) FILTER (content <> 'x') FROM parse_html_blocks(['<p>a</p>', repeat('<p>x</p>', 2047), repeat('<p>x</p>', 2048), '<p>b</p>', '', repeat('<p>x</p>', 2049), '<p>c</p>']);
+----
+6147	2049	a,b,c

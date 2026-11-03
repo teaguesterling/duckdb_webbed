@@ -2012,8 +2012,8 @@ struct HTMLBlocksReadFunctionData : public TableFunctionData {
 	idx_t max_file_size = 2147483648ULL; // 2GB default
 };
 
-// Stores one document's blocks as rows of a ColumnDataCollection, which the buffer manager tracks and can spill, and
-// emits them a chunk at a time. Each row has the seven canonical fields. The reader fills any filename column itself.
+// Holds one document's blocks and emits them a chunk at a time. The first chunk's worth stays in a staging chunk. Past
+// that, rows go to a ColumnDataCollection, which the buffer manager tracks and can spill. Each row has the seven canonical fields. The reader fills any filename column itself.
 class DuckBlockRowBuffer : public DuckBlockSink {
 public:
 	explicit DuckBlockRowBuffer(ClientContext &context) : context(context) {
@@ -2038,17 +2038,23 @@ public:
 		CompatSetOutputCardinality(*stage, row + 1);
 	}
 
-	bool HasRows() const {
-		return rows || (stage && stage->size() > 0);
-	}
-
 	// Copies rows into the first columns of `output` from output_idx until it is full. Returns false once every row
-	// has been emitted, leaving the buffer empty.
+	// has been emitted, leaving the buffer empty. A document that fits one chunk is emitted from the stage, and only
+	// a larger one goes through the collection.
 	bool Emit(DataChunk &output, idx_t &output_idx) {
-		FlushStage();
 		if (!rows) {
+			if (stage && stage_pos < stage->size()) {
+				auto count = MinValue<idx_t>(stage->size() - stage_pos, STANDARD_VECTOR_SIZE - output_idx);
+				CopyRows(*stage, stage_pos, count, output, output_idx);
+				stage_pos += count;
+				if (stage_pos < stage->size()) {
+					return true;
+				}
+			}
+			Clear();
 			return false;
 		}
+		FlushStage();
 		if (!scan_chunk) {
 			// Copy strings out of the collection's blocks, so emitted rows don't pin them
 			rows->InitializeScan(scan, ColumnDataScanProperties::DISALLOW_ZERO_COPY);
@@ -2065,23 +2071,32 @@ public:
 				scan_pos = 0;
 			}
 			auto count = MinValue<idx_t>(scan_chunk->size() - scan_pos, STANDARD_VECTOR_SIZE - output_idx);
-			for (idx_t col = 0; col < types.size(); col++) {
-				VectorOperations::Copy(scan_chunk->data[col], output.data[col], scan_pos + count, scan_pos, output_idx);
-			}
-			output_idx += count;
+			CopyRows(*scan_chunk, scan_pos, count, output, output_idx);
 			scan_pos += count;
 		}
 		return true;
 	}
 
+	// Empties the buffer and keeps the stage's allocation for the next document.
 	void Clear() {
 		rows.reset();
-		stage.reset();
+		if (stage) {
+			stage->Reset();
+		}
+		stage_pos = 0;
 		scan_chunk.reset();
 		scan_pos = 0;
 	}
 
 private:
+	// Copies strings into output's own heap, so the rows outlive `source`.
+	void CopyRows(DataChunk &source, idx_t offset, idx_t count, DataChunk &output, idx_t &output_idx) {
+		for (idx_t col = 0; col < types.size(); col++) {
+			VectorOperations::Copy(source.data[col], output.data[col], offset + count, offset, output_idx);
+		}
+		output_idx += count;
+	}
+
 	void FlushStage() {
 		if (!stage || stage->size() == 0) {
 			return;
@@ -2096,6 +2111,8 @@ private:
 	ClientContext &context;
 	vector<LogicalType> types;
 	unique_ptr<DataChunk> stage;
+	// The next stage row to emit, while every row is still in the stage.
+	idx_t stage_pos = 0;
 	unique_ptr<ColumnDataCollection> rows;
 	ColumnDataScanState scan;
 	unique_ptr<DataChunk> scan_chunk;
