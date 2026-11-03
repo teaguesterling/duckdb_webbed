@@ -449,7 +449,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -553,7 +554,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1263,7 +1265,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1420,7 +1423,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";

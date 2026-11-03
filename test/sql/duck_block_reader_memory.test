@@ -46,6 +46,12 @@ SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
 ----
 Raise memory_limit to read it
 
+# ignore_errors skips document errors, not a file too large for memory_limit
+statement error
+SELECT count(*) FROM read_html_blocks(['{TEST_DIR}/small_blocks.html', '{TEST_DIR}/many_blocks.html'], ignore_errors := true);
+----
+Raise memory_limit to read it
+
 # A file under the bound still reads
 query I
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/small_blocks.html');

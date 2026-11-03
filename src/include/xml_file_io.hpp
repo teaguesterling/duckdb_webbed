@@ -11,18 +11,6 @@ namespace duckdb {
 //! skip_missing is set. Then it is skipped.
 vector<string> ExpandFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing);
 
-//! Whether a reader's named parameters set ignore_errors. Read before the readers parse their other parameters, since
-//! file expansion needs it.
-template <class NAMED_PARAMETERS>
-bool IgnoreErrorsParameter(const NAMED_PARAMETERS &named_parameters) {
-	for (auto &kv : named_parameters) {
-		if (kv.first == "ignore_errors") {
-			return kv.second.template GetValue<bool>();
-		}
-	}
-	return false;
-}
-
 //! The maximum_file_size parameter in bytes. A negative value raises an InvalidInputException.
 idx_t MaximumFileSizeParameter(const Value &value);
 

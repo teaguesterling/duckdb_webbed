@@ -14,6 +14,7 @@
 #include "xml_in_memory_reader.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
@@ -2006,6 +2007,12 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 // read_html_blocks & parse_html_blocks Table Functions
 // ============================================================================
 
+// ignore_errors skips a document error, such as a libxml2 parser limit. Out of memory, IO errors, interrupts and other
+// failures still raise.
+static bool IsDocumentError(const std::exception &e) {
+	return ErrorData(e).Type() == ExceptionType::INVALID_INPUT;
+}
+
 struct HTMLBlocksReadFunctionData : public TableFunctionData {
 	vector<string> files;
 	bool include_filename = false;
@@ -2170,7 +2177,8 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -2323,7 +2331,7 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 					WalkHTMLDocument(doc.get(), bind_data.capture, lstate.blocks);
 				}
 			} catch (const std::exception &e) {
-				if (!bind_data.ignore_errors) {
+				if (!bind_data.ignore_errors || !IsDocumentError(e)) {
 					throw;
 				}
 				lstate.blocks.Clear();
@@ -2479,7 +2487,16 @@ void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFu
 			}
 			lstate.have_item = true;
 			lstate.blocks.Clear();
-			HtmlToDuckBlocks(gstate.html_contents[claimed], bind_data.capture, lstate.blocks);
+			try {
+				HtmlToDuckBlocks(gstate.html_contents[claimed], bind_data.capture, lstate.blocks);
+			} catch (const std::exception &e) {
+				if (!bind_data.ignore_errors || !IsDocumentError(e)) {
+					throw;
+				}
+				lstate.blocks.Clear();
+				lstate.have_item = false;
+				continue;
+			}
 		}
 
 		if (!lstate.blocks.Emit(output, output_idx)) {
