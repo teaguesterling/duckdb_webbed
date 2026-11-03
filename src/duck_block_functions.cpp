@@ -534,12 +534,22 @@ static bool IsBlockLevelTag(const std::string &tag) {
 	       tag == "dl" || tag == "dt" || tag == "dd" || IsJsonLeafTag(tag) || !SectionRoleForTag(tag).empty();
 }
 
+// HasBlockChildren caches its answer per node in xmlNode::_private, which libxml2 leaves to applications. Each level
+// of a nested wrapper asks again, and each answer recurses through the whole subtree. Without the cache, a chain of
+// wrappers costs depth times width. HtmlToDuckBlocks parses the document it walks and frees it on return.
+static void *const HAS_BLOCK_CHILDREN_NO = reinterpret_cast<void *>(1);
+static void *const HAS_BLOCK_CHILDREN_YES = reinterpret_cast<void *>(2);
+
 // True when `node` has at least one BLOCK-level element child, ignoring
 // non-content subtrees. Distinct from HasElementChildren, which cannot tell a
 // block child from an inline one -- a container holding only inlines must route
 // to ExtractInlineElements or its formatting is dropped entirely.
 static bool HasBlockChildren(xmlNodePtr node) {
-	for (xmlNodePtr c = node->children; c; c = c->next) {
+	if (node->_private) {
+		return node->_private == HAS_BLOCK_CHILDREN_YES;
+	}
+	bool found = false;
+	for (xmlNodePtr c = node->children; c && !found; c = c->next) {
 		if (c->type != XML_ELEMENT_NODE || !c->name) {
 			continue;
 		}
@@ -547,16 +557,12 @@ static bool HasBlockChildren(xmlNodePtr node) {
 		if (IsNonContentTag(tag)) {
 			continue;
 		}
-		if (IsBlockLevelTag(tag)) {
-			return true;
-		}
 		// A transparent wrapper is walked through, so a block inside it counts
 		// as a block child of this node.
-		if (HasBlockChildren(c)) {
-			return true;
-		}
+		found = IsBlockLevelTag(tag) || HasBlockChildren(c);
 	}
-	return false;
+	node->_private = found ? HAS_BLOCK_CHILDREN_YES : HAS_BLOCK_CHILDREN_NO;
+	return found;
 }
 
 // Attribute list for a single walked/extracted node. A vector, not a
@@ -791,8 +797,25 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			continue;
 		}
 
-		// Unknown inline element: preserve any nested formatting by recursing at
-		// the same level (the unknown wrapper is dropped); text-only becomes text.
+		// Unknown inline element carrying captured attributes: a span keeps them,
+		// as a container when it has element children and as a leaf otherwise.
+		if (!attrs.empty()) {
+			if (HasElementChildren(child)) {
+				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SPAN, "",
+				                                               Value::INTEGER(base_level),
+				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				auto nested = ExtractInlineElements(child, base_level + 1, element_order, spec);
+				inlines.insert(inlines.end(), nested.begin(), nested.end());
+			} else {
+				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SPAN, GetNodeTextContent(child),
+				                                               Value::INTEGER(base_level),
+				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+			}
+			continue;
+		}
+
+		// Unknown inline element without attributes: preserve any nested formatting by
+		// recursing at the same level (the unknown wrapper is dropped); text-only becomes text.
 		if (HasElementChildren(child)) {
 			auto nested = ExtractInlineElements(child, base_level, element_order, spec);
 			inlines.insert(inlines.end(), nested.begin(), nested.end());

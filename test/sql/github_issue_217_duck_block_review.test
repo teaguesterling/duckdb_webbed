@@ -21,18 +21,18 @@ SELECT html_to_duck_blocks(repeat('<blockquote>', 255) || 'deep' || repeat('</bl
 deeper than libxml2's limit of 256 levels
 
 statement ok
-COPY (SELECT repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256) || '<p>after</p>') TO '__TEST_DIR__/issue_217_deep.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+COPY (SELECT repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256) || '<p>after</p>') TO '{TEST_DIR}/issue_217_deep.html' (HEADER false, QUOTE '', DELIMITER '\x01');
 
 statement ok
-COPY (SELECT repeat('<blockquote>', 250) || 'deep' || repeat('</blockquote>', 250) || '<p>after</p>') TO '__TEST_DIR__/issue_217_deep_ok.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+COPY (SELECT repeat('<blockquote>', 250) || 'deep' || repeat('</blockquote>', 250) || '<p>after</p>') TO '{TEST_DIR}/issue_217_deep_ok.html' (HEADER false, QUOTE '', DELIMITER '\x01');
 
 statement error
-SELECT count(*) FROM read_html_blocks('__TEST_DIR__/issue_217_deep.html');
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_217_deep.html');
 ----
 deeper than libxml2's limit of 256 levels
 
 query I
-SELECT count(*) FROM read_html_blocks('__TEST_DIR__/issue_217_deep_ok.html') WHERE content IN ('deep', 'after');
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_217_deep_ok.html') WHERE content IN ('deep', 'after');
 ----
 2
 
@@ -43,7 +43,7 @@ deeper than libxml2's limit of 256 levels
 
 # The shared HTML parse raises the same error for read_html and the html_* scalars
 statement error
-SELECT * FROM read_html('__TEST_DIR__/issue_217_deep.html');
+SELECT * FROM read_html('{TEST_DIR}/issue_217_deep.html');
 ----
 deeper than libxml2's limit of 256 levels
 
@@ -99,3 +99,37 @@ query I
 SELECT [b.content FOR b IN html_to_duck_blocks('<meta charset="iso-8859-1"><p>café</p>') IF b.element_type = 'paragraph'];
 ----
 [café]
+
+# ============================================================================
+# An unknown element inside an inline parent keeps its captured attributes on a span
+# ============================================================================
+
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p><span><div id="x">t</div></span></p>')) AS b);
+----
+paragraph	NULL	1	{}
+span	NULL	2	{}
+span	t	3	{id=x}
+
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p>a<b><div id="c">x<i>y</i></div></b></p>')) AS b);
+----
+paragraph	NULL	1	{}
+text	a	2	{}
+bold	NULL	2	{}
+span	NULL	3	{id=c}
+text	x	4	{}
+italic	y	4	{}
+
+# Without attributes the unknown wrapper is still dropped
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p><span><div>t</div></span></p>')) AS b);
+----
+paragraph	NULL	1	{}
+span	NULL	2	{}
+text	t	3	{}
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><span><div id="x">t</div></span></p>'))::VARCHAR LIKE '%<span id="x">t</span>%';
+----
+true
