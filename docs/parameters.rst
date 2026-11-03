@@ -324,7 +324,8 @@ keeps every such field VARCHAR without naming the fields:
    SELECT * FROM read_xml('metadata/*.xml', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE']);
 
 A value takes the narrowest allowed type that reads it. An integer becomes INTEGER, or BIGINT
-when INTEGER is excluded, or DOUBLE when both are. A ``union_by_name`` merge of per-file types
+when INTEGER is excluded, or DOUBLE when both are. A date becomes TIMESTAMP at midnight when DATE is
+excluded. A ``union_by_name`` merge of per-file types
 never widens past the candidates. Nested STRUCT and LIST shapes are unchanged, and only their
 scalar leaves and attributes are restricted.
 
@@ -336,17 +337,19 @@ empty list, or a NULL element is an error, as in ``read_csv``.
 
 - ``read_csv`` also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM. Inference here
   never produces them, so naming one is an error instead of a silent no-op.
-- ``read_csv`` reads a date-only value as TIMESTAMP when TIMESTAMP is a candidate and DATE is not.
-  Here each ``datetime_format`` candidate yields one type, and a format whose type is excluded never
-  wins, so ``2024-01-01`` stays VARCHAR under ``['TIMESTAMP']``.
+- ``read_csv`` widens a zoneless date or timestamp to TIMESTAMPTZ, read in the session time zone.
+  Webbed reads zoneless text in a TIMESTAMPTZ column as UTC, so the two would disagree on the
+  instant. Here zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, and only text carrying an
+  offset becomes TIMESTAMPTZ.
 - ``read_csv`` ignores the option alongside ``columns`` or ``all_varchar``. Here either pairing is
   an error, as ``columns`` with ``all_varchar`` already is. ``all_varchar := true`` is
   ``auto_type_candidates := ['VARCHAR']``.
 
 **Interactions with other parameters:**
 
-- ``datetime_format`` supplies the formats temporal detection tries. A format whose type is not a
-  candidate is skipped, and the value falls through to the numeric and boolean checks.
+- ``datetime_format`` supplies the formats temporal detection tries. A date format yields TIMESTAMP
+  when only TIMESTAMP is allowed. Any other format whose type is not a candidate is skipped, and the
+  value falls through to the numeric and boolean checks.
 - ``nullstr`` matches are excluded from inference as usual.
 
 Examples

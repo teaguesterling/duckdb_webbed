@@ -227,6 +227,10 @@ public:
 	// Whether inference may choose this scalar type under options.auto_type_candidates.
 	static bool IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id);
 
+	// The type a datetime format of this type yields under auto_type_candidates: itself, or
+	// TIMESTAMP for an excluded DATE. INVALID when neither is allowed.
+	static LogicalType AllowedTemporalType(const XMLSchemaOptions &options, const LogicalType &type);
+
 	// Replace every scalar inferable type outside options.auto_type_candidates with VARCHAR,
 	// including inside nested types, so a union_by_name merge cannot widen past the candidates.
 	static LogicalType RestrictToAutoTypeCandidates(const LogicalType &type, const XMLSchemaOptions &options);

@@ -1299,9 +1299,13 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		StrTimeFormat::ParseFormatSpecifier(effective_candidates[i], compiled_formats[i]);
 	}
 
-	// A format whose type is not an auto_type_candidate never wins, so it starts eliminated.
+	// The type each format yields under auto_type_candidates. Like an integer, a date widens to
+	// TIMESTAMP when DATE is excluded, as read_csv's sniffer does. A format with no allowed type
+	// starts eliminated.
+	std::vector<LogicalType> result_types;
 	for (size_t i = 0; i < effective_candidates.size(); i++) {
-		alive[i] = IsAutoTypeCandidate(options, candidate_types[i].id());
+		result_types.push_back(AllowedTemporalType(options, candidate_types[i]));
+		alive[i] = result_types[i].id() != LogicalTypeId::INVALID;
 	}
 	bool any_alive = std::find(alive.begin(), alive.end(), true) != alive.end();
 	for (const auto &sample : samples) {
@@ -1331,7 +1335,7 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		for (size_t i = 0; i < effective_candidates.size(); i++) {
 			if (alive[i]) {
 				winning_datetime_format = effective_candidates[i];
-				return candidate_types[i];
+				return result_types[i];
 			}
 		}
 	}
@@ -1362,6 +1366,18 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	}
 
 	return RestrictToAutoTypeCandidates(GetMostSpecificType(detected_types), options);
+}
+
+LogicalType XMLSchemaInference::AllowedTemporalType(const XMLSchemaOptions &options, const LogicalType &type) {
+	if (IsAutoTypeCandidate(options, type.id())) {
+		return type;
+	}
+	// Zoneless text never widens to TIMESTAMPTZ: webbed reads it as UTC, where read_csv assumes
+	// the session time zone, so the two would disagree on the instant.
+	if (type.id() == LogicalTypeId::DATE && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+		return LogicalType::TIMESTAMP;
+	}
+	return LogicalType::INVALID;
 }
 
 bool XMLSchemaInference::IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id) {

@@ -57,6 +57,12 @@ SELECT * FROM (
     FROM parse_xml('<r><i><v>2024-01-01 10:00:00</v></i></r>', auto_type_candidates := ['TIMESTAMP'])
     UNION ALL SELECT '[DATE]', '2024-01-01 10:00:00', typeof(v)
     FROM parse_xml('<r><i><v>2024-01-01 10:00:00</v></i></r>', auto_type_candidates := ['DATE'])
+    UNION ALL SELECT '[DATE, TIMESTAMP]', '2024-01-01', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01</v></i></r>', auto_type_candidates := ['DATE', 'TIMESTAMP'])
+    UNION ALL SELECT '[TIMESTAMPTZ]', '2024-01-01', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01</v></i></r>', auto_type_candidates := ['TIMESTAMPTZ'])
+    UNION ALL SELECT '[TIMESTAMPTZ]', '2024-01-01 10:00:00', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01 10:00:00</v></i></r>', auto_type_candidates := ['TIMESTAMPTZ'])
     UNION ALL SELECT '[TIMESTAMPTZ]', '2024-01-01 10:00:00+02', typeof(v)
     FROM parse_xml('<r><i><v>2024-01-01 10:00:00+02</v></i></r>', auto_type_candidates := ['TIMESTAMPTZ'])
     UNION ALL SELECT '[TIME]', '10:00:00', typeof(v)
@@ -70,14 +76,17 @@ SELECT * FROM (
 [BIGINT]	7	BIGINT
 [BIGINT]	true	VARCHAR
 [BOOLEAN]	1	BOOLEAN
+[DATE, TIMESTAMP]	2024-01-01	DATE
 [DATE]	2024-01-01	DATE
 [DATE]	2024-01-01 10:00:00	VARCHAR
 [DOUBLE]	1.10	DOUBLE
 [DOUBLE]	7	DOUBLE
 [INTEGER, DOUBLE]	9999999999	DOUBLE
 [INTEGER]	9999999999	VARCHAR
+[TIMESTAMPTZ]	2024-01-01	VARCHAR
+[TIMESTAMPTZ]	2024-01-01 10:00:00	VARCHAR
 [TIMESTAMPTZ]	2024-01-01 10:00:00+02	TIMESTAMP WITH TIME ZONE
-[TIMESTAMP]	2024-01-01	VARCHAR
+[TIMESTAMP]	2024-01-01	TIMESTAMP
 [TIMESTAMP]	2024-01-01 10:00:00	TIMESTAMP
 [TIME]	10:00:00	TIME
 [VARCHAR]	7	VARCHAR
@@ -89,6 +98,22 @@ query II
 SELECT a, b FROM parse_xml('<r><i><a>7</a><b>8</b></i></r>', auto_type_candidates := ['BIGINT', 'DOUBLE']);
 ----
 7	8
+
+# A date widens to TIMESTAMP when DATE is excluded, at midnight, as read_csv
+# reads it. Zoneless text never widens to TIMESTAMPTZ (see the ladder above):
+# webbed reads it as UTC where read_csv assumes the session time zone.
+query II
+SELECT typeof(v), v FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-02-03</v></i></r>',
+                                   auto_type_candidates := ['TIMESTAMP'])
+ORDER BY v;
+----
+TIMESTAMP	2024-01-01 00:00:00
+TIMESTAMP	2024-02-03 00:00:00
+
+query I
+SELECT p FROM parse_xml('<r><i><p><d>2024-01-01</d><e>x</e></p></i></r>', auto_type_candidates := ['TIMESTAMP']);
+----
+{'d': '2024-01-01 00:00:00', 'e': x}
 
 # =============================================================================
 # Nested STRUCT and LIST shapes are unaffected. Only their scalar leaves, and
@@ -112,8 +137,9 @@ SELECT p, l FROM parse_xml(
 {'a': 1.5, 'c': 2}	{'x': [1.5, 2.5]}
 
 # =============================================================================
-# datetime_format: a format whose type is not a candidate never wins, so the
-# value falls through to the numeric ladder and then VARCHAR.
+# datetime_format: a format whose type is not a candidate, and cannot widen to
+# one, never wins, so the value falls through to the numeric ladder and then
+# VARCHAR. A date format widens to TIMESTAMP like an undeclared one.
 # =============================================================================
 
 query I
@@ -127,6 +153,12 @@ SELECT typeof(v), v FROM parse_xml('<r><i><v>25/12/2024</v></i></r>', datetime_f
                                    auto_type_candidates := ['DATE']);
 ----
 DATE	2024-12-25
+
+query II
+SELECT typeof(v), v FROM parse_xml('<r><i><v>25/12/2024</v></i></r>', datetime_format := '%d/%m/%Y',
+                                   auto_type_candidates := ['TIMESTAMP']);
+----
+TIMESTAMP	2024-12-25 00:00:00
 
 # =============================================================================
 # Each function accepts the option: read_xml, read_html, parse_xml, parse_html.
