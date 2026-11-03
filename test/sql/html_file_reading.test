@@ -69,7 +69,7 @@ true
 statement error
 SELECT html FROM read_html_objects('test/html/nonexistent.html');
 ----
-Invalid Input Error
+No files found that match the pattern "test/html/nonexistent.html"
 
 # Test empty HTML file
 query I

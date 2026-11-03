@@ -2170,17 +2170,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	}
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -2206,7 +2196,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 		} else if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 		}
 	}
 

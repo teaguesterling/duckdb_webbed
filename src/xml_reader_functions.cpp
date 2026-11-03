@@ -448,24 +448,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -477,7 +461,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
@@ -568,24 +552,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -611,7 +579,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "sample_files") {
 			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
@@ -1294,24 +1262,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 		throw InvalidInputException("read_xml_objects first argument must be a string or array of strings");
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1324,7 +1276,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
@@ -1467,24 +1419,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		throw InvalidInputException("read_xml first argument must be a string or array of strings");
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	result->files = ExpandFilePatterns(fs, file_patterns, IgnoreErrorsParameter(input.named_parameters));
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1510,7 +1446,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "sample_files") {
 			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();

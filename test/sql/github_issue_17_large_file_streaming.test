@@ -226,7 +226,7 @@ true
 statement error
 SELECT * FROM read_xml_objects('test/xml/nonexistent_pattern_*.xml');
 ----
-Invalid Input Error
+No files found that match the pattern "test/xml/nonexistent_pattern_*.xml"
 
 # Test 10.3: Single file via array syntax
 query I

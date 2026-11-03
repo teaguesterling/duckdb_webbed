@@ -6,9 +6,37 @@
 #include "xml_in_memory_reader.hpp"
 #include "xml_utils.hpp"
 
+#include <algorithm>
 #include <exception>
 
 namespace duckdb {
+
+vector<string> ExpandFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
+	vector<string> files;
+	for (const auto &pattern : patterns) {
+		// Sorted for an order independent of the filesystem, as read_csv does. Readers keep it across threads.
+		vector<string> matched;
+		for (const auto &file_info : fs.Glob(pattern, nullptr)) {
+			matched.push_back(file_info.path);
+		}
+		if (matched.empty() && !skip_missing) {
+			throw IOException("No files found that match the pattern \"%s\"", pattern);
+		}
+		std::sort(matched.begin(), matched.end());
+		for (auto &path : matched) {
+			files.push_back(std::move(path));
+		}
+	}
+	return files;
+}
+
+idx_t MaximumFileSizeParameter(const Value &value) {
+	auto size = value.GetValue<int64_t>();
+	if (size < 0) {
+		throw InvalidInputException("maximum_file_size must be non-negative");
+	}
+	return static_cast<idx_t>(size);
+}
 
 unique_ptr<FileHandle> OpenXMLFile(FileSystem &fs, const string &path, const string &compression) {
 	return fs.OpenFile(path, FileFlags::FILE_FLAGS_READ | CompatFileCompressionTypeFromString(compression));
