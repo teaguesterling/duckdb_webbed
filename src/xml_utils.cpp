@@ -398,7 +398,7 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEnc
 			encoding = UndeclaredHTMLEncoding(Utf8Proc::Analyze(data, size) != UnicodeType::INVALID);
 		}
 	}
-	XMLInMemoryReader reader {data, size, 0};
+	XMLInMemoryReader reader {data, NumericCast<size_t>(size), 0};
 	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
 }
 
