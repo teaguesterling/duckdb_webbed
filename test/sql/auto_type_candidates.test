@@ -27,12 +27,12 @@ VARCHAR	2.0
 
 query III
 SELECT * FROM (
-    SELECT 'default' AS candidates, '1.10' AS sample, typeof(v) AS inferred
-    FROM parse_xml('<r><i><v>1.10</v></i></r>')
-    UNION ALL SELECT '[BIGINT, BOOLEAN, DATE]', '1.10', typeof(v)
-    FROM parse_xml('<r><i><v>1.10</v></i></r>', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
-    UNION ALL SELECT '[DOUBLE]', '1.10', typeof(v)
-    FROM parse_xml('<r><i><v>1.10</v></i></r>', auto_type_candidates := ['DOUBLE'])
+    SELECT 'default' AS candidates, '1.5' AS sample, typeof(v) AS inferred
+    FROM parse_xml('<r><i><v>1.5</v></i></r>')
+    UNION ALL SELECT '[BIGINT, BOOLEAN, DATE]', '1.5', typeof(v)
+    FROM parse_xml('<r><i><v>1.5</v></i></r>', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
+    UNION ALL SELECT '[DOUBLE]', '1.5', typeof(v)
+    FROM parse_xml('<r><i><v>1.5</v></i></r>', auto_type_candidates := ['DOUBLE'])
     UNION ALL SELECT '[BIGINT]', '7', typeof(v)
     FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'])
     UNION ALL SELECT '[DOUBLE]', '7', typeof(v)
@@ -71,7 +71,7 @@ SELECT * FROM (
     FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['int8', 'float8', 'bool'])
 ) ORDER BY ALL;
 ----
-[BIGINT, BOOLEAN, DATE]	1.10	VARCHAR
+[BIGINT, BOOLEAN, DATE]	1.5	VARCHAR
 [BIGINT]	2024-01-01	VARCHAR
 [BIGINT]	7	BIGINT
 [BIGINT]	true	VARCHAR
@@ -79,7 +79,7 @@ SELECT * FROM (
 [DATE, TIMESTAMP]	2024-01-01	DATE
 [DATE]	2024-01-01	DATE
 [DATE]	2024-01-01 10:00:00	VARCHAR
-[DOUBLE]	1.10	DOUBLE
+[DOUBLE]	1.5	DOUBLE
 [DOUBLE]	7	DOUBLE
 [INTEGER, DOUBLE]	9999999999	DOUBLE
 [INTEGER]	9999999999	VARCHAR
@@ -91,7 +91,7 @@ SELECT * FROM (
 [TIME]	10:00:00	TIME
 [VARCHAR]	7	VARCHAR
 [int8, float8, bool]	7	BIGINT
-default	1.10	DOUBLE
+default	1.5	DOUBLE
 
 # A widened value still converts: BIGINT and DOUBLE hold what INTEGER would have.
 query II
@@ -183,14 +183,14 @@ COPY (SELECT '<r><item><v>1</v></item><item><v>2</v></item></r>' AS c)
 TO '__TEST_DIR__/atc_ints.xml' (FORMAT csv, HEADER false, QUOTE '');
 
 statement ok
-COPY (SELECT '<r><item><v>1.5</v></item><item><v>2.10</v></item></r>' AS c)
+COPY (SELECT '<r><item><v>1.5</v></item><item><v>2.25</v></item></r>' AS c)
 TO '__TEST_DIR__/atc_decimals.xml' (FORMAT csv, HEADER false, QUOTE '');
 
 query II
 SELECT typeof(v), v FROM read_xml('__TEST_DIR__/atc_decimals.xml', auto_type_candidates := ['BIGINT']) ORDER BY v;
 ----
 VARCHAR	1.5
-VARCHAR	2.10
+VARCHAR	2.25
 
 # The list-of-files overload takes the option too.
 query I
@@ -220,7 +220,7 @@ ORDER BY v;
 VARCHAR	1
 VARCHAR	1.5
 VARCHAR	2
-VARCHAR	2.10
+VARCHAR	2.25
 
 # DOUBLE allowed: the union widens to it as usual.
 query I
