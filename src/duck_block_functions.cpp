@@ -2273,10 +2273,20 @@ unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(Clie
 	auto &bind_data = input.bind_data->Cast<HTMLBlocksReadFunctionData>();
 	result->files = bind_data.files;
 	// Each thread parses one file at a time into a DOM outside the buffer manager, so cap the threads at the number
-	// of DOMs at maximum_file_size that fit in memory_limit. Divided in two steps so a huge maximum_file_size can't
-	// overflow the product.
+	// of DOMs of the largest file that fit in memory_limit. A file past maximum_file_size is never parsed, and one
+	// that can't be opened here raises its error in the scan. Divided in two steps so the product can't overflow.
+	auto &fs = FileSystem::GetFileSystem(context);
+	idx_t largest = 1;
+	for (auto &file : result->files) {
+		try {
+			auto handle = fs.OpenFile(file, FileFlags::FILE_FLAGS_READ);
+			largest = MaxValue<idx_t>(largest, MinValue<idx_t>(fs.GetFileSize(*handle), bind_data.max_file_size));
+		} catch (std::exception &) {
+			continue;
+		}
+	}
 	auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-	auto fit = memory / DOM_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(bind_data.max_file_size, 1);
+	auto fit = memory / DOM_BYTES_PER_FILE_BYTE / largest;
 	result->max_threads = MaxValue<idx_t>(MinValue<idx_t>(fit, result->files.size()), 1);
 	return std::move(result);
 }
