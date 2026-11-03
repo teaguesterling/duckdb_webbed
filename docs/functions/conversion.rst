@@ -230,9 +230,11 @@ Convert HTML content into a list of structured document blocks. This function pa
 - ``maximum_file_size`` (``read_html_blocks`` only): the largest file to read, in bytes. A
   negative value raises an error.
 
-**Encoding:** ``read_html_blocks`` decodes each file by its byte order mark, then a
-``<meta charset>`` or ``http-equiv`` declaration, then its bytes. A file in neither UTF-8
-nor a declared charset reads as windows-1252.
+**Encoding:** ``read_html_blocks`` and ``read_html`` decode each file by its byte order mark,
+then the first ``<meta charset>`` or ``http-equiv`` declaration naming a charset libxml2
+supports, then its bytes. As in browsers, ASCII and Latin-1 labels decode as windows-1252. A
+file in neither UTF-8 nor a declared charset reads as windows-1252. A byte that the declared
+charset doesn't define raises an error, because libxml2 stops decoding there.
 
 **Limits:** libxml2 parses at most 256 levels of nested elements. A deeper document raises
 an error naming the limit, so its blocks are never silently cut short. ``read_html_blocks``

@@ -9,7 +9,9 @@ Fixes from the duck_block review in #217.
 - HTML deeper than libxml2's 256-level limit raises an error. It used to return a truncated
   block list.
 - ``read_html_blocks`` decodes files by their byte order mark, ``<meta>`` charset or bytes, so
-  a Latin-1 or windows-1252 page no longer reads as U+FFFD.
+  a Latin-1 or windows-1252 page no longer reads as U+FFFD. ASCII and Latin-1 labels decode as
+  windows-1252, as in browsers. A byte the declared charset doesn't define raises an error. It
+  used to end the document there.
 - ``read_html_blocks`` streams each file into its parse, buffers rows in buffer-managed memory,
   and raises an Out of Memory error for a file whose parse would exceed ``memory_limit``. It
   runs as many files in parallel as fit in ``memory_limit``.
