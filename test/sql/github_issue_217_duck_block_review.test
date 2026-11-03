@@ -156,3 +156,34 @@ statement error
 SELECT duck_blocks_to_html([{kind: 'block', element_type: 'paragraph', content: NULL::VARCHAR, level: 1, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 0}] || [{kind: 'inline', element_type: 'bold', content: NULL::VARCHAR, level: i::INTEGER, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: i::INTEGER} FOR i IN range(2, 257)] || [{kind: 'inline', element_type: 'text', content: 'x', level: 257, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 257}]);
 ----
 nests containers deeper than 254 levels
+
+# ============================================================================
+# Without <thead>, only a first row of <th> cells is a header row
+# ============================================================================
+
+# A first row of <td> cells is data
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tr><td>a</td><td>1</td></tr><tr><td>b</td><td>2</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":[],"rows":[["a","1"],["b","2"]]}
+
+# A row mixing <th> and <td> is data too
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tr><th>a</th><td>1</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":[],"rows":[["a","1"]]}
+
+# A first row of <th> cells is still the header row, under <table> or <tbody>
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tbody><tr><th>h</th></tr><tr><td>a</td></tr></tbody></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":["h"],"rows":[["a"]]}
+
+# A table without headers renders no <thead>
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table><tr><td>a</td></tr></table>')) LIKE '%<thead>%';
+----
+false

@@ -3021,11 +3021,37 @@ static std::string TableToJson(xmlNodePtr node) {
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
 	std::vector<std::vector<std::string>> footers;
+	bool saw_thead = false;
+
+	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
+	auto add_body_row = [&](xmlNodePtr tr) {
+		std::vector<std::string> row;
+		bool all_th = true;
+		for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
+			if (cell->type != XML_ELEMENT_NODE || !cell->name) {
+				continue;
+			}
+			bool is_th = xmlStrcmp(cell->name, BAD_CAST "th") == 0;
+			if (is_th || xmlStrcmp(cell->name, BAD_CAST "td") == 0) {
+				row.push_back(GetNodeTextContent(cell));
+				all_th = all_th && is_th;
+			}
+		}
+		if (row.empty()) {
+			return;
+		}
+		if (!saw_thead && headers.empty() && rows.empty() && all_th) {
+			headers = std::move(row);
+		} else {
+			rows.push_back(std::move(row));
+		}
+	};
 
 	xmlNodePtr child = node->children;
 	while (child) {
 		if (child->type == XML_ELEMENT_NODE && child->name) {
 			if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
+				saw_thead = true;
 				xmlNodePtr tr = child->children;
 				while (tr) {
 					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
@@ -3045,18 +3071,7 @@ static std::string TableToJson(xmlNodePtr node) {
 				xmlNodePtr tr = child->children;
 				while (tr) {
 					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						std::vector<std::string> row;
-						xmlNodePtr td = tr->children;
-						while (td) {
-							if (td->type == XML_ELEMENT_NODE && td->name &&
-							    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
-								row.push_back(GetNodeTextContent(td));
-							}
-							td = td->next;
-						}
-						if (!row.empty()) {
-							rows.push_back(std::move(row));
-						}
+						add_body_row(tr);
 					}
 					tr = tr->next;
 				}
@@ -3080,22 +3095,7 @@ static std::string TableToJson(xmlNodePtr node) {
 					tr = tr->next;
 				}
 			} else if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
-				std::vector<std::string> row;
-				xmlNodePtr td = child->children;
-				while (td) {
-					if (td->type == XML_ELEMENT_NODE && td->name &&
-					    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
-						row.push_back(GetNodeTextContent(td));
-					}
-					td = td->next;
-				}
-				if (!row.empty()) {
-					if (headers.empty()) {
-						headers = row;
-					} else {
-						rows.push_back(std::move(row));
-					}
-				}
+				add_body_row(child);
 			}
 		}
 		child = child->next;
