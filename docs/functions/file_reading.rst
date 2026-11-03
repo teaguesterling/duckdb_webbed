@@ -53,6 +53,9 @@ Read XML files with automatic schema inference.
    * - ``all_varchar``
      - BOOLEAN
      - Force all scalar types to VARCHAR (default: false)
+   * - ``auto_type_candidates``
+     - VARCHAR[]
+     - Scalar types inference may choose, with VARCHAR always allowed (default: every type)
    * - ``union_by_name``
      - BOOLEAN
      - Combine columns by name for multiple files (default: false)
@@ -237,6 +240,9 @@ Parse XML string with automatic schema inference.
    * - ``all_varchar``
      - BOOLEAN
      - Force all scalar types to VARCHAR (default: false)
+   * - ``auto_type_candidates``
+     - VARCHAR[]
+     - Scalar types inference may choose, with VARCHAR always allowed (default: every type)
    * - ``columns``
      - STRUCT
      - Explicit column schema (e.g., ``{item: 'INTEGER'}``)

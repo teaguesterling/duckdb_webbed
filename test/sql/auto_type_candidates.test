@@ -1,0 +1,308 @@
+# name: test/sql/auto_type_candidates.test
+# description: auto_type_candidates restricts the scalar types inference may choose, as read_csv's option of the same name does. VARCHAR is always the fallback.
+# group: [sql]
+
+require webbed
+
+# =============================================================================
+# The motivating case: identity-bearing text that looks like a decimal. Without
+# DOUBLE among the candidates, '1.10' keeps its exact spelling.
+# =============================================================================
+
+query II
+SELECT typeof(versionNumber), versionNumber
+FROM parse_xml('<r><f><versionNumber>1.10</versionNumber></f><f><versionNumber>2.0</versionNumber></f></r>',
+               auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
+ORDER BY versionNumber;
+----
+VARCHAR	1.10
+VARCHAR	2.0
+
+# =============================================================================
+# The scalar ladder, one case per row: the candidates, the sample text, and the
+# type inference chooses. A value takes the narrowest allowed type that reads
+# it, so an integer widens to BIGINT and then DOUBLE when narrower types are
+# excluded, and falls back to VARCHAR when none is allowed.
+# =============================================================================
+
+query III
+SELECT * FROM (
+    SELECT 'default' AS candidates, '1.10' AS sample, typeof(v) AS inferred
+    FROM parse_xml('<r><i><v>1.10</v></i></r>')
+    UNION ALL SELECT '[BIGINT, BOOLEAN, DATE]', '1.10', typeof(v)
+    FROM parse_xml('<r><i><v>1.10</v></i></r>', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
+    UNION ALL SELECT '[DOUBLE]', '1.10', typeof(v)
+    FROM parse_xml('<r><i><v>1.10</v></i></r>', auto_type_candidates := ['DOUBLE'])
+    UNION ALL SELECT '[BIGINT]', '7', typeof(v)
+    FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'])
+    UNION ALL SELECT '[DOUBLE]', '7', typeof(v)
+    FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['DOUBLE'])
+    UNION ALL SELECT '[INTEGER]', '9999999999', typeof(v)
+    FROM parse_xml('<r><i><v>9999999999</v></i></r>', auto_type_candidates := ['INTEGER'])
+    UNION ALL SELECT '[INTEGER, DOUBLE]', '9999999999', typeof(v)
+    FROM parse_xml('<r><i><v>9999999999</v></i></r>', auto_type_candidates := ['INTEGER', 'DOUBLE'])
+    UNION ALL SELECT '[VARCHAR]', '7', typeof(v)
+    FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['VARCHAR'])
+    UNION ALL SELECT '[BOOLEAN]', '1', typeof(v)
+    FROM parse_xml('<r><i><v>1</v></i></r>', auto_type_candidates := ['BOOLEAN'])
+    UNION ALL SELECT '[BIGINT]', 'true', typeof(v)
+    FROM parse_xml('<r><i><v>true</v></i></r>', auto_type_candidates := ['BIGINT'])
+    UNION ALL SELECT '[DATE]', '2024-01-01', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01</v></i></r>', auto_type_candidates := ['DATE'])
+    UNION ALL SELECT '[BIGINT]', '2024-01-01', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01</v></i></r>', auto_type_candidates := ['BIGINT'])
+    UNION ALL SELECT '[TIMESTAMP]', '2024-01-01', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01</v></i></r>', auto_type_candidates := ['TIMESTAMP'])
+    UNION ALL SELECT '[TIMESTAMP]', '2024-01-01 10:00:00', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01 10:00:00</v></i></r>', auto_type_candidates := ['TIMESTAMP'])
+    UNION ALL SELECT '[DATE]', '2024-01-01 10:00:00', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01 10:00:00</v></i></r>', auto_type_candidates := ['DATE'])
+    UNION ALL SELECT '[TIMESTAMPTZ]', '2024-01-01 10:00:00+02', typeof(v)
+    FROM parse_xml('<r><i><v>2024-01-01 10:00:00+02</v></i></r>', auto_type_candidates := ['TIMESTAMPTZ'])
+    UNION ALL SELECT '[TIME]', '10:00:00', typeof(v)
+    FROM parse_xml('<r><i><v>10:00:00</v></i></r>', auto_type_candidates := ['TIME'])
+    UNION ALL SELECT '[int8, float8, bool]', '7', typeof(v)
+    FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['int8', 'float8', 'bool'])
+) ORDER BY ALL;
+----
+[BIGINT, BOOLEAN, DATE]	1.10	VARCHAR
+[BIGINT]	2024-01-01	VARCHAR
+[BIGINT]	7	BIGINT
+[BIGINT]	true	VARCHAR
+[BOOLEAN]	1	BOOLEAN
+[DATE]	2024-01-01	DATE
+[DATE]	2024-01-01 10:00:00	VARCHAR
+[DOUBLE]	1.10	DOUBLE
+[DOUBLE]	7	DOUBLE
+[INTEGER, DOUBLE]	9999999999	DOUBLE
+[INTEGER]	9999999999	VARCHAR
+[TIMESTAMPTZ]	2024-01-01 10:00:00+02	TIMESTAMP WITH TIME ZONE
+[TIMESTAMP]	2024-01-01	VARCHAR
+[TIMESTAMP]	2024-01-01 10:00:00	TIMESTAMP
+[TIME]	10:00:00	TIME
+[VARCHAR]	7	VARCHAR
+[int8, float8, bool]	7	BIGINT
+default	1.10	DOUBLE
+
+# A widened value still converts: BIGINT and DOUBLE hold what INTEGER would have.
+query II
+SELECT a, b FROM parse_xml('<r><i><a>7</a><b>8</b></i></r>', auto_type_candidates := ['BIGINT', 'DOUBLE']);
+----
+7	8
+
+# =============================================================================
+# Nested STRUCT and LIST shapes are unaffected. Only their scalar leaves, and
+# attributes, are restricted.
+# =============================================================================
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE FROM parse_xml(
+    '<r><i ver="1.10"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
+    auto_type_candidates := ['BIGINT']));
+----
+ver	VARCHAR
+p	STRUCT(a VARCHAR, c BIGINT)
+l	STRUCT(x VARCHAR[])
+
+query II
+SELECT p, l FROM parse_xml(
+    '<r><i ver="1.10"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
+    auto_type_candidates := ['BIGINT']);
+----
+{'a': 1.5, 'c': 2}	{'x': [1.5, 2.5]}
+
+# =============================================================================
+# datetime_format: a format whose type is not a candidate never wins, so the
+# value falls through to the numeric ladder and then VARCHAR.
+# =============================================================================
+
+query I
+SELECT typeof(v) FROM parse_xml('<r><i><v>25/12/2024</v></i></r>', datetime_format := '%d/%m/%Y',
+                                auto_type_candidates := ['BIGINT']);
+----
+VARCHAR
+
+query II
+SELECT typeof(v), v FROM parse_xml('<r><i><v>25/12/2024</v></i></r>', datetime_format := '%d/%m/%Y',
+                                   auto_type_candidates := ['DATE']);
+----
+DATE	2024-12-25
+
+# =============================================================================
+# Each function accepts the option: read_xml, read_html, parse_xml, parse_html.
+# =============================================================================
+
+query IIII
+SELECT typeof(id), typeof(age), typeof(salary), typeof(active)
+FROM read_html('test/html/all_varchar_data.html', record_element := 'employee',
+               auto_type_candidates := ['BIGINT', 'BOOLEAN'])
+LIMIT 1;
+----
+BIGINT	BIGINT	VARCHAR	BOOLEAN
+
+query II
+SELECT typeof(v), v FROM parse_html('<html><body><div><v>1.10</v></div></body></html>', record_element := 'div',
+                                    auto_type_candidates := ['BIGINT']);
+----
+VARCHAR	1.10
+
+statement ok
+COPY (SELECT '<r><item><v>1</v></item><item><v>2</v></item></r>' AS c)
+TO '__TEST_DIR__/atc_ints.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<r><item><v>1.5</v></item><item><v>2.10</v></item></r>' AS c)
+TO '__TEST_DIR__/atc_decimals.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query II
+SELECT typeof(v), v FROM read_xml('__TEST_DIR__/atc_decimals.xml', auto_type_candidates := ['BIGINT']) ORDER BY v;
+----
+VARCHAR	1.5
+VARCHAR	2.10
+
+# The list-of-files overload takes the option too.
+query I
+SELECT typeof(v) FROM read_xml(['__TEST_DIR__/atc_ints.xml'], auto_type_candidates := ['DOUBLE']) LIMIT 1;
+----
+DOUBLE
+
+# =============================================================================
+# union_by_name: the merge of per-file types stays inside the candidates.
+# One file infers integers, the other decimals.
+# =============================================================================
+
+# Control: without the option the union widens INTEGER and DOUBLE to DOUBLE.
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                        union_by_name := true);
+----
+DOUBLE
+
+# DOUBLE excluded: the decimals file infers VARCHAR, so the union is VARCHAR and
+# every value keeps its spelling.
+query II
+SELECT typeof(v), v FROM read_xml(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                  union_by_name := true, auto_type_candidates := ['INTEGER'])
+ORDER BY v;
+----
+VARCHAR	1
+VARCHAR	1.5
+VARCHAR	2
+VARCHAR	2.10
+
+# DOUBLE allowed: the union widens to it as usual.
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                        union_by_name := true, auto_type_candidates := ['INTEGER', 'DOUBLE']);
+----
+DOUBLE
+
+query I
+SELECT DISTINCT typeof(v) FROM read_html(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                         record_element := 'item', union_by_name := true,
+                                         auto_type_candidates := ['INTEGER']);
+----
+VARCHAR
+
+# =============================================================================
+# Validation matches read_csv: a list of type-name strings, at least one, no
+# NULLs, and unknown names are a catalog error.
+# =============================================================================
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := 'BIGINT');
+----
+requires a list as input
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := []);
+----
+requires at least one type
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := NULL::VARCHAR[]);
+----
+cannot be NULL
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT', NULL]);
+----
+cannot contain NULL types
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := [1]);
+----
+requires a type specification as string
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['NOT_A_TYPE']);
+----
+Type with name NOT_A_TYPE does not exist
+
+# Types read_csv accepts but webbed inference never produces are rejected
+# rather than silently ignored.
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['SMALLINT']);
+----
+does not accept SMALLINT
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['DECIMAL(10,2)']);
+----
+does not accept DECIMAL(10,2)
+
+statement error
+SELECT * FROM read_html('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['STRUCT(a INTEGER)']);
+----
+does not accept STRUCT(a INTEGER)
+
+# =============================================================================
+# Conflicts: columns turns inference off, and all_varchar already fixes every
+# scalar to VARCHAR. Each pairing is an error on every function.
+# =============================================================================
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'], columns := {'v': 'INTEGER'});
+----
+cannot use both "columns" parameter and "auto_type_candidates" option
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['BIGINT'], columns := {'v': 'INTEGER'});
+----
+cannot use both "columns" parameter and "auto_type_candidates" option
+
+statement error
+SELECT * FROM read_html('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['BIGINT'], columns := {'v': 'INTEGER'});
+----
+cannot use both "columns" parameter and "auto_type_candidates" option
+
+statement error
+SELECT * FROM parse_html('<div><v>7</v></div>', auto_type_candidates := ['BIGINT'], columns := {'v': 'INTEGER'});
+----
+cannot use both "columns" parameter and "auto_type_candidates" option
+
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'], all_varchar := true);
+----
+cannot use both "all_varchar" and "auto_type_candidates" options
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['BIGINT'], all_varchar := true);
+----
+cannot use both "all_varchar" and "auto_type_candidates" options
+
+statement error
+SELECT * FROM read_html('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['BIGINT'], all_varchar := true);
+----
+cannot use both "all_varchar" and "auto_type_candidates" options
+
+statement error
+SELECT * FROM parse_html('<div><v>7</v></div>', auto_type_candidates := ['BIGINT'], all_varchar := true);
+----
+cannot use both "all_varchar" and "auto_type_candidates" options
+
+# all_varchar := false does not conflict.
+query I
+SELECT typeof(v) FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'], all_varchar := false);
+----
+BIGINT

@@ -1299,7 +1299,11 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		StrTimeFormat::ParseFormatSpecifier(effective_candidates[i], compiled_formats[i]);
 	}
 
-	bool any_alive = !effective_candidates.empty();
+	// A format whose type is not an auto_type_candidate never wins, so it starts eliminated.
+	for (size_t i = 0; i < effective_candidates.size(); i++) {
+		alive[i] = IsAutoTypeCandidate(options, candidate_types[i].id());
+	}
+	bool any_alive = std::find(alive.begin(), alive.end(), true) != alive.end();
 	for (const auto &sample : samples) {
 		if (sample.empty()) {
 			continue; // Nulls/empty skip elimination
@@ -1332,30 +1336,62 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
-	// Fall through to numeric/boolean/VARCHAR detection (existing logic)
+	// Each sample takes the narrowest allowed type that reads it: an integer the candidates exclude
+	// from INTEGER widens to BIGINT, then DOUBLE, as read_csv's sniffer does.
+	// GetMostSpecificType widens INTEGER to BIGINT when samples mix.
+	auto allowed = [&options](LogicalTypeId id) {
+		return IsAutoTypeCandidate(options, id);
+	};
 	std::vector<LogicalType> detected_types;
 	for (const auto &sample : samples) {
 		if (sample.empty())
 			continue;
-		if (options.numeric_detection && IsInteger(sample)) {
-			// Pick the narrowest integer type that can hold the value;
-			// GetMostSpecificType widens INTEGER to BIGINT when samples mix.
-			int32_t int32_result;
-			if (TryCast::Operation(string_t(sample), int32_result, true)) {
-				detected_types.push_back(LogicalType::INTEGER);
-			} else {
-				detected_types.push_back(LogicalType::BIGINT);
-			}
-		} else if (options.numeric_detection && IsDouble(sample)) {
+		bool is_integer = options.numeric_detection && IsInteger(sample);
+		int32_t int32_result;
+		if (is_integer && allowed(LogicalTypeId::INTEGER) && TryCast::Operation(string_t(sample), int32_result, true)) {
+			detected_types.push_back(LogicalType::INTEGER);
+		} else if (is_integer && allowed(LogicalTypeId::BIGINT)) {
+			detected_types.push_back(LogicalType::BIGINT);
+		} else if (options.numeric_detection && allowed(LogicalTypeId::DOUBLE) && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
-		} else if (options.boolean_detection && IsBoolean(sample)) {
+		} else if (options.boolean_detection && allowed(LogicalTypeId::BOOLEAN) && IsBoolean(sample)) {
 			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
 		}
 	}
 
-	return GetMostSpecificType(detected_types);
+	return RestrictToAutoTypeCandidates(GetMostSpecificType(detected_types), options);
+}
+
+bool XMLSchemaInference::IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id) {
+	if (options.auto_type_candidates.empty() || id == LogicalTypeId::VARCHAR) {
+		return true;
+	}
+	return std::find(options.auto_type_candidates.begin(), options.auto_type_candidates.end(), id) !=
+	       options.auto_type_candidates.end();
+}
+
+LogicalType XMLSchemaInference::RestrictToAutoTypeCandidates(const LogicalType &type, const XMLSchemaOptions &options) {
+	if (options.auto_type_candidates.empty()) {
+		return type;
+	}
+	return TypeVisitor::VisitReplace(type, [&options](const LogicalType &t) {
+		switch (t.id()) {
+		case LogicalTypeId::BOOLEAN:
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DOUBLE:
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return IsAutoTypeCandidate(options, t.id()) ? t : LogicalType::VARCHAR;
+		default:
+			return t;
+		}
+	});
 }
 
 LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,

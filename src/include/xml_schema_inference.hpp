@@ -73,6 +73,9 @@ struct XMLSchemaOptions {
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
 	std::vector<std::string> null_strings; // Values to treat as NULL (empty = default behavior)
+	// Scalar types inference may choose (read_csv's auto_type_candidates). Empty allows every type
+	// inference produces. VARCHAR is always allowed, whether listed or not.
+	std::vector<LogicalTypeId> auto_type_candidates;
 
 	// Source type tracking
 	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
@@ -220,6 +223,13 @@ public:
 	// Infer type from sample values
 	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples, const XMLSchemaOptions &options,
 	                                        std::string &winning_datetime_format);
+
+	// Whether inference may choose this scalar type under options.auto_type_candidates.
+	static bool IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id);
+
+	// Replace every scalar inferable type outside options.auto_type_candidates with VARCHAR,
+	// including inside nested types, so a union_by_name merge cannot widen past the candidates.
+	static LogicalType RestrictToAutoTypeCandidates(const LogicalType &type, const XMLSchemaOptions &options);
 
 	// Detect nested structures (LIST and STRUCT types)
 	static LogicalType InferNestedType(const ElementPattern &pattern,

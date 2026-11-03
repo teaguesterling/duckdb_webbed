@@ -80,6 +80,10 @@ Type Handling Parameters
      - BOOLEAN
      - false
      - Force all scalar types to VARCHAR. Preserves nested structure (STRUCT, LIST) but converts leaf values.
+   * - ``auto_type_candidates``
+     - VARCHAR[]
+     - (every type)
+     - Scalar types inference may choose. VARCHAR is always a candidate. See :ref:`auto-type-candidates` below.
    * - ``datetime_format``
      - VARCHAR or VARCHAR[]
      - 'auto'
@@ -302,6 +306,49 @@ A column declared through ``columns`` has no recorded format. Its values are rea
    -- Custom format string
    SELECT * FROM read_xml('data.xml', datetime_format='%Y/%m/%d');
 
+.. _auto-type-candidates:
+
+auto_type_candidates
+~~~~~~~~~~~~~~~~~~~~
+
+``auto_type_candidates`` restricts the scalar types inference may choose. It mirrors
+``read_csv``'s option of the same name: a list of type names, with VARCHAR always a candidate
+whether listed or not. A value no candidate can read stays VARCHAR.
+
+Use it when a source's text is identity-bearing. In Salesforce metadata, ``versionNumber`` and
+``apiVersion`` look like decimals, and DOUBLE would turn ``1.10`` into ``1.1``. Excluding DOUBLE
+keeps every such field VARCHAR without naming the fields:
+
+.. code-block:: sql
+
+   SELECT * FROM read_xml('metadata/*.xml', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE']);
+
+A value takes the narrowest allowed type that reads it. An integer becomes INTEGER, or BIGINT
+when INTEGER is excluded, or DOUBLE when both are. A ``union_by_name`` merge of per-file types
+never widens past the candidates. Nested STRUCT and LIST shapes are unchanged, and only their
+scalar leaves and attributes are restricted.
+
+**Accepted types:** VARCHAR, BOOLEAN, INTEGER, BIGINT, DOUBLE, DATE, TIME, TIMETZ, TIMESTAMP and
+TIMESTAMPTZ, by any name DuckDB resolves to them (``'int8'`` is BIGINT). An unknown type name, an
+empty list, or a NULL element is an error, as in ``read_csv``.
+
+**Differences from read_csv:**
+
+- ``read_csv`` also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM. Inference here
+  never produces them, so naming one is an error instead of a silent no-op.
+- ``read_csv`` reads a date-only value as TIMESTAMP when TIMESTAMP is a candidate and DATE is not.
+  Here each ``datetime_format`` candidate yields one type, and a format whose type is excluded never
+  wins, so ``2024-01-01`` stays VARCHAR under ``['TIMESTAMP']``.
+- ``read_csv`` ignores the option alongside ``columns`` or ``all_varchar``. Here either pairing is
+  an error, as ``columns`` with ``all_varchar`` already is. ``all_varchar := true`` is
+  ``auto_type_candidates := ['VARCHAR']``.
+
+**Interactions with other parameters:**
+
+- ``datetime_format`` supplies the formats temporal detection tries. A format whose type is not a
+  candidate is skipped, and the value falls through to the numeric and boolean checks.
+- ``nullstr`` matches are excluded from inference as usual.
+
 Examples
 --------
 
@@ -332,6 +379,9 @@ Schema Control
 
    -- Preserve all values as strings
    SELECT * FROM read_xml('data.xml', all_varchar := true);
+
+   -- Infer integers, booleans and dates, but never DOUBLE
+   SELECT * FROM read_xml('data.xml', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE']);
 
 Attribute Handling
 ~~~~~~~~~~~~~~~~~~
