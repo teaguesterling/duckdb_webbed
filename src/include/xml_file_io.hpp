@@ -20,4 +20,8 @@ bool ParsesFromHandle(FileHandle &handle);
 //! Parse a file into a DOM as it reads, without holding a copy of its bytes.
 XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html);
 
+//! Parse an HTML file into a DOM as it reads, decoding it per its BOM, <meta> charset or bytes. Returns null when the
+//! file is empty.
+XMLDocPtr ParseHTMLFile(FileHandle &handle);
+
 } // namespace duckdb

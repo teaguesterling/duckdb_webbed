@@ -14,6 +14,11 @@ namespace duckdb {
 // with XML_ERR_RESOURCE_LIMIT.
 static constexpr int32_t LIBXML_MAX_TREE_DEPTH = 256;
 
+// A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
+// elements, and libxml2 allocates it outside the buffer manager. Readers size their parallelism and refuse files by
+// this bound.
+static constexpr idx_t DOM_BYTES_PER_FILE_BYTE = 32;
+
 // Where the bytes handed to the HTML parser came from, which decides how they are decoded.
 enum class HTMLInputEncoding {
 	// A VARCHAR or HTML value. DuckDB already holds it as UTF-8, so a <meta charset> in it is stale.

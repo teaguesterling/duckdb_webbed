@@ -8,6 +8,29 @@ namespace duckdb {
 
 struct CaptureSpec; // defined in duck_block_functions.cpp; see capture_attributes
 
+// Receives each duck_block as the HTML walk produces it, in document order. A reader writes blocks into buffer-managed
+// rows as they arrive instead of holding the whole document's blocks as Values.
+class DuckBlockSink {
+public:
+	virtual ~DuckBlockSink() = default;
+	// `block` is a duck_block STRUCT of the seven canonical fields.
+	virtual void Append(Value block) = 0;
+	void AppendAll(std::vector<Value> &blocks) {
+		for (auto &block : blocks) {
+			Append(std::move(block));
+		}
+	}
+};
+
+// Collects blocks into a vector, for html_to_duck_blocks's LIST result.
+class DuckBlockListSink : public DuckBlockSink {
+public:
+	vector<Value> blocks;
+	void Append(Value block) override {
+		blocks.push_back(std::move(block));
+	}
+};
+
 /**
  * DuckBlockFunctions provides scalar functions for converting between HTML/XML and duck_blocks.
  *
@@ -22,9 +45,12 @@ class DuckBlockFunctions {
 public:
 	static void Register(ExtensionLoader &loader);
 
-	// Core parsing helper
-	static vector<Value> HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec,
-	                                      HTMLInputEncoding input = HTMLInputEncoding::DECODED_TEXT);
+	// Parse HTML and write its blocks to `sink`.
+	static void HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec, DuckBlockSink &sink,
+	                             HTMLInputEncoding input = HTMLInputEncoding::DECODED_TEXT);
+	// Write a parsed document's blocks to `sink`. The walk caches per-node results in each node's _private slot, so
+	// the document must not be shared with another reader.
+	static void WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec, DuckBlockSink &sink);
 
 private:
 	// html_to_duck_blocks(html HTML) -> LIST(duck_block)

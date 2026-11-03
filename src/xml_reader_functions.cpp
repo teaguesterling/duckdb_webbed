@@ -354,10 +354,6 @@ private:
 	FileInferenceState &state;
 };
 
-// A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
-// elements, and libxml2 allocates it outside the buffer manager.
-static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 32;
-
 // A streamed record's DOM takes a few times its bytes, outside the buffer manager, so one record may span at most
 // this share of memory_limit.
 static constexpr idx_t STREAMED_RECORD_MEMORY_FACTOR = 4;
@@ -376,7 +372,7 @@ static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t 
 	} else {
 		// Divided in two steps so a huge maximum_file_size can't overflow the product
 		auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-		limit = MinValue<idx_t>(limit, memory / INFERENCE_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(max_file_size, 1));
+		limit = MinValue<idx_t>(limit, memory / DOM_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(max_file_size, 1));
 	}
 	return MaxValue<idx_t>(MinValue<idx_t>(limit, file_count), 1);
 }

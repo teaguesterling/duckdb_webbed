@@ -150,4 +150,14 @@ XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
 	return doc;
 }
 
+XMLDocPtr ParseHTMLFile(FileHandle &handle) {
+	std::string encoding = DetectHTMLHandleEncoding(handle);
+	FileHandleReader reader {handle, nullptr};
+	auto doc = XMLUtils::ParseHTMLDocument(FileHandleReaderRead, &reader, encoding);
+	if (reader.error) {
+		std::rethrow_exception(reader.error);
+	}
+	return doc;
+}
+
 } // namespace duckdb
