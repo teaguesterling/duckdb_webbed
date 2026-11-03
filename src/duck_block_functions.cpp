@@ -777,7 +777,11 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			continue;
 		}
 
+		// An unknown inline element carrying captured attributes becomes a span that keeps them.
 		std::string etype = InlineTypeForTag(tag);
+		if (etype.empty() && !attrs.empty()) {
+			etype = DuckBlockTypes::INLINE_SPAN;
+		}
 		if (!etype.empty()) {
 			if (tag == "a") {
 				std::string href = GetNodeAttribute(child, "href");
@@ -797,23 +801,6 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			} else {
 				// Leaf: carries its text content.
 				inlines.push_back(DuckBlockTypes::CreateInline(etype, GetNodeTextContent(child),
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-			}
-			continue;
-		}
-
-		// Unknown inline element carrying captured attributes: a span keeps them,
-		// as a container when it has element children and as a leaf otherwise.
-		if (!attrs.empty()) {
-			if (HasElementChildren(child)) {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SPAN, "",
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-				auto nested = ExtractInlineElements(child, base_level + 1, element_order, spec);
-				inlines.insert(inlines.end(), nested.begin(), nested.end());
-			} else {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_SPAN, GetNodeTextContent(child),
 				                                               Value::INTEGER(base_level),
 				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			}
