@@ -1021,9 +1021,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				} else {
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
-					lstate.current_doc =
-					    parse_from_handle ? ParseXMLFile(*file_handle, is_html)
-					                      : XMLDocRAII(content, is_html, HTMLInputEncoding::FILE_BYTES);
+					lstate.current_doc = parse_from_handle
+					                         ? ParseXMLFile(*file_handle, is_html)
+					                         : XMLDocRAII(content, is_html, HTMLInputEncoding::FILE_BYTES);
 
 					if (!lstate.current_doc.IsValid()) {
 						if (lstate.current_doc.HadResourceError()) {

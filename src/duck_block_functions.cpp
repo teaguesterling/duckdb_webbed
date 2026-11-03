@@ -942,11 +942,11 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			bool single_text_node = child->type == XML_TEXT_NODE && child->next == run_end;
 			if (single_text_node) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, GetNodeTextContent(child),
-				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
-				                                             OrderedAttrs(), order++));
+				                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+				                                          OrderedAttrs(), order++));
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, "", Value::INTEGER(level),
-				                                             DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
+				                                          DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
 				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order, spec);
 				blocks.AppendAll(inlines);
 			}
@@ -977,13 +977,13 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
-				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
 				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
 				blocks.AppendAll(inlines);
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, GetNodeTextContent(child),
-				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
-				                                             attrs, order++));
+				                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
+				                                          order++));
 			}
 			continue;
 		}
@@ -992,13 +992,13 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 		if (tag == "p") {
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(level),
-				                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+				                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
 				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
 				blocks.AppendAll(inlines);
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, GetNodeTextContent(child),
-				                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
-				                                             attrs, order++));
+				                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
+				                                          order++));
 			}
 			continue;
 		}
@@ -1017,8 +1017,8 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 				}
 			}
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_CODE, GetNodeTextContent(child),
-			                                             Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
-			                                             order++));
+			                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
+			                                          order++));
 			continue;
 		}
 
@@ -1032,7 +1032,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 		if (IsJsonLeafTag(tag)) {
 			std::string content = TableToJson(child);
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_TABLE, content, Value::INTEGER(level),
-			                                             DuckBlockTypes::ENCODING_JSON, attrs, order++));
+			                                          DuckBlockTypes::ENCODING_JSON, attrs, order++));
 			continue;
 		}
 
@@ -1106,7 +1106,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 		// --- Horizontal rule ---------------------------------------------
 		if (tag == "hr") {
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HR, "", Value::INTEGER(level),
-			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
 			continue;
 		}
 
@@ -1125,7 +1125,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 				PutAttr(attrs, "title", title);
 			}
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_IMAGE, content, Value::INTEGER(level),
-			                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+			                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
 			continue;
 		}
 
@@ -1223,7 +1223,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 static void EmitContainerAndRecurse(xmlNodePtr node, const std::string &block_type, int32_t level, int32_t &order,
                                     DuckBlockSink &blocks, OrderedAttrs &attrs, const CaptureSpec &spec) {
 	blocks.Append(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
-	                                             attrs, order++));
+	                                          attrs, order++));
 	WalkBlockNode(node, level + 1, order, blocks, spec);
 }
 
@@ -1237,13 +1237,13 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 	if (HasBlockChildren(node)) {
 		EmitContainerAndRecurse(node, block_type, level, order, blocks, attrs, spec);
 	} else if (HasElementChildren(node)) {
-		blocks.Append(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level),
-		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+		blocks.Append(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
+		                                          attrs, order++));
 		auto inlines = ExtractInlineElements(node, level + 1, order, spec);
 		blocks.AppendAll(inlines);
 	} else {
 		blocks.Append(DuckBlockTypes::CreateBlock(block_type, GetNodeTextContent(node), Value::INTEGER(level),
-		                                             DuckBlockTypes::ENCODING_TEXT, attrs, order++));
+		                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
 	}
 }
 
@@ -1355,7 +1355,7 @@ void DuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec
 		std::map<std::string, std::string> attrs;
 		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_FRONTMATTER;
 		blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
-		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+		                                          DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
 
 	if (body) {
@@ -1402,7 +1402,7 @@ void DuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec
 		std::map<std::string, std::string> attrs;
 		attrs[DuckBlockTypes::ATTR_ROLE] = DuckBlockTypes::ROLE_TAILMATTER;
 		blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_METADATA, content, Value::INTEGER(1),
-		                                             DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
+		                                          DuckBlockTypes::ENCODING_YAML, attrs, block_order++));
 	}
 }
 
@@ -2013,7 +2013,8 @@ struct HTMLBlocksReadFunctionData : public TableFunctionData {
 };
 
 // Holds one document's blocks and emits them a chunk at a time. The first chunk's worth stays in a staging chunk. Past
-// that, rows go to a ColumnDataCollection, which the buffer manager tracks and can spill. Each row has the seven canonical fields. The reader fills any filename column itself.
+// that, rows go to a ColumnDataCollection, which the buffer manager tracks and can spill. Each row has the seven
+// canonical fields. The reader fills any filename column itself.
 class DuckBlockRowBuffer : public DuckBlockSink {
 public:
 	explicit DuckBlockRowBuffer(ClientContext &context) : context(context) {

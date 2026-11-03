@@ -402,9 +402,9 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEnc
 	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
 }
 
-// The encoding libxml2 decodes a declared charset label with, mapped the way the WHATWG Encoding Standard maps it, or ""
-// when libxml2 has no decoder for it. Browsers decode ASCII and Latin-1 labels as windows-1252, a superset that gives
-// 0x80-0x9F the punctuation authors meant. libxml2 maps them only for a charset it reads from <meta> itself.
+// The encoding libxml2 decodes a declared charset label with, mapped the way the WHATWG Encoding Standard maps it, or
+// "" when libxml2 has no decoder for it. Browsers decode ASCII and Latin-1 labels as windows-1252, a superset that
+// gives 0x80-0x9F the punctuation authors meant. libxml2 maps them only for a charset it reads from <meta> itself.
 static std::string HTMLEncodingForLabel(const std::string &label) {
 	auto name = StringUtil::Lower(label);
 	StringUtil::Trim(name);
