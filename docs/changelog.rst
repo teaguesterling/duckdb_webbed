@@ -11,7 +11,7 @@ Fixes from the duck_block review in #217.
 - ``read_html_blocks`` decodes files by their byte order mark, ``<meta>`` charset or bytes, so
   a Latin-1 or windows-1252 page no longer reads as U+FFFD. ASCII and Latin-1 labels decode as
   windows-1252, as in browsers. A byte the declared charset doesn't define raises an error. It
-  used to end the document there.
+  used to end the document there, or read as U+FFFD in a UTF-8 file.
 - ``read_html_blocks`` streams each file into its parse, buffers rows in buffer-managed memory,
   and raises an Out of Memory error for a file whose parse would exceed ``memory_limit``. It
   runs as many files in parallel as fit in ``memory_limit``.

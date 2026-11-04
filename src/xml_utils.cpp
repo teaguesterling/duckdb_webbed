@@ -375,10 +375,9 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 		}
 		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
 	}
-	// Without a decoder, UTF-8 input reports a bad byte per character and parses on.
-	if (decode_failed && !StringUtil::CIEquals(encoding, "UTF-8")) {
-		throw InvalidInputException("HTML document has bytes that aren't valid %s, where libxml2 stopped decoding it",
-		                            encoding);
+	// Without a decoder, UTF-8 input reports a bad byte per character and parses on. Callers validate UTF-8 bytes.
+	if (decode_failed && encoding != "UTF-8") {
+		throw InvalidHTMLBytes(encoding);
 	}
 	if (doc) {
 		// libxml2 decoded the input to UTF-8. Recording that keeps a later dump from re-encoding to the source charset.
@@ -390,12 +389,22 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 	return doc;
 }
 
+InvalidInputException XMLUtils::InvalidHTMLBytes(const std::string &encoding) {
+	return InvalidInputException("HTML document has bytes that aren't valid %s, where libxml2 stopped decoding it",
+	                             encoding);
+}
+
 XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input) {
 	std::string encoding = "UTF-8";
 	if (input == HTMLInputEncoding::FILE_BYTES) {
 		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES));
-		if (encoding.empty()) {
-			encoding = UndeclaredHTMLEncoding(Utf8Proc::Analyze(data, size) != UnicodeType::INVALID);
+		if (encoding.empty() || encoding == "UTF-8") {
+			bool valid_utf8 = Utf8Proc::Analyze(data, size) != UnicodeType::INVALID;
+			if (encoding.empty()) {
+				encoding = UndeclaredHTMLEncoding(valid_utf8);
+			} else if (!valid_utf8) {
+				throw InvalidHTMLBytes(encoding);
+			}
 		}
 	}
 	XMLInMemoryReader reader {data, NumericCast<size_t>(size), 0};
@@ -416,6 +425,8 @@ static std::string HTMLEncodingForLabel(const std::string &label) {
 		return "UTF-8";
 	}
 	switch (xmlParseCharEncoding(name.c_str())) {
+	case XML_CHAR_ENCODING_UTF8:
+		return "UTF-8";
 	case XML_CHAR_ENCODING_ASCII:
 	case XML_CHAR_ENCODING_8859_1:
 		return "windows-1252";
@@ -465,13 +476,62 @@ static std::string ContentCharset(const std::string &content) {
 	return "";
 }
 
+// Reads the attribute at `i` in a lowercased tag, as the HTML standard's prescan gets an attribute, and leaves `i` past
+// it. Returns false at the tag's closing '>' or the end of `s`, with `i` on that '>'.
+static bool NextPrescanAttribute(const std::string &s, size_t &i, std::string &name, std::string &value) {
+	while (i < s.size() && (IsHTMLSpace(s[i]) || s[i] == '/')) {
+		i++;
+	}
+	if (i >= s.size() || s[i] == '>') {
+		return false;
+	}
+	size_t name_start = i;
+	while (i < s.size() && !IsHTMLSpace(s[i]) && s[i] != '=' && s[i] != '>' && s[i] != '/') {
+		i++;
+	}
+	name = s.substr(name_start, i - name_start);
+	value.clear();
+	while (i < s.size() && IsHTMLSpace(s[i])) {
+		i++;
+	}
+	if (i >= s.size() || s[i] != '=') {
+		return true;
+	}
+	i++;
+	while (i < s.size() && IsHTMLSpace(s[i])) {
+		i++;
+	}
+	if (i < s.size() && (s[i] == '"' || s[i] == '\'')) {
+		auto end = s.find(s[i], i + 1);
+		if (end == std::string::npos) {
+			end = s.size();
+		}
+		value = s.substr(i + 1, end - i - 1);
+		i = MinValue<size_t>(end + 1, s.size());
+	} else {
+		size_t value_start = i;
+		while (i < s.size() && !IsHTMLSpace(s[i]) && s[i] != '>') {
+			i++;
+		}
+		value = s.substr(value_start, i - value_start);
+	}
+	return true;
+}
+
+static bool IsASCIIAlpha(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
 // The encoding the first usable <meta> in `head` declares, through a charset attribute or an http-equiv content-type
-// content, or "". It follows the prescan in the HTML standard: comments are skipped, attributes are parsed, and a
-// <meta> naming an encoding libxml2 can't decode is passed over for a later one.
+// content, or "". It follows the prescan in the HTML standard: comments are skipped, every tag's attributes are parsed
+// so a quoted value can't hide or fake a <meta>, and a <meta> naming an encoding libxml2 can't decode is passed over
+// for a later one.
 static std::string FindMetaCharset(const char *head, idx_t size) {
 	std::string lower(head, size);
 	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
 	size_t pos = 0;
+	std::string name;
+	std::string value;
 	while ((pos = lower.find('<', pos)) != std::string::npos) {
 		if (lower.compare(pos, 4, "<!--") == 0) {
 			auto end = lower.find("-->", pos + 4);
@@ -481,64 +541,50 @@ static std::string FindMetaCharset(const char *head, idx_t size) {
 			pos = end + 3;
 			continue;
 		}
-		if (lower.compare(pos, 5, "<meta") != 0 || pos + 5 >= lower.size() ||
-		    !(IsHTMLSpace(lower[pos + 5]) || lower[pos + 5] == '/')) {
-			pos++;
+		if (lower.compare(pos, 5, "<meta") == 0 && pos + 5 < lower.size() &&
+		    (IsHTMLSpace(lower[pos + 5]) || lower[pos + 5] == '/')) {
+			size_t i = pos + 5;
+			std::string charset;
+			std::string content;
+			bool content_type = false;
+			while (NextPrescanAttribute(lower, i, name, value)) {
+				if (name == "charset" && charset.empty()) {
+					charset = value;
+				} else if (name == "content" && content.empty()) {
+					content = value;
+				} else if (name == "http-equiv" && value == "content-type") {
+					content_type = true;
+				}
+			}
+			auto label = !charset.empty() ? charset : content_type ? ContentCharset(content) : "";
+			auto encoding = HTMLEncodingForLabel(label);
+			if (!encoding.empty()) {
+				return encoding;
+			}
+			pos = i;
 			continue;
 		}
-		size_t i = pos + 5;
-		std::string charset;
-		std::string content;
-		bool content_type = false;
-		while (i < lower.size() && lower[i] != '>') {
-			if (IsHTMLSpace(lower[i]) || lower[i] == '/') {
-				i++;
-				continue;
-			}
-			size_t name_start = i;
-			while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '=' && lower[i] != '>' &&
-			       lower[i] != '/') {
+		size_t name_at = pos + (pos + 1 < lower.size() && lower[pos + 1] == '/' ? 2 : 1);
+		if (name_at < lower.size() && IsASCIIAlpha(lower[name_at])) {
+			// Another tag. Its attributes are skipped whole, so a '<' inside a quoted value starts nothing.
+			size_t i = name_at;
+			while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '>') {
 				i++;
 			}
-			auto name = lower.substr(name_start, i - name_start);
-			while (i < lower.size() && IsHTMLSpace(lower[i])) {
-				i++;
+			while (NextPrescanAttribute(lower, i, name, value)) {
 			}
-			std::string value;
-			if (i < lower.size() && lower[i] == '=') {
-				i++;
-				while (i < lower.size() && IsHTMLSpace(lower[i])) {
-					i++;
-				}
-				if (i < lower.size() && (lower[i] == '"' || lower[i] == '\'')) {
-					auto end = lower.find(lower[i], i + 1);
-					if (end == std::string::npos) {
-						end = lower.size();
-					}
-					value = lower.substr(i + 1, end - i - 1);
-					i = MinValue<size_t>(end + 1, lower.size());
-				} else {
-					size_t value_start = i;
-					while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '>') {
-						i++;
-					}
-					value = lower.substr(value_start, i - value_start);
-				}
-			}
-			if (name == "charset" && charset.empty()) {
-				charset = value;
-			} else if (name == "content" && content.empty()) {
-				content = value;
-			} else if (name == "http-equiv" && value == "content-type") {
-				content_type = true;
-			}
+			pos = i;
+			continue;
 		}
-		auto label = !charset.empty() ? charset : content_type ? ContentCharset(content) : "";
-		auto encoding = HTMLEncodingForLabel(label);
-		if (!encoding.empty()) {
-			return encoding;
+		if (pos + 1 < lower.size() && (lower[pos + 1] == '!' || lower[pos + 1] == '/' || lower[pos + 1] == '?')) {
+			auto end = lower.find('>', pos + 1);
+			if (end == std::string::npos) {
+				return "";
+			}
+			pos = end + 1;
+			continue;
 		}
-		pos = i;
+		pos++;
 	}
 	return "";
 }

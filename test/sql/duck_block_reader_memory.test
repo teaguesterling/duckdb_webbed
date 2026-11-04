@@ -57,3 +57,12 @@ query I
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/small_blocks.html');
 ----
 5000
+
+# One paragraph of many short inline elements streams its inlines into the buffer as the walk reaches them
+statement ok
+COPY (SELECT '<p>' || string_agg('<b>' || i || '</b>', '' ORDER BY i) || '</p>' FROM range(100000) t(i)) TO '{TEST_DIR}/many_inlines.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query III
+SELECT count(*), count(*) FILTER (WHERE kind = 'inline'), count(*) FILTER (WHERE kind = 'inline' AND content != (element_order - 1)::VARCHAR) FROM read_html_blocks('{TEST_DIR}/many_inlines.html');
+----
+100001	100000	0

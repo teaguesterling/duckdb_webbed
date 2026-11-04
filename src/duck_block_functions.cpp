@@ -39,7 +39,9 @@ static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 
 static std::string TableToJson(xmlNodePtr node);
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "");
+// `sections` wraps the header row in <thead> and the rows in <tbody>. Without them a table nests one level shallower,
+// and a reader still takes a first row of <th> cells as the header row.
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true);
 static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
@@ -710,31 +712,29 @@ static void CopySourceAttributes(xmlNodePtr node, OrderedAttrs &attrs, const Cap
 // Forward declaration: ExtractInlineElementsRange recurses into a parent's
 // full child list (e.g. a nested formatting wrapper) via this convenience
 // form, defined just after it below.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
-                                                const CaptureSpec &spec);
+static void ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
+                                  const CaptureSpec &spec, DuckBlockSink &sink);
 
 // Extract inline elements from an explicit sibling range [start, stop) as
 // structured kind='inline' duck_blocks. Nested formatting (e.g. <b>x
 // <i>y</i></b>) is preserved: a wrapper containing further elements is
 // emitted with empty content (=> NULL) followed by its children at
 // level+1; a wrapper containing only text becomes a leaf carrying that
-// text. Returns the inline Values and advances element_order.
+// text. Appends each inline to `sink` as it is produced and advances
+// element_order.
 //
 // Range-based rather than "all children of a parent" so WalkBlockNode can
 // hand it a run of loose inline nodes (text plus inline elements) that sit
 // among block siblings, not gathered under a dedicated inline parent.
-static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level,
-                                                     int32_t &element_order, const CaptureSpec &spec) {
-	std::vector<Value> inlines;
-
+static void ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_t base_level, int32_t &element_order,
+                                       const CaptureSpec &spec, DuckBlockSink &sink) {
 	for (xmlNodePtr child = start; child && child != stop; child = child->next) {
 		if (child->type == XML_TEXT_NODE) {
 			std::string text = reinterpret_cast<const char *>(child->content);
 			if (!text.empty()) {
 				OrderedAttrs attrs;
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, text,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				sink.Append(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, text, Value::INTEGER(base_level),
+				                                         DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			}
 			continue;
 		}
@@ -765,15 +765,13 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 				PutAttr(attrs, "alt", alt);
 			if (!title.empty())
 				PutAttr(attrs, "title", title);
-			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt,
-			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
-			                                               attrs, element_order++));
+			sink.Append(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_IMAGE, alt, Value::INTEGER(base_level),
+			                                         DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			continue;
 		}
 		if (tag == "br") {
-			inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_LINEBREAK, "",
-			                                               Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
-			                                               attrs, element_order++));
+			sink.Append(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_LINEBREAK, "", Value::INTEGER(base_level),
+			                                         DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			continue;
 		}
 
@@ -794,15 +792,13 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 			// (span's id/class copy lived here; CopySourceAttributes above covers it)
 			if (HasElementChildren(child)) {
 				// Container: empty content, then recurse children one level deeper.
-				inlines.push_back(DuckBlockTypes::CreateInline(etype, "", Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
-				auto nested = ExtractInlineElements(child, base_level + 1, element_order, spec);
-				inlines.insert(inlines.end(), nested.begin(), nested.end());
+				sink.Append(DuckBlockTypes::CreateInline(etype, "", Value::INTEGER(base_level),
+				                                         DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				ExtractInlineElements(child, base_level + 1, element_order, spec, sink);
 			} else {
 				// Leaf: carries its text content.
-				inlines.push_back(DuckBlockTypes::CreateInline(etype, GetNodeTextContent(child),
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				sink.Append(DuckBlockTypes::CreateInline(etype, GetNodeTextContent(child), Value::INTEGER(base_level),
+				                                         DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
 			}
 			continue;
 		}
@@ -810,26 +806,24 @@ static std::vector<Value> ExtractInlineElementsRange(xmlNodePtr start, xmlNodePt
 		// Unknown inline element without attributes: preserve any nested formatting by
 		// recursing at the same level (the unknown wrapper is dropped); text-only becomes text.
 		if (HasElementChildren(child)) {
-			auto nested = ExtractInlineElements(child, base_level, element_order, spec);
-			inlines.insert(inlines.end(), nested.begin(), nested.end());
+			ExtractInlineElements(child, base_level, element_order, spec, sink);
 		} else {
 			std::string content = GetNodeTextContent(child);
 			if (!content.empty()) {
-				inlines.push_back(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content,
-				                                               Value::INTEGER(base_level),
-				                                               DuckBlockTypes::ENCODING_TEXT, attrs, element_order++));
+				sink.Append(DuckBlockTypes::CreateInline(DuckBlockTypes::INLINE_TEXT, content,
+				                                         Value::INTEGER(base_level), DuckBlockTypes::ENCODING_TEXT,
+				                                         attrs, element_order++));
 			}
 		}
 	}
-	return inlines;
 }
 
 // Convenience form of ExtractInlineElementsRange over ALL of a parent's
 // children -- the common case; WalkBlockNode is the only caller that needs
 // the explicit-range form above.
-static std::vector<Value> ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
-                                                const CaptureSpec &spec) {
-	return ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order, spec);
+static void ExtractInlineElements(xmlNodePtr parent_node, int32_t base_level, int32_t &element_order,
+                                  const CaptureSpec &spec, DuckBlockSink &sink) {
+	ExtractInlineElementsRange(parent_node->children, nullptr, base_level, element_order, spec, sink);
 }
 
 // True when `node` is the start of a loose-inline run inside a container's
@@ -947,8 +941,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PLAIN, "", Value::INTEGER(level),
 				                                          DuckBlockTypes::ENCODING_TEXT, OrderedAttrs(), order++));
-				auto inlines = ExtractInlineElementsRange(child, run_end, level + 1, order, spec);
-				blocks.AppendAll(inlines);
+				ExtractInlineElementsRange(child, run_end, level + 1, order, spec, blocks);
 			}
 			if (!run_end) {
 				break;
@@ -978,8 +971,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
 				                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
-				blocks.AppendAll(inlines);
+				ExtractInlineElements(child, level + 1, order, spec, blocks);
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, GetNodeTextContent(child),
 				                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
@@ -993,8 +985,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, "", Value::INTEGER(level),
 				                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
-				auto inlines = ExtractInlineElements(child, level + 1, order, spec);
-				blocks.AppendAll(inlines);
+				ExtractInlineElements(child, level + 1, order, spec, blocks);
 			} else {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_PARAGRAPH, GetNodeTextContent(child),
 				                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
@@ -1005,16 +996,20 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 
 		// --- Code --------------------------------------------------------
 		if (tag == "pre") {
+			// The language is on a <code> child's class, or on the <pre>'s when it has none, as the writer emits
+			// at the depth limit.
+			xmlNodePtr lang_node = child;
 			for (xmlNodePtr c = child->children; c; c = c->next) {
 				if (c->type == XML_ELEMENT_NODE && xmlStrcmp(c->name, BAD_CAST "code") == 0) {
-					std::string cls = GetNodeAttribute(c, "class");
-					std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
-					std::smatch match;
-					if (std::regex_search(cls, match, lang_regex)) {
-						attrs.emplace_back("language", match[1].str());
-					}
+					lang_node = c;
 					break;
 				}
+			}
+			std::string cls = GetNodeAttribute(lang_node, "class");
+			std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
+			std::smatch match;
+			if (std::regex_search(cls, match, lang_regex)) {
+				attrs.emplace_back("language", match[1].str());
 			}
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_CODE, GetNodeTextContent(child),
 			                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,
@@ -1239,8 +1234,7 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 	} else if (HasElementChildren(node)) {
 		blocks.Append(DuckBlockTypes::CreateBlock(block_type, "", Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT,
 		                                          attrs, order++));
-		auto inlines = ExtractInlineElements(node, level + 1, order, spec);
-		blocks.AppendAll(inlines);
+		ExtractInlineElements(node, level + 1, order, spec, blocks);
 	} else {
 		blocks.Append(DuckBlockTypes::CreateBlock(block_type, GetNodeTextContent(node), Value::INTEGER(level),
 		                                          DuckBlockTypes::ENCODING_TEXT, attrs, order++));
@@ -1682,10 +1676,22 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 			} else if (element_type == DuckBlockTypes::TYPE_CODE) {
 				std::string lang_class = "";
 				if (attrs.count("language")) {
-					lang_class = " class=\"language-" + XMLUtils::HTMLEscape(attrs["language"]) + "\"";
+					lang_class = "language-" + attrs["language"];
 				}
-				html << "<pre" << PassthroughAttrs(attrs) << "><code" << lang_class << ">"
-				     << XMLUtils::HTMLEscape(content) << "</code></pre>";
+				if (cur_level < MAX_DUCK_BLOCK_CONTAINER_LEVEL) {
+					html << "<pre" << PassthroughAttrs(attrs) << "><code"
+					     << (lang_class.empty() ? "" : " class=\"" + XMLUtils::HTMLEscape(lang_class) + "\"") << ">"
+					     << XMLUtils::HTMLEscape(content) << "</code></pre>";
+				} else {
+					// A <code> here would nest past the parser's depth limit. The <pre> carries the language instead.
+					std::string pre_class = lang_class;
+					if (attrs.count("class") && !attrs["class"].empty()) {
+						pre_class += (pre_class.empty() ? "" : " ") + attrs["class"];
+					}
+					html << "<pre" << PassthroughAttrs(attrs, {"class"})
+					     << (pre_class.empty() ? "" : " class=\"" + XMLUtils::HTMLEscape(pre_class) + "\"") << ">"
+					     << XMLUtils::HTMLEscape(content) << "</pre>";
+				}
 			} else if (element_type == DuckBlockTypes::TYPE_BLOCKQUOTE) {
 				html << "<blockquote" << PassthroughAttrs(attrs) << ">";
 				if (!content.empty()) {
@@ -1788,7 +1794,10 @@ void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionSta
 				open_containers.push_back({"</" + item_tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
-					html << TableJsonToHtml(content, PassthroughAttrs(attrs));
+					// table > tbody > tr > td is three levels below the table. At the depth limit the table drops the
+					// optional sections, which a source table without them needs no room for.
+					html << TableJsonToHtml(content, PassthroughAttrs(attrs),
+					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL);
 				} else {
 					html << "<table" << PassthroughAttrs(attrs) << "></table>";
 				}
@@ -2956,7 +2965,7 @@ static std::string PandocTableToHtml(const std::string &json, const std::string 
 	return html.str();
 }
 
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs) {
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs, bool sections) {
 	size_t first_char = json.find_first_not_of(" \t\n\r");
 	if (first_char != std::string::npos && json[first_char] == '[') {
 		return PandocTableToHtml(json, open_attrs);
@@ -2978,7 +2987,7 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 
 	yyjson_val *headers_val = yyjson_obj_get(root, "headers");
 	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {
-		html << "<thead><tr>";
+		html << (sections ? "<thead><tr>" : "<tr>");
 		size_t idx, max;
 		yyjson_val *h;
 		yyjson_arr_foreach(headers_val, idx, max, h) {
@@ -2986,12 +2995,14 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 				html << "<th>" << XMLUtils::HTMLEscape(std::string(yyjson_get_str(h), yyjson_get_len(h))) << "</th>";
 			}
 		}
-		html << "</tr></thead>";
+		html << (sections ? "</tr></thead>" : "</tr>");
 	}
 
 	yyjson_val *rows_val = yyjson_obj_get(root, "rows");
 	if (rows_val && yyjson_is_arr(rows_val)) {
-		html << "<tbody>";
+		if (sections) {
+			html << "<tbody>";
+		}
 		size_t r_idx, r_max;
 		yyjson_val *row;
 		yyjson_arr_foreach(rows_val, r_idx, r_max, row) {
@@ -3008,7 +3019,9 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 				html << "</tr>";
 			}
 		}
-		html << "</tbody>";
+		if (sections) {
+			html << "</tbody>";
+		}
 	}
 
 	yyjson_val *footers_val = yyjson_obj_get(root, "footers");

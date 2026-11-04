@@ -122,6 +122,28 @@ SELECT * FROM read_html('test/html/encoding/github_issue_217_iso8859_6_invalid_b
 ----
 HTML document has bytes that aren't valid iso-8859-6
 
+# A file that declares UTF-8 by <meta> or BOM and holds a byte that isn't UTF-8 raises instead of reading U+FFFD
+statement error
+SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html');
+----
+HTML document has bytes that aren't valid UTF-8
+
+statement error
+SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom_invalid_byte.html');
+----
+HTML document has bytes that aren't valid UTF-8
+
+statement error
+SELECT * FROM read_html('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html');
+----
+HTML document has bytes that aren't valid UTF-8
+
+# A <meta> inside another tag's quoted attribute value declares nothing
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_meta_in_quoted_attribute.html') WHERE element_type = 'paragraph';
+----
+café
+
 # Undeclared valid UTF-8 (GitHub #53) still reads as UTF-8
 query I
 SELECT count(*) > 0 FROM read_html_blocks('test/html/github_issue_53_utf8.html') WHERE content LIKE '%è%';
@@ -183,6 +205,27 @@ WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 254) || 'deep' || r
 SELECT list_max([x.level FOR x IN blocks]), ([x.level FOR x IN blocks] = [y.level FOR y IN html_to_duck_blocks(duck_blocks_to_html(blocks))])::INTEGER, len(blocks) FROM b;
 ----
 254	1	254
+
+# A code block at the deepest level renders without its <code> wrapper, which would nest past the limit, and keeps
+# its language on the <pre>
+query II
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 253) || '<pre class="language-sql">x</pre>' || repeat('</blockquote>', 253)) AS blocks),
+r AS (SELECT blocks, html_to_duck_blocks(duck_blocks_to_html(blocks)) AS again FROM b)
+SELECT ([(x.element_type, x.level, x.content, x.attributes) FOR x IN blocks] = [(y.element_type, y.level, y.content, y.attributes) FOR y IN again])::INTEGER, [x.attributes['language'] FOR x IN again IF x.element_type = 'code'] FROM r;
+----
+1	[sql]
+
+query I
+SELECT len(html_to_duck_blocks(duck_blocks_to_html(html_to_duck_blocks(repeat('<blockquote>', 253) || '<pre>x</pre>' || repeat('</blockquote>', 253)))));
+----
+254
+
+# A table whose cells sit at the limit renders without <thead> and <tbody>, and its header row still reads back
+query I
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 251) || '<table><tr><th>h</th></tr><tr><td>d</td></tr></table>' || repeat('</blockquote>', 251)) AS blocks)
+SELECT [x.content FOR x IN html_to_duck_blocks(duck_blocks_to_html(blocks)) IF x.element_type = 'table'] FROM b;
+----
+['{"headers":["h"],"rows":[["d"]]}']
 
 # A container one level deeper than the reader can emit raises an error instead of rendering flat
 statement error

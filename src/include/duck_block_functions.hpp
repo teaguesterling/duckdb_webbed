@@ -7,7 +7,9 @@
 namespace duckdb {
 
 // The deepest duck_block container level read_html_blocks can emit. <html> and <body> take two of libxml2's levels,
-// and a body child is level 1. duck_blocks_to_html refuses a deeper container, so a reader's output round trips.
+// and a body child is level 1. duck_blocks_to_html refuses a deeper container, so a reader's output round trips. A
+// block it renders with optional wrappers, <code> in <pre> and a table's <thead> and <tbody>, drops them near this
+// level.
 static constexpr int32_t MAX_DUCK_BLOCK_CONTAINER_LEVEL = LIBXML_MAX_TREE_DEPTH - 2;
 
 struct CaptureSpec; // defined in duck_block_functions.cpp; see capture_attributes
@@ -19,11 +21,6 @@ public:
 	virtual ~DuckBlockSink() = default;
 	// `block` is a duck_block STRUCT of the seven canonical fields.
 	virtual void Append(Value block) = 0;
-	void AppendAll(std::vector<Value> &blocks) {
-		for (auto &block : blocks) {
-			Append(std::move(block));
-		}
-	}
 };
 
 // Collects blocks into a vector, for html_to_duck_blocks's LIST result.

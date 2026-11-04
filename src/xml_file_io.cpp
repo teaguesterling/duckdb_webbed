@@ -118,22 +118,6 @@ bool ParsesFromHandle(FileHandle &handle) {
 	return handle.CanSeek() && handle.GetFileSize() > (idx_t(16) << 20);
 }
 
-struct FileHandleReader {
-	FileHandle &handle;
-	std::exception_ptr error;
-};
-
-// libxml2 calls this from C frames, so a read error is held and rethrown once the parse returns.
-static int FileHandleReaderRead(void *context, char *buffer, int len) {
-	auto &reader = *static_cast<FileHandleReader *>(context);
-	try {
-		return NumericCast<int>(reader.handle.Read(buffer, UnsafeNumericCast<idx_t>(len)));
-	} catch (...) {
-		reader.error = std::current_exception();
-		return -1;
-	}
-}
-
 // Length of the UTF-8 sequence a lead byte starts, or 0 for a continuation byte.
 static idx_t Utf8SequenceLength(unsigned char lead) {
 	if (lead < 0x80) {
@@ -161,34 +145,67 @@ static idx_t ReadUpTo(FileHandle &handle, char *buffer, idx_t size) {
 	return filled;
 }
 
-// Whether the rest of the handle, after `carry` bytes already in `buffer`, is valid UTF-8. Reads until the first
-// invalid sequence.
-static bool RestIsValidUtf8(FileHandle &handle, std::string &buffer, idx_t carry) {
-	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
-	while (true) {
-		buffer.resize(carry + CHUNK_SIZE);
-		idx_t got = ReadUpTo(handle, &buffer[carry], CHUNK_SIZE);
-		idx_t filled = carry + got;
-		if (got == 0) {
-			return filled == 0 || Utf8Proc::Analyze(buffer.data(), filled) != UnicodeType::INVALID;
+// Validates UTF-8 fed in chunks. A sequence a chunk cuts off is held back and checked once the next chunk completes it.
+class Utf8StreamValidator {
+public:
+	bool Feed(const char *data, idx_t size) {
+		idx_t offset = 0;
+		if (!pending.empty()) {
+			idx_t need = Utf8SequenceLength(static_cast<unsigned char>(pending[0])) - pending.size();
+			idx_t take = MinValue(need, size);
+			pending.append(data, take);
+			offset = take;
+			if (take < need) {
+				return true;
+			}
+			if (Utf8Proc::Analyze(pending.data(), pending.size()) == UnicodeType::INVALID) {
+				return false;
+			}
+			pending.clear();
 		}
-		// Hold back a sequence the chunk cuts off. The next chunk checks it whole.
-		idx_t cut = filled;
-		for (idx_t back = 1; back <= 3 && back <= filled; back++) {
-			auto len = Utf8SequenceLength(static_cast<unsigned char>(buffer[filled - back]));
+		idx_t cut = size;
+		for (idx_t back = 1; back <= 3 && back <= size - offset; back++) {
+			auto len = Utf8SequenceLength(static_cast<unsigned char>(data[size - back]));
 			if (len == 0) {
 				continue;
 			}
 			if (len > back) {
-				cut = filled - back;
+				cut = size - back;
 			}
 			break;
 		}
-		if (Utf8Proc::Analyze(buffer.data(), cut) == UnicodeType::INVALID) {
+		if (Utf8Proc::Analyze(data + offset, cut - offset) == UnicodeType::INVALID) {
 			return false;
 		}
-		carry = filled - cut;
-		buffer.erase(0, cut);
+		pending.assign(data + cut, size - cut);
+		return true;
+	}
+	// Whether the input ended on a whole sequence.
+	bool Finish() const {
+		return pending.empty();
+	}
+
+private:
+	std::string pending;
+};
+
+// Whether the rest of the handle, after `carry` bytes already in `buffer`, is valid UTF-8. Reads until the first
+// invalid sequence.
+static bool RestIsValidUtf8(FileHandle &handle, std::string &buffer, idx_t carry) {
+	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
+	Utf8StreamValidator validator;
+	if (!validator.Feed(buffer.data(), carry)) {
+		return false;
+	}
+	buffer.resize(CHUNK_SIZE);
+	while (true) {
+		idx_t got = ReadUpTo(handle, &buffer[0], CHUNK_SIZE);
+		if (got == 0) {
+			return validator.Finish();
+		}
+		if (!validator.Feed(buffer.data(), got)) {
+			return false;
+		}
 	}
 }
 
@@ -207,9 +224,39 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle) {
 	return encoding;
 }
 
+struct FileHandleReader {
+	FileHandle &handle;
+	std::exception_ptr error;
+	// Set when the bytes are UTF-8, which libxml2 doesn't validate.
+	unique_ptr<Utf8StreamValidator> utf8;
+};
+
+// libxml2 calls this from C frames, so a read error is held and rethrown once the parse returns.
+static int FileHandleReaderRead(void *context, char *buffer, int len) {
+	auto &reader = *static_cast<FileHandleReader *>(context);
+	try {
+		auto got = reader.handle.Read(buffer, UnsafeNumericCast<idx_t>(len));
+		if (reader.utf8 && got >= 0) {
+			bool valid = got == 0 ? reader.utf8->Finish() : reader.utf8->Feed(buffer, UnsafeNumericCast<idx_t>(got));
+			if (!valid) {
+				throw XMLUtils::InvalidHTMLBytes("UTF-8");
+			}
+		}
+		return NumericCast<int>(got);
+	} catch (...) {
+		reader.error = std::current_exception();
+		return -1;
+	}
+}
+
+// A validator for HTML read as UTF-8. XML input is left to libxml2's own UTF-8 checks.
+static unique_ptr<Utf8StreamValidator> HTMLUtf8Validator(bool is_html, const std::string &encoding) {
+	return is_html && encoding == "UTF-8" ? make_uniq<Utf8StreamValidator>() : nullptr;
+}
+
 XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
 	std::string html_encoding = is_html ? DetectHTMLHandleEncoding(handle) : "UTF-8";
-	FileHandleReader reader {handle, nullptr};
+	FileHandleReader reader {handle, nullptr, HTMLUtf8Validator(is_html, html_encoding)};
 	XMLDocRAII doc(FileHandleReaderRead, &reader, is_html, html_encoding);
 	if (reader.error) {
 		std::rethrow_exception(reader.error);
@@ -219,7 +266,7 @@ XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
 
 XMLDocPtr ParseHTMLFile(FileHandle &handle) {
 	std::string encoding = DetectHTMLHandleEncoding(handle);
-	FileHandleReader reader {handle, nullptr};
+	FileHandleReader reader {handle, nullptr, HTMLUtf8Validator(true, encoding)};
 	auto doc = XMLUtils::ParseHTMLDocument(FileHandleReaderRead, &reader, encoding);
 	if (reader.error) {
 		std::rethrow_exception(reader.error);
