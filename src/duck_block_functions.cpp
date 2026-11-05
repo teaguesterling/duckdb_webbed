@@ -25,7 +25,6 @@
 #include <libxml/HTMLparser.h>
 #include <libxml/xpath.h>
 #include <sstream>
-#include <regex>
 #include <set>
 #include <mutex>
 
@@ -172,6 +171,31 @@ static std::string EscapeScriptData(const std::string &content) {
 		}
 	}
 	return out;
+}
+
+// The language in a code element's class: the leftmost "language-" or "lang-" followed by at least one name character.
+// A scan, because std::regex recurses per character and a long class in untrusted HTML overflowed the stack.
+static std::string LanguageFromClass(const std::string &cls) {
+	auto is_name_char = [](char c) {
+		return StringUtil::CharacterIsAlphaNumeric(c) || c == '_' || c == '+' || c == '-';
+	};
+	for (size_t i = 0; i < cls.size(); i++) {
+		for (const char *prefix : {"language-", "lang-"}) {
+			size_t prefix_len = strlen(prefix);
+			if (cls.compare(i, prefix_len, prefix) != 0) {
+				continue;
+			}
+			size_t start = i + prefix_len;
+			size_t end = start;
+			while (end < cls.size() && is_name_char(cls[end])) {
+				end++;
+			}
+			if (end > start) {
+				return cls.substr(start, end - start);
+			}
+		}
+	}
+	return std::string();
 }
 
 static std::string RenderInlineElementToHtml(const std::string &element_type, const std::string &content,
@@ -1005,11 +1029,9 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 					break;
 				}
 			}
-			std::string cls = GetNodeAttribute(lang_node, "class");
-			std::regex lang_regex("(?:language-|lang-)([a-zA-Z0-9_+-]+)");
-			std::smatch match;
-			if (std::regex_search(cls, match, lang_regex)) {
-				attrs.emplace_back("language", match[1].str());
+			std::string language = LanguageFromClass(GetNodeAttribute(lang_node, "class"));
+			if (!language.empty()) {
+				attrs.emplace_back("language", language);
 			}
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_CODE, GetNodeTextContent(child),
 			                                          Value::INTEGER(level), DuckBlockTypes::ENCODING_TEXT, attrs,

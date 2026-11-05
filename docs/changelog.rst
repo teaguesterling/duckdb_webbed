@@ -27,8 +27,17 @@ Fixes from the duck_block review in #217.
 - ``ignore_errors`` on ``read_html_blocks`` skips document errors only, and
   ``parse_html_blocks`` now honors it.
 
-v2.14.0 (Current)
+v2.14.1 (Current)
 -----------------
+
+**Security: a long class on** ``<pre><code>`` **crashed DuckDB.** ``html_to_duck_blocks``,
+``read_html_blocks`` and ``parse_html_blocks`` matched the ``language-`` class with
+``std::regex``, which recurses per character. A class of about 64 KB in untrusted HTML overflowed
+the stack and took the process down with SIGSEGV. A linear scan now reads the class, with the
+same results. Claude (Opus) found this in review of #220.
+
+v2.14.0
+-------
 
 Faster XML reads and compressed input, contributed by **@bendrucker** (#212), with
 follow-up hardening of streaming memory and the duck_block writer (#215, #216).

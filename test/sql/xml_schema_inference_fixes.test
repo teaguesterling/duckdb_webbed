@@ -5,15 +5,16 @@
 require webbed
 
 # -----------------------------------------------------------------------------
-# Integer widening: values that do not fit INT32 must infer BIGINT, and values
-# beyond INT64 must infer DOUBLE
+# Integer widening: values that do not fit INT32 must infer BIGINT. A value
+# beyond INT64 stays VARCHAR, because DOUBLE would read 99999999999999999999
+# back as 1e+20.
 # -----------------------------------------------------------------------------
 
 query IIIII
 SELECT typeof(small), typeof(big), typeof(mixed), typeof(neg), typeof(huge)
 FROM read_xml('test/xml/schema_inference/bigint_widening.xml') LIMIT 1;
 ----
-INTEGER	BIGINT	BIGINT	BIGINT	DOUBLE
+INTEGER	BIGINT	BIGINT	BIGINT	VARCHAR
 
 query III
 SELECT small, big, mixed FROM read_xml('test/xml/schema_inference/bigint_widening.xml') ORDER BY small;
