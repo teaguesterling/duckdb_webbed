@@ -180,6 +180,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 		double confidence = static_cast<double>(col_analysis.occurrence_count) / record_elements.size();
 		XMLColumnInfo col_info(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
 		col_info.winning_datetime_format = winning_fmt;
+		if (col_type.id() == LogicalTypeId::BIGINT) {
+			col_info.integers_fit_double = SampledIntegersFitDouble(col_analysis, options);
+		}
 		columns.push_back(std::move(col_info));
 	}
 
@@ -484,6 +487,26 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 		}
 	}
 	return names;
+}
+
+bool XMLSchemaInference::SampledIntegersFitDouble(const ColumnAnalysis &column, const XMLSchemaOptions &options) {
+	constexpr int64_t max_exact = int64_t(1) << 53;
+	size_t sampled = 0;
+	for (xmlNodePtr node : column.instances) {
+		if (sampled >= XmlSampleLimit(options)) {
+			break;
+		}
+		std::string text = CleanNodeText(node, options.preserve_whitespace);
+		if (text.empty() || IsNullString(text, options)) {
+			continue;
+		}
+		sampled++;
+		int64_t value;
+		if (!TryCast::Operation(string_t(text), value, true) || value > max_exact || value < -max_exact) {
+			return false;
+		}
+	}
+	return true;
 }
 
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,

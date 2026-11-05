@@ -194,7 +194,8 @@ Element text is trimmed before typing, for VARCHAR columns too, so ``<v> 5 </v>`
 A column of integers and decimals still types DOUBLE, so ``1`` and ``2.5`` read as ``1.0`` and
 ``2.5``. The integer is exact in the double, so ``CAST(v AS BIGINT)`` recovers ``1``. An integer
 the double cannot hold exactly, such as ``9007199254740993`` next to ``2.5``, keeps the column
-VARCHAR.
+VARCHAR. Under ``union_by_name`` the same holds across files: an integer file beside a decimal
+file is DOUBLE when every sampled integer is exact in a double, and VARCHAR otherwise.
 
 The same rule applies to values outside the sample. A value such as ``007`` that reaches an
 inferred INTEGER column gets the "does not match column type" error, or NULL under

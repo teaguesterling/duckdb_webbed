@@ -94,6 +94,7 @@ struct XMLColumnInfo {
 	double confidence;                      // Schema inference confidence (0.0-1.0)
 	std::vector<std::string> sample_values; // Sample values used for type detection
 	std::string winning_datetime_format;    // Format string that won during inference (empty = no format)
+	bool integers_fit_double = true;        // Every sampled integer is exact in a DOUBLE (under 2^53)
 
 	XMLColumnInfo(const std::string &name, LogicalType type, bool is_attribute = false, const std::string &xpath = "",
 	              double confidence = 1.0)
@@ -299,6 +300,7 @@ private:
 	// Returns columns in first-seen document order so the inferred column order is deterministic.
 	static std::vector<ColumnAnalysis> IdentifyColumns(const std::vector<xmlNodePtr> &record_elements,
 	                                                   const XMLSchemaOptions &options);
+	static bool SampledIntegersFitDouble(const ColumnAnalysis &column, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
 	                                   const XMLSchemaOptions &options, std::string &winning_datetime_format);
 

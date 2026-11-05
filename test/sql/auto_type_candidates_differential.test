@@ -22,8 +22,6 @@ CREATE TABLE atcd_classes AS SELECT * FROM (VALUES
 
 # A disagreement is acceptable only where docs/parameters.rst documents it:
 # - zoneless text stays VARCHAR where read_csv reads TIMESTAMPTZ in the session time zone.
-# - a union of a BIGINT file and a DOUBLE file is VARCHAR, because the merge cannot see whether
-#   the integers fit a DOUBLE exactly. One file with the same rows is DOUBLE.
 # - dates beside timestamps read as TIMESTAMP, in one file or a union. read_csv reads them as
 #   TIMESTAMP, or as VARCHAR when DATE is a candidate.
 statement ok
@@ -33,7 +31,6 @@ CREATE MACRO atcd_agrees(xt, xv, ot, ov) AS
 statement ok
 CREATE MACRO atcd_union_agrees(ut, uv, jt, jv, ct, cv) AS
     (ut = jt AND uv = jv AND atcd_agrees(ut, uv, ct, cv))
-    OR (ut = 'VARCHAR' AND jt = 'DOUBLE' AND ct = 'DOUBLE')
     OR (ut = 'VARCHAR' AND jt = 'VARCHAR' AND ct = 'TIMESTAMP WITH TIME ZONE')
     OR (ut = 'TIMESTAMP' AND jt = 'TIMESTAMP' AND uv = jv AND ct = 'VARCHAR');
 

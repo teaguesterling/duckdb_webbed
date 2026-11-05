@@ -250,11 +250,34 @@ SELECT DISTINCT typeof(v) FROM read_html(['__TEST_DIR__/atc_ints.xml', '__TEST_D
 ----
 VARCHAR
 
-# Excluding INTEGER makes every integer file BIGINT, and a BIGINT file beside a
-# DOUBLE file merges to VARCHAR: the merge cannot see whether the integers fit a
-# DOUBLE exactly. One file with both is DOUBLE.
+# Excluding INTEGER makes every integer file BIGINT. A BIGINT file beside a DOUBLE
+# file merges to DOUBLE when its sampled integers fit a DOUBLE exactly, as one file
+# with both does.
 query I
 SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                        union_by_name := true, auto_type_candidates := ['BIGINT', 'DOUBLE']);
+----
+DOUBLE
+
+statement ok
+COPY (SELECT '<r><i><v>9007199254740993</v></i><i><v>1</v></i></r>' AS c) TO '__TEST_DIR__/atc_huge.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+# Past 2^53 a DOUBLE would round, so the union stays VARCHAR, in either file order.
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_huge.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                        union_by_name := true, auto_type_candidates := ['BIGINT', 'DOUBLE']);
+----
+VARCHAR
+
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_decimals.xml', '__TEST_DIR__/atc_huge.xml'],
+                                        union_by_name := true, auto_type_candidates := ['BIGINT', 'DOUBLE']);
+----
+VARCHAR
+
+# The rounding risk carries through a third file: huge + small ints + decimals stays VARCHAR.
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_huge.xml', '__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
                                         union_by_name := true, auto_type_candidates := ['BIGINT', 'DOUBLE']);
 ----
 VARCHAR

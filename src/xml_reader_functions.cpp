@@ -266,17 +266,31 @@ static bool IsUnknownElementType(const LogicalType &type) {
 static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
                                  std::unordered_map<std::string, LogicalType> &union_schema,
                                  std::unordered_map<std::string, std::string> &union_formats,
+                                 std::unordered_map<std::string, bool> &union_fits_double,
                                  std::vector<std::string> &column_order, const XMLSchemaOptions &options) {
 	for (const auto &col_info : inferred_columns) {
 		auto it = union_schema.find(col_info.name);
 		if (it == union_schema.end()) {
 			union_schema[col_info.name] = col_info.type;
 			union_formats[col_info.name] = col_info.winning_datetime_format;
+			union_fits_double[col_info.name] = col_info.integers_fit_double;
 			column_order.push_back(col_info.name);
 			continue;
 		}
+		auto &fits_double = union_fits_double[col_info.name];
+		// MergeXMLColumnType keeps BIGINT beside DOUBLE VARCHAR, since it cannot see the values. These
+		// files' samples all fit a DOUBLE exactly, as within one file.
+		auto is_bigint_and_double = [](const LogicalType &x, const LogicalType &y) {
+			return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
+		};
+		bool widen_to_double =
+		    fits_double && col_info.integers_fit_double &&
+		    (is_bigint_and_double(it->second, col_info.type) || is_bigint_and_double(col_info.type, it->second));
+		fits_double = fits_double && col_info.integers_fit_double;
 		auto merged = XMLSchemaInference::RestrictToAutoTypeCandidates(
-		    XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, options.text_key), options);
+		    widen_to_double ? LogicalType::DOUBLE
+		                    : XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, options.text_key),
+		    options);
 		if (merged != it->second) {
 			if (IsUnknownElementType(it->second)) {
 				union_formats[col_info.name] = col_info.winning_datetime_format;
@@ -879,7 +893,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order;                      // Track order of first appearance
+			std::unordered_map<std::string, bool> union_fits_double;
+			std::vector<std::string> column_order; // Track order of first appearance
 
 			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, mode);
 			for (auto &file_result : file_results) {
@@ -891,7 +906,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					result->inferred_schema = file_result.columns;
 					XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 				}
-				MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order, schema_options);
+				MergeInferredColumns(file_result.columns, union_schema, union_formats, union_fits_double, column_order,
+				                     schema_options);
 			}
 
 			// Convert union schema to return types
@@ -1778,13 +1794,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order;                      // Track order of first appearance
+			std::unordered_map<std::string, bool> union_fits_double;
+			std::vector<std::string> column_order; // Track order of first appearance
 
 			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, ParseMode::XML);
 			for (auto &file_result : file_results) {
 				if (ResolveFileInference(file_result)) {
-					MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order,
-					                     schema_options);
+					MergeInferredColumns(file_result.columns, union_schema, union_formats, union_fits_double,
+					                     column_order, schema_options);
 				}
 			}
 
