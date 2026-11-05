@@ -6,7 +6,6 @@
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "utf8proc_wrapper.hpp"
 #include "yyjson.hpp"
 #include <libxml/encoding.h>
 #include <libxml/parserInternals.h>
@@ -376,10 +375,12 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 			throw InvalidInputException("HTML document nests elements deeper than libxml2's limit of %d levels",
 			                            LIBXML_MAX_TREE_DEPTH);
 		}
+		// libxml2 refuses to grow its input buffer past XML_MAX_LOOKUP_LIMIT bytes for one token.
 		if (StringUtil::Contains(detail, "XML_PARSE_HUGE")) {
 			throw InvalidInputException(
-			    "HTML document has a text node or attribute value longer than libxml2's limit of %d bytes",
-			    XML_MAX_TEXT_LENGTH);
+			    "HTML document has a text node, attribute value, comment or tag longer than libxml2's limit of %d "
+			    "bytes",
+			    XML_MAX_LOOKUP_LIMIT);
 		}
 		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
 	}

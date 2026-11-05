@@ -238,8 +238,8 @@ file that declares nothing reads as UTF-8 when it holds a UTF-8 multibyte sequen
 ASCII, and as windows-1252 otherwise. A byte that isn't UTF-8 in a UTF-8 file reads as
 U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error.
 
-**Limits:** libxml2 parses at most 256 levels of nested elements, and a text node or
-attribute value of at most 10,000,000 bytes. A document past either raises an error naming
+**Limits:** libxml2 parses at most 256 levels of nested elements, and a text node,
+attribute value, comment or tag of at most 10,000,000 bytes. A document past either raises an error naming
 the limit, so its blocks are never silently cut short. ``read_html_blocks`` parses each file
 into memory outside DuckDB's buffer manager, from 5 times the file's size for long paragraphs
 to about 80 times for markup of empty elements. It estimates that memory from the markup as it

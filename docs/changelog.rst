@@ -17,8 +17,8 @@ Fixes from the duck_block review in #217.
   memory. Each parse estimates its document's memory from the markup as it reads and reserves
   it from ``memory_limit``, shared by the threads. A file that doesn't fit beside the others is
   read again alone, and one that doesn't fit alone raises an Out of Memory error.
-- A text node or attribute value past libxml2's 10,000,000-byte limit raises an error that
-  names the limit. It used to read as empty.
+- A text node, attribute value, comment or tag past libxml2's 10,000,000-byte limit raises an
+  error that names the limit. It used to read as empty.
 - ``read_html_blocks`` reads a named pipe. It used to return no rows.
 - The HTML walk is linear in document size. Inline ``<div>`` elements with attributes keep
   them as ``span`` inlines.

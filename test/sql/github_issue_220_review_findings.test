@@ -360,7 +360,7 @@ COPY (SELECT '<p>' || repeat('a', 12000000) || '</p>') TO '{TEST_DIR}/issue_220_
 statement error
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_220_long_text.html');
 ----
-HTML document has a text node or attribute value longer than libxml2's limit of 10000000 bytes
+HTML document has a text node, attribute value, comment or tag longer than libxml2's limit of 10000000 bytes
 
 statement ok
 COPY (SELECT '<a href="data:' || repeat('a', 12000000) || '">x</a>') TO '{TEST_DIR}/issue_220_long_attr.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
@@ -368,7 +368,7 @@ COPY (SELECT '<a href="data:' || repeat('a', 12000000) || '">x</a>') TO '{TEST_D
 statement error
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_220_long_attr.html');
 ----
-HTML document has a text node or attribute value longer than libxml2's limit of 10000000 bytes
+HTML document has a text node, attribute value, comment or tag longer than libxml2's limit of 10000000 bytes
 
 # ============================================================================
 # A void element with attributes has no content to wrap, so it emits no span
