@@ -176,7 +176,9 @@ static void ParseAutoTypeCandidatesParameter(const Value &val, ClientContext &co
 			throw BinderException("%s \"auto_type_candidates\" cannot contain NULL types", function_name);
 		}
 		auto type = TransformStringToLogicalType(StringValue::Get(child), context);
-		switch (type.id()) {
+		// JSON and XML are VARCHAR under an alias. Inference never produces them.
+		auto id = type.HasAlias() ? LogicalTypeId::INVALID : type.id();
+		switch (id) {
 		case LogicalTypeId::VARCHAR:
 		case LogicalTypeId::BOOLEAN:
 		case LogicalTypeId::INTEGER:
@@ -282,11 +284,13 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 				union_formats[col_info.name] = "";
 			}
 			it->second = merged;
+		} else if (!IsUnknownElementType(col_info.type) &&
+		           union_formats[col_info.name] != col_info.winning_datetime_format) {
+			// Files can agree on a type through different formats: `%Y-%m-%d` widened to TIMESTAMP
+			// beside `%Y-%m-%d %H:%M:%S`. One file's format would misread the other's values. The
+			// column uses the default cast instead, which reads ISO forms of both.
+			union_formats[col_info.name] = "";
 		}
-		// NOTE(#38): When types match across files but datetime formats differ,
-		// the first file's format wins. This is acceptable since the format was
-		// determined by that file's samples and both files parse successfully
-		// with it (same type implies compatible format during inference).
 	}
 }
 

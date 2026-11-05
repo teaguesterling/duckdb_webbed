@@ -316,7 +316,8 @@ auto_type_candidates
 whether listed or not. A value no candidate can read stays VARCHAR.
 
 Use it when a source's text is identity-bearing. In Salesforce metadata, ``versionNumber`` and
-``apiVersion`` look like decimals, and DOUBLE would turn ``1.10`` into ``1.1``. Excluding DOUBLE
+``apiVersion`` look like decimals. Inference already keeps ``1.10`` VARCHAR, because DOUBLE would
+not reproduce its spelling, but ``58.0`` reads back exactly and becomes DOUBLE. Excluding DOUBLE
 keeps every such field VARCHAR without naming the fields:
 
 .. code-block:: sql
@@ -324,23 +325,26 @@ keeps every such field VARCHAR without naming the fields:
    SELECT * FROM read_xml('metadata/*.xml', auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE']);
 
 A value takes the narrowest allowed type that reads it. An integer becomes INTEGER, or BIGINT
-when INTEGER is excluded, or DOUBLE when both are. A date becomes TIMESTAMP at midnight when DATE is
-excluded. A ``union_by_name`` merge of per-file types
-never widens past the candidates. Nested STRUCT and LIST shapes are unchanged, and only their
-scalar leaves and attributes are restricted.
+when INTEGER is excluded, or DOUBLE when both are. An integer never becomes BOOLEAN, so ``0`` and
+``1`` stay VARCHAR under ``['BOOLEAN']``, as in ``read_csv``. A date becomes TIMESTAMP at midnight
+when DATE is excluded. A ``union_by_name`` merge of per-file types never widens past the
+candidates. Nested STRUCT and LIST shapes are unchanged, and only their scalar leaves and
+attributes are restricted.
 
 **Accepted types:** VARCHAR, BOOLEAN, INTEGER, BIGINT, DOUBLE, DATE, TIME, TIMETZ, TIMESTAMP and
 TIMESTAMPTZ, by any name DuckDB resolves to them (``'int8'`` is BIGINT). An unknown type name, an
-empty list, or a NULL element is an error, as in ``read_csv``.
+empty list, or a NULL element is an error, as in ``read_csv``. JSON and XML are VARCHAR under
+another name, and inference never produces them, so naming either is an error.
 
 **Differences from read_csv:**
 
-- ``read_csv`` also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM. Inference here
-  never produces them, so naming one is an error instead of a silent no-op.
+- ``read_csv`` also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM, and honours
+  each. Inference here never produces them, so naming one is an error.
 - ``read_csv`` widens a zoneless date or timestamp to TIMESTAMPTZ, read in the session time zone.
   Webbed reads zoneless text in a TIMESTAMPTZ column as UTC, so the two would disagree on the
   instant. Here zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, and only text carrying an
-  offset becomes TIMESTAMPTZ.
+  offset becomes TIMESTAMPTZ. A ``union_by_name`` merge of a zoneless file with a zoned one is
+  VARCHAR for the same reason, with or without this option.
 - ``read_csv`` ignores the option alongside ``columns`` or ``all_varchar``. Here either pairing is
   an error, as ``columns`` with ``all_varchar`` already is. ``all_varchar := true`` is
   ``auto_type_candidates := ['VARCHAR']``.
@@ -350,6 +354,10 @@ empty list, or a NULL element is an error, as in ``read_csv``.
 - ``datetime_format`` supplies the formats temporal detection tries. A date format yields TIMESTAMP
   when only TIMESTAMP is allowed. Any other format whose type is not a candidate is skipped, and the
   value falls through to the numeric and boolean checks.
+- ``union_by_name`` can give a date file and a timestamp file the same TIMESTAMP type. When files
+  agree on a temporal type through different formats, the column reads with DuckDB's default
+  cast, which accepts ISO dates and timestamps. Non-ISO formats that disagree across files raise
+  a conversion error.
 - ``nullstr`` matches are excluded from inference as usual.
 
 Examples

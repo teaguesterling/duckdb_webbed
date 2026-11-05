@@ -5,18 +5,26 @@
 require webbed
 
 # =============================================================================
-# The motivating case: identity-bearing text that looks like a decimal. Without
-# DOUBLE among the candidates, '1.10' keeps its exact spelling.
+# The motivating case: identity-bearing text that looks like a decimal. '58.0'
+# reads back exactly as DOUBLE, so only excluding DOUBLE keeps it VARCHAR.
 # =============================================================================
 
 query II
-SELECT typeof(versionNumber), versionNumber
-FROM parse_xml('<r><f><versionNumber>1.10</versionNumber></f><f><versionNumber>2.0</versionNumber></f></r>',
-               auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
-ORDER BY versionNumber;
+SELECT typeof(apiVersion), apiVersion
+FROM parse_xml('<r><f><apiVersion>58.0</apiVersion></f><f><apiVersion>1.5</apiVersion></f></r>')
+ORDER BY apiVersion;
 ----
-VARCHAR	1.10
-VARCHAR	2.0
+DOUBLE	1.5
+DOUBLE	58.0
+
+query II
+SELECT typeof(apiVersion), apiVersion
+FROM parse_xml('<r><f><apiVersion>58.0</apiVersion></f><f><apiVersion>1.5</apiVersion></f></r>',
+               auto_type_candidates := ['BIGINT', 'BOOLEAN', 'DATE'])
+ORDER BY apiVersion;
+----
+VARCHAR	1.5
+VARCHAR	58.0
 
 # =============================================================================
 # The scalar ladder, one case per row: the candidates, the sample text, and the
@@ -45,6 +53,10 @@ SELECT * FROM (
     FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['VARCHAR'])
     UNION ALL SELECT '[BOOLEAN]', '1', typeof(v)
     FROM parse_xml('<r><i><v>1</v></i></r>', auto_type_candidates := ['BOOLEAN'])
+    UNION ALL SELECT '[BOOLEAN]', 'true', typeof(v)
+    FROM parse_xml('<r><i><v>true</v></i></r>', auto_type_candidates := ['BOOLEAN'])
+    UNION ALL SELECT '[BOOLEAN, DOUBLE]', '1', typeof(v)
+    FROM parse_xml('<r><i><v>1</v></i></r>', auto_type_candidates := ['BOOLEAN', 'DOUBLE'])
     UNION ALL SELECT '[BIGINT]', 'true', typeof(v)
     FROM parse_xml('<r><i><v>true</v></i></r>', auto_type_candidates := ['BIGINT'])
     UNION ALL SELECT '[DATE]', '2024-01-01', typeof(v)
@@ -75,7 +87,9 @@ SELECT * FROM (
 [BIGINT]	2024-01-01	VARCHAR
 [BIGINT]	7	BIGINT
 [BIGINT]	true	VARCHAR
-[BOOLEAN]	1	BOOLEAN
+[BOOLEAN, DOUBLE]	1	DOUBLE
+[BOOLEAN]	1	VARCHAR
+[BOOLEAN]	true	BOOLEAN
 [DATE, TIMESTAMP]	2024-01-01	DATE
 [DATE]	2024-01-01	DATE
 [DATE]	2024-01-01 10:00:00	VARCHAR
@@ -122,7 +136,7 @@ SELECT p FROM parse_xml('<r><i><p><d>2024-01-01</d><e>x</e></p></i></r>', auto_t
 
 query II
 SELECT column_name, column_type FROM (DESCRIBE FROM parse_xml(
-    '<r><i ver="1.10"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
+    '<r><i ver="1.5"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
     auto_type_candidates := ['BIGINT']));
 ----
 ver	VARCHAR
@@ -131,7 +145,7 @@ l	STRUCT(x VARCHAR[])
 
 query II
 SELECT p, l FROM parse_xml(
-    '<r><i ver="1.10"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
+    '<r><i ver="1.5"><p><a>1.5</a><c>2</c></p><l><x>1.5</x><x>2.5</x></l></i></r>',
     auto_type_candidates := ['BIGINT']);
 ----
 {'a': 1.5, 'c': 2}	{'x': [1.5, 2.5]}
@@ -173,10 +187,10 @@ LIMIT 1;
 BIGINT	BIGINT	VARCHAR	BOOLEAN
 
 query II
-SELECT typeof(v), v FROM parse_html('<html><body><div><v>1.10</v></div></body></html>', record_element := 'div',
+SELECT typeof(v), v FROM parse_html('<html><body><div><v>58.0</v></div></body></html>', record_element := 'div',
                                     auto_type_candidates := ['BIGINT']);
 ----
-VARCHAR	1.10
+VARCHAR	58.0
 
 statement ok
 COPY (SELECT '<r><item><v>1</v></item><item><v>2</v></item></r>' AS c)
@@ -236,6 +250,115 @@ SELECT DISTINCT typeof(v) FROM read_html(['__TEST_DIR__/atc_ints.xml', '__TEST_D
 ----
 VARCHAR
 
+# Excluding INTEGER makes every integer file BIGINT, and a BIGINT file beside a
+# DOUBLE file merges to VARCHAR: the merge cannot see whether the integers fit a
+# DOUBLE exactly. One file with both is DOUBLE.
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_ints.xml', '__TEST_DIR__/atc_decimals.xml'],
+                                        union_by_name := true, auto_type_candidates := ['BIGINT', 'DOUBLE']);
+----
+VARCHAR
+
+# A date file and a timestamp file both infer TIMESTAMP under ['TIMESTAMP'],
+# through different formats. Neither file's format may read the other's values.
+statement ok
+COPY (SELECT '<r><i><v>2024-01-01</v></i><i><v>2024-01-02</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_dates.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<r><i><v>2024-01-01 10:00:00</v></i><i><v>2024-01-02 11:30:00</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_timestamps.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+foreach files ['__TEST_DIR__/atc_dates.xml','__TEST_DIR__/atc_timestamps.xml'] ['__TEST_DIR__/atc_timestamps.xml','__TEST_DIR__/atc_dates.xml']
+
+query II
+SELECT typeof(v), v FROM read_xml(${files}, union_by_name := true, auto_type_candidates := ['TIMESTAMP']) ORDER BY v;
+----
+TIMESTAMP	2024-01-01 00:00:00
+TIMESTAMP	2024-01-01 10:00:00
+TIMESTAMP	2024-01-02 00:00:00
+TIMESTAMP	2024-01-02 11:30:00
+
+endloop
+
+# Zoneless text never becomes TIMESTAMPTZ, including through a union with a
+# zoned file. Within one file the mix is VARCHAR, and so is the union.
+statement ok
+COPY (SELECT '<r><i><v>2024-01-01 10:00:00+02</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_zoned.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_dates.xml', '__TEST_DIR__/atc_zoned.xml'],
+                                        union_by_name := true, auto_type_candidates := ['DATE', 'TIMESTAMPTZ']);
+----
+VARCHAR
+
+query I
+SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_timestamps.xml', '__TEST_DIR__/atc_zoned.xml'],
+                                        union_by_name := true);
+----
+VARCHAR
+
+# =============================================================================
+# Values past the sample: a value the inferred type cannot read is an error, or
+# NULL under ignore_errors, never a silent NULL.
+# =============================================================================
+
+# 0 and 1 are integers, so excluding the integer types leaves them VARCHAR
+# rather than BOOLEAN, and an out-of-sample 2 keeps its spelling.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><v>1</v></i><i><v>0</v></i>', 30) || '<i><v>2</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_zero_one.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query II
+SELECT typeof(v), count(*) FROM read_xml('__TEST_DIR__/atc_zero_one.xml', sample_size := 50,
+                                         auto_type_candidates := ['BOOLEAN']) GROUP BY ALL;
+----
+VARCHAR	61
+
+statement ok
+COPY (SELECT '<r>' || repeat('<i><v>true</v></i>', 30) || '<i><v>maybe</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_maybe.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_maybe.xml', sample_size := 10, auto_type_candidates := ['BOOLEAN']);
+----
+value 'maybe' does not match column type BOOLEAN
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_maybe.xml', sample_size := 10, maximum_file_size := 16, streaming := true,
+                       auto_type_candidates := ['BOOLEAN']);
+----
+value 'maybe' does not match column type BOOLEAN
+
+query II
+SELECT count(*), count(v) FROM read_xml('__TEST_DIR__/atc_maybe.xml', sample_size := 10, ignore_errors := true,
+                                        auto_type_candidates := ['BOOLEAN']);
+----
+31	30
+
+# An out-of-sample decimal in a BIGINT column is an error, not a rounded integer.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><v>7</v></i>', 30) || '<i><v>2.75</v></i></r>' AS c)
+TO '__TEST_DIR__/atc_late_decimal.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement error
+SELECT * FROM read_xml('__TEST_DIR__/atc_late_decimal.xml', sample_size := 10, auto_type_candidates := ['BIGINT']);
+----
+value '2.75' does not match column type BIGINT
+
+# =============================================================================
+# TIMETZ keeps each value's offset, zero or not.
+# =============================================================================
+
+query II
+SELECT typeof(v), v FROM parse_xml('<r><i><v>10:00:00+02</v></i><i><v>11:30:00-05:30</v></i></r>',
+                                   datetime_format := '%H:%M:%S%z', auto_type_candidates := ['TIMETZ'])
+ORDER BY v;
+----
+TIME WITH TIME ZONE	10:00:00+02
+TIME WITH TIME ZONE	11:30:00-05:30
+
 # =============================================================================
 # Validation matches read_csv: a list of type-name strings, at least one, no
 # NULLs, and unknown names are a catalog error.
@@ -287,6 +410,12 @@ statement error
 SELECT * FROM read_html('__TEST_DIR__/atc_ints.xml', auto_type_candidates := ['STRUCT(a INTEGER)']);
 ----
 does not accept STRUCT(a INTEGER)
+
+# XML is VARCHAR under an alias, as JSON is. Inference never produces either.
+statement error
+SELECT * FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['XML']);
+----
+does not accept XML
 
 # =============================================================================
 # Conflicts: columns turns inference off, and all_varchar already fixes every

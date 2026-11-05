@@ -1,0 +1,105 @@
+# name: test/sql/auto_type_candidates_differential.test
+# description: auto_type_candidates agrees with read_csv on the same values, across single files, unions and streaming
+# group: [sql]
+
+require webbed
+
+# Each value class is one column of text, written once as XML and once as CSV.
+statement ok
+CREATE TABLE atcd_classes AS SELECT * FROM (VALUES
+    ('ints', 1, '1'), ('ints', 2, '2'), ('ints', 3, '300'),
+    ('zero_one', 1, '0'), ('zero_one', 2, '1'), ('zero_one', 3, '1'),
+    ('big', 1, '9999999999'), ('big', 2, '1'), ('big', 3, '2'),
+    ('decs', 1, '1.5'), ('decs', 2, '2.25'), ('decs', 3, '3.0'),
+    ('mixed', 1, '1'), ('mixed', 2, '2.5'), ('mixed', 3, '3'),
+    ('bools', 1, 'true'), ('bools', 2, 'false'), ('bools', 3, 'true'),
+    ('dates', 1, '2024-01-01'), ('dates', 2, '2024-02-03'), ('dates', 3, '2024-03-04'),
+    ('ts', 1, '2024-01-01 10:00:00'), ('ts', 2, '2024-02-03 11:30:00'), ('ts', 3, '2024-03-04 00:00:01'),
+    ('tsz', 1, '2024-01-01 10:00:00+02'), ('tsz', 2, '2024-02-03 11:30:00+00'), ('tsz', 3, '2024-03-04 00:00:01-05'),
+    ('times', 1, '10:00:00'), ('times', 2, '11:30:00'), ('times', 3, '23:59:59'),
+    ('text', 1, 'abc'), ('text', 2, '1'), ('text', 3, '2024-01-01')
+) t(name, ord, val);
+
+# A disagreement is acceptable only where docs/parameters.rst documents it:
+# - zoneless text stays VARCHAR where read_csv reads TIMESTAMPTZ in the session time zone.
+# - a union of a BIGINT file and a DOUBLE file is VARCHAR, because the merge cannot see whether
+#   the integers fit a DOUBLE exactly. One file with the same rows is DOUBLE.
+# - one file mixing dates and timestamps is VARCHAR, since no one format reads both. The union of
+#   a date file and a timestamp file is TIMESTAMP. read_csv reads the joined file as TIMESTAMP, or
+#   as VARCHAR when DATE is a candidate.
+statement ok
+CREATE MACRO atcd_agrees(xt, xv, ot, ov) AS
+    (xt = ot AND xv = ov) OR (xt = 'VARCHAR' AND ot = 'TIMESTAMP WITH TIME ZONE');
+
+statement ok
+CREATE MACRO atcd_union_agrees(ut, uv, jt, jv, ct, cv) AS
+    (ut = jt AND uv = jv AND atcd_agrees(ut, uv, ct, cv))
+    OR (ut = 'VARCHAR' AND jt = 'DOUBLE' AND ct = 'DOUBLE')
+    OR (ut = 'VARCHAR' AND jt = 'VARCHAR' AND ct = 'TIMESTAMP WITH TIME ZONE')
+    OR (ut = 'TIMESTAMP' AND jt = 'VARCHAR' AND ((ut = ct AND uv = cv) OR ct = 'VARCHAR'));
+
+foreach a ints zero_one big decs mixed bools dates ts tsz times text
+
+statement ok
+COPY (SELECT '<r>' || string_agg('<i><v>' || val || '</v></i>', '' ORDER BY ord) || '</r>' FROM atcd_classes WHERE name = '${a}')
+TO '__TEST_DIR__/atcd_${a}.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT val AS v FROM atcd_classes WHERE name = '${a}' ORDER BY ord) TO '__TEST_DIR__/atcd_${a}.csv' (HEADER, QUOTE '');
+
+foreach b ints zero_one big decs mixed bools dates ts tsz times text
+
+# The rows of a then b in one file: what a union of the two files should match.
+statement ok
+CREATE OR REPLACE TABLE atcd_joined AS
+SELECT val, 0 AS part, ord FROM atcd_classes WHERE name = '${a}'
+UNION ALL SELECT val, 1, ord FROM atcd_classes WHERE name = '${b}';
+
+statement ok
+COPY (SELECT '<r>' || string_agg('<i><v>' || val || '</v></i>', '' ORDER BY part, ord) || '</r>' FROM atcd_joined)
+TO '__TEST_DIR__/atcd_${a}_${b}.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT val AS v FROM atcd_joined ORDER BY part, ord) TO '__TEST_DIR__/atcd_${a}_${b}.csv' (HEADER, QUOTE '');
+
+endloop
+
+endloop
+
+foreach cands ['BOOLEAN'] ['INTEGER'] ['BIGINT'] ['DOUBLE'] ['BIGINT','DOUBLE'] ['BOOLEAN','DOUBLE'] ['DATE'] ['TIMESTAMP'] ['TIMESTAMPTZ'] ['DATE','TIMESTAMPTZ'] ['TIME'] ['BOOLEAN','INTEGER','BIGINT','DOUBLE','DATE','TIME','TIMESTAMP','TIMESTAMPTZ']
+
+foreach a ints zero_one big decs mixed bools dates ts tsz times text
+
+# One file, in the sample and streamed past maximum_file_size, against read_csv.
+query I
+SELECT (${cands})::VARCHAR || ' ${a}: xml=' || x.t || ' streamed=' || s.t || ' csv=' || c.t
+FROM (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_xml('__TEST_DIR__/atcd_${a}.xml', auto_type_candidates := ${cands})) x,
+     (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_xml('__TEST_DIR__/atcd_${a}.xml', maximum_file_size := 16, streaming := true,
+                    auto_type_candidates := ${cands})) s,
+     (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_csv('__TEST_DIR__/atcd_${a}.csv', auto_type_candidates := ${cands})) c
+WHERE NOT (atcd_agrees(x.t, x.vals, c.t, c.vals) AND x.t = s.t AND x.vals = s.vals);
+----
+
+foreach b ints zero_one big decs mixed bools dates ts tsz times text
+
+# A union of two files against one file holding both, read by read_xml and by read_csv.
+query I
+SELECT (${cands})::VARCHAR || ' ${a}+${b}: union=' || u.t || ' joined=' || j.t || ' csv=' || c.t
+FROM (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_xml(['__TEST_DIR__/atcd_${a}.xml', '__TEST_DIR__/atcd_${b}.xml'], union_by_name := true,
+                    auto_type_candidates := ${cands})) u,
+     (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_xml('__TEST_DIR__/atcd_${a}_${b}.xml', sample_size := -1, auto_type_candidates := ${cands})) j,
+     (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
+      FROM read_csv('__TEST_DIR__/atcd_${a}_${b}.csv', sample_size := -1, auto_type_candidates := ${cands})) c
+WHERE NOT atcd_union_agrees(u.t, u.vals, j.t, j.vals, c.t, c.vals);
+----
+
+endloop
+
+endloop
+
+endloop

@@ -7,6 +7,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/types/time.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
@@ -1036,6 +1037,11 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	}
 }
 
+// The wall-clock time a TIMETZ keeps beside its offset. TryToTime rejects any nonzero offset.
+static dtime_t ParsedWallClockTime(const StrpTimeFormat::ParseResult &parse_result) {
+	return Time::FromTime(parse_result.data[3], parse_result.data[4], parse_result.data[5], parse_result.GetMicros());
+}
+
 static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &strp_format,
                                    const LogicalType &expected_type) {
 	switch (expected_type.id()) {
@@ -1048,14 +1054,17 @@ static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &str
 		timestamp_t result;
 		return strp_format.TryParseTimestamp(value.c_str(), value.size(), result);
 	}
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ: {
+	case LogicalTypeId::TIME: {
 		StrpTimeFormat::ParseResult parse_result;
 		if (!strp_format.Parse(value.c_str(), value.size(), parse_result)) {
 			return false;
 		}
 		dtime_t time_result;
 		return parse_result.TryToTime(time_result);
+	}
+	case LogicalTypeId::TIME_TZ: {
+		StrpTimeFormat::ParseResult parse_result;
+		return strp_format.Parse(value.c_str(), value.size(), parse_result);
 	}
 	default:
 		return false;
@@ -1153,11 +1162,10 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 		}
 		case LogicalTypeId::TIME_TZ: {
 			StrpTimeFormat::ParseResult parse_result;
-			dtime_t time_result;
-			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) || !parse_result.TryToTime(time_result)) {
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result)) {
 				continue;
 			}
-			parsed = Value::TIMETZ(dtime_tz_t(time_result, parse_result.data[7]));
+			parsed = Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
 			break;
 		}
 		default:
@@ -1359,7 +1367,9 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 			detected_types.push_back(LogicalType::BIGINT);
 		} else if (options.numeric_detection && allowed(LogicalTypeId::DOUBLE) && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
-		} else if (options.boolean_detection && allowed(LogicalTypeId::BOOLEAN) && IsBoolean(sample)) {
+		} else if (!is_integer && options.boolean_detection && allowed(LogicalTypeId::BOOLEAN) && IsBoolean(sample)) {
+			// `1` and `0` read as integers first, so excluding the integer types cannot turn an
+			// integer column BOOLEAN. read_csv keeps them VARCHAR under ['BOOLEAN'] too.
 			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
@@ -1776,6 +1786,24 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
 	};
 	if (is_bigint_and_double(a, b) || is_bigint_and_double(b, a)) {
+		return LogicalType::VARCHAR;
+	}
+	// Zoneless text in a zoned column reads as UTC, not as the session time zone read_csv assumes.
+	// Within a file, zoned and zoneless samples share no format and stay VARCHAR. Across files the
+	// merge would widen to the zoned type. It stays VARCHAR here too.
+	auto is_zoneless_beside_zoned = [](const LogicalType &x, const LogicalType &y) {
+		switch (y.id()) {
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return x.id() == LogicalTypeId::DATE || x.id() == LogicalTypeId::TIMESTAMP ||
+			       x.id() == LogicalTypeId::TIMESTAMP_SEC || x.id() == LogicalTypeId::TIMESTAMP_MS ||
+			       x.id() == LogicalTypeId::TIMESTAMP_NS;
+		case LogicalTypeId::TIME_TZ:
+			return x.id() == LogicalTypeId::TIME;
+		default:
+			return false;
+		}
+	};
+	if (is_zoneless_beside_zoned(a, b) || is_zoneless_beside_zoned(b, a)) {
 		return LogicalType::VARCHAR;
 	}
 
@@ -2288,7 +2316,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			} else if (lower == "false" || lower == "no" || lower == "0" || lower == "off") {
 				return Value::BOOLEAN(false);
 			}
-			return Value(); // NULL for unrecognized boolean
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::INTEGER: {
 			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
@@ -2422,11 +2450,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
 				StrpTimeFormat::ParseResult parse_result;
 				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
-					dtime_t time_result;
-					if (parse_result.TryToTime(time_result)) {
-						dtime_tz_t result(time_result, parse_result.data[7]);
-						return Value::TIMETZ(result);
-					}
+					return Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
 				}
 				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
 			}
