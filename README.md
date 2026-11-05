@@ -808,7 +808,7 @@ The extension uses a **3-phase deterministic approach** for intelligent schema i
 - **Timestamps**: Date with time → TIMESTAMP type
 - **Timestamps with timezone**: Date with time and offset → TIMESTAMPTZ type
 - **Times**: Time of day → TIME type
-- **Numbers**: Integer and decimal → BIGINT/DOUBLE types
+- **Numbers**: Integer and decimal → INTEGER/BIGINT/DOUBLE types, only when the type reads back the exact text. `007`, `1.10`, `1e3`, and `+5` stay VARCHAR, in the sample and beyond it
 - **Booleans**: true/false, 1/0 → BOOLEAN type
 - **Lists**: Repeated elements → LIST type
 - **Objects**: Nested elements → STRUCT type

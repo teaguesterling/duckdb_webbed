@@ -45,6 +45,10 @@ struct XMLSchemaOptions {
 	bool temporal_detection = true; // Detect DATE/TIME/TIMESTAMP
 	bool numeric_detection = true;  // Detect optimal numeric types
 	bool boolean_detection = true;  // Detect boolean values
+	// Extraction into an INTEGER, BIGINT, or DOUBLE column rejects text the type cannot reproduce
+	// (`007`, `1.10`, `1e3`), the same lexemes inference refuses to type as numeric. Off for
+	// `columns :=` types, which cast.
+	bool lossless_numeric_text = true;
 
 	// Datetime format (replaces temporal_detection for explicit format control)
 	std::vector<std::string>
