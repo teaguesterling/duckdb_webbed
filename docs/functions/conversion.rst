@@ -231,8 +231,9 @@ Convert HTML content into a list of structured document blocks. This function pa
   negative value raises an error.
 
 **Encoding:** ``read_html_blocks`` and ``read_html`` decode each file by its byte order mark,
-then the first ``<meta charset>`` or ``http-equiv`` declaration naming a charset libxml2
-supports, then its bytes. As in browsers, ASCII and Latin-1 labels decode as windows-1252. A
+then the first ``<meta charset>`` or ``http-equiv`` declaration naming a label from the WHATWG
+Encoding Standard, then its bytes. As in browsers, other labels are ignored, and ASCII and
+Latin-1 labels decode as windows-1252. A
 file in neither UTF-8 nor a declared charset reads as windows-1252. A byte that the declared
 charset doesn't define, UTF-8 included, raises an error.
 
