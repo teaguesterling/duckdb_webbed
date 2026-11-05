@@ -263,6 +263,8 @@ When ``datetime_format='auto'`` (the default), the extension tries a built-in li
 
 When an explicit format or preset is specified, only those formats are tried. If no format matches all samples, the column falls back to VARCHAR.
 
+When no one format reads every sample but each is a date or timestamp that a date or timestamp format reads, and DuckDB's cast reads it too, the column is TIMESTAMP and a date reads as midnight. This matches ``read_csv`` and a union of a date file with a timestamp file.
+
 .. note::
 
    When auto-detecting, an ambiguous date (e.g., ``03/04/2024``) resolves to US (month-first)

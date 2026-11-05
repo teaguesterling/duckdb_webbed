@@ -1349,6 +1349,40 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
+	// No one format reads dates beside timestamps, but the column is TIMESTAMP, as the union of a
+	// date file and a timestamp file is. It keeps no format, and the default cast reads ISO forms.
+	auto is_date_or_timestamp = [&](const std::string &sample) {
+		timestamp_t ts;
+		if (!TryCast::Operation(string_t(sample), ts, true)) {
+			return false;
+		}
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			auto id = candidate_types[i].id();
+			if ((id == LogicalTypeId::DATE || id == LogicalTypeId::TIMESTAMP) &&
+			    TryMatchDatetimeFormat(sample, compiled_formats[i], candidate_types[i])) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+		bool any_sample = false;
+		bool all_match = true;
+		for (const auto &sample : samples) {
+			if (sample.empty()) {
+				continue;
+			}
+			any_sample = true;
+			if (!is_date_or_timestamp(sample)) {
+				all_match = false;
+				break;
+			}
+		}
+		if (any_sample && all_match) {
+			return LogicalType::TIMESTAMP;
+		}
+	}
+
 	// Each sample takes the narrowest allowed type that reads it: an integer the candidates exclude
 	// from INTEGER widens to BIGINT, then DOUBLE, as read_csv's sniffer does.
 	// GetMostSpecificType widens INTEGER to BIGINT when samples mix.

@@ -467,3 +467,16 @@ query I
 SELECT typeof(v) FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates := ['BIGINT'], all_varchar := false);
 ----
 BIGINT
+
+# Dates beside timestamps read as TIMESTAMP in one file, as in a union of a date file and a
+# timestamp file. Without TIMESTAMP as a candidate they stay VARCHAR.
+query TT
+SELECT typeof(v), v FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-01-02 10:00:00</v></i></r>') ORDER BY v;
+----
+TIMESTAMP	2024-01-01 00:00:00
+TIMESTAMP	2024-01-02 10:00:00
+
+query T
+SELECT DISTINCT typeof(v) FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-01-02 10:00:00</v></i></r>', auto_type_candidates := ['DATE']);
+----
+VARCHAR
