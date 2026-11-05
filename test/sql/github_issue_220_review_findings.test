@@ -369,3 +369,18 @@ statement error
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_220_long_attr.html');
 ----
 HTML document has a text node or attribute value longer than libxml2's limit of 10000000 bytes
+
+# ============================================================================
+# A void element with attributes has no content to wrap, so it emits no span
+# ============================================================================
+
+query I
+SELECT count(*) FROM (SELECT unnest(html_to_duck_blocks('<p>a<input id="q">b</p>')) AS b) WHERE b.element_type = 'span';
+----
+0
+
+# An unknown inline wrapper with content and attributes still emits its span
+query I
+SELECT count(*) FROM (SELECT unnest(html_to_duck_blocks('<p>a<input id="q"><kbd id="k">b</kbd></p>')) AS b) WHERE b.element_type = 'span';
+----
+1

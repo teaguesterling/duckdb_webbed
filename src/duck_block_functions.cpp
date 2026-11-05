@@ -799,9 +799,9 @@ static void ExtractInlineElementsRange(xmlNodePtr start, xmlNodePtr stop, int32_
 			continue;
 		}
 
-		// An unknown inline element carrying captured attributes becomes a span that keeps them.
+		// An unknown inline element with content and captured attributes becomes a span that keeps them.
 		std::string etype = InlineTypeForTag(tag);
-		if (etype.empty() && !attrs.empty()) {
+		if (etype.empty() && !attrs.empty() && child->children != nullptr) {
 			etype = DuckBlockTypes::INLINE_SPAN;
 		}
 		if (!etype.empty()) {
