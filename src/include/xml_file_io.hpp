@@ -22,7 +22,7 @@ static constexpr idx_t DOM_BYTES_PER_NODE = 250;
 static constexpr idx_t DOM_BYTES_PER_ATTRIBUTE = 300;
 
 //! Estimates the memory an HTML DOM peaks at from the bytes it parses, fed in any number of chunks. An open tag is '<'
-//! before an ASCII letter, a text run is '>' before a byte other than '<', and an attribute is '='.
+//! before an ASCII letter, a text run is '>' before a byte other than '<', and an attribute is '=' inside a tag.
 class DOMCostCounter {
 public:
 	void Feed(const char *data, idx_t size);
@@ -35,6 +35,7 @@ private:
 	idx_t nodes = 0;
 	idx_t attributes = 0;
 	char last = '\0';
+	bool in_tag = false;
 };
 
 //! How many DOMs of a `file_size`-byte file fit in memory_limit at once, at `bytes_per_file_byte`. 0 when not one

@@ -2154,11 +2154,13 @@ private:
 
 // Thrown from a parse's read when its DOM's estimate doesn't fit what the other parses left of memory_limit.
 struct HTMLBudgetExceeded : public std::exception {
-	explicit HTMLBudgetExceeded(bool others_held) : others_held(others_held) {
+	HTMLBudgetExceeded(idx_t estimate, bool others_held) : estimate(estimate), others_held(others_held) {
 	}
 	const char *what() const noexcept override {
 		return "HTML DOM memory budget exceeded";
 	}
+	// The DOM's estimate with the growth that didn't fit.
+	idx_t estimate;
 	// Whether other parses held part of the budget, so the file may fit alone.
 	bool others_held;
 };
@@ -2174,8 +2176,12 @@ struct HTMLDOMBudget {
 	idx_t reserved = 0;
 	bool exclusive = false;
 
-	bool TryReserve(idx_t bytes, idx_t held, bool &others_held) {
-		std::lock_guard<std::mutex> guard(lock);
+	// A parse that holds nothing waits out another's exclusive turn, which began once the bytes reserved reached 0.
+	bool TryReserve(idx_t bytes, idx_t held, bool owns_exclusive, bool &others_held) {
+		std::unique_lock<std::mutex> guard(lock);
+		if (held == 0 && !owns_exclusive) {
+			changed.wait(guard, [&] { return !exclusive; });
+		}
 		if (reserved + bytes > limit) {
 			others_held = reserved > held;
 			return false;
@@ -2216,8 +2222,8 @@ public:
 	}
 	void Reserve(idx_t bytes) {
 		bool others_held = false;
-		if (!budget.TryReserve(bytes, held, others_held)) {
-			throw HTMLBudgetExceeded(others_held);
+		if (!budget.TryReserve(bytes, held, exclusive, others_held)) {
+			throw HTMLBudgetExceeded(held + bytes, others_held);
 		}
 		held += bytes;
 	}
@@ -2268,18 +2274,21 @@ static XMLDocPtr ParseHTMLFileInBudget(FileSystem &fs, const string &path, uniqu
 	auto reserve = [&](idx_t bytes) {
 		reservation.Reserve(bytes);
 	};
+	// A pipe can't be read twice, so it parses alone from the start.
+	while (!handle->CanSeek() && !reservation.exclusive) {
+		reservation.exclusive = reservation.budget.BeginExclusive();
+	}
 	while (true) {
 		try {
 			return ParseHTMLFile(*handle, reserve);
 		} catch (HTMLBudgetExceeded &e) {
-			auto estimate = reservation.held;
 			reservation.ReleaseBytes();
-			if (reservation.exclusive || !e.others_held || !handle->CanSeek()) {
+			if (reservation.exclusive || !e.others_held) {
 				throw OutOfMemoryException(
 				    "Reading '%s' needs more than memory_limit (%s) for its parsed document, by an estimate of at "
 				    "least %s. Raise memory_limit to read it.",
 				    path, StringUtil::BytesToHumanReadableString(reservation.budget.limit),
-				    StringUtil::BytesToHumanReadableString(estimate));
+				    StringUtil::BytesToHumanReadableString(e.estimate));
 			}
 			handle.reset();
 			reservation.exclusive = reservation.budget.BeginExclusive();

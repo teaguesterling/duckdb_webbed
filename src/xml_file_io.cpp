@@ -21,20 +21,25 @@ idx_t DOMsThatFit(ClientContext &context, idx_t file_size, idx_t bytes_per_file_
 
 void DOMCostCounter::Feed(const char *data, idx_t size) {
 	char previous = last;
+	bool tag = in_tag;
 	for (idx_t i = 0; i < size; i++) {
 		char c = data[i];
 		if (previous == '<' && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
 			nodes++;
+			tag = true;
 		} else if (previous == '>' && c != '<') {
 			nodes++;
 		}
-		if (c == '=') {
+		if (c == '>') {
+			tag = false;
+		} else if (c == '=' && tag) {
 			attributes++;
 		}
 		previous = c;
 	}
 	bytes += size;
 	last = previous;
+	in_tag = tag;
 }
 
 vector<OpenFileInfo> GlobFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
@@ -154,9 +159,10 @@ static idx_t ReadUpTo(FileHandle &handle, char *buffer, idx_t size) {
 }
 
 // Reads the file's first bytes into `prefix` and chooses its HTML encoding. A BOM or <meta> in the first bytes
-// decides it. Otherwise the bytes are sniffed until a UTF-8 sequence decides it or the file ends. The parse replays
-// `prefix` before it reads the handle on, so a pipe, which can't rewind, is read once. A seekable handle that is still
-// undecided past SNIFF_KEEP_BYTES is sniffed to its end without keeping the bytes and rewound, leaving `prefix` empty.
+// decides it. Otherwise the bytes are sniffed until a UTF-8 sequence decides it, the file ends, or SNIFF_KEEP_BYTES
+// are kept. The parse replays `prefix` before it reads the handle on, so a pipe, which can't rewind, is read once and
+// decided by its first SNIFF_KEEP_BYTES. A seekable handle still undecided there is sniffed to its end without keeping
+// the bytes and rewound, leaving `prefix` empty.
 static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &prefix) {
 	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
 	constexpr idx_t SNIFF_KEEP_BYTES = CHUNK_SIZE;
@@ -168,8 +174,7 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &pre
 	}
 	UndeclaredEncodingSniffer sniffer;
 	sniffer.Feed(prefix.data(), prefix.size());
-	bool rewinds = handle.CanSeek();
-	while (!sniffer.Decided() && !(rewinds && prefix.size() >= SNIFF_KEEP_BYTES)) {
+	while (!sniffer.Decided() && prefix.size() < SNIFF_KEEP_BYTES) {
 		auto offset = prefix.size();
 		prefix.resize(offset + CHUNK_SIZE);
 		auto got = ReadUpTo(handle, &prefix[offset], CHUNK_SIZE);
@@ -179,7 +184,7 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &pre
 		}
 		sniffer.Feed(prefix.data() + offset, got);
 	}
-	if (sniffer.Decided()) {
+	if (sniffer.Decided() || !handle.CanSeek()) {
 		return sniffer.Encoding();
 	}
 	std::string().swap(prefix);

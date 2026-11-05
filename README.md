@@ -959,7 +959,7 @@ ingesting untrusted documents is safe by default:
   deeper document raises an error instead of returning a truncated tree.
 - **HTML block reads are bounded by `memory_limit`.** `read_html_blocks` estimates each parsed
   document's memory from its markup as it reads and stops a file whose estimate passes what's
-  left of `memory_limit`, shared across threads. It buffers its rows in DuckDB-managed memory,
+  left of `memory_limit`, shared across the threads of one read. It buffers its rows in DuckDB-managed memory,
   which `memory_limit` bounds on its own.
 - **Internal-entity text handling.** Internal entities defined in a document's DTD subset are
   expanded within those limits by the XPath extractors (e.g. `xml_extract_text`), but
