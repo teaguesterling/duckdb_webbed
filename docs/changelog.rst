@@ -23,7 +23,8 @@ Fixes from the duck_block review in #217.
 - The HTML walk is linear in document size. Inline ``<div>`` elements with attributes keep
   them as ``span`` inlines.
 - ``duck_blocks_to_html`` nests containers up to level 254 and raises an error past it. It used
-  to flatten everything below 64 levels.
+  to flatten everything below 64 levels. A ``<pre>`` without a ``<code>`` child, as it writes
+  code past that level, takes its language from its own class.
 - A table without ``<thead>`` takes headers only from a first row of ``<th>`` cells. A first row
   of ``<td>`` cells stays in ``rows``.
 - ``read_xml``, ``read_html``, their ``_objects`` variants and ``read_html_blocks`` raise an
