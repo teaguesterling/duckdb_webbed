@@ -13,10 +13,28 @@
 
 namespace duckdb {
 
-idx_t DOMsThatFit(ClientContext &context, idx_t file_size) {
+idx_t DOMsThatFit(ClientContext &context, idx_t file_size, idx_t bytes_per_file_byte) {
 	// Divided in two steps so the product can't overflow
 	auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-	return memory / DOM_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(file_size, 1);
+	return memory / bytes_per_file_byte / MaxValue<idx_t>(file_size, 1);
+}
+
+void DOMCostCounter::Feed(const char *data, idx_t size) {
+	char previous = last;
+	for (idx_t i = 0; i < size; i++) {
+		char c = data[i];
+		if (previous == '<' && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+			nodes++;
+		} else if (previous == '>' && c != '<') {
+			nodes++;
+		}
+		if (c == '=') {
+			attributes++;
+		}
+		previous = c;
+	}
+	bytes += size;
+	last = previous;
 }
 
 vector<OpenFileInfo> GlobFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {
@@ -185,6 +203,20 @@ struct FileHandleReader {
 	std::string prefix;
 	idx_t prefix_offset = 0;
 	std::exception_ptr error;
+	// Set when the parse reserves its DOM's estimated memory as it reads.
+	DOMReserve reserve;
+	DOMCostCounter cost;
+	idx_t reserved = 0;
+
+	int Delivered(const char *buffer, idx_t got) {
+		if (reserve && got > 0) {
+			cost.Feed(buffer, got);
+			auto estimate = cost.Estimate();
+			reserve(estimate - reserved);
+			reserved = estimate;
+		}
+		return NumericCast<int>(got);
+	}
 };
 
 // libxml2 calls this from C frames, so a read error is held and rethrown once the parse returns.
@@ -199,9 +231,13 @@ static int FileHandleReaderRead(void *context, char *buffer, int len) {
 				std::string().swap(reader.prefix);
 				reader.prefix_offset = 0;
 			}
-			return NumericCast<int>(take);
+			return reader.Delivered(buffer, take);
 		}
-		return NumericCast<int>(reader.handle.Read(buffer, UnsafeNumericCast<idx_t>(len)));
+		auto got = reader.handle.Read(buffer, UnsafeNumericCast<idx_t>(len));
+		if (got < 0) {
+			throw IOException("Could not read from file \"%s\"", reader.handle.path);
+		}
+		return reader.Delivered(buffer, UnsafeNumericCast<idx_t>(got));
 	} catch (...) {
 		reader.error = std::current_exception();
 		return -1;
@@ -218,10 +254,20 @@ XMLDocRAII ParseXMLFile(FileHandle &handle, bool is_html) {
 	return doc;
 }
 
-XMLDocPtr ParseHTMLFile(FileHandle &handle) {
+XMLDocPtr ParseHTMLFile(FileHandle &handle, const DOMReserve &reserve) {
 	FileHandleReader reader(handle);
+	reader.reserve = reserve;
 	std::string encoding = DetectHTMLHandleEncoding(handle, reader.prefix);
-	auto doc = XMLUtils::ParseHTMLDocument(FileHandleReaderRead, &reader, encoding);
+	XMLDocPtr doc;
+	try {
+		doc = XMLUtils::ParseHTMLDocument(FileHandleReaderRead, &reader, encoding);
+	} catch (...) {
+		// A failed read ends the parse early, which libxml2 may report as an error of its own.
+		if (reader.error) {
+			std::rethrow_exception(reader.error);
+		}
+		throw;
+	}
 	if (reader.error) {
 		std::rethrow_exception(reader.error);
 	}

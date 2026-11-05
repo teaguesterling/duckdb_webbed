@@ -1,5 +1,5 @@
 # name: test/sql/duck_block_reader_memory.test
-# description: read_html_blocks streams a file into its DOM, buffers blocks in buffer-managed rows, and refuses a file whose DOM would not fit in memory_limit
+# description: read_html_blocks streams a file into its DOM, buffers blocks in buffer-managed rows, and refuses a file whose estimated DOM would not fit in memory_limit
 # group: [sql]
 
 require webbed
@@ -32,7 +32,7 @@ SELECT count(*), sum(length(content)) FROM parse_html_blocks(repeat('<p>' || rep
 ----
 5000	500000
 
-# A 20 MB file's DOM can take 32 times its size outside the buffer manager, so a 100 MB limit refuses it before the parse
+# The estimate for a 20 MB file's DOM, which libxml2 allocates outside the buffer manager, passes a 100 MB limit as it parses
 statement ok
 SET memory_limit = '100MB';
 
@@ -52,7 +52,7 @@ SELECT count(*) FROM read_html_blocks(['{TEST_DIR}/small_blocks.html', '{TEST_DI
 ----
 Raise memory_limit to read it
 
-# A file under the bound still reads
+# A file whose estimate fits still reads
 query I
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/small_blocks.html');
 ----
@@ -66,3 +66,36 @@ query III
 SELECT count(*), count(*) FILTER (WHERE kind = 'inline'), count(*) FILTER (WHERE kind = 'inline' AND content != (element_order - 1)::VARCHAR) FROM read_html_blocks('{TEST_DIR}/many_inlines.html');
 ----
 100001	100000	0
+
+# 3 MB of empty paragraphs is small on disk but builds a DOM of over 250 MB, which the estimate counts as the parse reads
+statement ok
+COPY (SELECT repeat('<p>', 1000000)) TO '{TEST_DIR}/dense_p.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/dense_p.html');
+----
+Out of Memory Error: Reading '
+
+# A 20 MB file of long paragraphs builds a DOM of about 5 times its size, so 600 MB reads it
+statement ok
+SET memory_limit = '600MB';
+
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
+----
+20000
+
+# Eight files whose DOMs fit memory_limit one at a time, not two, all read on four threads
+statement ok
+COPY (SELECT i, repeat('<p>x</p>', 100000) FROM range(8) t(i)) TO '{TEST_DIR}/dense_files' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01', PARTITION_BY (i));
+
+statement ok
+SET threads = 4;
+
+statement ok
+SET memory_limit = '80MB';
+
+query II
+SELECT count(*), count(DISTINCT filename) FROM read_html_blocks('{TEST_DIR}/dense_files/*/*.csv', filename := true);
+----
+800000	8

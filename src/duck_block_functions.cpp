@@ -26,6 +26,7 @@
 #include <libxml/xpath.h>
 #include <sstream>
 #include <set>
+#include <condition_variable>
 #include <mutex>
 
 namespace duckdb {
@@ -2151,24 +2152,141 @@ private:
 	idx_t scan_pos = 0;
 };
 
+// Thrown from a parse's read when its DOM's estimate doesn't fit what the other parses left of memory_limit.
+struct HTMLBudgetExceeded : public std::exception {
+	explicit HTMLBudgetExceeded(bool others_held) : others_held(others_held) {
+	}
+	const char *what() const noexcept override {
+		return "HTML DOM memory budget exceeded";
+	}
+	// Whether other parses held part of the budget, so the file may fit alone.
+	bool others_held;
+};
+
+// memory_limit shared by the DOMs read_html_blocks parses at once, which libxml2 allocates outside the buffer manager.
+// Each parse reserves its DOMCostCounter estimate as it reads and fails rather than waiting. A file that failed while
+// other parses held memory is reparsed alone: it asks for an exclusive turn, new files aren't claimed until it ends,
+// and it starts once the parses in flight have released theirs. A thread waits only while it holds no reservation.
+struct HTMLDOMBudget {
+	std::mutex lock;
+	std::condition_variable changed;
+	idx_t limit = 0;
+	idx_t reserved = 0;
+	bool exclusive = false;
+
+	bool TryReserve(idx_t bytes, idx_t held, bool &others_held) {
+		std::lock_guard<std::mutex> guard(lock);
+		if (reserved + bytes > limit) {
+			others_held = reserved > held;
+			return false;
+		}
+		reserved += bytes;
+		return true;
+	}
+	void Release(idx_t bytes) {
+		std::lock_guard<std::mutex> guard(lock);
+		reserved -= bytes;
+		changed.notify_all();
+	}
+	// Returns once the caller may parse alone, or false after another thread's exclusive turn, which it waits out.
+	bool BeginExclusive() {
+		std::unique_lock<std::mutex> guard(lock);
+		if (exclusive) {
+			changed.wait(guard, [&] { return !exclusive; });
+			return false;
+		}
+		exclusive = true;
+		changed.wait(guard, [&] { return reserved == 0; });
+		return true;
+	}
+	void EndExclusive() {
+		std::lock_guard<std::mutex> guard(lock);
+		exclusive = false;
+		changed.notify_all();
+	}
+};
+
+// One parse's share of an HTMLDOMBudget, released when the DOM is freed.
+class HTMLDOMReservation {
+public:
+	explicit HTMLDOMReservation(HTMLDOMBudget &budget) : budget(budget) {
+	}
+	~HTMLDOMReservation() {
+		Release();
+	}
+	void Reserve(idx_t bytes) {
+		bool others_held = false;
+		if (!budget.TryReserve(bytes, held, others_held)) {
+			throw HTMLBudgetExceeded(others_held);
+		}
+		held += bytes;
+	}
+	void ReleaseBytes() {
+		if (held > 0) {
+			budget.Release(held);
+			held = 0;
+		}
+	}
+	void Release() {
+		ReleaseBytes();
+		if (exclusive) {
+			budget.EndExclusive();
+			exclusive = false;
+		}
+	}
+
+	HTMLDOMBudget &budget;
+	idx_t held = 0;
+	bool exclusive = false;
+};
+
 struct HTMLBlocksReadGlobalState : public GlobalTableFunctionState {
 	vector<string> files;
-	std::mutex file_lock;
 	idx_t next_file_index = 0;
 	idx_t max_threads = 1;
+	HTMLDOMBudget budget;
 
 	idx_t MaxThreads() const override {
 		return max_threads;
 	}
 
+	// Waits out an exclusive parse, so its file starts once the parses in flight end.
 	idx_t ClaimNextFile() {
-		std::lock_guard<std::mutex> guard(file_lock);
+		std::unique_lock<std::mutex> guard(budget.lock);
+		budget.changed.wait(guard, [&] { return !budget.exclusive; });
 		if (next_file_index >= files.size()) {
 			return DConstants::INVALID_INDEX;
 		}
 		return next_file_index++;
 	}
 };
+
+// Parses a file within the shared budget, reparsing it alone when other parses held the memory it needed. The
+// reservation holds the DOM's estimate until the caller frees the DOM.
+static XMLDocPtr ParseHTMLFileInBudget(FileSystem &fs, const string &path, unique_ptr<FileHandle> handle,
+                                       HTMLDOMReservation &reservation) {
+	auto reserve = [&](idx_t bytes) {
+		reservation.Reserve(bytes);
+	};
+	while (true) {
+		try {
+			return ParseHTMLFile(*handle, reserve);
+		} catch (HTMLBudgetExceeded &e) {
+			auto estimate = reservation.held;
+			reservation.ReleaseBytes();
+			if (reservation.exclusive || !e.others_held || !handle->CanSeek()) {
+				throw OutOfMemoryException(
+				    "Reading '%s' needs more than memory_limit (%s) for its parsed document, by an estimate of at "
+				    "least %s. Raise memory_limit to read it.",
+				    path, StringUtil::BytesToHumanReadableString(reservation.budget.limit),
+				    StringUtil::BytesToHumanReadableString(estimate));
+			}
+			handle.reset();
+			reservation.exclusive = reservation.budget.BeginExclusive();
+			handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+		}
+	}
+}
 
 struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
 	static constexpr idx_t FILE_SHIFT = FileBatchIndex::CHUNK_BITS;
@@ -2308,7 +2426,9 @@ unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(Clie
 			largest = MaxValue<idx_t>(largest, size.GetIndex());
 		}
 	}
-	result->max_threads = MaxValue<idx_t>(MinValue<idx_t>(DOMsThatFit(context, largest), result->files.size()), 1);
+	result->max_threads = MaxValue<idx_t>(
+	    MinValue<idx_t>(DOMsThatFit(context, largest, DOM_MIN_BYTES_PER_FILE_BYTE), result->files.size()), 1);
+	result->budget.limit = BufferManager::GetBufferManager(context).GetMaxMemory();
 	return std::move(result);
 }
 
@@ -2360,18 +2480,18 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 					lstate.have_file = false;
 					continue;
 				}
-				if (DOMsThatFit(context, file_size) == 0) {
+				if (DOMsThatFit(context, file_size, DOM_MIN_BYTES_PER_FILE_BYTE) == 0) {
 					auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
 					throw OutOfMemoryException(
-					    "Reading '%s' (%s) needs up to %llu times its size for the parsed document, more than "
+					    "Reading '%s' (%s) needs at least %llu times its size for the parsed document, more than "
 					    "memory_limit (%s). Raise memory_limit to read it.",
 					    lstate.current_filename, StringUtil::BytesToHumanReadableString(file_size),
-					    DOM_BYTES_PER_FILE_BYTE, StringUtil::BytesToHumanReadableString(memory));
+					    DOM_MIN_BYTES_PER_FILE_BYTE, StringUtil::BytesToHumanReadableString(memory));
 				}
 				// The parse streams the file, so its bytes are never held whole. The DOM is freed once its
-				// blocks are in the row buffer.
-				auto doc = ParseHTMLFile(*file_handle);
-				file_handle.reset();
+				// blocks are in the row buffer, and then its reservation.
+				HTMLDOMReservation reservation(gstate.budget);
+				auto doc = ParseHTMLFileInBudget(fs, lstate.current_filename, std::move(file_handle), reservation);
 				if (doc) {
 					WalkHTMLDocument(doc.get(), bind_data.capture, lstate.blocks);
 				}
