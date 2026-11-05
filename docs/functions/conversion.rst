@@ -238,12 +238,16 @@ file that declares nothing reads as UTF-8 when it holds a UTF-8 multibyte sequen
 ASCII, and as windows-1252 otherwise. A byte that isn't UTF-8 in a UTF-8 file reads as
 U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error.
 
-**Limits:** libxml2 parses at most 256 levels of nested elements. A deeper document raises
-an error naming the limit, so its blocks are never silently cut short. ``read_html_blocks``
-parses each file into memory outside DuckDB's buffer manager, at up to 32 times the file's
-size. A file whose parse would exceed ``memory_limit`` raises an Out of Memory error, and the
-reader runs as many files at once as fit in ``memory_limit``. The rows themselves live in
-buffer-managed memory, so a file with many blocks spills to disk instead of failing.
+**Limits:** libxml2 parses at most 256 levels of nested elements, and a text node or
+attribute value of at most 10,000,000 bytes. A document past either raises an error naming
+the limit, so its blocks are never silently cut short. ``read_html_blocks`` parses each file
+into memory outside DuckDB's buffer manager, from 5 times the file's size for long paragraphs
+to about 80 times for markup of empty elements. It estimates that memory from the markup as it
+reads, and the files parsing at once share ``memory_limit``. A file that doesn't fit while
+others parse is read again alone, and one whose estimate passes ``memory_limit`` on its own
+raises an Out of Memory error. The rows themselves live in buffer-managed memory, which
+``memory_limit`` bounds separately, so a file with many blocks spills to disk instead of
+failing.
 
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 

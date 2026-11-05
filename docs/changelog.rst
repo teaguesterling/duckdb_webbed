@@ -13,9 +13,13 @@ Fixes from the duck_block review in #217.
   windows-1252, and only labels from the WHATWG Encoding Standard count, as in browsers. A byte
   that isn't UTF-8 in a UTF-8 file reads as U+FFFD. A byte another declared charset doesn't
   define raises an error. It used to end the document there.
-- ``read_html_blocks`` streams each file into its parse, buffers rows in buffer-managed memory,
-  and raises an Out of Memory error for a file whose parse would exceed ``memory_limit``. It
-  runs as many files in parallel as fit in ``memory_limit``.
+- ``read_html_blocks`` streams each file into its parse and buffers rows in buffer-managed
+  memory. Each parse estimates its document's memory from the markup as it reads and reserves
+  it from ``memory_limit``, shared by the threads. A file that doesn't fit beside the others is
+  read again alone, and one that doesn't fit alone raises an Out of Memory error.
+- A text node or attribute value past libxml2's 10,000,000-byte limit raises an error that
+  names the limit. It used to read as empty.
+- ``read_html_blocks`` reads a named pipe. It used to return no rows.
 - The HTML walk is linear in document size. Inline ``<div>`` elements with attributes keep
   them as ``span`` inlines.
 - ``duck_blocks_to_html`` nests containers up to level 254 and raises an error past it. It used
