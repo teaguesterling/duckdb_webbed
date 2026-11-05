@@ -4,14 +4,15 @@
 
 require webbed
 
-# Test 1: Without all_varchar - types should be inferred from HTML document
+# Test 1: Without all_varchar - types should be inferred from HTML document.
+# salary stays VARCHAR because DOUBLE would read 75000.50 back as 75000.5.
 query TTTTTT
 DESCRIBE SELECT id, name, age, salary, active FROM read_html('test/html/all_varchar_data.html', record_element:='employee');
 ----
 id	INTEGER	YES	NULL	NULL	NULL
 name	VARCHAR	YES	NULL	NULL	NULL
 age	INTEGER	YES	NULL	NULL	NULL
-salary	DOUBLE	YES	NULL	NULL	NULL
+salary	VARCHAR	YES	NULL	NULL	NULL
 active	BOOLEAN	YES	NULL	NULL	NULL
 
 # Test 2: With all_varchar=true - all scalar types should be VARCHAR
@@ -46,7 +47,7 @@ SELECT typeof(id), typeof(name), typeof(age), typeof(salary), typeof(active)
 FROM read_html('test/html/all_varchar_data.html', record_element:='employee')
 LIMIT 1;
 ----
-INTEGER	VARCHAR	INTEGER	DOUBLE	BOOLEAN
+INTEGER	VARCHAR	INTEGER	VARCHAR	BOOLEAN
 
 # Test 6: Verify that using both columns and all_varchar raises an error
 statement error

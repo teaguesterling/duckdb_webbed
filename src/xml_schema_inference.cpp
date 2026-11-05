@@ -1,5 +1,6 @@
 #include "xml_schema_inference.hpp"
 #include "xml_types.hpp"
+#include "xml_numeric_lexeme.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
@@ -1365,7 +1366,15 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
-	return RestrictToAutoTypeCandidates(GetMostSpecificType(detected_types), options);
+	// Each sample reproduces under its own type, but unifying can widen past that: `9007199254740993`
+	// is an exact BIGINT and an inexact DOUBLE once `2.5` joins it. Check the type the column gets.
+	auto column_type = GetMostSpecificType(detected_types);
+	for (const auto &sample : samples) {
+		if (!sample.empty() && !NumericTypeReproduces(sample, column_type)) {
+			return LogicalType::VARCHAR;
+		}
+	}
+	return RestrictToAutoTypeCandidates(column_type, options);
 }
 
 LogicalType XMLSchemaInference::AllowedTemporalType(const XMLSchemaOptions &options, const LogicalType &type) {
@@ -1481,24 +1490,14 @@ bool XMLSchemaInference::IsBoolean(const std::string &value) {
 	       lower == "on" || lower == "off";
 }
 
+// A numeric type is a candidate only for text it reads back verbatim, so `007` and `1.10` stay
+// VARCHAR rather than landing as 7 and 1.1.
 bool XMLSchemaInference::IsInteger(const std::string &value) {
-	if (value.empty())
-		return false;
-
-	int64_t result;
-	return TryCast::Operation(string_t(value), result, true);
+	return NumericTypeReproduces(value, LogicalType::BIGINT);
 }
 
 bool XMLSchemaInference::IsDouble(const std::string &value) {
-	if (value.empty())
-		return false;
-
-	double result;
-	if (!TryCast::Operation(string_t(value), result, true)) {
-		return false;
-	}
-	// Strings like "inf" and "nan" parse as DOUBLE but are not numeric data
-	return std::isfinite(result);
+	return NumericTypeReproduces(value, LogicalType::DOUBLE);
 }
 
 // IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
@@ -1770,6 +1769,16 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	// sides have an implicit cast path to the candidate; otherwise fall back to VARCHAR to preserve
 	// textual data. This avoids depending on TryGetMaxLogicalTypeUnchecked, which only exists on
 	// newer DuckDB.
+	// A BIGINT side may hold values past 2^53, which DOUBLE would round. Neither file's samples
+	// reach the merge, so it cannot check them the way InferTypeFromSamples does within a file.
+	// INTEGER values are always exact in a DOUBLE.
+	auto is_bigint_and_double = [](const LogicalType &x, const LogicalType &y) {
+		return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
+	};
+	if (is_bigint_and_double(a, b) || is_bigint_and_double(b, a)) {
+		return LogicalType::VARCHAR;
+	}
+
 	LogicalType candidate = CompatForceMaxLogicalType(a, b);
 	auto castable = [&candidate](const LogicalType &t) {
 		return t == candidate || CastRules::ImplicitCast(t, candidate) >= 0;
@@ -2282,6 +2291,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return Value(); // NULL for unrecognized boolean
 		}
 		case LogicalTypeId::INTEGER: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			int32_t int_result;
 			if (TryCast::Operation(string_t(text), int_result, false)) {
 				return Value::INTEGER(int_result);
@@ -2289,6 +2301,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::BIGINT: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			int64_t bigint_result;
 			if (TryCast::Operation(string_t(text), bigint_result, false)) {
 				return Value::BIGINT(bigint_result);
@@ -2296,6 +2311,9 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::DOUBLE: {
+			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
+				return XmlUncastableValue(text, target_type, options);
+			}
 			double double_result;
 			if (TryCast::Operation(string_t(text), double_result, false)) {
 				return Value::DOUBLE(double_result);

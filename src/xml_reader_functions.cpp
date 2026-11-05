@@ -850,6 +850,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, function_name);
 
 	// Store schema options in bind_data for use during execution
+	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
+	schema_options.lossless_numeric_text = !has_explicit_columns;
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
@@ -1747,6 +1749,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, "read_xml");
 
 	// Store schema options in bind_data for use during execution
+	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
+	schema_options.lossless_numeric_text = !has_explicit_columns;
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
@@ -2166,6 +2170,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 	}
 	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, function_name);
 
+	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
+	schema_options.lossless_numeric_text = !has_explicit_columns;
 	result->schema_options = schema_options;
 
 	// Validate XML before either schema path, as read_xml does per file. Extraction against
