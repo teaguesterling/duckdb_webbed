@@ -403,16 +403,14 @@ public:
 	// caller passing "UTF-8" validates the bytes itself. It throws OutOfMemoryException when libxml2 cannot allocate.
 	// The returned document's encoding is UTF-8 whatever the input's was, so serialising it yields UTF-8.
 	static XMLDocPtr ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding);
-	// Validates FILE_BYTES that are UTF-8, declared or not. DECODED_TEXT is a VARCHAR, which DuckDB already holds as
-	// UTF-8.
+	// FILE_BYTES are decoded per their BOM, <meta> charset or bytes. DECODED_TEXT is a VARCHAR, which DuckDB already
+	// holds as UTF-8.
 	static XMLDocPtr ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input);
 	// The error for bytes that aren't valid in `encoding`.
 	static InvalidInputException InvalidHTMLBytes(const std::string &encoding);
 	// The encoding that raw HTML file bytes declare with a BOM or a <meta> in `head`, the file's first
 	// HTML_ENCODING_SNIFF_BYTES. Labels map the way browsers map them. "" when nothing usable is declared.
 	static std::string DeclaredHTMLEncoding(const char *head, idx_t head_size);
-	// The encoding for a file that declares none, given whether all of its bytes are valid UTF-8.
-	static const char *UndeclaredHTMLEncoding(bool valid_utf8);
 	static constexpr idx_t HTML_ENCODING_SNIFF_BYTES = 1024;
 
 	// HTML entity escaping/unescaping

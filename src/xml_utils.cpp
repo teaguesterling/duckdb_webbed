@@ -2,6 +2,7 @@
 #include "xml_types.hpp"
 #include "xml_in_memory_reader.hpp"
 #include "html_charset_labels.hpp"
+#include "html_encoding_sniffer.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -376,7 +377,7 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 		}
 		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
 	}
-	// Without a decoder, UTF-8 input reports a bad byte per character and parses on. Callers validate UTF-8 bytes.
+	// UTF-8 input reports a bad byte per character and parses on with U+FFFD in its place, as a browser does.
 	if (decode_failed && encoding != "UTF-8") {
 		throw InvalidHTMLBytes(encoding);
 	}
@@ -399,13 +400,10 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEnc
 	std::string encoding = "UTF-8";
 	if (input == HTMLInputEncoding::FILE_BYTES) {
 		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES));
-		if (encoding.empty() || encoding == "UTF-8") {
-			bool valid_utf8 = Utf8Proc::Analyze(data, size) != UnicodeType::INVALID;
-			if (encoding.empty()) {
-				encoding = UndeclaredHTMLEncoding(valid_utf8);
-			} else if (!valid_utf8) {
-				throw InvalidHTMLBytes(encoding);
-			}
+		if (encoding.empty()) {
+			UndeclaredEncodingSniffer sniffer;
+			sniffer.Feed(data, size);
+			encoding = sniffer.Encoding();
 		}
 	}
 	XMLInMemoryReader reader {data, NumericCast<size_t>(size), 0};
@@ -570,10 +568,6 @@ std::string XMLUtils::DeclaredHTMLEncoding(const char *head, idx_t head_size) {
 		return "UTF-16BE";
 	}
 	return FindMetaCharset(head, head_size);
-}
-
-const char *XMLUtils::UndeclaredHTMLEncoding(bool valid_utf8) {
-	return valid_utf8 ? "UTF-8" : "windows-1252";
 }
 
 void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding) {

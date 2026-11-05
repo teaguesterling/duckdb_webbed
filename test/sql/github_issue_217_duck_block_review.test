@@ -122,21 +122,21 @@ SELECT * FROM read_html('test/html/encoding/github_issue_217_iso8859_6_invalid_b
 ----
 HTML document has bytes that aren't valid ISO-8859-6
 
-# A file that declares UTF-8 by <meta> or BOM and holds a byte that isn't UTF-8 raises instead of reading U+FFFD
-statement error
-SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html');
+# A file that declares UTF-8 by <meta> or BOM and holds a byte that isn't UTF-8 reads U+FFFD there, as in a browser
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html') WHERE element_type = 'paragraph';
 ----
-HTML document has bytes that aren't valid UTF-8
+caf�
 
-statement error
-SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom_invalid_byte.html');
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom_invalid_byte.html') WHERE element_type = 'paragraph';
 ----
-HTML document has bytes that aren't valid UTF-8
+caf�
 
-statement error
-SELECT * FROM read_html('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html');
+query I
+SELECT html_extract_text(html, '//p') FROM read_html('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html', columns := {'html': 'HTML'}, record_element := 'html');
 ----
-HTML document has bytes that aren't valid UTF-8
+[caf�]
 
 # A <meta> inside another tag's quoted attribute value declares nothing
 query I
