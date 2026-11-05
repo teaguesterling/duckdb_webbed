@@ -9,6 +9,7 @@
 #include "utf8proc_wrapper.hpp"
 #include "yyjson.hpp"
 #include <libxml/encoding.h>
+#include <libxml/parserInternals.h>
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
@@ -374,6 +375,11 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, 
 		if (StringUtil::Contains(detail, "depth")) {
 			throw InvalidInputException("HTML document nests elements deeper than libxml2's limit of %d levels",
 			                            LIBXML_MAX_TREE_DEPTH);
+		}
+		if (StringUtil::Contains(detail, "XML_PARSE_HUGE")) {
+			throw InvalidInputException(
+			    "HTML document has a text node or attribute value longer than libxml2's limit of %d bytes",
+			    XML_MAX_TEXT_LENGTH);
 		}
 		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
 	}
