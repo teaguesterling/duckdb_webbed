@@ -1,0 +1,52 @@
+# name: test/sql/duck_block_long_language_class.test
+# description: A long language- class on <pre><code> must not overflow the stack; std::regex recursed once per character
+# group: [sql]
+
+require webbed
+
+statement ok
+CREATE MACRO code_language(c) AS (SELECT html_to_duck_blocks('<pre><code class="' || c || '">x</code></pre>')[1].attributes['language']);
+
+# The crash: a crafted class in untrusted HTML took the whole process down with SIGSEGV
+query I
+SELECT length(code_language('language-' || repeat('a', 65536)));
+----
+65536
+
+query I
+SELECT length(code_language('lang-' || repeat('a', 2000000)));
+----
+2000000
+
+# A long class with no language in it reads as none
+query I
+SELECT code_language(repeat('a', 2000000)) IS NULL;
+----
+true
+
+# The same results the regex "(?:language-|lang-)([a-zA-Z0-9_+-]+)" gave: the leftmost prefix followed by at least one
+# name character, matched anywhere in the class, case-sensitive
+query II
+SELECT c, coalesce(code_language(c), 'NULL') FROM (VALUES
+    (1, 'language-python'), (2, 'lang-c'), (3, 'hljs language-c++'), (4, 'xlanguage-go'), (5, 'mylang-rust'),
+    (6, 'language- lang-py'), (7, 'language-'), (8, 'lang-'), (9, 'language-a b'), (10, 'language-a.b'),
+    (11, 'LANGUAGE-py'), (12, 'lang-a language-b'), (13, 'language-a_b+c-d'), (14, 'python'),
+    (15, 'language-!x lang-y'), (16, 'lang-language-z'), (17, 'langlang-q')) t(i, c) ORDER BY i;
+----
+language-python	python
+lang-c	c
+hljs language-c++	c++
+xlanguage-go	go
+mylang-rust	rust
+language- lang-py	py
+language-	NULL
+lang-	NULL
+language-a b	a
+language-a.b	a
+LANGUAGE-py	NULL
+lang-a language-b	a
+language-a_b+c-d	a_b+c-d
+python	NULL
+language-!x lang-y	y
+lang-language-z	language-z
+langlang-q	q
