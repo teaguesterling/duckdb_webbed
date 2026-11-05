@@ -1,6 +1,7 @@
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
 #include "xml_in_memory_reader.hpp"
+#include "html_charset_labels.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -411,38 +412,6 @@ XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEnc
 	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
 }
 
-// The encoding libxml2 decodes a declared charset label with, mapped the way the WHATWG Encoding Standard maps it, or
-// "" when libxml2 has no decoder for it. Browsers decode ASCII and Latin-1 labels as windows-1252, a superset that
-// gives 0x80-0x9F the punctuation authors meant. libxml2 maps them only for a charset it reads from <meta> itself.
-static std::string HTMLEncodingForLabel(const std::string &label) {
-	auto name = StringUtil::Lower(label);
-	StringUtil::Trim(name);
-	if (name.empty()) {
-		return "";
-	}
-	// A <meta> is read as ASCII, so the bytes cannot be UTF-16, and HTML treats that declaration as UTF-8.
-	if (StringUtil::StartsWith(name, "utf-16")) {
-		return "UTF-8";
-	}
-	switch (xmlParseCharEncoding(name.c_str())) {
-	case XML_CHAR_ENCODING_UTF8:
-		return "UTF-8";
-	case XML_CHAR_ENCODING_ASCII:
-	case XML_CHAR_ENCODING_8859_1:
-		return "windows-1252";
-	default:
-		break;
-	}
-	xmlCharEncodingHandlerPtr handler = nullptr;
-	if (xmlOpenCharEncodingHandler(name.c_str(), 0, &handler) != XML_ERR_OK) {
-		return "";
-	}
-	if (handler) {
-		xmlCharEncCloseFunc(handler);
-	}
-	return name;
-}
-
 static bool IsHTMLSpace(char c) {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
 }
@@ -557,7 +526,7 @@ static std::string FindMetaCharset(const char *head, idx_t size) {
 				}
 			}
 			auto label = !charset.empty() ? charset : content_type ? ContentCharset(content) : "";
-			auto encoding = HTMLEncodingForLabel(label);
+			auto encoding = HTMLDecoderForLabel(label);
 			if (!encoding.empty()) {
 				return encoding;
 			}

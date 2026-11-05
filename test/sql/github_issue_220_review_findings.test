@@ -1,0 +1,319 @@
+# name: test/sql/github_issue_220_review_findings.test
+# description: Findings from the PR #220 review on HTML charset labels
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Only WHATWG Encoding Standard labels declare a charset. Every label, from the standard's table, decodes ASCII
+# unchanged. One file per label, keyed by index, since ':' in a label is not a path character on Windows.
+# ============================================================================
+
+statement ok
+COPY (SELECT i, '<meta charset=' || label || '><p>abcd</p>' AS html FROM (VALUES
+(0, '866'),
+(1, 'ansi_x3.4-1968'),
+(2, 'arabic'),
+(3, 'ascii'),
+(4, 'asmo-708'),
+(5, 'big5'),
+(6, 'big5-hkscs'),
+(7, 'chinese'),
+(8, 'cn-big5'),
+(9, 'cp1250'),
+(10, 'cp1251'),
+(11, 'cp1252'),
+(12, 'cp1253'),
+(13, 'cp1254'),
+(14, 'cp1255'),
+(15, 'cp1256'),
+(16, 'cp1257'),
+(17, 'cp1258'),
+(18, 'cp819'),
+(19, 'cp866'),
+(20, 'csbig5'),
+(21, 'cseuckr'),
+(22, 'cseucpkdfmtjapanese'),
+(23, 'csgb2312'),
+(24, 'csibm866'),
+(25, 'csiso2022jp'),
+(26, 'csiso2022kr'),
+(27, 'csiso58gb231280'),
+(28, 'csiso88596e'),
+(29, 'csiso88596i'),
+(30, 'csiso88598e'),
+(31, 'csiso88598i'),
+(32, 'csisolatin1'),
+(33, 'csisolatin2'),
+(34, 'csisolatin3'),
+(35, 'csisolatin4'),
+(36, 'csisolatin5'),
+(37, 'csisolatin6'),
+(38, 'csisolatin9'),
+(39, 'csisolatinarabic'),
+(40, 'csisolatincyrillic'),
+(41, 'csisolatingreek'),
+(42, 'csisolatinhebrew'),
+(43, 'cskoi8r'),
+(44, 'csksc56011987'),
+(45, 'csmacintosh'),
+(46, 'csshiftjis'),
+(47, 'csunicode'),
+(48, 'cyrillic'),
+(49, 'dos-874'),
+(50, 'ecma-114'),
+(51, 'ecma-118'),
+(52, 'elot_928'),
+(53, 'euc-jp'),
+(54, 'euc-kr'),
+(55, 'gb18030'),
+(56, 'gb2312'),
+(57, 'gb_2312'),
+(58, 'gb_2312-80'),
+(59, 'gbk'),
+(60, 'greek'),
+(61, 'greek8'),
+(62, 'hebrew'),
+(63, 'hz-gb-2312'),
+(64, 'ibm819'),
+(65, 'ibm866'),
+(66, 'iso-10646-ucs-2'),
+(67, 'iso-2022-cn'),
+(68, 'iso-2022-cn-ext'),
+(69, 'iso-2022-jp'),
+(70, 'iso-2022-kr'),
+(71, 'iso-8859-1'),
+(72, 'iso-8859-10'),
+(73, 'iso-8859-11'),
+(74, 'iso-8859-13'),
+(75, 'iso-8859-14'),
+(76, 'iso-8859-15'),
+(77, 'iso-8859-16'),
+(78, 'iso-8859-2'),
+(79, 'iso-8859-3'),
+(80, 'iso-8859-4'),
+(81, 'iso-8859-5'),
+(82, 'iso-8859-6'),
+(83, 'iso-8859-6-e'),
+(84, 'iso-8859-6-i'),
+(85, 'iso-8859-7'),
+(86, 'iso-8859-8'),
+(87, 'iso-8859-8-e'),
+(88, 'iso-8859-8-i'),
+(89, 'iso-8859-9'),
+(90, 'iso-ir-100'),
+(91, 'iso-ir-101'),
+(92, 'iso-ir-109'),
+(93, 'iso-ir-110'),
+(94, 'iso-ir-126'),
+(95, 'iso-ir-127'),
+(96, 'iso-ir-138'),
+(97, 'iso-ir-144'),
+(98, 'iso-ir-148'),
+(99, 'iso-ir-149'),
+(100, 'iso-ir-157'),
+(101, 'iso-ir-58'),
+(102, 'iso8859-1'),
+(103, 'iso8859-10'),
+(104, 'iso8859-11'),
+(105, 'iso8859-13'),
+(106, 'iso8859-14'),
+(107, 'iso8859-15'),
+(108, 'iso8859-2'),
+(109, 'iso8859-3'),
+(110, 'iso8859-4'),
+(111, 'iso8859-5'),
+(112, 'iso8859-6'),
+(113, 'iso8859-7'),
+(114, 'iso8859-8'),
+(115, 'iso8859-9'),
+(116, 'iso88591'),
+(117, 'iso885910'),
+(118, 'iso885911'),
+(119, 'iso885913'),
+(120, 'iso885914'),
+(121, 'iso885915'),
+(122, 'iso88592'),
+(123, 'iso88593'),
+(124, 'iso88594'),
+(125, 'iso88595'),
+(126, 'iso88596'),
+(127, 'iso88597'),
+(128, 'iso88598'),
+(129, 'iso88599'),
+(130, 'iso_8859-1'),
+(131, 'iso_8859-15'),
+(132, 'iso_8859-1:1987'),
+(133, 'iso_8859-2'),
+(134, 'iso_8859-2:1987'),
+(135, 'iso_8859-3'),
+(136, 'iso_8859-3:1988'),
+(137, 'iso_8859-4'),
+(138, 'iso_8859-4:1988'),
+(139, 'iso_8859-5'),
+(140, 'iso_8859-5:1988'),
+(141, 'iso_8859-6'),
+(142, 'iso_8859-6:1987'),
+(143, 'iso_8859-7'),
+(144, 'iso_8859-7:1987'),
+(145, 'iso_8859-8'),
+(146, 'iso_8859-8:1988'),
+(147, 'iso_8859-9'),
+(148, 'iso_8859-9:1989'),
+(149, 'koi'),
+(150, 'koi8'),
+(151, 'koi8-r'),
+(152, 'koi8-ru'),
+(153, 'koi8-u'),
+(154, 'koi8_r'),
+(155, 'korean'),
+(156, 'ks_c_5601-1987'),
+(157, 'ks_c_5601-1989'),
+(158, 'ksc5601'),
+(159, 'ksc_5601'),
+(160, 'l1'),
+(161, 'l2'),
+(162, 'l3'),
+(163, 'l4'),
+(164, 'l5'),
+(165, 'l6'),
+(166, 'l9'),
+(167, 'latin1'),
+(168, 'latin2'),
+(169, 'latin3'),
+(170, 'latin4'),
+(171, 'latin5'),
+(172, 'latin6'),
+(173, 'logical'),
+(174, 'mac'),
+(175, 'macintosh'),
+(176, 'ms932'),
+(177, 'ms_kanji'),
+(178, 'replacement'),
+(179, 'shift-jis'),
+(180, 'shift_jis'),
+(181, 'sjis'),
+(182, 'sun_eu_greek'),
+(183, 'tis-620'),
+(184, 'ucs-2'),
+(185, 'unicode'),
+(186, 'unicode-1-1-utf-8'),
+(187, 'unicode11utf8'),
+(188, 'unicode20utf8'),
+(189, 'unicodefeff'),
+(190, 'unicodefffe'),
+(191, 'us-ascii'),
+(192, 'utf-16'),
+(193, 'utf-16be'),
+(194, 'utf-16le'),
+(195, 'utf-8'),
+(196, 'utf8'),
+(197, 'visual'),
+(198, 'windows-1250'),
+(199, 'windows-1251'),
+(200, 'windows-1252'),
+(201, 'windows-1253'),
+(202, 'windows-1254'),
+(203, 'windows-1255'),
+(204, 'windows-1256'),
+(205, 'windows-1257'),
+(206, 'windows-1258'),
+(207, 'windows-31j'),
+(208, 'windows-874'),
+(209, 'windows-949'),
+(210, 'x-cp1250'),
+(211, 'x-cp1251'),
+(212, 'x-cp1252'),
+(213, 'x-cp1253'),
+(214, 'x-cp1254'),
+(215, 'x-cp1255'),
+(216, 'x-cp1256'),
+(217, 'x-cp1257'),
+(218, 'x-cp1258'),
+(219, 'x-euc-jp'),
+(220, 'x-gbk'),
+(221, 'x-mac-cyrillic'),
+(222, 'x-mac-roman'),
+(223, 'x-mac-ukrainian'),
+(224, 'x-sjis'),
+(225, 'x-unicode20utf8'),
+(226, 'x-user-defined'),
+(227, 'x-x-big5')
+) AS t(i, label)) TO '{TEST_DIR}/issue_220_labels' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01', PARTITION_BY (i));
+
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_220_labels/*/*.csv', filename := true) WHERE element_type = 'paragraph' AND content = 'abcd';
+----
+228
+
+# Any label that did not decode to abcd, by index
+query I
+SELECT filename FROM read_html_blocks('{TEST_DIR}/issue_220_labels/*/*.csv', filename := true) WHERE element_type = 'paragraph' AND content IS DISTINCT FROM 'abcd';
+----
+
+# ============================================================================
+# Labels that are not in the standard are ignored, even when iconv opens them
+# ============================================================================
+
+# iconv reads "unicode" as UTF-16, which turned ASCII into CJK. The standard maps it to UTF-16LE, and a <meta> is
+# ASCII, so the file is read as UTF-8.
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_unicode_label.html') WHERE element_type = 'paragraph';
+----
+abcd
+
+# UTF-7 is not a web encoding. Decoding it would turn this text into an <img>.
+statement ok
+COPY (SELECT '<meta charset=utf-7>+ADw-img src+AD0-x onerror+AD0-alert(1)+AD4-') TO '{TEST_DIR}/issue_220_utf7.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_220_utf7.html') WHERE element_type = 'image';
+----
+0
+
+# "us" is not a label (us-ascii is). It used to raise, and is now ignored, so the undeclared rule reads windows-1252.
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_unknown_label_us.html') WHERE element_type = 'paragraph';
+----
+café
+
+# ============================================================================
+# Declared labels decode the bytes the way a browser does
+# ============================================================================
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_koi8_r.html') WHERE element_type = 'paragraph';
+----
+а
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_shift_jis.html') WHERE element_type = 'paragraph';
+----
+あ
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_gbk.html') WHERE element_type = 'paragraph';
+----
+你
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_euc_kr.html') WHERE element_type = 'paragraph';
+----
+가
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_big5.html') WHERE element_type = 'paragraph';
+----
+一
+
+# x-user-defined reads as windows-1252, per the HTML prescan, where 0x80 is the euro sign
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_x_user_defined.html') WHERE element_type = 'paragraph';
+----
+€
+
+# "logical" is an ISO-8859-8-I label, and 0xE0 is the Hebrew letter alef
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_logical.html') WHERE element_type = 'paragraph';
+----
+א
