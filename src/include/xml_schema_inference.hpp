@@ -17,6 +17,17 @@ enum class XMLTier {
 	FALLBACK_TO_XML = 4           // Must preserve full XML context (has parent attributes or complex nesting)
 };
 
+// One force_list entry. Steps are element names from outer to inner. A relative pattern (`a/b`)
+// is anchored at the record element. A descendant pattern (`//a/b`, or a bare name, which bind
+// rewrites to `//name`) matches at any depth.
+struct ForceListPattern {
+	bool descendant;
+	std::vector<std::string> steps;
+};
+
+// Parses the joined force_list union (`//a | b/c`). Throws BinderException on unsupported XPath.
+std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list);
+
 // Configuration options for schema inference
 struct XMLSchemaOptions {
 	// Schema inference controls
@@ -59,8 +70,8 @@ struct XMLSchemaOptions {
 	double array_threshold = 0.8;    // Minimum homogeneity for arrays (80%)
 	int32_t max_array_depth = 3;     // Maximum nested array depth
 	std::string record_element = ""; // XPath or tag name for elements that should be rows (e.g., "//item" or "item")
-	std::string force_list =
-	    ""; // Comma-separated list of element names that should always be LIST type (like xml_to_json)
+	std::string force_list = ""; // Elements that should always be LIST type, joined as an XPath union
+	std::vector<ForceListPattern> force_list_patterns; // force_list parsed at bind
 
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors

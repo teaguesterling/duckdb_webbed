@@ -144,3 +144,15 @@ statement error
 SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := ['layoutSections', '//@id']);
 ----
 is not supported
+
+# Bind validates force_list, so error recovery during inference can't swallow it
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', ignore_errors := true, force_list := 'layoutSections[1]');
+----
+is not supported
+
+# The check runs even when inference never reaches a nested element
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', max_depth := 1, force_list := 'layoutSections[1]');
+----
+is not supported

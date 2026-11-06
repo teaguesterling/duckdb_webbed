@@ -661,6 +661,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					}
 				}
 			}
+			schema_options.force_list_patterns = ParseForceListPatterns(schema_options.force_list);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {
@@ -1560,6 +1561,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					}
 				}
 			}
+			schema_options.force_list_patterns = ParseForceListPatterns(schema_options.force_list);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {
@@ -1988,6 +1990,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 					}
 				}
 			}
+			schema_options.force_list_patterns = ParseForceListPatterns(schema_options.force_list);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {

@@ -374,14 +374,6 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 	return columns;
 }
 
-// One force_list entry. Steps are element names from outer to inner. A relative pattern (`a/b`)
-// is anchored at the record element. A descendant pattern (`//a/b`, or a bare name, which bind
-// rewrites to `//name`) matches at any depth.
-struct ForceListPattern {
-	bool descendant;
-	std::vector<std::string> steps;
-};
-
 static std::string TrimWhitespace(const std::string &text) {
 	size_t first = text.find_first_not_of(" \t\n\r");
 	if (first == std::string::npos) {
@@ -391,8 +383,7 @@ static std::string TrimWhitespace(const std::string &text) {
 	return text.substr(first, last - first + 1);
 }
 
-// Bind joins the force_list entries into one XPath union (`//a | b/c`)
-static std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list_str) {
+std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list_str) {
 	std::vector<ForceListPattern> patterns;
 	for (const auto &segment : StringUtil::Split(force_list_str, '|')) {
 		std::string expr = TrimWhitespace(segment);
@@ -535,7 +526,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	// Check if this column is in force_list (should always be LIST type)
-	bool force_as_list = MatchesForceList(ParseForceListPatterns(options.force_list), column.ancestors, column.name);
+	bool force_as_list = MatchesForceList(options.force_list_patterns, column.ancestors, column.name);
 
 	// Check if all instances are leaf nodes (text only, no children and no attributes)
 	// Elements with attributes should be treated as complex (STRUCT), not leaf
