@@ -1,5 +1,6 @@
 #include "xml_reader_functions.hpp"
 #include "named_parameter_compat.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "xml_utils.hpp"
 #include "xml_file_io.hpp"
 #include "xml_schema_inference.hpp"
@@ -1012,6 +1013,14 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 					}
 				}
 
+				// The file is returned as text, so it must be UTF-8. The other readers decode its declared encoding.
+				if (valid && !Utf8Proc::IsValid(content.data(), content.size())) {
+					throw InvalidInputException("File %s is not valid UTF-8. %s returns each file as text, which must "
+					                            "be UTF-8. Use %s, which decodes the file's declared encoding, or "
+					                            "read_blob for its bytes",
+					                            filename, is_html ? "read_html_objects" : "read_xml_objects",
+					                            is_html ? "read_html" : "read_xml");
+				}
 				if (valid) {
 					// Set output values based on schema
 					idx_t col_idx = 0;
