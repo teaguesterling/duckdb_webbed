@@ -4,6 +4,17 @@ Changelog
 Unreleased
 ----------
 
+Inference changes contributed by **@bendrucker** (#221, #222).
+
+- Inference types a value as numeric only when the type gives back its exact text. ``007``,
+  ``1.10`` and ``1e3`` stay VARCHAR. Under ``union_by_name``, an integer file beside a decimal
+  file is DOUBLE only when every sampled integer is exact in a DOUBLE (#221).
+- ``auto_type_candidates`` restricts the scalar types inference may choose, as in ``read_csv``.
+  VARCHAR is always a candidate. Naming a type that inference never produces, such as DECIMAL,
+  is an error. Zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, where ``read_csv`` reads it
+  in the session time zone. The option with ``columns`` or ``all_varchar`` is an error. See
+  :ref:`auto-type-candidates` (#222).
+
 Fixes from the duck_block review in #217.
 
 - HTML deeper than libxml2's 256-level limit raises an error. It used to return a truncated
@@ -33,6 +44,8 @@ Fixes from the duck_block review in #217.
   skips it. A negative ``maximum_file_size`` raises an error.
 - ``ignore_errors`` on ``read_html_blocks`` skips document errors and a file too large for
   ``memory_limit`` alone, and ``parse_html_blocks`` now honors it.
+- A NULL boolean parameter, such as ``ignore_errors := NULL``, raises a binder error, as in
+  ``read_csv``. It used to raise an INTERNAL error (#244).
 
 Fixes from the pre-release scan.
 
