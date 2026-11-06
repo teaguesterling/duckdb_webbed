@@ -33,6 +33,32 @@ Fixes from the duck_block review in #217.
 - ``ignore_errors`` on ``read_html_blocks`` skips document errors only, and
   ``parse_html_blocks`` now honors it.
 
+Fixes from the pre-release scan.
+
+- ``json_to_xml`` and the ``JSON`` to ``XML`` cast raise an error for JSON nested deeper than
+  256 levels. It used to crash DuckDB (#228).
+- ``json_to_xml`` raises an error for a key that is not an XML name, such as ``"first name"``.
+  It used to write the key as markup, so a crafted key could add elements (#228).
+- ``to_xml(value, name)`` uses each row's name when ``name`` is a column. It used to write
+  ``<xml>`` for every row (#229).
+- ``read_xml``: an attribute and a child element with the same name are two columns. The
+  attribute column takes ``attr_prefix``, such as ``@id`` beside ``id``. The same holds for
+  fields inside a STRUCT. The attribute used to fill both (#230, #235).
+- ``read_xml``: a tag-name ``record_element`` matches only the outermost elements. A nested
+  match stays in its parent's column, as streaming always read it. Use an XPath expression to
+  select nested elements as rows (#235).
+- ``read_xml``: a record no longer fills a column with its own name beside other columns,
+  inferred or declared. A record without that child reads NULL. A one-column schema named
+  after the record still reads the record (#235).
+- ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
+  tags, and the text after ``</body>`` (#231).
+- ``html_extract_tables`` returns ``<tfoot>`` rows after the body rows (#232).
+- ``namespaces := 'auto'`` works after more than one processing instruction, with a ``>`` in a
+  root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. It used
+  to return ``[]`` (#233).
+- ``to_xml`` and ``json_to_xml`` write a NUL byte as U+FFFD and keep the text after it. They
+  used to end the text at the NUL (#234).
+
 v2.14.1 (Current)
 -----------------
 
