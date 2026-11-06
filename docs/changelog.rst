@@ -80,6 +80,12 @@ Fixes from the pre-release scan.
   (#233).
 - ``to_xml`` and ``json_to_xml`` write a NUL byte as U+FFFD and keep the text after it. They
   used to end the text at the NUL (#234).
+- ``read_xml``: a date that fits two candidate formats, such as ``05/06/2024`` in a union of
+  files with different day/month orders, raises an error that names both formats and
+  ``datetime_format``. It used to name the ISO format (#247).
+- ``read_xml``: a declared ``TIMESTAMPTZ`` column with a zone name, such as ``EST``, raises an
+  error that says ``read_xml`` cannot resolve the name, and gives the VARCHAR-then-cast route. It
+  used to say the name was not resolvable (#242).
 
 v2.14.1 (Current)
 -----------------
