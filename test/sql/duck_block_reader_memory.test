@@ -46,11 +46,12 @@ SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
 ----
 Raise memory_limit to read it
 
-# ignore_errors skips document errors, not a file too large for memory_limit
-statement error
+# ignore_errors skips a file too large for memory_limit even alone, as it skips one over maximum_file_size. This
+# 20 MB file fails the size check before its parse starts.
+query I
 SELECT count(*) FROM read_html_blocks(['{TEST_DIR}/small_blocks.html', '{TEST_DIR}/many_blocks.html'], ignore_errors := true);
 ----
-Raise memory_limit to read it
+5000
 
 # A file whose estimate fits still reads
 query I
@@ -75,6 +76,12 @@ statement error
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/dense_p.html');
 ----
 Out of Memory Error: Reading '
+
+# This file passes the size check and fails as its parse reads. ignore_errors skips it too.
+query I
+SELECT count(*) FROM read_html_blocks(['{TEST_DIR}/dense_p.html', '{TEST_DIR}/small_blocks.html'], ignore_errors := true);
+----
+5000
 
 # A 20 MB file of long paragraphs builds a DOM of about 5 times its size, so 600 MB reads it
 statement ok
