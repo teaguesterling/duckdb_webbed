@@ -246,7 +246,8 @@ into memory outside DuckDB's buffer manager, from 5 times the file's size for lo
 to about 80 times for markup of empty elements. It estimates that memory from the markup as it
 reads, and the files parsing at once share ``memory_limit``. A file that doesn't fit while
 others parse is read again alone, and one whose estimate passes ``memory_limit`` on its own
-raises an Out of Memory error. The rows themselves live in buffer-managed memory, which
+raises an Out of Memory error. A tight ``memory_limit`` leaves room for fewer parses at once,
+down to one, so the read takes longer than with ``threads`` parses. The rows themselves live in buffer-managed memory, which
 ``memory_limit`` bounds separately, so a file with many blocks spills to disk instead of
 failing.
 
