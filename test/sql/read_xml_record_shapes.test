@@ -1,0 +1,39 @@
+# name: test/sql/read_xml_record_shapes.test
+# description: A record fills a column with its own name only when that column is the whole schema
+# group: [sql]
+
+require webbed
+
+# The first <row> has a child <row>, so the schema has columns a and row. The second <row> has no child <row>: its
+# row is NULL. It used to read '<a>2</a>', the record itself.
+query IT
+SELECT a, "row" FROM read_xml('test/xml/record_shapes/selfcol.xml') ORDER BY a;
+----
+1	x
+2	NULL
+
+query IT
+SELECT a, "row" FROM read_xml('test/xml/record_shapes/selfcol.xml', maximum_file_size := 1) ORDER BY a;
+----
+1	x
+2	NULL
+
+# A one-column schema named after the record still reads the record: max_depth leaves no room inside it,
+# or the column is declared
+query T
+SELECT "row" FROM read_xml('test/xml/record_shapes/plain.xml', max_depth := 1);
+----
+<a>1</a>
+<a>2</a>
+
+query T
+SELECT "row" FROM read_xml('test/xml/record_shapes/plain.xml', max_depth := 1, maximum_file_size := 1);
+----
+<a>1</a>
+<a>2</a>
+
+query T
+SELECT "row" FROM read_xml('test/xml/record_shapes/plain.xml', columns := {'row': 'XML'});
+----
+<a>1</a>
+<a>2</a>

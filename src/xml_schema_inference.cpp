@@ -2358,10 +2358,12 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 				child = child->next;
 			}
 
-			// If no matching child found, check if column name matches the record element itself
+			// If no matching child found, a column named after the record reads the record itself, but only when it
+			// is the whole schema: inference makes that column when max_depth leaves no room inside records, or the
+			// user declares it. Beside other columns it came from a child of that name: without one, it is NULL.
 			if (child == nullptr) {
 				std::string record_name = (const char *)record->name;
-				if (record_name == column_name) {
+				if (record_name == column_name && column_names.size() == 1) {
 					WriteNodeValue(record, column_type, column_out, row, options, col_fmt);
 					written = true;
 				} else {
