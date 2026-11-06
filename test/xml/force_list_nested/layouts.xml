@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Layouts>
+    <Layout>
+        <fullName>A</fullName>
+        <layoutSections>
+            <label>Information</label>
+            <layoutColumns>
+                <layoutItems>
+                    <field>Name</field>
+                </layoutItems>
+            </layoutColumns>
+        </layoutSections>
+        <summaryLayout>
+            <layoutItems>
+                <field>Owner</field>
+            </layoutItems>
+        </summaryLayout>
+    </Layout>
+    <Layout>
+        <fullName>B</fullName>
+    </Layout>
+    <Layout>
+        <fullName>C</fullName>
+        <layoutSections>
+            <label>Empty</label>
+        </layoutSections>
+    </Layout>
+</Layouts>

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Layouts>
+    <Layout>
+        <fullName>A</fullName>
+        <layoutSections>
+            <label>First</label>
+            <layoutColumns>
+                <layoutItems>
+                    <field>Name</field>
+                </layoutItems>
+            </layoutColumns>
+        </layoutSections>
+        <layoutSections>
+            <label>Second</label>
+            <layoutColumns>
+                <layoutItems>
+                    <field>Phone</field>
+                </layoutItems>
+            </layoutColumns>
+        </layoutSections>
+        <layoutSections>
+            <label>Third</label>
+        </layoutSections>
+    </Layout>
+    <Layout>
+        <fullName>B</fullName>
+        <layoutSections>
+            <label>Only</label>
+            <layoutColumns>
+                <layoutItems>
+                    <field>Email</field>
+                </layoutItems>
+            </layoutColumns>
+        </layoutSections>
+    </Layout>
+</Layouts>

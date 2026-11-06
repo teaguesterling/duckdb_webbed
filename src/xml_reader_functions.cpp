@@ -678,37 +678,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 			schema_options.record_element = record_value;
 		} else if (kv.first == "force_list") {
-			// Handle both VARCHAR and LIST(VARCHAR)
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				// Single tag name or XPath
-				std::string force_value = kv.second.ToString();
-				// Convert simple tag names to XPath
-				if (force_value.find('/') == std::string::npos) {
-					force_value = "//" + force_value;
-				}
-				schema_options.force_list = force_value;
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				// List of tag names - try each one
-				auto &list_children = ListValue::GetChildren(kv.second);
-				std::vector<std::string> xpaths;
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						std::string tag = child.ToString();
-						// Convert simple tag names to XPath
-						if (tag.find('/') == std::string::npos) {
-							tag = "//" + tag;
-						}
-						xpaths.push_back(tag);
-					}
-				}
-				// Combine with XPath OR operator
-				if (!xpaths.empty()) {
-					schema_options.force_list = xpaths[0];
-					for (size_t i = 1; i < xpaths.size(); i++) {
-						schema_options.force_list += " | " + xpaths[i];
-					}
-				}
-			}
+			schema_options.force_list = ParseForceList(kv.second);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {
@@ -1553,37 +1523,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 			schema_options.record_element = record_value;
 		} else if (kv.first == "force_list") {
-			// Handle both VARCHAR and LIST(VARCHAR)
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				// Single tag name or XPath
-				std::string force_value = kv.second.ToString();
-				// Convert simple tag names to XPath
-				if (force_value.find('/') == std::string::npos) {
-					force_value = "//" + force_value;
-				}
-				schema_options.force_list = force_value;
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				// List of tag names - try each one
-				auto &list_children = ListValue::GetChildren(kv.second);
-				std::vector<std::string> xpaths;
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						std::string tag = child.ToString();
-						// Convert simple tag names to XPath
-						if (tag.find('/') == std::string::npos) {
-							tag = "//" + tag;
-						}
-						xpaths.push_back(tag);
-					}
-				}
-				// Combine with XPath OR operator
-				if (!xpaths.empty()) {
-					schema_options.force_list = xpaths[0];
-					for (size_t i = 1; i < xpaths.size(); i++) {
-						schema_options.force_list += " | " + xpaths[i];
-					}
-				}
-			}
+			schema_options.force_list = ParseForceList(kv.second);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {
@@ -1991,31 +1931,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 			schema_options.record_element = record_value;
 		} else if (kv.first == "force_list") {
-			if (kv.second.type().id() == LogicalTypeId::VARCHAR) {
-				std::string force_value = kv.second.ToString();
-				if (force_value.find('/') == std::string::npos) {
-					force_value = "//" + force_value;
-				}
-				schema_options.force_list = force_value;
-			} else if (kv.second.type().id() == LogicalTypeId::LIST) {
-				auto &list_children = ListValue::GetChildren(kv.second);
-				std::vector<std::string> xpaths;
-				for (const auto &child : list_children) {
-					if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
-						std::string tag = child.ToString();
-						if (tag.find('/') == std::string::npos) {
-							tag = "//" + tag;
-						}
-						xpaths.push_back(tag);
-					}
-				}
-				if (!xpaths.empty()) {
-					schema_options.force_list = xpaths[0];
-					for (size_t i = 1; i < xpaths.size(); i++) {
-						schema_options.force_list += " | " + xpaths[i];
-					}
-				}
-			}
+			schema_options.force_list = ParseForceList(kv.second);
 		} else if (kv.first == "attr_mode") {
 			schema_options.attr_mode = kv.second.ToString();
 		} else if (kv.first == "attr_prefix") {

@@ -91,7 +91,7 @@ Type Handling Parameters
    * - ``force_list``
      - VARCHAR[]
      - []
-     - Column names that should always be LIST type, even if they appear only once
+     - Elements that should always be LIST type, even if they appear only once. A bare name (``'tag'``) or ``'//tag'`` matches the element at any depth. A path such as ``'sections/columns/items'`` matches only that chain of child elements under the record element. ``'//columns/items'`` matches the chain at any depth. See :ref:`force-list-paths`.
    * - ``nullstr``
      - VARCHAR or VARCHAR[]
      - (none)
