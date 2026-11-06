@@ -1,0 +1,35 @@
+# name: test/sql/declared_type_ignore_errors.test
+# description: A declared column of a type ConvertToValue has no branch for (DECIMAL, HUGEINT, UUID) casts each value. Under ignore_errors a value that doesn't cast is NULL, as in the typed branches. It used to fail the read with a chunk-count error (#246).
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<r><i><p>1.5</p></i><i><p>abc</p></i><i><p>2.5</p></i></r>') TO '{TEST_DIR}/dec.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT p FROM read_xml('{TEST_DIR}/dec.xml', record_element := 'i', columns := {'p': 'DECIMAL(10,2)'}, ignore_errors := true);
+----
+1.50
+NULL
+2.50
+
+# The streaming reader gives the same rows
+query I
+SELECT p FROM read_xml('{TEST_DIR}/dec.xml', record_element := 'i', columns := {'p': 'DECIMAL(10,2)'}, ignore_errors := true, maximum_file_size := 16, streaming := true);
+----
+1.50
+NULL
+2.50
+
+query I
+SELECT u FROM parse_xml('<r><i><u>550e8400-e29b-41d4-a716-446655440000</u></i><i><u>nope</u></i></r>', columns := {'u': 'UUID'}, ignore_errors := true);
+----
+550e8400-e29b-41d4-a716-446655440000
+NULL
+
+# Without ignore_errors the value still raises
+statement error
+SELECT p FROM read_xml('{TEST_DIR}/dec.xml', record_element := 'i', columns := {'p': 'DECIMAL(10,2)'});
+----
+Could not convert string "abc" to DECIMAL(10,2)

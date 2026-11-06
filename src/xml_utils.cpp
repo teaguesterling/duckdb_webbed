@@ -163,11 +163,19 @@ void XMLSilentXPathErrorHandler(void *ctx, const xmlError *error) {
 	// This is thread-safe because it's set per-context, not globally
 }
 
+// libxml2 reads an expression as a C string, so a NUL would silently end it there.
+static void RejectNulInXPath(const std::string &xpath) {
+	if (xpath.find('\0') != std::string::npos) {
+		throw InvalidInputException("XPath expression contains a NUL byte");
+	}
+}
+
 // See xml_utils.hpp for why this compiles before evaluating.
 xmlXPathObjectPtr EvalXPathChecked(xmlXPathContextPtr xpath_ctx, const std::string &xpath) {
 	if (!xpath_ctx) {
 		return nullptr;
 	}
+	RejectNulInXPath(xpath);
 	xmlXPathCompExprPtr compiled = xmlXPathCtxtCompile(xpath_ctx, BAD_CAST xpath.c_str());
 	if (!compiled) {
 		throw InvalidInputException("Invalid XPath expression: '%s'", xpath);
@@ -1126,6 +1134,7 @@ std::vector<std::pair<bool, std::string>> XMLUtils::ExtractTextByXPathEach(const
 	//
 	// Compiling first fixes all three: one compile, a deterministic error, and nothing allocated
 	// yet to leak when it throws.
+	RejectNulInXPath(relative_xpath);
 	xmlXPathCompExprPtr rel_compiled = xmlXPathCtxtCompile(xml_doc.xpath_ctx, BAD_CAST relative_xpath.c_str());
 	if (!rel_compiled) {
 		throw InvalidInputException("Invalid XPath expression: '%s'", relative_xpath);
