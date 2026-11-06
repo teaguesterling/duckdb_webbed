@@ -61,7 +61,7 @@ statement ok
 COPY (SELECT '<r>' || string_agg('<i><v>' || CASE WHEN n = 15000 THEN '0.50' ELSE (n / 4)::VARCHAR END || '</v></i>', '' ORDER BY n) || '</r>' FROM range(20000) t(n)) TO '{TEST_DIR}/late_zero.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
 
 statement error
-SELECT count(*) FROM read_xml('{TEST_DIR}/late_zero.xml', record_element := 'i');
+SELECT max(v) FROM read_xml('{TEST_DIR}/late_zero.xml', record_element := 'i');
 ----
 value '0.50' does not match column type DOUBLE
 
@@ -81,12 +81,12 @@ statement ok
 COPY (SELECT '<r>' || repeat('<i><v>0.25</v></i>', 100) || '<i><v>5.188912636955312e-05</v></i></r>') TO '{TEST_DIR}/py_float.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
 
 statement error
-SELECT count(*) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i');
+SELECT max(v) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i', sample_size := 10);
 ----
 value '5.188912636955312e-05' does not match column type DOUBLE
 
 query I
-SELECT max(v) FILTER (WHERE v < 0.1) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i', numeric_inference := 'lenient');
+SELECT max(v) FILTER (WHERE v < 0.1) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i', sample_size := 10, numeric_inference := 'lenient');
 ----
 5.188912636955312e-05
 
