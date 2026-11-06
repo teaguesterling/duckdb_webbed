@@ -165,14 +165,15 @@ SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml
 # PART 7: Complex AWS Response with Nested attachmentSet
 # ============================================================================
 
-# Test 7.1: record_element matches ALL elements with that name at ANY depth
-# This file has 3 volume items + 2 attachment items = 5 total
-# NOTE: This behavior may be unexpected - user might want only top-level items
+# Test 7.1: record_element matches the outermost elements with that name
+# This file has 3 volume items, 2 of them holding an attachment item. The attachments stay in their volume's row,
+# as streaming reads them. They used to be rows of their own, for 5 in all.
 query I
 SELECT count(*) FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml',
                               record_element := 'item');
 ----
-5
+3
+
 
 # Test 7.2: WORKAROUND - Filter by presence of volume-specific fields
 # Volume items have 'size', attachment items don't
@@ -183,11 +184,13 @@ WHERE size IS NOT NULL;
 ----
 3
 
-# Test 7.3: Attachment items have instanceId at top level
+# Test 7.3: An XPath expression selects the attachment items as rows, with instanceId at top level.
+# The file has a default namespace, so match local names.
 query I
 SELECT count(*)
-FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml', record_element := 'item')
-WHERE size IS NULL AND instanceId IS NOT NULL;
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes.xml',
+              record_element := '//*[local-name()=''attachmentSet'']/*[local-name()=''item'']')
+WHERE instanceId IS NOT NULL;
 ----
 2
 

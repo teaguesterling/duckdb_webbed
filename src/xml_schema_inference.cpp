@@ -197,7 +197,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 // Phase 1: Identify Record Elements
 static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std::vector<xmlNodePtr> &out) {
 	if (xmlStrEqual(node->name, name)) {
+		// A match inside a match stays part of its outer record, as in streaming (xml_sax_reader.cpp)
 		out.push_back(node);
+		return;
 	}
 	// Elements only nest inside elements: entity references are left unexpanded, and the XPath
 	// descendant axis does not enter them either.
@@ -209,8 +211,8 @@ static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std
 }
 
 // Resolve record_element to its nodes in document order. A bare tag, or `//tag`, matches by local
-// name regardless of namespace: the node set of //*[local-name()='tag'], found by walking the tree
-// instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
+// name regardless of namespace: the outermost nodes of //*[local-name()='tag'], found by walking the
+// tree instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
 // cannot sit inside that XPath literal (a quote or NUL) still goes to XPath, which rejects it.
 static std::vector<xmlNodePtr> FindRecordElements(XMLDocRAII &doc, const std::string &record_element) {
 	auto is_simple = [](const std::string &tag) {

@@ -37,3 +37,29 @@ SELECT "row" FROM read_xml('test/xml/record_shapes/plain.xml', columns := {'row'
 ----
 <a>1</a>
 <a>2</a>
+
+# A record nested inside a record of the same name is not a row of its own: it stays in its parent's column, as
+# streaming always read it. DOM used to add a row for it.
+query IT
+SELECT v, item FROM read_xml('test/xml/record_shapes/nested_rec.xml', record_element := 'item') ORDER BY v;
+----
+1	{'v': 2}
+3	NULL
+
+query IT
+SELECT v, item FROM read_xml('test/xml/record_shapes/nested_rec.xml', record_element := '//item') ORDER BY v;
+----
+1	{'v': 2}
+3	NULL
+
+query IT
+SELECT v, item FROM read_xml('test/xml/record_shapes/nested_rec.xml', record_element := 'item', maximum_file_size := 1) ORDER BY v;
+----
+1	{'v': 2}
+3	NULL
+
+# Any other XPath expression keeps its own node set, nested matches included
+query I
+SELECT count(*) FROM read_xml('test/xml/record_shapes/nested_rec.xml', record_element := '//*[local-name()=''item'']');
+----
+3
