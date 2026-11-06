@@ -5,10 +5,10 @@
 require webbed
 
 # <a>1</a> and <A>x</A> are one field, typed from both values.
-query I
-DESCRIBE SELECT s FROM read_xml('test/xml/struct_case/mixed.xml', record_element := 'i');
+query T
+SELECT column_type FROM (DESCRIBE SELECT s FROM read_xml('test/xml/struct_case/mixed.xml', record_element := 'i'));
 ----
-<REGEX>:.*STRUCT\(a VARCHAR\).*
+STRUCT(a VARCHAR)
 
 query T
 SELECT s.a FROM read_xml('test/xml/struct_case/mixed.xml', record_element := 'i') ORDER BY 1;
