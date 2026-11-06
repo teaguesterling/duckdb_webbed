@@ -1,0 +1,36 @@
+# name: test/sql/attr_prefixed_shadow.test
+# description: In attr_mode='prefixed', an element column must read the element, not a same-name attribute
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<r><row id="7"><id>5</id><v>a</v></row><row><id>6</id><v>b</v></row></r>') TO '{TEST_DIR}/attr_shadow.xml' (HEADER false, QUOTE '');
+
+# Before, column id read the attribute too: (7, 7, a) instead of (7, 5, a)
+query III
+SELECT "@id", id, v FROM read_xml('{TEST_DIR}/attr_shadow.xml', attr_mode := 'prefixed') ORDER BY v;
+----
+7	5	a
+NULL	6	b
+
+# The streaming reader agrees
+query III
+SELECT "@id", id, v FROM read_xml('{TEST_DIR}/attr_shadow.xml', attr_mode := 'prefixed', maximum_file_size := 1) ORDER BY v;
+----
+7	5	a
+NULL	6	b
+
+# Explicit columns follow the same rule
+query II
+SELECT "@id", id FROM read_xml('{TEST_DIR}/attr_shadow.xml', attr_mode := 'prefixed', columns := {'@id': 'VARCHAR', 'id': 'INTEGER'}) ORDER BY id;
+----
+7	5
+NULL	6
+
+# A custom prefix works the same way
+query II
+SELECT "_id", id FROM read_xml('{TEST_DIR}/attr_shadow.xml', attr_mode := 'prefixed', attr_prefix := '_') ORDER BY id;
+----
+7	5
+NULL	6

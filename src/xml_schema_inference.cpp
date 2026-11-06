@@ -309,10 +309,13 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 	std::vector<ColumnAnalysis> columns;
 	std::unordered_map<std::string, size_t> column_index;
 
+	// Attributes and elements are keyed apart, so <row id="r1"><id>5</id> keeps both values; a clash
+	// is renamed below. '\x01' cannot occur in an XML name.
 	auto get_column = [&](const std::string &column_name, bool is_attribute) -> ColumnAnalysis & {
-		auto it = column_index.find(column_name);
+		std::string key = is_attribute ? "\x01" + column_name : column_name;
+		auto it = column_index.find(key);
 		if (it == column_index.end()) {
-			it = column_index.emplace(column_name, columns.size()).first;
+			it = column_index.emplace(key, columns.size()).first;
 			columns.emplace_back(column_name, is_attribute);
 		}
 		return columns[it->second];
@@ -341,7 +344,6 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 					auto &col = get_column(column_name, true);
 					col.instances.push_back(record); // Store record node for attribute access
 					col.occurrence_count++;
-					columns_in_this_record[column_name]++;
 				}
 			}
 		}
@@ -364,13 +366,23 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 			}
 		}
 
-		// Check if any column appeared multiple times in this record
+		// Check if any element appeared multiple times in this record (an attribute cannot repeat)
 		for (const auto &pair : columns_in_this_record) {
 			if (pair.second > 1) {
 				auto idx_it = column_index.find(pair.first);
 				if (idx_it != column_index.end()) {
 					columns[idx_it->second].repeats_in_record = true;
 				}
+			}
+		}
+	}
+
+	// attr_mode='columns' names an attribute column after the attribute. When a child element has the
+	// same name, the attribute column takes attr_prefix instead ('@id' beside 'id'), as in 'prefixed'.
+	if (options.attr_mode == "columns" && !options.attr_prefix.empty()) {
+		for (auto &col : columns) {
+			if (col.is_attribute && column_index.count(col.name)) {
+				col.name = options.attr_prefix + col.name;
 			}
 		}
 	}
@@ -2039,8 +2051,48 @@ std::string XMLSchemaInference::CleanTextContent(const char *text, size_t size, 
 	return result;
 }
 
+// The attribute a column reads, or "" when it reads only elements (an attribute name is never empty).
+// 'prefixed': only an attr_prefix column reads an attribute, so <row id="7"><id>5</id> gives @id = 7
+// and id = 5. 'columns': a column reads the same-name attribute, unless inference renamed a clash so
+// that the attribute has its own attr_prefix column; that column reads it and the bare one does not.
+static bool StartsWithAttrPrefix(const std::string &column_name, const XMLSchemaOptions &options) {
+	const std::string &prefix = options.attr_prefix;
+	return !prefix.empty() && column_name.size() > prefix.size() && column_name.compare(0, prefix.size(), prefix) == 0;
+}
+
+template <class HAS_COLUMN>
+static std::string AttributeForColumn(const std::string &column_name, const XMLSchemaOptions &options,
+                                      HAS_COLUMN has_column) {
+	const std::string &prefix = options.attr_prefix;
+	bool prefixed_name = StartsWithAttrPrefix(column_name, options);
+	if (options.attr_mode == "discard") {
+		return "";
+	}
+	if (options.attr_mode == "prefixed") {
+		if (prefix.empty()) {
+			return column_name;
+		}
+		return prefixed_name ? column_name.substr(prefix.size()) : "";
+	}
+	if (options.attr_mode == "columns" && !prefix.empty()) {
+		if (prefixed_name && has_column(column_name.substr(prefix.size()))) {
+			return column_name.substr(prefix.size());
+		}
+		if (has_column(prefix + column_name)) {
+			return "";
+		}
+	}
+	return column_name;
+}
+
 idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLColumnInfo> &schema, int remaining_depth,
                                       const XMLSchemaOptions &options, DataChunk &out, idx_t col, idx_t row) {
+	// AttributeForColumn looks up other columns only when one starts with attr_prefix (a renamed clash)
+	bool any_prefixed_column = false;
+	for (const auto &column : schema) {
+		any_prefixed_column = any_prefixed_column || StartsWithAttrPrefix(column.name, options);
+	}
+
 	// If remaining_depth < 0, serialize the record as XML
 	if (remaining_depth < 0) {
 		if (col >= out.ColumnCount()) {
@@ -2073,10 +2125,20 @@ idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLCo
 		bool written = false;
 
 		if (column.is_attribute) {
-			// Extract attribute value (strip attr_prefix in 'prefixed' mode)
-			std::string attr_name = AttributeNameFromColumn(column.name, options);
+			// Extract attribute value (strip attr_prefix in 'prefixed' mode, and from a renamed clash)
+			std::string attr_name = AttributeForColumn(column.name, options, [&](const std::string &name) {
+				if (!any_prefixed_column) {
+					return false;
+				}
+				for (const auto &other : schema) {
+					if (other.name == name) {
+						return true;
+					}
+				}
+				return false;
+			});
 
-			xmlChar *attr_value = xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+			xmlChar *attr_value = attr_name.empty() ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
 				xmlFree(attr_value);
@@ -2241,6 +2303,12 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
                                                 const XMLSchemaOptions &options,
                                                 const std::vector<std::string> &column_datetime_formats, DataChunk &out,
                                                 idx_t col, idx_t row) {
+	// AttributeForColumn looks up other columns only when one starts with attr_prefix (a renamed clash)
+	bool any_prefixed_column = false;
+	for (const auto &name : column_names) {
+		any_prefixed_column = any_prefixed_column || StartsWithAttrPrefix(name, options);
+	}
+
 	for (size_t col_idx = 0; col_idx < column_names.size(); col_idx++) {
 		const auto &column_name = column_names[col_idx];
 		const auto &column_type = column_types[col_idx];
@@ -2252,11 +2320,13 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 		Value value;
 		bool written = false;
 
-		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode). attr_mode='discard'
-		// ignores attributes, so a column can only come from an element.
-		std::string attr_name = AttributeNameFromColumn(column_name, options);
-		xmlChar *attr_value =
-		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+		// First check if it's an attribute (see AttributeForColumn). attr_mode='discard' ignores
+		// attributes, so a column can only come from an element.
+		std::string attr_name = AttributeForColumn(column_name, options, [&](const std::string &name) {
+			return any_prefixed_column &&
+			       std::find(column_names.begin(), column_names.end(), name) != column_names.end();
+		});
+		xmlChar *attr_value = attr_name.empty() ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
 			xmlFree(attr_value);

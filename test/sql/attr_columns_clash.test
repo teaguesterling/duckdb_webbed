@@ -1,0 +1,63 @@
+# name: test/sql/attr_columns_clash.test
+# description: In the default attr_mode='columns', an attribute and a child element of the same name both keep their values
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<r><row id="r1"><id>5</id><v>a</v></row><row><id>6</id><v>b</v></row></r>') TO '{TEST_DIR}/clash.xml' (HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<r><row id="1"><v>a</v></row><row id="2"><v>b</v></row></r>') TO '{TEST_DIR}/noclash.xml' (HEADER false, QUOTE '');
+
+statement ok
+COPY (SELECT '<r><row><id>5</id></row><row id="r2"><id>6</id></row></r>') TO '{TEST_DIR}/lateclash.xml' (HEADER false, QUOTE '');
+
+# Before, column id held the attribute (r1) and the child value 5 was lost. Now the attribute column
+# takes attr_prefix only because of the clash, and id stays a scalar element column.
+query IIII
+SELECT "@id", id, typeof(id), v FROM read_xml('{TEST_DIR}/clash.xml') ORDER BY v;
+----
+r1	5	INTEGER	a
+NULL	6	INTEGER	b
+
+query III
+SELECT "@id", id, v FROM read_xml('{TEST_DIR}/clash.xml', maximum_file_size := 1) ORDER BY v;
+----
+r1	5	a
+NULL	6	b
+
+# Without a clash an attribute column keeps its bare name
+query II
+SELECT id, v FROM read_xml('{TEST_DIR}/noclash.xml') ORDER BY v;
+----
+1	a
+2	b
+
+# A clash first seen in a later record renames too
+query II
+SELECT "@id", id FROM read_xml('{TEST_DIR}/lateclash.xml') ORDER BY id;
+----
+NULL	5
+r2	6
+
+# A custom attr_prefix names the renamed column
+query II
+SELECT "_id", id FROM read_xml('{TEST_DIR}/clash.xml', attr_prefix := '_') ORDER BY id;
+----
+r1	5
+NULL	6
+
+# Explicit columns use the same names
+query II
+SELECT "@id", id FROM read_xml('{TEST_DIR}/clash.xml', columns := {'@id': 'VARCHAR', 'id': 'INTEGER'}) ORDER BY id;
+----
+r1	5
+NULL	6
+
+# An explicit bare column with no "@" twin still reads the attribute, as before
+query I
+SELECT id FROM read_xml('{TEST_DIR}/noclash.xml', columns := {'id': 'INTEGER'}) ORDER BY id;
+----
+1
+2
