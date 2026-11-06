@@ -1,0 +1,22 @@
+# name: test/sql/xpath_nul_byte.test
+# description: An XPath expression holding a NUL byte raises an error. libxml2 reads the expression as a C string, so it used to stop at the NUL and ignore the rest (#249).
+# group: [sql]
+
+require webbed
+
+statement error
+SELECT xml_extract_text('<a><b>1</b><c>2</c></a>', '//b' || chr(0) || '| //c');
+----
+XPath expression contains a NUL byte
+
+# The relative path of xml_extract_text_each is checked too
+statement error
+SELECT xml_extract_text_each('<a><i><b>1</b><c>2</c></i></a>', '//i', 'b' || chr(0) || '| c');
+----
+XPath expression contains a NUL byte
+
+# Without the NUL the union reads both
+query I
+SELECT xml_extract_text('<a><b>1</b><c>2</c></a>', '//b | //c');
+----
+[1, 2]

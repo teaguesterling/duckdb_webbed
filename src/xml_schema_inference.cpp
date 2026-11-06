@@ -2690,8 +2690,19 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::VARCHAR:
-		default:
 			return Value(text);
+		default: {
+			// A declared type with no branch above, such as DECIMAL or UUID. Cast here, so a failure gets the
+			// ignore_errors NULL instead of failing later as the vector is written.
+			try {
+				return Value(text).DefaultCastAs(target_type);
+			} catch (std::exception &) {
+				if (options.ignore_errors) {
+					return Value(target_type);
+				}
+				throw;
+			}
+		}
 		}
 	} catch (ConversionException &) {
 		// A typed parse failure (e.g. DATE/TIMESTAMP). Under ignore_errors drop to NULL instead of
