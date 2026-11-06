@@ -233,22 +233,40 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 
 	// Get all in-scope namespaces for the root element
 	xmlNsPtr *nsList = xmlGetNsList(doc, root);
-	if (!nsList) {
-		return;
+	if (nsList) {
+		// Register each namespace with a prefix
+		for (int i = 0; nsList[i] != NULL; i++) {
+			xmlNsPtr ns = nsList[i];
+			// Only register namespaces that have a prefix (skip default namespace)
+			// Default namespace (prefix=NULL) cannot be used in XPath 1.0 expressions directly
+			if (ns->prefix && ns->href) {
+				xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+			}
+		}
+		// Free the array (but not the namespace structures themselves, they belong to the document)
+		xmlFree(nsList);
 	}
 
-	// Register each namespace with a prefix
-	for (int i = 0; nsList[i] != NULL; i++) {
-		xmlNsPtr ns = nsList[i];
-		// Only register namespaces that have a prefix (skip default namespace)
-		// Default namespace (prefix=NULL) cannot be used in XPath 1.0 expressions directly
-		if (ns->prefix && ns->href) {
-			xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+	// A prefix declared only below the root is registered too. The first declaration in document order wins.
+	for (xmlNodePtr node = root->children; node && node != root;) {
+		if (node->type == XML_ELEMENT_NODE) {
+			for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
+				if (ns->prefix && ns->href && !xmlXPathNsLookup(xpath_ctx, ns->prefix)) {
+					xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+				}
+			}
+			if (node->children) {
+				node = node->children;
+				continue;
+			}
+		}
+		while (node != root && !node->next) {
+			node = node->parent;
+		}
+		if (node != root) {
+			node = node->next;
 		}
 	}
-
-	// Free the array (but not the namespace structures themselves, they belong to the document)
-	xmlFree(nsList);
 }
 
 // A silent, per-context error handler keeps XPath errors off the global handler.
@@ -3615,10 +3633,46 @@ static size_t SkipInternalSubset(const std::string &xml_str, size_t pos) {
 	return std::string::npos;
 }
 
+// Whether pos is an attribute name inside a start tag. Text and attribute values can't hold a raw '<', so the tag, if
+// any, starts at the last '<' before pos. pos is in it when no unquoted '>' comes between, and not inside quotes.
+static bool IsInStartTag(const std::string &xml_str, size_t pos) {
+	if (pos == 0 || !std::isspace(static_cast<unsigned char>(xml_str[pos - 1]))) {
+		return false;
+	}
+	size_t open = xml_str.rfind('<', pos);
+	if (open == std::string::npos || open + 1 >= pos) {
+		return false;
+	}
+	// An element name starts with a letter, '_', ':' or a non-ASCII character. '/', '!' and '?' begin an end tag, a
+	// comment or declaration, and a processing instruction.
+	auto first = static_cast<unsigned char>(xml_str[open + 1]);
+	if (!std::isalpha(first) && first != '_' && first != ':' && first < 0x80) {
+		return false;
+	}
+	char quote = 0;
+	for (size_t i = open + 1; i < pos; i++) {
+		char c = xml_str[i];
+		if (quote) {
+			if (c == quote) {
+				quote = 0;
+			}
+		} else if (c == '"' || c == '\'') {
+			quote = c;
+		} else if (c == '>') {
+			return false;
+		}
+	}
+	return quote == 0;
+}
+
 bool DeclaresNamespacePrefix(const std::string &xml_str, const std::string &prefix) {
-	// xmlns:prefix, then optional whitespace, then '=': XML allows whitespace around the '='
+	// xmlns:prefix as an attribute name, then optional whitespace, then '=': XML allows whitespace around the '='.
+	// The same text in content or an attribute value is not a declaration.
 	std::string name = "xmlns:" + prefix;
 	for (size_t pos = xml_str.find(name); pos != std::string::npos; pos = xml_str.find(name, pos + 1)) {
+		if (!IsInStartTag(xml_str, pos)) {
+			continue;
+		}
 		size_t after = pos + name.length();
 		while (after < xml_str.length() && std::isspace(static_cast<unsigned char>(xml_str[after]))) {
 			after++;
