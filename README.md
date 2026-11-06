@@ -863,7 +863,9 @@ SELECT * FROM read_xml('products.xml',
 
 -- Default behavior: Type inference
 SELECT * FROM read_xml('employees.xml');
--- Schema: id INTEGER, age INTEGER, salary DOUBLE, active BOOLEAN
+-- Schema: id INTEGER, age INTEGER, salary VARCHAR, active BOOLEAN
+-- salary stays VARCHAR because a DOUBLE would drop the trailing zero of 75000.50.
+-- 75000.5 would type DOUBLE.
 
 -- With all_varchar: All scalars become VARCHAR (prevents data loss during inference)
 SELECT * FROM read_xml('employees.xml', all_varchar := true);
