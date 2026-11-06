@@ -1,0 +1,136 @@
+# name: test/sql/numeric_inference_mode.test
+# description: numeric_inference := 'lenient' types numbers by DuckDB's cast, as before #221. 'exact', the default, types a column numeric only when the type reproduces every lexeme.
+# group: [sql]
+
+require webbed
+
+# The expectations below are the types and values before #221, from the table in
+# lexical_numeric_inference.test. Columns whose cast differs between DuckDB lines (007, 0x10) are left out.
+
+query III
+SELECT column_name, column_type, value
+FROM (DESCRIBE SELECT trailing_zero, exponent, leading_dot, trailing_dot, negative_zero, excess_digits, beyond_bigint, ctl_decimal
+      FROM read_xml('test/xml/schema_inference/lexical_numeric_classes.xml', numeric_inference := 'lenient'))
+POSITIONAL JOIN (
+    UNPIVOT (SELECT COLUMNS(* EXCLUDE (leading_zero, hex))::VARCHAR FROM read_xml('test/xml/schema_inference/lexical_numeric_classes.xml', numeric_inference := 'lenient')
+             LIMIT 1)
+    ON trailing_zero, exponent, leading_dot, trailing_dot, negative_zero, excess_digits, beyond_bigint, ctl_decimal INTO NAME name VALUE value
+);
+----
+trailing_zero	DOUBLE	1.1
+exponent	DOUBLE	1000.0
+leading_dot	DOUBLE	0.5
+trailing_dot	DOUBLE	5.0
+negative_zero	INTEGER	0
+excess_digits	DOUBLE	3.141592653589793
+beyond_bigint	DOUBLE	1.2345678901234567e+19
+ctl_decimal	DOUBLE	1.5
+
+# 'exact' is the default and names the same rule
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p><v>1.9</v></p><p><v>1.10</v></p></root>', numeric_inference := 'exact');
+----
+VARCHAR	1.9
+VARCHAR	1.10
+
+query II
+SELECT typeof(v), v FROM parse_xml('<root><p><v>1.9</v></p><p><v>1.10</v></p></root>', numeric_inference := 'lenient');
+----
+DOUBLE	1.9
+DOUBLE	1.1
+
+# In one file, 'exact' re-checks the unified type: 9007199254740993 is an exact BIGINT but not an exact DOUBLE beside
+# 2.5. 'lenient' skips the re-check, as before #221.
+query T
+SELECT DISTINCT typeof(v) FROM parse_xml('<root><p><v>9007199254740993</v></p><p><v>2.5</v></p></root>');
+----
+VARCHAR
+
+query II
+SELECT typeof(v), max(v) FROM parse_xml('<root><p><v>9007199254740993</v></p><p><v>2.5</v></p></root>', numeric_inference := 'lenient') GROUP BY ALL;
+----
+DOUBLE	9007199254740992.0
+
+# NULL is the default
+query I
+SELECT typeof(v) FROM parse_xml('<root><p><v>1.10</v></p></root>', numeric_inference := NULL);
+----
+VARCHAR
+
+statement error
+SELECT * FROM read_xml('test/xml/schema_inference/lexical_numeric_classes.xml', numeric_inference := 'loose');
+----
+"numeric_inference" parameter must be 'exact' or 'lenient', got: 'loose'
+
+# Inside a LIST, the element type follows the mode
+query I
+SELECT typeof(v.i) FROM parse_xml('<root><p><v><i>1.10</i><i>2.5</i></v></p></root>', numeric_inference := 'lenient');
+----
+DOUBLE[]
+
+# The issue's case: 0.50 at row 15,000 of 20,000. 'exact' raises past the sample, and 'lenient' reads it as 0.5.
+statement ok
+COPY (SELECT '<r>' || string_agg('<i><v>' || CASE WHEN n = 15000 THEN '0.50' ELSE (n / 4)::VARCHAR END || '</v></i>', '' ORDER BY n) || '</r>' FROM range(20000) t(n)) TO '{TEST_DIR}/late_zero.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT max(v) FROM read_xml('{TEST_DIR}/late_zero.xml', record_element := 'i');
+----
+value '0.50' does not match column type DOUBLE
+
+query II
+SELECT typeof(v), count(*) FILTER (WHERE v = 0.5) FROM read_xml('{TEST_DIR}/late_zero.xml', record_element := 'i', numeric_inference := 'lenient') GROUP BY ALL;
+----
+DOUBLE	2
+
+# The same file through the streaming reader
+query II
+SELECT typeof(v), count(*) FILTER (WHERE v = 0.5) FROM read_xml('{TEST_DIR}/late_zero.xml', record_element := 'i', maximum_file_size := 16, streaming := true, numeric_inference := 'lenient') GROUP BY ALL;
+----
+DOUBLE	2
+
+# A Python float in exponent form past the sample
+statement ok
+COPY (SELECT '<r>' || repeat('<i><v>0.25</v></i>', 100) || '<i><v>5.188912636955312e-05</v></i></r>') TO '{TEST_DIR}/py_float.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT max(v) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i', sample_size := 10);
+----
+value '5.188912636955312e-05' does not match column type DOUBLE
+
+query I
+SELECT max(v) FILTER (WHERE v < 0.1) FROM read_xml('{TEST_DIR}/py_float.xml', record_element := 'i', sample_size := 10, numeric_inference := 'lenient');
+----
+5.188912636955312e-05
+
+# Across files, BIGINT beside DOUBLE is DOUBLE, as before #221. 'exact' keeps it VARCHAR when the integers don't fit.
+query II
+SELECT typeof(big), big
+FROM read_xml(['test/xml/schema_inference/lexical_numeric_merge_bigint.xml',
+               'test/xml/schema_inference/lexical_numeric_merge_double.xml'], union_by_name := true, numeric_inference := 'lenient')
+ORDER BY big;
+----
+DOUBLE	2.5
+DOUBLE	9007199254740992.0
+
+# The same merge inside a STRUCT field
+statement ok
+COPY (SELECT '<r><i><n><x>9007199254740993</x></n></i></r>') TO '{TEST_DIR}/nested_big.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement ok
+COPY (SELECT '<r><i><n><x>2.5</x></n></i></r>') TO '{TEST_DIR}/nested_dbl.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT DISTINCT typeof(n) FROM read_xml(['{TEST_DIR}/nested_big.xml', '{TEST_DIR}/nested_dbl.xml'], record_element := 'i', union_by_name := true);
+----
+STRUCT(x VARCHAR)
+
+query I
+SELECT DISTINCT typeof(n) FROM read_xml(['{TEST_DIR}/nested_big.xml', '{TEST_DIR}/nested_dbl.xml'], record_element := 'i', union_by_name := true, numeric_inference := 'lenient');
+----
+STRUCT(x DOUBLE)
+
+# read_html takes it too: salary 75000.50 is DOUBLE again
+query T
+SELECT typeof(salary) FROM read_html('test/html/all_varchar_data.html', record_element := 'employee', numeric_inference := 'lenient') LIMIT 1;
+----
+DOUBLE

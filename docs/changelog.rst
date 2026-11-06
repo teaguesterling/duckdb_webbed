@@ -53,6 +53,9 @@ Fixes from the pre-release scan.
   after the record still reads the record (#235).
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
+- ``numeric_inference := 'lenient'`` types numbers by DuckDB's cast, as in v2.14.1 and earlier,
+  so ``1.10`` is DOUBLE ``1.1``. The default, ``'exact'``, keeps the rule from #221 (#224).
+- With ``sample_size := -1``, the out-of-sample error no longer advises ``sample_size := -1``.
 - ``html_extract_tables`` returns ``<tfoot>`` rows after the body rows (#232).
 - ``namespaces := 'auto'`` works after more than one processing instruction, with a ``>`` in a
   root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. A

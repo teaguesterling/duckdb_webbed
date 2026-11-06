@@ -128,6 +128,19 @@ static std::string ParseEmptyElementsParameter(const Value &val, const char *fun
 	return mode;
 }
 
+// numeric_inference: 'exact' (the default) or 'lenient'. NULL keeps the default.
+static bool ParseNumericInferenceParameter(const Value &val, const char *function_name) {
+	if (val.IsNull()) {
+		return XMLSchemaOptions {}.exact_numeric;
+	}
+	auto mode = val.ToString();
+	if (mode != "exact" && mode != "lenient") {
+		throw BinderException("%s \"numeric_inference\" parameter must be 'exact' or 'lenient', got: '%s'",
+		                      function_name, mode);
+	}
+	return mode == "exact";
+}
+
 // Parse nullstr parameter (VARCHAR or LIST(VARCHAR)) into null_strings vector.
 // Throws BinderException for invalid types.
 static void ParseNullstrParameter(const Value &val, const char *function_name, std::vector<std::string> &null_strings) {
@@ -289,7 +302,8 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 		fits_double = fits_double && col_info.integers_fit_double;
 		auto merged = XMLSchemaInference::RestrictToAutoTypeCandidates(
 		    widen_to_double ? LogicalType::DOUBLE
-		                    : XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, options.text_key),
+		                    : XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, options.text_key,
+		                                                             options.exact_numeric),
 		    options);
 		if (merged != it->second) {
 			if (IsUnknownElementType(it->second)) {
@@ -689,6 +703,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
 			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, function_name);
+		} else if (kv.first == "numeric_inference") {
+			schema_options.exact_numeric = ParseNumericInferenceParameter(kv.second, function_name);
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -804,7 +820,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 	// Store schema options in bind_data for use during execution
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
-	schema_options.lossless_numeric_text = !has_explicit_columns;
+	schema_options.lossless_numeric_text = !has_explicit_columns && schema_options.exact_numeric;
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
@@ -1534,6 +1550,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
 			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, "read_xml");
+		} else if (kv.first == "numeric_inference") {
+			schema_options.exact_numeric = ParseNumericInferenceParameter(kv.second, "read_xml");
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -1647,7 +1665,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 	// Store schema options in bind_data for use during execution
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
-	schema_options.lossless_numeric_text = !has_explicit_columns;
+	schema_options.lossless_numeric_text = !has_explicit_columns && schema_options.exact_numeric;
 	result->schema_options = schema_options;
 
 	// Perform schema inference only if no explicit columns were provided
@@ -1942,6 +1960,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			schema_options.namespaces = kv.second.ToString();
 		} else if (kv.first == "empty_elements") {
 			schema_options.empty_elements = ParseEmptyElementsParameter(kv.second, function_name);
+		} else if (kv.first == "numeric_inference") {
+			schema_options.exact_numeric = ParseNumericInferenceParameter(kv.second, function_name);
 		} else if (kv.first == "auto_detect") {
 			schema_options.auto_detect = kv.second.GetValue<bool>();
 		} else if (kv.first == "max_depth") {
@@ -2045,7 +2065,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, function_name);
 
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
-	schema_options.lossless_numeric_text = !has_explicit_columns;
+	schema_options.lossless_numeric_text = !has_explicit_columns && schema_options.exact_numeric;
 	result->schema_options = schema_options;
 
 	// Validate XML before either schema path, as read_xml does per file. Extraction against
@@ -2277,11 +2297,12 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    read_xml_single,
 	    {
 	        {"root_element", LogicalType::VARCHAR},
-	        {"attr_mode", LogicalType::VARCHAR},      // 'columns' | 'prefixed' | 'map' | 'discard'
-	        {"attr_prefix", LogicalType::VARCHAR},    // Prefix for attributes when attr_mode='prefixed'
-	        {"text_key", LogicalType::VARCHAR},       // Key for mixed text content
-	        {"namespaces", LogicalType::VARCHAR},     // 'strip' | 'expand' | 'keep'
-	        {"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+	        {"attr_mode", LogicalType::VARCHAR},         // 'columns' | 'prefixed' | 'map' | 'discard'
+	        {"attr_prefix", LogicalType::VARCHAR},       // Prefix for attributes when attr_mode='prefixed'
+	        {"text_key", LogicalType::VARCHAR},          // Key for mixed text content
+	        {"namespaces", LogicalType::VARCHAR},        // 'strip' | 'expand' | 'keep'
+	        {"empty_elements", LogicalType::VARCHAR},    // 'null' | 'string' | 'object'
+	        {"numeric_inference", LogicalType::VARCHAR}, // 'exact' | 'lenient'
 	        {"auto_detect", LogicalType::BOOLEAN},
 	        {"max_depth", LogicalType::INTEGER},
 	        {"sample_size", LogicalType::INTEGER},
@@ -2319,11 +2340,12 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    read_xml_array,
 	    {
 	        {"root_element", LogicalType::VARCHAR},
-	        {"attr_mode", LogicalType::VARCHAR},      // 'columns' | 'prefixed' | 'map' | 'discard'
-	        {"attr_prefix", LogicalType::VARCHAR},    // Prefix for attributes when attr_mode='prefixed'
-	        {"text_key", LogicalType::VARCHAR},       // Key for mixed text content
-	        {"namespaces", LogicalType::VARCHAR},     // 'strip' | 'expand' | 'keep'
-	        {"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+	        {"attr_mode", LogicalType::VARCHAR},         // 'columns' | 'prefixed' | 'map' | 'discard'
+	        {"attr_prefix", LogicalType::VARCHAR},       // Prefix for attributes when attr_mode='prefixed'
+	        {"text_key", LogicalType::VARCHAR},          // Key for mixed text content
+	        {"namespaces", LogicalType::VARCHAR},        // 'strip' | 'expand' | 'keep'
+	        {"empty_elements", LogicalType::VARCHAR},    // 'null' | 'string' | 'object'
+	        {"numeric_inference", LogicalType::VARCHAR}, // 'exact' | 'lenient'
 	        {"auto_detect", LogicalType::BOOLEAN},
 	        {"max_depth", LogicalType::INTEGER},
 	        {"sample_size", LogicalType::INTEGER},
@@ -2376,11 +2398,12 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    read_html_single,
 	    {
 	        {"root_element", LogicalType::VARCHAR},
-	        {"attr_mode", LogicalType::VARCHAR},      // 'columns' | 'prefixed' | 'map' | 'discard'
-	        {"attr_prefix", LogicalType::VARCHAR},    // Prefix for attributes when attr_mode='prefixed'
-	        {"text_key", LogicalType::VARCHAR},       // Key for mixed text content
-	        {"namespaces", LogicalType::VARCHAR},     // 'strip' | 'expand' | 'keep'
-	        {"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+	        {"attr_mode", LogicalType::VARCHAR},         // 'columns' | 'prefixed' | 'map' | 'discard'
+	        {"attr_prefix", LogicalType::VARCHAR},       // Prefix for attributes when attr_mode='prefixed'
+	        {"text_key", LogicalType::VARCHAR},          // Key for mixed text content
+	        {"namespaces", LogicalType::VARCHAR},        // 'strip' | 'expand' | 'keep'
+	        {"empty_elements", LogicalType::VARCHAR},    // 'null' | 'string' | 'object'
+	        {"numeric_inference", LogicalType::VARCHAR}, // 'exact' | 'lenient'
 	        {"auto_detect", LogicalType::BOOLEAN},
 	        {"max_depth", LogicalType::INTEGER},
 	        {"sample_size", LogicalType::INTEGER},
@@ -2417,11 +2440,12 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	    read_html_array,
 	    {
 	        {"root_element", LogicalType::VARCHAR},
-	        {"attr_mode", LogicalType::VARCHAR},      // 'columns' | 'prefixed' | 'map' | 'discard'
-	        {"attr_prefix", LogicalType::VARCHAR},    // Prefix for attributes when attr_mode='prefixed'
-	        {"text_key", LogicalType::VARCHAR},       // Key for mixed text content
-	        {"namespaces", LogicalType::VARCHAR},     // 'strip' | 'expand' | 'keep'
-	        {"empty_elements", LogicalType::VARCHAR}, // 'null' | 'string' | 'object'
+	        {"attr_mode", LogicalType::VARCHAR},         // 'columns' | 'prefixed' | 'map' | 'discard'
+	        {"attr_prefix", LogicalType::VARCHAR},       // Prefix for attributes when attr_mode='prefixed'
+	        {"text_key", LogicalType::VARCHAR},          // Key for mixed text content
+	        {"namespaces", LogicalType::VARCHAR},        // 'strip' | 'expand' | 'keep'
+	        {"empty_elements", LogicalType::VARCHAR},    // 'null' | 'string' | 'object'
+	        {"numeric_inference", LogicalType::VARCHAR}, // 'exact' | 'lenient'
 	        {"auto_detect", LogicalType::BOOLEAN},
 	        {"max_depth", LogicalType::INTEGER},
 	        {"sample_size", LogicalType::INTEGER},
@@ -2569,6 +2593,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                     {"text_key", LogicalType::VARCHAR},
 	                                     {"namespaces", LogicalType::VARCHAR},
 	                                     {"empty_elements", LogicalType::VARCHAR},
+	                                     {"numeric_inference", LogicalType::VARCHAR},
 	                                     {"auto_detect", LogicalType::BOOLEAN},
 	                                     {"max_depth", LogicalType::INTEGER},
 	                                     {"sample_size", LogicalType::INTEGER},
@@ -2609,6 +2634,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                      {"text_key", LogicalType::VARCHAR},
 	                                      {"namespaces", LogicalType::VARCHAR},
 	                                      {"empty_elements", LogicalType::VARCHAR},
+	                                      {"numeric_inference", LogicalType::VARCHAR},
 	                                      {"auto_detect", LogicalType::BOOLEAN},
 	                                      {"max_depth", LogicalType::INTEGER},
 	                                      {"sample_size", LogicalType::INTEGER},

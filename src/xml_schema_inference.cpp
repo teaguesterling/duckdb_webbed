@@ -510,6 +510,12 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 	if (options.ignore_errors) {
 		return Value(target_type);
 	}
+	if (options.sample_size <= 0) {
+		// sample_size := -1 is already set, so don't advise it
+		throw InvalidInputException("read_xml: value '%s' does not match column type %s. Set all_varchar := true, or "
+		                            "set ignore_errors := true to skip such values. (issue #102)",
+		                            text, target_type.ToString());
+	}
 	throw InvalidInputException(
 	    "read_xml: value '%s' does not match column type %s, which was inferred from the first %d "
 	    "sampled values. Increase sample_size (or set sample_size := -1 to sample every value), set "
@@ -1497,13 +1503,14 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	for (const auto &sample : samples) {
 		if (sample.empty())
 			continue;
-		bool is_integer = options.numeric_detection && IsInteger(sample);
+		bool is_integer = options.numeric_detection && IsInteger(sample, options.exact_numeric);
 		int32_t int32_result;
 		if (is_integer && allowed(LogicalTypeId::INTEGER) && TryCast::Operation(string_t(sample), int32_result, true)) {
 			detected_types.push_back(LogicalType::INTEGER);
 		} else if (is_integer && allowed(LogicalTypeId::BIGINT)) {
 			detected_types.push_back(LogicalType::BIGINT);
-		} else if (options.numeric_detection && allowed(LogicalTypeId::DOUBLE) && IsDouble(sample)) {
+		} else if (options.numeric_detection && allowed(LogicalTypeId::DOUBLE) &&
+		           IsDouble(sample, options.exact_numeric)) {
 			detected_types.push_back(LogicalType::DOUBLE);
 		} else if (!is_integer && options.boolean_detection && allowed(LogicalTypeId::BOOLEAN) && IsBoolean(sample)) {
 			// `1` and `0` read as integers first, so excluding the integer types cannot turn an
@@ -1518,7 +1525,7 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	// is an exact BIGINT and an inexact DOUBLE once `2.5` joins it. Check the type the column gets.
 	auto column_type = GetMostSpecificType(detected_types);
 	for (const auto &sample : samples) {
-		if (!sample.empty() && !NumericTypeReproduces(sample, column_type)) {
+		if (options.exact_numeric && !sample.empty() && !NumericTypeReproduces(sample, column_type)) {
 			return LogicalType::VARCHAR;
 		}
 	}
@@ -1638,14 +1645,23 @@ bool XMLSchemaInference::IsBoolean(const std::string &value) {
 	       lower == "on" || lower == "off";
 }
 
-// A numeric type is a candidate only for text it reads back verbatim, so `007` and `1.10` stay
-// VARCHAR rather than landing as 7 and 1.1.
-bool XMLSchemaInference::IsInteger(const std::string &value) {
-	return NumericTypeReproduces(value, LogicalType::BIGINT);
+// Under 'exact', a numeric type is a candidate only for text it reads back verbatim, so `007` and `1.10` stay
+// VARCHAR rather than landing as 7 and 1.1. Under 'lenient', any text DuckDB's cast reads is a candidate.
+bool XMLSchemaInference::IsInteger(const std::string &value, bool exact) {
+	if (exact) {
+		return NumericTypeReproduces(value, LogicalType::BIGINT);
+	}
+	int64_t result;
+	return !value.empty() && TryCast::Operation(string_t(value), result, true);
 }
 
-bool XMLSchemaInference::IsDouble(const std::string &value) {
-	return NumericTypeReproduces(value, LogicalType::DOUBLE);
+bool XMLSchemaInference::IsDouble(const std::string &value, bool exact) {
+	if (exact) {
+		return NumericTypeReproduces(value, LogicalType::DOUBLE);
+	}
+	double result;
+	// Strings like "inf" and "nan" parse as DOUBLE but are not numeric data
+	return !value.empty() && TryCast::Operation(string_t(value), result, true) && std::isfinite(result);
 }
 
 // IsDate, IsTime, IsTimestamp removed — replaced by StrpTimeFormat candidate elimination in InferTypeFromSamples.
@@ -1768,7 +1784,7 @@ LogicalType XMLSchemaInference::GetMostSpecificType(const std::vector<LogicalTyp
 }
 
 LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const LogicalType &b,
-                                                   const std::string &text_key) {
+                                                   const std::string &text_key, bool exact_numeric) {
 	if (a == b) {
 		return a;
 	}
@@ -1798,7 +1814,8 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 			if (it == b_index.end()) {
 				merged.emplace_back(ac.first, ac.second);
 			} else {
-				merged.emplace_back(ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second, text_key));
+				merged.emplace_back(
+				    ac.first, MergeXMLColumnType(ac.second, b_children[it->second].second, text_key, exact_numeric));
 				b_index.erase(it);
 			}
 		}
@@ -1814,7 +1831,8 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	}
 
 	if (a.id() == LogicalTypeId::LIST && b.id() == LogicalTypeId::LIST) {
-		return LogicalType::LIST(MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b), text_key));
+		return LogicalType::LIST(
+		    MergeXMLColumnType(ListType::GetChildType(a), ListType::GetChildType(b), text_key, exact_numeric));
 	}
 
 	// Complex-vs-non-matching collision: fall back to VARCHAR so textual data is preserved.
@@ -1853,7 +1871,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	};
 	auto widen_text_field = [&](const LogicalType &struct_type, idx_t index, const LogicalType &scalar) {
 		child_list_t<LogicalType> fields = StructType::GetChildTypes(struct_type);
-		auto merged = MergeXMLColumnType(fields[index].second, scalar, text_key);
+		auto merged = MergeXMLColumnType(fields[index].second, scalar, text_key, exact_numeric);
 		// The two files' dates may use different formats, and the union keeps no format for a field
 		// inside a struct, so a temporal text field stays VARCHAR.
 		fields[index].second = is_temporal(merged) ? LogicalType::VARCHAR : merged;
@@ -1897,13 +1915,13 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	if (a.id() == LogicalTypeId::LIST && b.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(a);
 		if (reconcilable(element, b)) {
-			return LogicalType::LIST(MergeXMLColumnType(element, b, text_key));
+			return LogicalType::LIST(MergeXMLColumnType(element, b, text_key, exact_numeric));
 		}
 	}
 	if (b.id() == LogicalTypeId::LIST && a.id() != LogicalTypeId::LIST) {
 		auto &element = ListType::GetChildType(b);
 		if (reconcilable(element, a)) {
-			return LogicalType::LIST(MergeXMLColumnType(a, element, text_key));
+			return LogicalType::LIST(MergeXMLColumnType(a, element, text_key, exact_numeric));
 		}
 	}
 
@@ -1923,7 +1941,7 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	auto is_bigint_and_double = [](const LogicalType &x, const LogicalType &y) {
 		return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
 	};
-	if (is_bigint_and_double(a, b) || is_bigint_and_double(b, a)) {
+	if (exact_numeric && (is_bigint_and_double(a, b) || is_bigint_and_double(b, a))) {
 		return LogicalType::VARCHAR;
 	}
 	// Zoneless text in a zoned column reads as UTC, not as the session time zone read_csv assumes.

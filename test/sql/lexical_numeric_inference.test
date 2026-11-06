@@ -72,15 +72,15 @@ SELECT typeof(v), v FROM parse_xml('<root><p><v>1.9</v></p><p><v>1.10</v></p></r
 VARCHAR	1.9
 VARCHAR	1.10
 
-# The same lexemes as attributes
+# Attribute columns are always VARCHAR (no type detection), so these keep their text under any
+# rule. They pin that, not the lexeme rule, and also pass before #221.
 query II
 SELECT typeof(v), v FROM parse_xml('<root><p v="007"/><p v="12"/></root>');
 ----
 VARCHAR	007
 VARCHAR	12
 
-# Attribute values keep surrounding whitespace, so ' 5 ' is a lexeme no integer
-# renders. The 2.0 pin's strict cast already rejected it. Now the rule does.
+# Attribute values keep surrounding whitespace
 query II
 SELECT typeof(v), '[' || v || ']' FROM parse_xml('<root><p v=" 5 "/><p v="6"/></root>');
 ----
@@ -178,3 +178,13 @@ FROM read_xml('test/xml/schema_inference/lexical_numeric_out_of_sample.xml',
 WHERE id = 60;
 ----
 7	1.1
+
+# Streaming with sample_size := -1 widens a top-level column at the verify pass, but not a nested
+# leaf, which then raises. The error doesn't advise the sample_size := -1 already set.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><n><x>1.5</x></n></i>', 60) || '<i><n><x>1.10</x></n></i></r>') TO '{TEST_DIR}/nested_late.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT * FROM read_xml('{TEST_DIR}/nested_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1);
+----
+value '1.10' does not match column type DOUBLE. Set all_varchar := true

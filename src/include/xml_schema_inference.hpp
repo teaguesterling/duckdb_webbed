@@ -61,6 +61,9 @@ struct XMLSchemaOptions {
 	// (`007`, `1.10`, `1e3`), the same lexemes inference refuses to type as numeric. Off for
 	// `columns :=` types, which cast.
 	bool lossless_numeric_text = true;
+	// numeric_inference := 'exact' (the default): a column is numeric only when its type reproduces every lexeme.
+	// 'lenient' types by DuckDB's cast, as before #221, so `1.10` is DOUBLE 1.1.
+	bool exact_numeric = true;
 
 	// Datetime format (replaces temporal_detection for explicit format control)
 	std::vector<std::string>
@@ -261,8 +264,8 @@ public:
 
 	// Type detection helpers
 	static bool IsBoolean(const std::string &value);
-	static bool IsInteger(const std::string &value);
-	static bool IsDouble(const std::string &value);
+	static bool IsInteger(const std::string &value, bool exact = true);
+	static bool IsDouble(const std::string &value, bool exact = true);
 
 	// Datetime format helpers
 	static LogicalType ClassifyDatetimeFormat(const std::string &format);
@@ -302,7 +305,8 @@ public:
 	// or attributes) and merges as the identity.
 	// A scalar merged with a STRUCT that has a text_key field (an element seen as plain text in one
 	// file and as text plus attributes in another) widens into that field.
-	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b, const std::string &text_key);
+	static LogicalType MergeXMLColumnType(const LogicalType &a, const LogicalType &b, const std::string &text_key,
+	                                      bool exact_numeric = true);
 
 	// Replace SQLNULL left over after merging (an element empty in every file) with VARCHAR,
 	// including inside nested types.
