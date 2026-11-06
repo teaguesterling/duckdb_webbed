@@ -1572,8 +1572,19 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 		return "<?xml version=\"1.0\"?>\n<root></root>\n";
 	}
 
-	std::function<xmlNodePtr(yyjson_val *, const std::string &, xmlDocPtr)> json_to_node =
-	    [&](yyjson_val *val, const std::string &node_name, xmlDocPtr document) -> xmlNodePtr {
+	// The recursion follows the JSON nesting, so crafted input overflowed the stack. Stop at libxml2's
+	// own parse depth: deeper output is XML that no webbed function can read back. The flag unwinds
+	// without throwing, so every node made so far stays in the tree and the document frees it.
+	static constexpr int MAX_JSON_DEPTH = 256; // libxml2's xmlParserMaxDepth
+	bool too_deep = false;
+	std::function<xmlNodePtr(yyjson_val *, const std::string &, xmlDocPtr, int)> json_to_node =
+	    [&](yyjson_val *val, const std::string &node_name, xmlDocPtr document, int depth) -> xmlNodePtr {
+		if (depth > MAX_JSON_DEPTH) {
+			too_deep = true;
+		}
+		if (too_deep) {
+			return nullptr;
+		}
 		xmlNodePtr node = xmlNewNode(nullptr, BAD_CAST node_name.c_str());
 		if (!node) {
 			return nullptr;
@@ -1596,7 +1607,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 			size_t idx, max;
 			yyjson_val *elem;
 			yyjson_arr_foreach(val, idx, max, elem) {
-				xmlNodePtr child = json_to_node(elem, node_name, document);
+				xmlNodePtr child = json_to_node(elem, node_name, document, depth + 1);
 				if (child) {
 					xmlAddChild(node, child);
 				}
@@ -1643,7 +1654,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 						}
 					}
 				} else {
-					xmlNodePtr child = json_to_node(prop.second, prop.first, document);
+					xmlNodePtr child = json_to_node(prop.second, prop.first, document, depth + 1);
 					if (child) {
 						xmlAddChild(node, child);
 					}
@@ -1696,12 +1707,15 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 		}
 	}
 
-	xmlNodePtr root_node = json_to_node(actual_content, root_element_name, doc.get());
+	xmlNodePtr root_node = json_to_node(actual_content, root_element_name, doc.get(), 0);
 	if (root_node) {
 		xmlDocSetRootElement(doc.get(), root_node);
 	}
 
 	yyjson_doc_free(json_doc);
+	if (too_deep) {
+		throw InvalidInputException("Cannot convert JSON to XML: it is nested deeper than %d levels", MAX_JSON_DEPTH);
+	}
 
 	xmlChar *xml_string = nullptr;
 	int size = 0;
