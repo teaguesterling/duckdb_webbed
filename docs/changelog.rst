@@ -78,6 +78,8 @@ Fixes from the pre-release scan.
   root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. A
   comment or processing instruction inside the DOCTYPE may hold ``]``. It used to return ``[]``
   (#233).
+- With ``sample_size := -1``, streaming widens a STRUCT or LIST leaf whose value past the first
+  50 records doesn't fit, as DOM types it. It used to fail the read (#224).
 - ``to_xml`` and ``json_to_xml`` write a NUL byte as U+FFFD and keep the text after it. They
   used to end the text at the NUL (#234).
 

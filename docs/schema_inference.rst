@@ -307,8 +307,8 @@ streaming instead of building a full DOM tree. This affects schema inference in 
    number of sampled *values per field*. There, ``sample_size := -1`` samples every value for
    always-correct detection at the cost of scanning the whole input. In SAX mode ``sample_size <= 0``
    triggers a second, memory-bounded pass: after typing from the first 50 records it streams the
-   whole file and widens to ``VARCHAR`` any column whose later values do not fit the sampled type
-   (see "Out-of-Sample Values" below). This is the SAX equivalent of the DOM path's "sample every
+   whole file and widens to ``VARCHAR`` any column, or any STRUCT or LIST leaf, whose later values
+   do not fit the sampled type (see "Out-of-Sample Values" below). This is the SAX equivalent of the DOM path's "sample every
    value" — records are tested and discarded per chunk, so detection is complete without buffering
    the whole prefix in memory, at the cost of one extra read of the file.
 
