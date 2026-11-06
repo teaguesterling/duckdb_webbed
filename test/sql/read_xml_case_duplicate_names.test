@@ -1,0 +1,38 @@
+# name: test/sql/read_xml_case_duplicate_names.test
+# description: Child elements whose names differ only in case are two columns. DuckDB column names are case-insensitive, so the second is renamed name_1, as read_csv and read_json do. The read used to fail with a duplicate-column error (#248).
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<r><i><Name>a</Name><name>b</name><n>1</n></i><i><Name>c</Name><name>d</name><n>2</n></i></r>') TO '{TEST_DIR}/case.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query TTI
+SELECT "Name", name_1, n FROM read_xml('{TEST_DIR}/case.xml', record_element := 'i') ORDER BY n;
+----
+a	b	1
+c	d	2
+
+# The streaming reader names and fills them the same way
+query TTI
+SELECT "Name", name_1, n FROM read_xml('{TEST_DIR}/case.xml', record_element := 'i', maximum_file_size := 16, streaming := true) ORDER BY n;
+----
+a	b	1
+c	d	2
+
+query TT
+SELECT "Name", name_1 FROM parse_xml('<r><i><Name>a</Name><name>b</name></i></r>');
+----
+a	b
+
+# An attribute and an element whose names differ only in case
+query TT
+SELECT "Id", id_1 FROM parse_xml('<r><i Id="7"><id>8</id></i></r>');
+----
+7	8
+
+# A name already taken by another column moves on to the next suffix
+query TTT
+SELECT "Name", name_1, name_2 FROM parse_xml('<r><i><Name>a</Name><name_1>x</name_1><name>b</name></i></r>');
+----
+a	x	b
