@@ -1,0 +1,32 @@
+# name: test/sql/sax_out_of_sample_nested.test
+# description: Issue #224. With sample_size := -1, SAX infers from 50 records, then a verify pass widens a column whose later value doesn't fit. The pass checked only top-level scalars, so a bad STRUCT or LIST leaf past record 50 failed the read. DOM samples every record and reads the leaf as VARCHAR. SAX must give the same types as DOM and keep the value.
+# group: [sql]
+
+require webbed
+
+# 60 good records, then one whose nested leaves are not integers. `ok` has no bad value.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><s><a>1</a><b>2</b></s><t>3</t><t>4</t><p><a>5</a></p><p><a>6</a></p><ok><a>7</a></ok></i>', 60)
+  || '<i><s><a>x</a><b>2</b></s><t>y</t><p><a>z</a></p><ok><a>8</a></ok></i></r>' AS c)
+TO '{TEST_DIR}/sax_nested_late.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+# DOM: the types SAX must match.
+query IIII
+SELECT DISTINCT typeof(s), typeof(t), typeof(p), typeof(ok)
+FROM read_xml('{TEST_DIR}/sax_nested_late.xml', record_element := 'i', sample_size := -1, streaming := false);
+----
+STRUCT(a VARCHAR, b INTEGER)	VARCHAR[]	STRUCT(a VARCHAR)[]	STRUCT(a INTEGER)
+
+query IIII
+SELECT DISTINCT typeof(s), typeof(t), typeof(p), typeof(ok)
+FROM read_xml('{TEST_DIR}/sax_nested_late.xml', record_element := 'i', sample_size := -1, streaming := true, maximum_file_size := 1);
+----
+STRUCT(a VARCHAR, b INTEGER)	VARCHAR[]	STRUCT(a VARCHAR)[]	STRUCT(a INTEGER)
+
+# The late values are kept.
+query IIII
+SELECT s.a, t[1], p[1].a, ok.a
+FROM read_xml('{TEST_DIR}/sax_nested_late.xml', record_element := 'i', sample_size := -1, streaming := true, maximum_file_size := 1)
+WHERE s.a = 'x';
+----
+x	y	z	8
