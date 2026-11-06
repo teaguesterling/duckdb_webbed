@@ -101,3 +101,21 @@ query I
 SELECT xml_extract_text('<root xmlns:gml = "urn:mine"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
 ----
 [v]
+
+# A prefix declared on an inner element can be used in XPath, with or without auto. Only root declarations used to
+# be registered, so these returned [].
+query I
+SELECT xml_extract_text('<root><x xmlns:gml="urn:mine"><gml:p>v</gml:p></x></root>', '//gml:p');
+----
+[v]
+
+query I
+SELECT xml_extract_text('<root><x xmlns:gml="urn:mine"><gml:p>v</gml:p></x></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# The first declaration in document order wins when two scopes bind the prefix to different URIs
+query I
+SELECT xml_extract_text('<root><x xmlns:p="urn:a"><p:v>a</p:v></x><y xmlns:p="urn:b"><p:v>b</p:v></y></root>', '//p:v');
+----
+[a]

@@ -233,22 +233,40 @@ static void RegisterDocumentNamespaces(xmlDocPtr doc, xmlXPathContextPtr xpath_c
 
 	// Get all in-scope namespaces for the root element
 	xmlNsPtr *nsList = xmlGetNsList(doc, root);
-	if (!nsList) {
-		return;
+	if (nsList) {
+		// Register each namespace with a prefix
+		for (int i = 0; nsList[i] != NULL; i++) {
+			xmlNsPtr ns = nsList[i];
+			// Only register namespaces that have a prefix (skip default namespace)
+			// Default namespace (prefix=NULL) cannot be used in XPath 1.0 expressions directly
+			if (ns->prefix && ns->href) {
+				xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+			}
+		}
+		// Free the array (but not the namespace structures themselves, they belong to the document)
+		xmlFree(nsList);
 	}
 
-	// Register each namespace with a prefix
-	for (int i = 0; nsList[i] != NULL; i++) {
-		xmlNsPtr ns = nsList[i];
-		// Only register namespaces that have a prefix (skip default namespace)
-		// Default namespace (prefix=NULL) cannot be used in XPath 1.0 expressions directly
-		if (ns->prefix && ns->href) {
-			xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+	// A prefix declared only below the root is registered too. The first declaration in document order wins.
+	for (xmlNodePtr node = root->children; node && node != root;) {
+		if (node->type == XML_ELEMENT_NODE) {
+			for (xmlNsPtr ns = node->nsDef; ns; ns = ns->next) {
+				if (ns->prefix && ns->href && !xmlXPathNsLookup(xpath_ctx, ns->prefix)) {
+					xmlXPathRegisterNs(xpath_ctx, ns->prefix, ns->href);
+				}
+			}
+			if (node->children) {
+				node = node->children;
+				continue;
+			}
+		}
+		while (node != root && !node->next) {
+			node = node->parent;
+		}
+		if (node != root) {
+			node = node->next;
 		}
 	}
-
-	// Free the array (but not the namespace structures themselves, they belong to the document)
-	xmlFree(nsList);
 }
 
 // A silent, per-context error handler keeps XPath errors off the global handler.
