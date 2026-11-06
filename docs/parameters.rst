@@ -84,6 +84,10 @@ Type Handling Parameters
      - VARCHAR[]
      - (every type)
      - Scalar types inference may choose. VARCHAR is always a candidate. See :ref:`auto-type-candidates` below.
+   * - ``numeric_inference``
+     - VARCHAR
+     - 'exact'
+     - ``'exact'`` types a column numeric only when the type gives back the exact text of every value, so ``1.10`` stays VARCHAR. ``'lenient'`` types any text DuckDB's cast reads, so ``1.10`` is DOUBLE ``1.1``. See :doc:`schema_inference`.
    * - ``datetime_format``
      - VARCHAR or VARCHAR[]
      - 'auto'

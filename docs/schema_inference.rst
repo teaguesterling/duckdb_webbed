@@ -250,6 +250,15 @@ inferred INTEGER column gets the "does not match column type" error, or NULL und
 Types given with ``columns`` are casts the caller asked for and are not checked this way:
 ``columns := {'v': 'INTEGER'}`` still reads ``007`` as ``7``.
 
+Under ``ignore_errors`` the value reads as NULL with no error. For example, ``0.50`` past the
+sample of a DOUBLE column reads as NULL, although DuckDB's cast reads it as ``0.5``.
+
+``numeric_inference := 'lenient'`` turns the rule off. A numeric type is then chosen for any
+text DuckDB's cast reads, as in v2.14.1 and earlier: ``1.10`` is DOUBLE ``1.1``, and ``0.50`` past the
+sample reads as ``0.5``. Under ``union_by_name``, an integer file beside a decimal file is
+DOUBLE. The default is ``'exact'``. Use ``'lenient'`` when the numbers matter and their spelling
+does not, such as floats written by another program.
+
 Use the ``datetime_format`` parameter to control this behavior — see :doc:`parameters` for details.
 
 Forcing VARCHAR Types
