@@ -2057,8 +2057,7 @@ std::string XMLSchemaInference::CleanTextContent(const char *text, size_t size, 
 // that the attribute has its own attr_prefix column; that column reads it and the bare one does not.
 static bool StartsWithAttrPrefix(const std::string &column_name, const XMLSchemaOptions &options) {
 	const std::string &prefix = options.attr_prefix;
-	return !prefix.empty() && column_name.size() > prefix.size() &&
-	       column_name.compare(0, prefix.size(), prefix) == 0;
+	return !prefix.empty() && column_name.size() > prefix.size() && column_name.compare(0, prefix.size(), prefix) == 0;
 }
 
 template <class HAS_COLUMN>
@@ -2139,8 +2138,7 @@ idx_t XMLSchemaInference::WriteRecord(xmlNodePtr record, const std::vector<XMLCo
 				return false;
 			});
 
-			xmlChar *attr_value =
-			    attr_name.empty() ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+			xmlChar *attr_value = attr_name.empty() ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 			if (attr_value) {
 				std::string str_value = (const char *)attr_value;
 				xmlFree(attr_value);
@@ -2325,7 +2323,8 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 		// First check if it's an attribute (see AttributeForColumn). attr_mode='discard' ignores
 		// attributes, so a column can only come from an element.
 		std::string attr_name = AttributeForColumn(column_name, options, [&](const std::string &name) {
-			return any_prefixed_column && std::find(column_names.begin(), column_names.end(), name) != column_names.end();
+			return any_prefixed_column &&
+			       std::find(column_names.begin(), column_names.end(), name) != column_names.end();
 		});
 		xmlChar *attr_value = attr_name.empty() ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
 		if (attr_value) {
