@@ -44,7 +44,10 @@ SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'name
 ----
 <REGEX>:.*cannot resolve the time zone name 'EST'.*VARCHAR.*
 
-# The route the error gives works.
+# The route the error gives works where ICU resolves the name. The DuckDB CLI links ICU; the test
+# runner loads it only on request.
+require icu
+
 query I
 SELECT epoch(named::TIMESTAMPTZ)::BIGINT FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'VARCHAR'}, streaming := false);
 ----

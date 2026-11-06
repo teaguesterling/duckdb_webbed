@@ -1395,7 +1395,7 @@ static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
 // a zero offset, so the bare timestamp is the same instant.
 //
 // DuckDB's TIMESTAMPTZ cast resolves names such as 'EST' through ICU, but this function has no client
-// context to reach it. For TIMESTAMPTZ the error says so, and gives the cast route (issue #242).
+// context to reach ICU's cast. For TIMESTAMPTZ the error says so, and gives the cast route (issue #242).
 static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalType &target_type) {
 	timestamp_t parsed;
 	bool has_offset = false;
@@ -1415,7 +1415,8 @@ static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalT
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_TZ) {
 		throw ConversionException(
 		    "Could not read '%s' as TIMESTAMPTZ: read_xml cannot resolve the time zone name '%s'. "
-		    "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ",
+		    "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ, which "
+		    "resolves zone names through ICU",
 		    text, tz_name);
 	}
 	throw ConversionException("Could not read '%s' as a timestamp without discarding its '%s' suffix, which is not a "
