@@ -140,3 +140,15 @@ statement error
 SELECT count(*) FROM read_html_blocks('{TEST_DIR}/comments.html');
 ----
 Out of Memory Error: Reading '
+
+# An attribute without a value costs about half of one with a value, so a file of them reads within its peak
+statement ok
+SET memory_limit = '300MB';
+
+statement ok
+COPY (SELECT repeat('<br a b c d e f g h i j k l m n o p q r s t u v w x y z>' || chr(10), 40000)) TO '{TEST_DIR}/boolean_br.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT count(*) > 0 FROM read_html_blocks('{TEST_DIR}/boolean_br.html');
+----
+true

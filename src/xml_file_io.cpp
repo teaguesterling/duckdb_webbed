@@ -42,6 +42,7 @@ void DOMCostCounter::Feed(const char *data, idx_t size) {
 			} else if (IsDOMCostSpace(c)) {
 				after_space = true;
 			} else if (c == '=') {
+				values++;
 				after_equals = true;
 				after_space = false;
 			} else if (after_equals) {

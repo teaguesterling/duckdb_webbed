@@ -16,25 +16,29 @@ static constexpr idx_t DOM_BYTES_PER_FILE_BYTE = 32;
 
 // What a DOM parsed from HTML peaks at, fit to libxml2's peak on generated markup from long paragraphs to one empty
 // element per three bytes: DOM_MIN_BYTES_PER_FILE_BYTE per byte, plus DOM_BYTES_PER_NODE per open tag or text run,
-// plus DOM_BYTES_PER_ATTRIBUTE per attribute. It overestimates each shape by up to 1.5 times.
+// plus DOM_BYTES_PER_ATTRIBUTE per attribute and DOM_BYTES_PER_ATTRIBUTE_VALUE more when it has a value. It
+// overestimates each shape by up to 1.6 times.
 static constexpr idx_t DOM_MIN_BYTES_PER_FILE_BYTE = 5;
 static constexpr idx_t DOM_BYTES_PER_NODE = 250;
-static constexpr idx_t DOM_BYTES_PER_ATTRIBUTE = 400;
+static constexpr idx_t DOM_BYTES_PER_ATTRIBUTE = 210;
+static constexpr idx_t DOM_BYTES_PER_ATTRIBUTE_VALUE = 190;
 
 //! Estimates the memory an HTML DOM peaks at from the bytes it parses, fed in any number of chunks. A node is '<'
 //! before an ASCII letter, '!' or '?', or '>' before a byte other than '<', counted anywhere. An attribute is a name
-//! inside a tag, where a quoted value can hold '>'.
+//! inside a tag, where a quoted value can hold '>', and its value is the '=' after it.
 class DOMCostCounter {
 public:
 	void Feed(const char *data, idx_t size);
 	idx_t Estimate() const {
-		return DOM_MIN_BYTES_PER_FILE_BYTE * bytes + DOM_BYTES_PER_NODE * nodes + DOM_BYTES_PER_ATTRIBUTE * attributes;
+		return DOM_MIN_BYTES_PER_FILE_BYTE * bytes + DOM_BYTES_PER_NODE * nodes + DOM_BYTES_PER_ATTRIBUTE * attributes +
+		       DOM_BYTES_PER_ATTRIBUTE_VALUE * values;
 	}
 
 private:
 	idx_t bytes = 0;
 	idx_t nodes = 0;
 	idx_t attributes = 0;
+	idx_t values = 0;
 	char last = '\0';
 	bool in_tag = false;
 	char quote = '\0';
