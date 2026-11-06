@@ -384,3 +384,10 @@ query I
 SELECT count(*) FROM (SELECT unnest(html_to_duck_blocks('<p>a<input id="q"><kbd id="k">b</kbd></p>')) AS b) WHERE b.element_type = 'span';
 ----
 1
+
+# windows-1252 text can hold a UTF-8-shaped pair by chance, as in "ß“" (DF 93). More invalid bytes than well-formed
+# sequences keep it windows-1252.
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_220_cp1252_utf8_shaped_pair.html') WHERE element_type = 'paragraph';
+----
+München, „Gruß“ und Köln.

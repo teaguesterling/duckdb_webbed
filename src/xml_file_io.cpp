@@ -184,10 +184,9 @@ static idx_t ReadUpTo(FileHandle &handle, char *buffer, idx_t size) {
 }
 
 // Reads the file's first bytes into `prefix` and chooses its HTML encoding. A BOM or <meta> in the first bytes
-// decides it. Otherwise the bytes are sniffed until a UTF-8 sequence decides it, the file ends, or SNIFF_KEEP_BYTES
-// are kept. The parse replays `prefix` before it reads the handle on, so a pipe, which can't rewind, is read once and
-// decided by its first SNIFF_KEEP_BYTES. A seekable handle still undecided there is sniffed to its end without keeping
-// the bytes and rewound, leaving `prefix` empty.
+// decides it. Otherwise the encoding needs every byte, and up to SNIFF_KEEP_BYTES are kept in `prefix`, which the
+// parse replays before it reads the handle on, so a pipe, which can't rewind, is read once and judged by those bytes.
+// A larger seekable file is sniffed to its end without keeping the rest and rewound, leaving `prefix` empty.
 static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &prefix) {
 	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
 	constexpr idx_t SNIFF_KEEP_BYTES = CHUNK_SIZE;
@@ -199,7 +198,7 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &pre
 	}
 	UndeclaredEncodingSniffer sniffer;
 	sniffer.Feed(prefix.data(), prefix.size());
-	while (!sniffer.Decided() && prefix.size() < SNIFF_KEEP_BYTES) {
+	while (prefix.size() < SNIFF_KEEP_BYTES) {
 		auto offset = prefix.size();
 		prefix.resize(offset + CHUNK_SIZE);
 		auto got = ReadUpTo(handle, &prefix[offset], CHUNK_SIZE);
@@ -209,12 +208,12 @@ static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &pre
 		}
 		sniffer.Feed(prefix.data() + offset, got);
 	}
-	if (sniffer.Decided() || !handle.CanSeek()) {
+	if (!handle.CanSeek()) {
 		return sniffer.Encoding();
 	}
 	std::string().swap(prefix);
 	std::string chunk(CHUNK_SIZE, '\0');
-	while (!sniffer.Decided()) {
+	while (true) {
 		auto got = ReadUpTo(handle, &chunk[0], CHUNK_SIZE);
 		if (got == 0) {
 			break;

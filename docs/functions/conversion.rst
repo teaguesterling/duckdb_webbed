@@ -234,8 +234,8 @@ Convert HTML content into a list of structured document blocks. This function pa
 then the first ``<meta charset>`` or ``http-equiv`` declaration naming a label from the WHATWG
 Encoding Standard, then its bytes. As in browsers, other labels are ignored, and ASCII and
 Latin-1 labels decode as windows-1252. A
-file that declares nothing reads as UTF-8 when it holds a UTF-8 multibyte sequence or only
-ASCII, and as windows-1252 otherwise. A pipe is judged by its first megabyte, since it can't
+file that declares nothing reads as UTF-8 when its well-formed UTF-8 multibyte sequences are
+at least as many as its other bytes above ASCII, and as windows-1252 otherwise. A pipe is judged by its first megabyte, since it can't
 be read twice. A byte that isn't UTF-8 in a UTF-8 file reads as
 U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error.
 
