@@ -30,9 +30,9 @@ SELECT * FROM read_xml('test/xml/simple.xml', all_varchar := NULL);
 "all_varchar" expects a non-null boolean value
 
 statement error
-SELECT * FROM read_xml_objects('test/xml/simple.xml', include_filename := NULL);
+SELECT * FROM read_xml_objects('test/xml/simple.xml', filename := NULL);
 ----
-"include_filename" expects a non-null boolean value
+"filename" expects a non-null boolean value
 
 statement error
 SELECT * FROM parse_xml('<r><i>1</i></r>', auto_detect := NULL);
