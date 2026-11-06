@@ -84,3 +84,20 @@ query I
 SELECT xml_add_namespace_declarations('<?a?><?b?><r/>', MAP {'p': 'urn:a'});
 ----
 <?a?><?b?><r xmlns:p="urn:a"/>
+
+# xmlns:p= in text content or an attribute value is not a declaration, so the prefix is still injected (#243)
+query I
+SELECT xml_extract_text('<root><note>use xmlns:gml="x"</note><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+query I
+SELECT xml_extract_text('<root a="xmlns:gml=x"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A real declaration on an inner element is still found, so nothing is injected and the document's own URI holds
+query I
+SELECT xml_extract_text('<root><x xmlns:gml = "urn:mine"><gml:p>v</gml:p></x></root>', '//gml:p', namespaces := 'auto');
+----
+[v]

@@ -3615,10 +3615,40 @@ static size_t SkipInternalSubset(const std::string &xml_str, size_t pos) {
 	return std::string::npos;
 }
 
+// Whether pos is an attribute name inside a start tag. Text and attribute values can't hold a raw '<', so the tag, if
+// any, starts at the last '<' before pos. pos is in it when no unquoted '>' comes between, and not inside quotes.
+static bool IsInStartTag(const std::string &xml_str, size_t pos) {
+	if (pos == 0 || !std::isspace(static_cast<unsigned char>(xml_str[pos - 1]))) {
+		return false;
+	}
+	size_t open = xml_str.rfind('<', pos);
+	if (open == std::string::npos || open + 1 >= pos || !std::isalpha(static_cast<unsigned char>(xml_str[open + 1]))) {
+		return false;
+	}
+	char quote = 0;
+	for (size_t i = open + 1; i < pos; i++) {
+		char c = xml_str[i];
+		if (quote) {
+			if (c == quote) {
+				quote = 0;
+			}
+		} else if (c == '"' || c == '\'') {
+			quote = c;
+		} else if (c == '>') {
+			return false;
+		}
+	}
+	return quote == 0;
+}
+
 bool DeclaresNamespacePrefix(const std::string &xml_str, const std::string &prefix) {
-	// xmlns:prefix, then optional whitespace, then '=': XML allows whitespace around the '='
+	// xmlns:prefix as an attribute name, then optional whitespace, then '=': XML allows whitespace around the '='.
+	// The same text in content or an attribute value is not a declaration.
 	std::string name = "xmlns:" + prefix;
 	for (size_t pos = xml_str.find(name); pos != std::string::npos; pos = xml_str.find(name, pos + 1)) {
+		if (!IsInStartTag(xml_str, pos)) {
+			continue;
+		}
 		size_t after = pos + name.length();
 		while (after < xml_str.length() && std::isspace(static_cast<unsigned char>(xml_str[after]))) {
 			after++;
