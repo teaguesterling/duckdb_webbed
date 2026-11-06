@@ -197,7 +197,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 // Phase 1: Identify Record Elements
 static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std::vector<xmlNodePtr> &out) {
 	if (xmlStrEqual(node->name, name)) {
+		// A match inside a match stays part of its outer record, as in streaming (xml_sax_reader.cpp)
 		out.push_back(node);
+		return;
 	}
 	// Elements only nest inside elements: entity references are left unexpanded, and the XPath
 	// descendant axis does not enter them either.
@@ -209,8 +211,8 @@ static void CollectElementsByLocalName(xmlNodePtr node, const xmlChar *name, std
 }
 
 // Resolve record_element to its nodes in document order. A bare tag, or `//tag`, matches by local
-// name regardless of namespace: the node set of //*[local-name()='tag'], found by walking the tree
-// instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
+// name regardless of namespace: the outermost nodes of //*[local-name()='tag'], found by walking the
+// tree instead of calling local-name() on every node. Anything else is evaluated as XPath. A tag that
 // cannot sit inside that XPath literal (a quote or NUL) still goes to XPath, which rejects it.
 static std::vector<xmlNodePtr> FindRecordElements(XMLDocRAII &doc, const std::string &record_element) {
 	auto is_simple = [](const std::string &tag) {
@@ -483,6 +485,7 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 	if (options.attr_mode == "discard") {
 		return names;
 	}
+	const case_insensitive_set_t children(child_names.begin(), child_names.end());
 	case_insensitive_set_t seen(child_names.begin(), child_names.end());
 	for (xmlNodePtr instance : instances) {
 		for (xmlAttrPtr attr = instance->properties; attr; attr = attr->next) {
@@ -492,6 +495,11 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 			std::string attr_name((const char *)attr->name);
 			if (options.namespaces == "strip") {
 				attr_name = StripNamespacePrefix(attr_name);
+			}
+			// An attribute named like a child element takes attr_prefix, so both get a field (see
+			// StructFieldAttribute). With an empty attr_prefix the child's field wins.
+			if (!options.attr_prefix.empty() && children.count(attr_name)) {
+				attr_name = options.attr_prefix + attr_name;
 			}
 			if (seen.insert(attr_name).second) {
 				names.push_back(attr_name);
@@ -2358,10 +2366,12 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 				child = child->next;
 			}
 
-			// If no matching child found, check if column name matches the record element itself
+			// If no matching child found, a column named after the record reads the record itself, but only when it
+			// is the whole schema: inference makes that column when max_depth leaves no room inside records, or the
+			// user declares it. Beside other columns it came from a child of that name: without one, it is NULL.
 			if (child == nullptr) {
 				std::string record_name = (const char *)record->name;
-				if (record_name == column_name) {
+				if (record_name == column_name && column_names.size() == 1) {
 					WriteNodeValue(record, column_type, column_out, row, options, col_fmt);
 					written = true;
 				} else {
@@ -2738,10 +2748,47 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 	return true;
 }
 
+// The attribute a STRUCT field reads, or "" when it reads only child elements. CollectAttributeNames gives an attribute
+// named like a child element the field attr_prefix + name, so field X reads only the child when field @X exists, and
+// field @X reads attribute X. attribute_only is set for @X: a child element named @X cannot exist. any_prefixed_field
+// says whether any field starts with attr_prefix: without one there is no clash, so no field lookup is needed.
+static std::string StructFieldAttribute(const std::string &field_name, const child_list_t<LogicalType> &fields,
+                                        const XMLSchemaOptions &options, bool any_prefixed_field,
+                                        bool &attribute_only) {
+	attribute_only = false;
+	if (options.attr_mode == "discard") {
+		return "";
+	}
+	const std::string &prefix = options.attr_prefix;
+	if (prefix.empty() || !any_prefixed_field) {
+		return field_name;
+	}
+	auto has_field = [&](const std::string &name) {
+		for (const auto &field : fields) {
+			if (StringUtil::CIEquals(CompatIdentifierName(field.first), name)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (StartsWithAttrPrefix(field_name, options) && has_field(field_name.substr(prefix.size()))) {
+		attribute_only = true;
+		return field_name.substr(prefix.size());
+	}
+	if (has_field(prefix + field_name)) {
+		return "";
+	}
+	return field_name;
+}
+
 void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
                                              const XMLSchemaOptions &options, const std::string &datetime_format) {
 	CompatFlatValidity(out).SetValid(row);
 	auto &struct_children = StructType::GetChildTypes(struct_type);
+	bool any_prefixed_field = false;
+	for (const auto &field : struct_children) {
+		any_prefixed_field = any_prefixed_field || StartsWithAttrPrefix(CompatIdentifierName(field.first), options);
+	}
 	for (idx_t field_idx = 0; field_idx < struct_children.size(); field_idx++) {
 		const auto &field_type = struct_children[field_idx].second;
 		auto &field_out = CompatStructGetField(out, field_idx);
@@ -2754,6 +2801,9 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 		// parameter. CompatIdentifierName reads the raw name out of either (the string
 		// overload is a pass-through), so both helpers take a plain name on both lines.
 		const auto &field_name_str = CompatIdentifierName(struct_children[field_idx].first);
+		bool attribute_only;
+		std::string attr_name =
+		    StructFieldAttribute(field_name_str, struct_children, options, any_prefixed_field, attribute_only);
 		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
 		    IsOwnTextField(node, field_name_str)) {
 			std::string text = CleanNodeText(node, options.preserve_whitespace);
@@ -2762,15 +2812,14 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 				found = true;
 			}
 		}
-		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
-		else if (xmlChar *attr_value = options.attr_mode == "discard"
-		                                   ? nullptr
-		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
+		// Check if this field is an attribute on the node itself (see StructFieldAttribute)
+		else if (xmlChar *attr_value =
+		             attr_name.empty() ? nullptr : xmlGetProp(node, (const xmlChar *)attr_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			WriteConverted(str_value, field_type, field_out, row, options, datetime_format);
 			xmlFree(attr_value);
 			found = true;
-		} else {
+		} else if (!attribute_only) {
 			// Look for child element(s) with matching name. Match case-insensitively because
 			// DuckDB STRUCTs enforce case-insensitive uniqueness of field names. Cross-file
 			// union_by_name widening (MergeXMLColumnType) keeps the first-seen casing, so an

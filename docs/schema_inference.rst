@@ -35,14 +35,15 @@ You can customize this with the ``record_element`` parameter:
    -- Use XPath syntax
    SELECT * FROM read_xml('data.xml', record_element := '//entry');
 
-.. warning::
+.. note::
 
-   ``record_element`` matches at ALL depths. If your document has ``<item>`` elements at multiple levels, all will become rows. Filter by column presence if needed:
+   A tag name, or ``//tag``, matches the outermost elements with that name at any depth. An ``<item>`` inside
+   another ``<item>`` is not a row of its own: it stays in its parent's column. Use an XPath expression to select
+   the inner elements as rows:
 
    .. code-block:: sql
 
-      SELECT * FROM read_xml('data.xml', record_element := 'item')
-      WHERE price IS NOT NULL;
+      SELECT * FROM read_xml('data.xml', record_element := '//attachmentSet/item');
 
 Phase 2: Identify Columns
 -------------------------
