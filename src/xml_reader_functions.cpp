@@ -437,10 +437,6 @@ private:
 	FileInferenceState &state;
 };
 
-// A parsed DOM peaks at 10-14 times its file's size on real datasets and 31 times on markup of one-character
-// elements, and libxml2 allocates it outside the buffer manager.
-static constexpr idx_t INFERENCE_BYTES_PER_FILE_BYTE = 32;
-
 // A streamed record's DOM takes a few times its bytes, outside the buffer manager, so one record may span at most
 // this share of memory_limit.
 static constexpr idx_t STREAMED_RECORD_MEMORY_FACTOR = 4;
@@ -457,9 +453,7 @@ static idx_t InferenceTaskCount(ClientContext &context, idx_t file_count, idx_t 
 	if (context.TryGetCurrentSetting(XMLReaderFunctions::INFERENCE_THREADS_SETTING, setting) && !setting.IsNull()) {
 		limit = setting.GetValue<uint64_t>();
 	} else {
-		// Divided in two steps so a huge maximum_file_size can't overflow the product
-		auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
-		limit = MinValue<idx_t>(limit, memory / INFERENCE_BYTES_PER_FILE_BYTE / MaxValue<idx_t>(max_file_size, 1));
+		limit = MinValue<idx_t>(limit, DOMsThatFit(context, max_file_size));
 	}
 	return MaxValue<idx_t>(MinValue<idx_t>(limit, file_count), 1);
 }
@@ -535,24 +529,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -564,7 +543,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
@@ -655,24 +634,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		throw InvalidInputException("%s first argument must be a string or array of strings", function_name);
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -684,6 +648,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
+	schema_options.html_input = HTMLInputEncoding::FILE_BYTES;
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {
@@ -697,7 +662,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		} else if (kv.first == "sample_files") {
 			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
@@ -1145,8 +1110,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 				} else {
 					// This single parse is also the validity check: a separate pre-validation
 					// pass would parse the document twice and could not see why a parse failed.
-					lstate.current_doc =
-					    parse_from_handle ? ParseXMLFile(*file_handle, is_html) : XMLDocRAII(content, is_html);
+					lstate.current_doc = parse_from_handle
+					                         ? ParseXMLFile(*file_handle, is_html)
+					                         : XMLDocRAII(content, is_html, HTMLInputEncoding::FILE_BYTES);
 
 					if (!lstate.current_doc.IsValid()) {
 						if (lstate.current_doc.HadResourceError()) {
@@ -1385,24 +1351,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 		throw InvalidInputException("read_xml_objects first argument must be a string or array of strings");
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1415,7 +1366,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
 		if (kv.first == "ignore_errors") {
 			result->ignore_errors = kv.second.GetValue<bool>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();
 		} else if (kv.first == "filename") {
@@ -1558,24 +1509,9 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		throw InvalidInputException("read_xml first argument must be a string or array of strings");
 	}
 
-	// Expand file patterns using file system
 	auto &fs = FileSystem::GetFileSystem(context);
-	for (const auto &pattern : file_patterns) {
-		auto glob_result = fs.Glob(pattern, nullptr);
-		// Extract file paths from OpenFileInfo results
-		// Sort each glob's matches lexicographically for deterministic, filesystem-independent
-		// order (matching read_csv). This is the order preserved across threads under multi-file
-		// parallelism (issue #72). Explicitly listed paths — each its own single-match pattern —
-		// keep the user-provided order.
-		vector<string> matched;
-		for (const auto &file_info : glob_result) {
-			matched.push_back(file_info.path);
-		}
-		std::sort(matched.begin(), matched.end());
-		for (auto &matched_path : matched) {
-			result->files.push_back(std::move(matched_path));
-		}
-	}
+	auto ignore_errors = FindNamedParameter(input.named_parameters, "ignore_errors");
+	result->files = ExpandFilePatterns(fs, file_patterns, ignore_errors && ignore_errors->GetValue<bool>());
 
 	if (result->files.empty()) {
 		string pattern_str = file_patterns.size() == 1 ? file_patterns[0] : "provided patterns";
@@ -1587,6 +1523,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
+	schema_options.html_input = HTMLInputEncoding::FILE_BYTES;
 	bool has_explicit_columns = false;
 
 	for (auto &kv : input.named_parameters) {
@@ -1600,7 +1537,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		} else if (kv.first == "sample_files") {
 			result->schema_sample_files = kv.second.GetValue<int64_t>();
 		} else if (kv.first == "maximum_file_size") {
-			result->max_file_size = kv.second.GetValue<idx_t>();
+			result->max_file_size = MaximumFileSizeParameter(kv.second);
 			schema_options.maximum_file_size = result->max_file_size;
 		} else if (kv.first == "compression") {
 			result->compression = kv.second.ToString();

@@ -10,6 +10,18 @@
 
 namespace duckdb {
 
+// libxml2's limit on open elements without XML_PARSE_HUGE, which webbed leaves off. A deeper document stops the parser
+// with XML_ERR_RESOURCE_LIMIT.
+static constexpr int32_t LIBXML_MAX_TREE_DEPTH = 256;
+
+// Where the bytes handed to the HTML parser came from, which decides how they are decoded.
+enum class HTMLInputEncoding {
+	// A VARCHAR or HTML value. DuckDB already holds it as UTF-8, so a <meta charset> in it is stale.
+	DECODED_TEXT,
+	// Raw file bytes. Decoded per a BOM, then a <meta> charset, then as UTF-8 when valid, else as windows-1252.
+	FILE_BYTES
+};
+
 // Schema options for XML to JSON conversion
 struct XMLToJSONOptions {
 	std::vector<std::string> force_list;   // Element names to always convert to arrays
@@ -54,9 +66,11 @@ struct XMLDocRAII {
 	// Parses with this thread's reused parser context and shares its dictionary, so the document must be freed on
 	// this thread. Keep it function-local. Scan state that outlives a task uses the is_html overload.
 	explicit XMLDocRAII(const std::string &xml_str);
-	XMLDocRAII(const std::string &content, bool is_html);
-	// Parse input pulled through a libxml2 read callback
-	XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html);
+	// An HTML parse throws InvalidInputException past a libxml2 resource limit, such as LIBXML_MAX_TREE_DEPTH.
+	XMLDocRAII(const std::string &content, bool is_html,
+	           HTMLInputEncoding html_input = HTMLInputEncoding::DECODED_TEXT);
+	// Parse input pulled through a libxml2 read callback. HTML input is decoded as `html_encoding`.
+	XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding = "UTF-8");
 	~XMLDocRAII();
 
 	// Delete copy operations for safety
@@ -83,7 +97,7 @@ struct XMLDocRAII {
 	case_insensitive_map_t<string> GetDeclaredNamespaces() const;
 
 private:
-	void Parse(xmlInputReadCallback read, void *context, bool is_html);
+	void Parse(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding);
 };
 
 // Custom deleters for libxml2 resources to use with DuckDB's smart pointers
@@ -122,12 +136,28 @@ struct XMLDocDeleter {
 	}
 };
 
+struct XMLXPathContextDeleter {
+	void operator()(xmlXPathContextPtr ptr) const {
+		if (ptr)
+			xmlXPathFreeContext(ptr);
+	}
+};
+
+struct XMLXPathObjectDeleter {
+	void operator()(xmlXPathObjectPtr ptr) const {
+		if (ptr)
+			xmlXPathFreeObject(ptr);
+	}
+};
+
 // Type aliases for DuckDB-style smart pointers
 using XMLSchemaParserPtr = std::unique_ptr<xmlSchemaParserCtxt, XMLSchemaParserDeleter>;
 using XMLSchemaPtr = std::unique_ptr<xmlSchema, XMLSchemaDeleter>;
 using XMLSchemaValidPtr = std::unique_ptr<xmlSchemaValidCtxt, XMLSchemaValidDeleter>;
 using XMLCharPtr = std::unique_ptr<xmlChar, XMLCharDeleter>;
 using XMLDocPtr = std::unique_ptr<xmlDoc, XMLDocDeleter>;
+using XMLXPathContextPtr = std::unique_ptr<xmlXPathContext, XMLXPathContextDeleter>;
+using XMLXPathObjectPtr = std::unique_ptr<xmlXPathObject, XMLXPathObjectDeleter>;
 
 // Structure to hold extracted XML element information
 struct XMLElement {
@@ -365,6 +395,23 @@ public:
 	static std::vector<std::string> ExtractHTMLAllTextByXPath(const std::string &html_str, const std::string &xpath);
 	// NOTE: Namespace overloads intentionally omitted - HTML5 parsing doesn't support
 	// XML namespace declarations. Prefixed elements are treated as literal names.
+
+	// Every HTML parse goes through ParseHTMLDocument. It throws InvalidInputException when the document exceeds a
+	// libxml2 resource limit, such as LIBXML_MAX_TREE_DEPTH, because the parser stops there and recovery would
+	// silently return the truncated tree. It throws InvalidInputException too when bytes aren't valid in `encoding`,
+	// because libxml2 stops decoding there. libxml2 reads UTF-8 without a decoder and replaces a bad byte instead, so a
+	// caller passing "UTF-8" validates the bytes itself. It throws OutOfMemoryException when libxml2 cannot allocate.
+	// The returned document's encoding is UTF-8 whatever the input's was, so serialising it yields UTF-8.
+	static XMLDocPtr ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding);
+	// FILE_BYTES are decoded per their BOM, <meta> charset or bytes. DECODED_TEXT is a VARCHAR, which DuckDB already
+	// holds as UTF-8.
+	static XMLDocPtr ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input);
+	// The error for bytes that aren't valid in `encoding`.
+	static InvalidInputException InvalidHTMLBytes(const std::string &encoding);
+	// The encoding that raw HTML file bytes declare with a BOM or a <meta> in `head`, the file's first
+	// HTML_ENCODING_SNIFF_BYTES. Labels map the way browsers map them. "" when nothing usable is declared.
+	static std::string DeclaredHTMLEncoding(const char *head, idx_t head_size);
+	static constexpr idx_t HTML_ENCODING_SNIFF_BYTES = 1024;
 
 	// HTML entity escaping/unescaping
 	static std::string HTMLUnescape(const std::string &html_str);

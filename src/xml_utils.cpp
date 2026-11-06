@@ -1,9 +1,14 @@
 #include "xml_utils.hpp"
 #include "xml_types.hpp"
 #include "xml_in_memory_reader.hpp"
+#include "html_charset_labels.hpp"
+#include "html_encoding_sniffer.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "yyjson.hpp"
+#include <libxml/encoding.h>
+#include <libxml/parserInternals.h>
 #include <libxml/xmlerror.h>
 #include <libxml/xmlschemas.h>
 #include <libxml/HTMLparser.h>
@@ -318,27 +323,265 @@ XMLDocRAII::XMLDocRAII(const std::string &xml_str) {
 	xpath_ctx = NewDocumentXPathContext(doc);
 }
 
-XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html) {
+XMLDocRAII::XMLDocRAII(const std::string &content, bool is_html, HTMLInputEncoding html_input) {
+	if (is_html) {
+		doc = XMLUtils::ParseHTMLDocument(content.data(), content.size(), html_input).release();
+		xpath_ctx = NewDocumentXPathContext(doc);
+		return;
+	}
 	XMLInMemoryReader reader {content.data(), content.size(), 0};
-	Parse(XMLInMemoryReaderRead, &reader, is_html);
+	Parse(XMLInMemoryReaderRead, &reader, false, std::string());
 }
 
-XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html) {
-	Parse(read, context, is_html);
+XMLDocRAII::XMLDocRAII(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding) {
+	Parse(read, context, is_html, html_encoding);
 }
 
-void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html) {
+struct HTMLParserCtxtDeleter {
+	void operator()(htmlParserCtxtPtr ptr) const {
+		if (ptr)
+			htmlFreeParserCtxt(ptr);
+	}
+};
+
+// A decoder error fails libxml2's input buffer. The parse ends there and RECOVER returns the tree so far. Later errors
+// can replace it as the last error, and a handler on the context records it when it happens.
+static void RecordHTMLDecodeError(void *data, const xmlError *error) {
+	if (error && error->domain == XML_FROM_IO && error->code == XML_ERR_INVALID_ENCODING) {
+		*static_cast<bool *>(data) = true;
+	}
+}
+
+XMLDocPtr XMLUtils::ParseHTMLDocument(xmlInputReadCallback read, void *context, const std::string &encoding) {
+	EnsureSecureParsing();
+	std::unique_ptr<htmlParserCtxt, HTMLParserCtxtDeleter> ctxt(htmlNewParserCtxt());
+	if (!ctxt) {
+		throw OutOfMemoryException("libxml2 could not allocate an HTML parser context");
+	}
+	bool decode_failed = false;
+	xmlCtxtSetErrorHandler(ctxt.get(), RecordHTMLDecodeError, &decode_failed);
+	// RECOVER keeps malformed HTML parsing. HUGE stays off, so LIBXML_MAX_TREE_DEPTH and libxml2's other limits hold.
+	// Errors go to the context's handler, which prints nothing.
+	XMLDocPtr doc(htmlCtxtReadIO(ctxt.get(), read, XMLInMemoryReaderClose, context, nullptr, encoding.c_str(),
+	                             HTML_PARSE_RECOVER | HTML_PARSE_NOWARNING | HTML_PARSE_NONET));
+	// A resource limit stops the parser, so no later error replaces it as the context's last error.
+	const xmlError *error = xmlCtxtGetLastError(ctxt.get());
+	if (error && error->code == XML_ERR_NO_MEMORY) {
+		throw OutOfMemoryException("libxml2 ran out of memory parsing an HTML document");
+	}
+	if (error && error->code == XML_ERR_RESOURCE_LIMIT) {
+		std::string detail = error->message ? StringUtil::Replace(error->message, "\n", "") : "";
+		if (StringUtil::Contains(detail, "depth")) {
+			throw InvalidInputException("HTML document nests elements deeper than libxml2's limit of %d levels",
+			                            LIBXML_MAX_TREE_DEPTH);
+		}
+		// libxml2 refuses to grow its input buffer past XML_MAX_LOOKUP_LIMIT bytes for one token.
+		if (StringUtil::Contains(detail, "XML_PARSE_HUGE")) {
+			throw InvalidInputException(
+			    "HTML document has a text node, attribute value, comment or tag longer than libxml2's limit of %d "
+			    "bytes",
+			    XML_MAX_LOOKUP_LIMIT);
+		}
+		throw InvalidInputException("HTML document exceeds a libxml2 parser limit: %s", detail);
+	}
+	// UTF-8 input reports a bad byte per character and parses on with U+FFFD in its place, as a browser does.
+	if (decode_failed && encoding != "UTF-8") {
+		throw InvalidHTMLBytes(encoding);
+	}
+	if (doc) {
+		// libxml2 decoded the input to UTF-8. Recording that keeps a later dump from re-encoding to the source charset.
+		if (doc->encoding) {
+			xmlFree(const_cast<xmlChar *>(doc->encoding));
+		}
+		doc->encoding = xmlStrdup(BAD_CAST "UTF-8");
+	}
+	return doc;
+}
+
+InvalidInputException XMLUtils::InvalidHTMLBytes(const std::string &encoding) {
+	return InvalidInputException("HTML document has bytes that aren't valid %s, where libxml2 stopped decoding it",
+	                             encoding);
+}
+
+XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input) {
+	std::string encoding = "UTF-8";
+	if (input == HTMLInputEncoding::FILE_BYTES) {
+		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES));
+		if (encoding.empty()) {
+			UndeclaredEncodingSniffer sniffer;
+			sniffer.Feed(data, size);
+			encoding = sniffer.Encoding();
+		}
+	}
+	XMLInMemoryReader reader {data, NumericCast<size_t>(size), 0};
+	return ParseHTMLDocument(XMLInMemoryReaderRead, &reader, encoding);
+}
+
+static bool IsHTMLSpace(char c) {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+}
+
+// The charset parameter of an http-equiv content value, as in "text/html; charset=iso-8859-1", or "".
+static std::string ContentCharset(const std::string &content) {
+	size_t pos = 0;
+	while ((pos = content.find("charset", pos)) != std::string::npos) {
+		size_t i = pos + 7;
+		while (i < content.size() && IsHTMLSpace(content[i])) {
+			i++;
+		}
+		if (i >= content.size() || content[i] != '=') {
+			pos = i;
+			continue;
+		}
+		i++;
+		while (i < content.size() && IsHTMLSpace(content[i])) {
+			i++;
+		}
+		if (i < content.size() && (content[i] == '"' || content[i] == '\'')) {
+			auto end = content.find(content[i], i + 1);
+			return end == std::string::npos ? "" : content.substr(i + 1, end - i - 1);
+		}
+		size_t start = i;
+		while (i < content.size() && !IsHTMLSpace(content[i]) && content[i] != ';') {
+			i++;
+		}
+		return content.substr(start, i - start);
+	}
+	return "";
+}
+
+// Reads the attribute at `i` in a lowercased tag, as the HTML standard's prescan gets an attribute, and leaves `i` past
+// it. Returns false at the tag's closing '>' or the end of `s`, with `i` on that '>'.
+static bool NextPrescanAttribute(const std::string &s, size_t &i, std::string &name, std::string &value) {
+	while (i < s.size() && (IsHTMLSpace(s[i]) || s[i] == '/')) {
+		i++;
+	}
+	if (i >= s.size() || s[i] == '>') {
+		return false;
+	}
+	size_t name_start = i;
+	while (i < s.size() && !IsHTMLSpace(s[i]) && s[i] != '=' && s[i] != '>' && s[i] != '/') {
+		i++;
+	}
+	name = s.substr(name_start, i - name_start);
+	value.clear();
+	while (i < s.size() && IsHTMLSpace(s[i])) {
+		i++;
+	}
+	if (i >= s.size() || s[i] != '=') {
+		return true;
+	}
+	i++;
+	while (i < s.size() && IsHTMLSpace(s[i])) {
+		i++;
+	}
+	if (i < s.size() && (s[i] == '"' || s[i] == '\'')) {
+		auto end = s.find(s[i], i + 1);
+		if (end == std::string::npos) {
+			end = s.size();
+		}
+		value = s.substr(i + 1, end - i - 1);
+		i = MinValue<size_t>(end + 1, s.size());
+	} else {
+		size_t value_start = i;
+		while (i < s.size() && !IsHTMLSpace(s[i]) && s[i] != '>') {
+			i++;
+		}
+		value = s.substr(value_start, i - value_start);
+	}
+	return true;
+}
+
+static bool IsASCIIAlpha(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The encoding the first usable <meta> in `head` declares, through a charset attribute or an http-equiv content-type
+// content, or "". It follows the prescan in the HTML standard: comments are skipped, every tag's attributes are parsed
+// so a quoted value can't hide or fake a <meta>, and a <meta> naming an encoding libxml2 can't decode is passed over
+// for a later one.
+static std::string FindMetaCharset(const char *head, idx_t size) {
+	std::string lower(head, size);
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+	size_t pos = 0;
+	std::string name;
+	std::string value;
+	while ((pos = lower.find('<', pos)) != std::string::npos) {
+		if (lower.compare(pos, 4, "<!--") == 0) {
+			auto end = lower.find("-->", pos + 4);
+			if (end == std::string::npos) {
+				return "";
+			}
+			pos = end + 3;
+			continue;
+		}
+		if (lower.compare(pos, 5, "<meta") == 0 && pos + 5 < lower.size() &&
+		    (IsHTMLSpace(lower[pos + 5]) || lower[pos + 5] == '/')) {
+			size_t i = pos + 5;
+			std::string charset;
+			std::string content;
+			bool content_type = false;
+			while (NextPrescanAttribute(lower, i, name, value)) {
+				if (name == "charset" && charset.empty()) {
+					charset = value;
+				} else if (name == "content" && content.empty()) {
+					content = value;
+				} else if (name == "http-equiv" && value == "content-type") {
+					content_type = true;
+				}
+			}
+			auto label = !charset.empty() ? charset : content_type ? ContentCharset(content) : "";
+			auto encoding = HTMLDecoderForLabel(label);
+			if (!encoding.empty()) {
+				return encoding;
+			}
+			pos = i;
+			continue;
+		}
+		size_t name_at = pos + (pos + 1 < lower.size() && lower[pos + 1] == '/' ? 2 : 1);
+		if (name_at < lower.size() && IsASCIIAlpha(lower[name_at])) {
+			// Another tag. Its attributes are skipped whole, so a '<' inside a quoted value starts nothing.
+			size_t i = name_at;
+			while (i < lower.size() && !IsHTMLSpace(lower[i]) && lower[i] != '>') {
+				i++;
+			}
+			while (NextPrescanAttribute(lower, i, name, value)) {
+			}
+			pos = i;
+			continue;
+		}
+		if (pos + 1 < lower.size() && (lower[pos + 1] == '!' || lower[pos + 1] == '/' || lower[pos + 1] == '?')) {
+			auto end = lower.find('>', pos + 1);
+			if (end == std::string::npos) {
+				return "";
+			}
+			pos = end + 1;
+			continue;
+		}
+		pos++;
+	}
+	return "";
+}
+
+std::string XMLUtils::DeclaredHTMLEncoding(const char *head, idx_t head_size) {
+	auto bytes = reinterpret_cast<const unsigned char *>(head);
+	if (head_size >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+		return "UTF-8";
+	}
+	if (head_size >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+		return "UTF-16LE";
+	}
+	if (head_size >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+		return "UTF-16BE";
+	}
+	return FindMetaCharset(head, head_size);
+}
+
+void XMLDocRAII::Parse(xmlInputReadCallback read, void *context, bool is_html, const std::string &html_encoding) {
 	XMLUtils::EnsureSecureParsing();
 
 	if (is_html) {
-		// Parse as HTML using libxml2's HTML parser with error suppression
-		// HTML needs RECOVER flag to handle malformed HTML gracefully
-		// Specify UTF-8 encoding explicitly to prevent libxml2 from defaulting to Latin-1
-		// which would cause UTF-8 multi-byte characters to be misinterpreted (Issue #53)
-		// TODO: Future enhancement - consider making encoding configurable via parameter
-		// (with UTF-8 as default) or deriving it from database collation settings
-		doc = htmlReadIO(read, XMLInMemoryReaderClose, context, nullptr, "UTF-8",
-		                 HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
+		doc = XMLUtils::ParseHTMLDocument(read, context, html_encoding).release();
 	} else {
 		// Parse as XML with error message suppression (thread-safe, per-operation config)
 		// Do NOT use RECOVER flag to maintain strict XML parsing behavior
@@ -3114,21 +3357,11 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	// Wrap the string in a minimal HTML document to parse it
 	std::string wrapped = "<html><body>" + html_str + "</body></html>";
 
-	// Parse using HTML parser with explicit UTF-8 encoding, via the IO reader so a wrapped
-	// value larger than 2 GiB doesn't overflow htmlReadMemory's int length argument.
-	// Note: Explicit "UTF-8" encoding is used here (unlike XMLDocRAII which uses nullptr)
-	// to ensure correct handling of international characters in HTML entities
-	XMLUtils::EnsureSecureParsing();
-	XMLInMemoryReader reader {wrapped.data(), wrapped.size(), 0};
-	xmlDocPtr raw_doc = htmlReadIO(XMLInMemoryReaderRead, XMLInMemoryReaderClose, &reader, nullptr, "UTF-8",
-	                               HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET);
-
-	if (!raw_doc) {
-		return html_str; // Fallback to original on error
+	// A depth or other limit error propagates. Only a parse that produced no document falls back to the input.
+	XMLDocPtr doc = ParseHTMLDocument(wrapped.data(), wrapped.size(), HTMLInputEncoding::DECODED_TEXT);
+	if (!doc) {
+		return html_str;
 	}
-
-	// Use RAII pattern to ensure proper cleanup
-	XMLDocPtr doc(raw_doc);
 
 	// Extract text content from body element
 	xmlNodePtr root = xmlDocGetRootElement(doc.get());

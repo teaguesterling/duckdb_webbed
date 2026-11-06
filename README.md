@@ -957,7 +957,12 @@ ingesting untrusted documents is safe by default:
 - **Entity-expansion ("billion laughs") is bounded.** Parsing runs *without* `XML_PARSE_HUGE`,
   so libxml2's built-in limits on entity expansion, nesting depth, and name/text length stay
   active. A nested-entity bomb does not amplify, and pathologically deep documents are rejected
-  rather than overflowing the stack.
+  rather than overflowing the stack. The depth limit of 256 levels applies to HTML too, and a
+  deeper document raises an error instead of returning a truncated tree.
+- **HTML block reads are bounded by `memory_limit`.** `read_html_blocks` estimates each parsed
+  document's memory from its markup as it reads and stops a file whose estimate passes what's
+  left of `memory_limit`, shared across the threads of one read. It buffers its rows in DuckDB-managed memory,
+  which `memory_limit` bounds on its own.
 - **Internal-entity text handling.** Internal entities defined in a document's DTD subset are
   expanded within those limits by the XPath extractors (e.g. `xml_extract_text`), but
   `xml_extract_all_text` currently omits entity-referenced text (returns it empty) — a

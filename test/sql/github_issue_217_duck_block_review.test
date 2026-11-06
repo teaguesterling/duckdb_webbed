@@ -1,0 +1,354 @@
+# name: test/sql/github_issue_217_duck_block_review.test
+# description: Findings from the duck_block review in GitHub issue #217
+# group: [sql]
+
+require webbed
+
+# ============================================================================
+# Depth limit. libxml2 holds at most 256 open elements, and <html> and <body> take two. A deeper document used to
+# come back truncated with no error.
+# ============================================================================
+
+# 254 nested blockquotes is the deepest that parses. Both the innermost text and the trailing paragraph survive.
+query I
+SELECT list_count(list_filter(html_to_duck_blocks(repeat('<blockquote>', 254) || 'deep' || repeat('</blockquote>', 254) || '<p>after</p>'), lambda b: b.content IN ('deep', 'after')));
+----
+2
+
+statement error
+SELECT html_to_duck_blocks(repeat('<blockquote>', 255) || 'deep' || repeat('</blockquote>', 255) || '<p>after</p>');
+----
+deeper than libxml2's limit of 256 levels
+
+statement ok
+COPY (SELECT repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256) || '<p>after</p>') TO '{TEST_DIR}/issue_217_deep.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement ok
+COPY (SELECT repeat('<blockquote>', 250) || 'deep' || repeat('</blockquote>', 250) || '<p>after</p>') TO '{TEST_DIR}/issue_217_deep_ok.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_217_deep.html');
+----
+deeper than libxml2's limit of 256 levels
+
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/issue_217_deep_ok.html') WHERE content IN ('deep', 'after');
+----
+2
+
+statement error
+SELECT count(*) FROM parse_html_blocks(repeat('<blockquote>', 256) || 'deep' || repeat('</blockquote>', 256));
+----
+deeper than libxml2's limit of 256 levels
+
+# The shared HTML parse raises the same error for read_html and the html_* scalars
+statement error
+SELECT * FROM read_html('{TEST_DIR}/issue_217_deep.html');
+----
+deeper than libxml2's limit of 256 levels
+
+statement error
+SELECT html_extract_text(repeat('<div>', 300) || 'x' || repeat('</div>', 300), '//div');
+----
+deeper than libxml2's limit of 256 levels
+
+statement error
+SELECT html_unescape(repeat('<div>', 300) || 'x' || repeat('</div>', 300));
+----
+deeper than libxml2's limit of 256 levels
+
+# ============================================================================
+# Character encoding of HTML files. A file's bytes are decoded per a BOM, then a <meta> charset, then as UTF-8 when
+# they are valid UTF-8, else as windows-1252. A VARCHAR is already decoded, so its <meta> is ignored.
+# ============================================================================
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_meta.html') WHERE element_type = 'paragraph';
+----
+café
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_http_equiv.html') WHERE element_type = 'paragraph';
+----
+naïve
+
+# Undeclared and not valid UTF-8: windows-1252, where 0x80 is the euro sign
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_cp1252_undeclared.html') WHERE element_type = 'paragraph';
+----
+café €
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom.html') WHERE element_type = 'paragraph';
+----
+café
+
+# Latin-1 and ASCII labels decode as windows-1252, as browsers do, so 0x93 and 0x94 are curly quotes
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_latin1_label_smart_quotes.html') WHERE element_type = 'paragraph';
+----
+“q”
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_us_ascii_label_high_bytes.html') WHERE element_type = 'paragraph';
+----
+a“b”
+
+# Only a charset attribute counts, so the word "charset" in another meta's content doesn't
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_charset_word_in_content.html') WHERE element_type = 'paragraph';
+----
+α
+
+# A meta inside a comment is skipped, and so is one naming an unknown charset, for the next meta
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_meta_after_comment_and_unknown_charset.html') WHERE element_type = 'paragraph';
+----
+α
+
+# 0xA1 isn't a character in ISO-8859-6. libxml2 stops decoding there, which would drop the rest of the document.
+statement error
+SELECT * FROM read_html_blocks('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html');
+----
+HTML document has bytes that aren't valid ISO-8859-6
+
+query I
+SELECT count(*) FROM read_html_blocks('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html', ignore_errors := true);
+----
+0
+
+statement error
+SELECT * FROM read_html('test/html/encoding/github_issue_217_iso8859_6_invalid_byte.html');
+----
+HTML document has bytes that aren't valid ISO-8859-6
+
+# A file that declares UTF-8 by <meta> or BOM and holds a byte that isn't UTF-8 reads U+FFFD there, as in a browser
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html') WHERE element_type = 'paragraph';
+----
+caf�
+
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_utf8_bom_invalid_byte.html') WHERE element_type = 'paragraph';
+----
+caf�
+
+query I
+SELECT html_extract_text(html, '//p') FROM read_html('test/html/encoding/github_issue_217_utf8_meta_invalid_byte.html', columns := {'html': 'HTML'}, record_element := 'html');
+----
+[caf�]
+
+# A <meta> inside another tag's quoted attribute value declares nothing
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_217_meta_in_quoted_attribute.html') WHERE element_type = 'paragraph';
+----
+café
+
+# Undeclared valid UTF-8 (GitHub #53) still reads as UTF-8
+query I
+SELECT count(*) > 0 FROM read_html_blocks('test/html/github_issue_53_utf8.html') WHERE content LIKE '%è%';
+----
+true
+
+query I
+SELECT html_extract_text(html, '//p') FROM read_html('test/html/encoding/github_issue_217_latin1_meta.html', columns := {'html': 'HTML'}, record_element := 'html');
+----
+[café]
+
+# A VARCHAR that declares Latin-1 is still UTF-8 text
+query I
+SELECT [b.content FOR b IN html_to_duck_blocks('<meta charset="iso-8859-1"><p>café</p>') IF b.element_type = 'paragraph'];
+----
+[café]
+
+# ============================================================================
+# An unknown element inside an inline parent keeps its captured attributes on a span
+# ============================================================================
+
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p><span><div id="x">t</div></span></p>')) AS b);
+----
+paragraph	NULL	1	{}
+span	NULL	2	{}
+span	t	3	{id=x}
+
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p>a<b><div id="c">x<i>y</i></div></b></p>')) AS b);
+----
+paragraph	NULL	1	{}
+text	a	2	{}
+bold	NULL	2	{}
+span	NULL	3	{id=c}
+text	x	4	{}
+italic	y	4	{}
+
+# Without attributes the unknown wrapper is still dropped
+query IIII
+SELECT b.element_type, b.content, b.level, b.attributes::VARCHAR FROM (SELECT unnest(html_to_duck_blocks('<p><span><div>t</div></span></p>')) AS b);
+----
+paragraph	NULL	1	{}
+span	NULL	2	{}
+text	t	3	{}
+
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<p><span><div id="x">t</div></span></p>'))::VARCHAR LIKE '%<span id="x">t</span>%';
+----
+true
+
+# ============================================================================
+# The writer keeps nesting as deep as the reader emits, and refuses deeper
+# ============================================================================
+
+# 254 nested blockquotes is the deepest document libxml2 parses whole, so level 254 is the deepest container
+query III
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 254) || 'deep' || repeat('</blockquote>', 254)) AS blocks)
+SELECT list_max([x.level FOR x IN blocks]), ([x.level FOR x IN blocks] = [y.level FOR y IN html_to_duck_blocks(duck_blocks_to_html(blocks))])::INTEGER, len(blocks) FROM b;
+----
+254	1	254
+
+# A code block at the deepest level renders without its <code> wrapper, which would nest past the limit, and keeps
+# its language on the <pre>
+query II
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 253) || '<pre class="language-sql">x</pre>' || repeat('</blockquote>', 253)) AS blocks),
+r AS (SELECT blocks, html_to_duck_blocks(duck_blocks_to_html(blocks)) AS again FROM b)
+SELECT ([(x.element_type, x.level, x.content, x.attributes) FOR x IN blocks] = [(y.element_type, y.level, y.content, y.attributes) FOR y IN again])::INTEGER, [x.attributes['language'] FOR x IN again IF x.element_type = 'code'] FROM r;
+----
+1	[sql]
+
+query I
+SELECT len(html_to_duck_blocks(duck_blocks_to_html(html_to_duck_blocks(repeat('<blockquote>', 253) || '<pre>x</pre>' || repeat('</blockquote>', 253)))));
+----
+254
+
+# A table whose cells sit at the limit renders without <thead> and <tbody>, and its header row still reads back
+query I
+WITH b AS (SELECT html_to_duck_blocks(repeat('<blockquote>', 251) || '<table><tr><th>h</th></tr><tr><td>d</td></tr></table>' || repeat('</blockquote>', 251)) AS blocks)
+SELECT [x.content FOR x IN html_to_duck_blocks(duck_blocks_to_html(blocks)) IF x.element_type = 'table'] FROM b;
+----
+['{"headers":["h"],"rows":[["d"]]}']
+
+# A container one level deeper than the reader can emit raises an error instead of rendering flat
+statement error
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'blockquote', content: NULL::VARCHAR, level: i::INTEGER, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: i::INTEGER} FOR i IN range(1, 256)] || [{kind: 'block', element_type: 'paragraph', content: 'x', level: 256, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 256}]);
+----
+nests containers deeper than 254 levels
+
+# Inline containers have the same bound
+statement error
+SELECT duck_blocks_to_html([{kind: 'block', element_type: 'paragraph', content: NULL::VARCHAR, level: 1, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 0}] || [{kind: 'inline', element_type: 'bold', content: NULL::VARCHAR, level: i::INTEGER, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: i::INTEGER} FOR i IN range(2, 257)] || [{kind: 'inline', element_type: 'text', content: 'x', level: 257, encoding: 'text', attributes: MAP {}::MAP(VARCHAR, VARCHAR), element_order: 257}]);
+----
+nests containers deeper than 254 levels
+
+# ============================================================================
+# Without <thead>, only a first row of <th> cells is a header row
+# ============================================================================
+
+# A first row of <td> cells is data
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tr><td>a</td><td>1</td></tr><tr><td>b</td><td>2</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":[],"rows":[["a","1"],["b","2"]]}
+
+# A row mixing <th> and <td> is data too
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tr><th>a</th><td>1</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":[],"rows":[["a","1"]]}
+
+# A first row of <th> cells is still the header row, under <table> or <tbody>
+query I
+SELECT b.content FROM (SELECT unnest(html_to_duck_blocks('<table><tbody><tr><th>h</th></tr><tr><td>a</td></tr></tbody></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+{"headers":["h"],"rows":[["a"]]}
+
+# A table without headers renders no <thead>
+query I
+SELECT duck_blocks_to_html(html_to_duck_blocks('<table><tr><td>a</td></tr></table>')) LIKE '%<thead>%';
+----
+false
+
+# ============================================================================
+# Bind parameters: a negative size and a missing path in a list raise errors
+# ============================================================================
+
+statement error
+SELECT count(*) FROM read_html_blocks('test/html/simple.html', maximum_file_size := -1);
+----
+maximum_file_size must be non-negative
+
+statement error
+SELECT count(*) FROM read_xml('test/xml/simple.xml', maximum_file_size := -1);
+----
+maximum_file_size must be non-negative
+
+statement error
+SELECT count(*) FROM read_xml_objects('test/xml/simple.xml', maximum_file_size := -1);
+----
+maximum_file_size must be non-negative
+
+statement error
+SELECT count(*) FROM read_html_blocks(['test/html/simple.html', 'test/html/missing_217.html']);
+----
+No files found that match the pattern "test/html/missing_217.html"
+
+statement error
+SELECT count(*) FROM read_xml(['test/xml/simple.xml', 'test/xml/missing_217.xml']);
+----
+No files found that match the pattern "test/xml/missing_217.xml"
+
+statement error
+SELECT count(*) FROM read_xml_objects(['test/xml/simple.xml', 'test/xml/missing_217.xml']);
+----
+No files found that match the pattern "test/xml/missing_217.xml"
+
+statement error
+SELECT count(*) FROM read_html(['test/html/simple.html', 'test/html/missing_217.html']);
+----
+No files found that match the pattern "test/html/missing_217.html"
+
+# A glob in the list that matches nothing names that glob
+statement error
+SELECT count(*) FROM read_xml(['test/xml/simple.xml', 'test/xml/missing_217_*.xml']);
+----
+No files found that match the pattern "test/xml/missing_217_*.xml"
+
+# Under ignore_errors a missing path in a list is skipped
+query I
+SELECT count(*) > 0 FROM read_html_blocks(['test/html/simple.html', 'test/html/missing_217.html'], ignore_errors := true);
+----
+true
+
+# ============================================================================
+# ignore_errors skips a document error, in parse_html_blocks too
+# ============================================================================
+
+statement error
+SELECT count(*) FROM parse_html_blocks([repeat('<div>', 300) || 'x', '<p>ok</p>']);
+----
+deeper than libxml2's limit of 256 levels
+
+query I
+SELECT string_agg(content, ',') FROM parse_html_blocks([repeat('<div>', 300) || 'x', '<p>ok</p>'], ignore_errors := true);
+----
+ok
+
+statement ok
+COPY (SELECT repeat('<div>', 300) || 'x') TO '{TEST_DIR}/deep_217.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query I
+SELECT count(*) > 0 FROM read_html_blocks(['{TEST_DIR}/deep_217.html', 'test/html/simple.html'], ignore_errors := true);
+----
+true
+
+# ============================================================================
+# A document that fits one chunk is emitted from the staging chunk, and a larger one through the collection. Both
+# kinds interleave, including documents of exactly one chunk and one row past it.
+# ============================================================================
+
+query III
+SELECT count(*), count(DISTINCT element_order), string_agg(content, ',' ORDER BY content) FILTER (content <> 'x') FROM parse_html_blocks(['<p>a</p>', repeat('<p>x</p>', 2047), repeat('<p>x</p>', 2048), '<p>b</p>', '', repeat('<p>x</p>', 2049), '<p>c</p>']);
+----
+6147	2049	a,b,c

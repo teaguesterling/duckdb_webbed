@@ -230,7 +230,7 @@ table	json
 statement error
 SELECT * FROM read_html_blocks('non_existent_file_pattern_xyz_123.html');
 ----
-No files found matching pattern
+No files found that match the pattern "non_existent_file_pattern_xyz_123.html"
 
 query I
 SELECT count(*) FROM parse_html_blocks('', ignore_errors := true);

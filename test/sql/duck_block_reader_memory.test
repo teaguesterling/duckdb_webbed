@@ -1,0 +1,154 @@
+# name: test/sql/duck_block_reader_memory.test
+# description: read_html_blocks streams a file into its DOM, buffers blocks in buffer-managed rows, and refuses a file whose estimated DOM would not fit in memory_limit
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT string_agg('<p>' || i || ' ' || repeat('a', 1000) || '</p>', '' ORDER BY i) FROM range(20000) t(i)) TO '{TEST_DIR}/many_blocks.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query III
+SELECT count(*), sum(length(content)), count(DISTINCT element_order) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
+----
+20000	20108890	20000
+
+# Rows leave the buffer in document order across output chunks
+query I
+SELECT count(*) FROM (SELECT element_order, row_number() OVER () - 1 AS position, content FROM read_html_blocks('{TEST_DIR}/many_blocks.html')) WHERE element_order != position OR NOT starts_with(content, position::VARCHAR || ' ');
+----
+0
+
+statement ok
+COPY (SELECT string_agg('<p>' || i || '</p>', '' ORDER BY i) FROM range(5000) t(i)) TO '{TEST_DIR}/small_blocks.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+# Two files with more than a chunk of rows each keep their own order and filenames
+query III
+SELECT count(*), count(*) FILTER (WHERE filename LIKE '%many_blocks.html'), count(*) FILTER (WHERE element_order != CASE WHEN filename LIKE '%many_blocks.html' THEN position ELSE position - 20000 END) FROM (SELECT element_order, filename, row_number() OVER () - 1 AS position FROM read_html_blocks(['{TEST_DIR}/many_blocks.html', '{TEST_DIR}/small_blocks.html'], filename := true));
+----
+25000	20000	0
+
+query II
+SELECT count(*), sum(length(content)) FROM parse_html_blocks(repeat('<p>' || repeat('b', 100) || '</p>', 5000));
+----
+5000	500000
+
+# The estimate for a 20 MB file's DOM, which libxml2 allocates outside the buffer manager, passes a 100 MB limit as it parses
+statement ok
+SET memory_limit = '100MB';
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
+----
+Out of Memory Error: Reading '
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
+----
+Raise memory_limit to read it
+
+# ignore_errors skips document errors, not a file too large for memory_limit
+statement error
+SELECT count(*) FROM read_html_blocks(['{TEST_DIR}/small_blocks.html', '{TEST_DIR}/many_blocks.html'], ignore_errors := true);
+----
+Raise memory_limit to read it
+
+# A file whose estimate fits still reads
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/small_blocks.html');
+----
+5000
+
+# One paragraph of many short inline elements streams its inlines into the buffer as the walk reaches them
+statement ok
+COPY (SELECT '<p>' || string_agg('<b>' || i || '</b>', '' ORDER BY i) || '</p>' FROM range(100000) t(i)) TO '{TEST_DIR}/many_inlines.html' (HEADER false, QUOTE '', DELIMITER '\x01');
+
+query III
+SELECT count(*), count(*) FILTER (WHERE kind = 'inline'), count(*) FILTER (WHERE kind = 'inline' AND content != (element_order - 1)::VARCHAR) FROM read_html_blocks('{TEST_DIR}/many_inlines.html');
+----
+100001	100000	0
+
+# 3 MB of empty paragraphs is small on disk but builds a DOM of over 250 MB, which the estimate counts as the parse reads
+statement ok
+COPY (SELECT repeat('<p>', 1000000)) TO '{TEST_DIR}/dense_p.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/dense_p.html');
+----
+Out of Memory Error: Reading '
+
+# A 20 MB file of long paragraphs builds a DOM of about 5 times its size, so 600 MB reads it
+statement ok
+SET memory_limit = '600MB';
+
+query I
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/many_blocks.html');
+----
+20000
+
+# Eight files whose DOMs fit memory_limit one at a time, not two, all read on four threads
+statement ok
+COPY (SELECT i, repeat('<p>x</p>', 100000) FROM range(8) t(i)) TO '{TEST_DIR}/dense_files' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01', PARTITION_BY (i));
+
+statement ok
+SET threads = 4;
+
+statement ok
+SET memory_limit = '80MB';
+
+query II
+SELECT count(*), count(DISTINCT filename) FROM read_html_blocks('{TEST_DIR}/dense_files/*/*.csv', filename := true);
+----
+800000	8
+
+# '=' outside a tag, as in an inline script or a text separator, makes no attribute
+statement ok
+SET threads = 1;
+
+statement ok
+SET memory_limit = '100MB';
+
+statement ok
+COPY (SELECT '<p>' || repeat('=', 2000000) || '</p>') TO '{TEST_DIR}/equals_text.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT length(content) FROM read_html_blocks('{TEST_DIR}/equals_text.html') WHERE element_type = 'paragraph';
+----
+2000000
+
+# Each attribute counts toward the estimate, past a '>' in a quoted value and without '='
+statement ok
+COPY (SELECT '<p a=">" ' || string_agg('b' || i || '=x', ' ') || '>z</p>' FROM range(400000) t(i)) TO '{TEST_DIR}/attrs_after_quoted_gt.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/attrs_after_quoted_gt.html');
+----
+Out of Memory Error: Reading '
+
+statement ok
+COPY (SELECT '<p ' || string_agg('b' || i, ' ') || '>z</p>' FROM range(600000) t(i)) TO '{TEST_DIR}/boolean_attrs.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/boolean_attrs.html');
+----
+Out of Memory Error: Reading '
+
+# Comments are DOM nodes
+statement ok
+COPY (SELECT repeat('<!--x-->', 1000000)) TO '{TEST_DIR}/comments.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/comments.html');
+----
+Out of Memory Error: Reading '
+
+# An attribute without a value costs about half of one with a value, so a file of them reads within its peak
+statement ok
+SET memory_limit = '300MB';
+
+statement ok
+COPY (SELECT repeat('<br a b c d e f g h i j k l m n o p q r s t u v w x y z>' || chr(10), 40000)) TO '{TEST_DIR}/boolean_br.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query I
+SELECT count(*) > 0 FROM read_html_blocks('{TEST_DIR}/boolean_br.html');
+----
+true

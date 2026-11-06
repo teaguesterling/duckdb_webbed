@@ -83,6 +83,8 @@ struct XMLSchemaOptions {
 
 	// Source type tracking
 	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
+	// How HTML content is decoded. read_html sets FILE_BYTES. parse_html's content is a decoded value.
+	HTMLInputEncoding html_input = HTMLInputEncoding::DECODED_TEXT;
 };
 
 // Information about an inferred column

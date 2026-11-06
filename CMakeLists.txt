@@ -61,7 +61,8 @@ set(EXTENSION_SOURCES
     src/xml_sax_reader.cpp
     src/xml_file_io.cpp
     src/xml_numeric_lexeme.cpp
-    src/duck_block_functions.cpp)
+    src/duck_block_functions.cpp
+    src/html_charset_labels.cpp)
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

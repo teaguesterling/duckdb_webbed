@@ -13,6 +13,12 @@ SELECT length(code_language('language-' || repeat('a', 65536)));
 ----
 65536
 
+# A <pre> with no <code> child carries the class itself, as the writer emits at the depth limit
+query I
+SELECT length(html_to_duck_blocks('<pre class="language-' || repeat('a', 65536) || '">x</pre>')[1].attributes['language']);
+----
+65536
+
 query I
 SELECT length(code_language('lang-' || repeat('a', 2000000)));
 ----

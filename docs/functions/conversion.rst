@@ -223,6 +223,32 @@ Convert HTML content into a list of structured document blocks. This function pa
   the rows still binds as duck_blocks. A string (``filename := 'src_path'``) names the column
   instead, as DuckDB's core readers allow, **but that shape is not the accepted type and will
   not bind as duck_blocks**; use ``true`` when the rows feed ``duck_block_utils``.
+- ``ignore_errors`` (``read_html_blocks`` and ``parse_html_blocks``): skip a file or input
+  that fails as a document, such as one past ``maximum_file_size`` or libxml2's depth limit,
+  and a path in a list that matches no file. Out of memory, IO errors and interrupts still
+  raise.
+- ``maximum_file_size`` (``read_html_blocks`` only): the largest file to read, in bytes. A
+  negative value raises an error.
+
+**Encoding:** ``read_html_blocks`` and ``read_html`` decode each file by its byte order mark,
+then the first ``<meta charset>`` or ``http-equiv`` declaration naming a label from the WHATWG
+Encoding Standard, then its bytes. As in browsers, other labels are ignored, and ASCII and
+Latin-1 labels decode as windows-1252. A
+file that declares nothing reads as UTF-8 when its well-formed UTF-8 multibyte sequences are
+at least as many as its other bytes above ASCII, and as windows-1252 otherwise. A pipe is judged by its first megabyte, since it can't
+be read twice. A byte that isn't UTF-8 in a UTF-8 file reads as
+U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error.
+
+**Limits:** libxml2 parses at most 256 levels of nested elements, and a text node,
+attribute value, comment or tag of at most 10,000,000 bytes. A document past either raises an error naming
+the limit, so its blocks are never silently cut short. ``read_html_blocks`` parses each file
+into memory outside DuckDB's buffer manager, from 5 times the file's size for long paragraphs
+to about 80 times for markup of empty elements. It estimates that memory from the markup as it
+reads, and the files parsing at once share ``memory_limit``. A file that doesn't fit while
+others parse is read again alone, and one whose estimate passes ``memory_limit`` on its own
+raises an Out of Memory error. The rows themselves live in buffer-managed memory, which
+``memory_limit`` bounds separately, so a file with many blocks spills to disk instead of
+failing.
 
 **Returns:** ``LIST(duck_block)`` - A list of document blocks
 
@@ -338,7 +364,9 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
        incrementing a nesting counter.
    * - ``table``
      - TABLE elements. ``encoding`` is ``'json'``; ``content`` is a JSON object with
-       ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``.
+       ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``. Headers
+       come from ``<thead>``, or from a first row of only ``<th>`` cells. A table without
+       either has ``"headers":[]``, and its first row stays in ``rows``.
    * - ``hr``
      - HR elements. A marker: no ``content``, no children.
    * - ``image``
@@ -522,6 +550,10 @@ Convert a list of document blocks back to HTML. This is the inverse of ``html_to
 - ``blocks`` (LIST(duck_block)): A list of document blocks
 
 **Returns:** HTML - The reconstructed HTML content
+
+A container block or inline at a ``level`` above 254 raises an error. That is the deepest
+level ``html_to_duck_blocks`` emits under libxml2's 256-level limit, so any reader output
+renders with its nesting intact.
 
 .. warning::
 
