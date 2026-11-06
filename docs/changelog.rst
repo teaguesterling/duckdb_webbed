@@ -54,6 +54,11 @@ Fixes from the pre-release scan.
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
 - ``html_extract_tables`` returns ``<tfoot>`` rows after the body rows (#232).
+- An XPath expression that holds a NUL byte raises an error. It used to end at the NUL, so the
+  rest of the expression was ignored (#249).
+- Under ``ignore_errors``, a value that doesn't cast to a declared DECIMAL, UUID or other type
+  with no reader of its own reads as NULL. It used to fail the read with a chunk-count error
+  (#246).
 - ``namespaces := 'auto'`` works after more than one processing instruction, with a ``>`` in a
   root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. A
   comment or processing instruction inside the DOCTYPE may hold ``]``. It used to return ``[]``
