@@ -1459,8 +1459,9 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
-	// No one format reads dates beside timestamps, but the column is TIMESTAMP, as the union of a
-	// date file and a timestamp file is. It keeps no format, and the default cast reads ISO forms.
+	// No one format reads dates beside timestamps. With DATE excluded the column is TIMESTAMP, as in
+	// read_csv. It keeps no format, and the default cast reads ISO forms. With DATE allowed it stays
+	// VARCHAR, as in read_csv: the default cast would drop an offset past the sample.
 	auto is_date_or_timestamp = [&](const std::string &sample) {
 		timestamp_t ts;
 		if (!TryCast::Operation(string_t(sample), ts, true)) {
@@ -1475,7 +1476,8 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 		return false;
 	};
-	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP) &&
+	    !IsAutoTypeCandidate(options, LogicalTypeId::DATE)) {
 		bool any_sample = false;
 		bool all_match = true;
 		for (const auto &sample : samples) {
@@ -2624,7 +2626,8 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
 				RejectUnresolvedTimezoneName(text);
-				return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, false)));
+				// Apply a numeric offset, as DuckDB's cast does. Zoneless text reads as UTC.
+				return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, true)));
 			} catch (...) {
 				Value fallback;
 				if (TryParseTemporalWithCandidates(text, target_type, options, fallback)) {

@@ -1,0 +1,38 @@
+# name: test/sql/temporal_offset_no_format.test
+# description: A temporal column with no recorded format reads offsets as read_csv does. A TIMESTAMPTZ applies the offset, and dates beside timestamps stay VARCHAR while DATE is a candidate.
+# group: [sql]
+
+require webbed
+
+statement ok
+COPY (SELECT '<r><i><t>2024-01-01 10:00:00+05</t><n><t>2024-01-01 10:00:00+05</t></n></i><i><t>2024-01-02 10:00:00</t><n><t>2024-01-02 10:00:00</t></n></i></r>') TO '{TEST_DIR}/offsets.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+# A declared TIMESTAMPTZ column reads the offset as DuckDB's cast does: 10:00+05 is 05:00 UTC. Zoneless text reads as UTC.
+query TI
+SELECT t, t = '2024-01-01 10:00:00+05'::TIMESTAMPTZ OR t = '2024-01-02 10:00:00'::TIMESTAMPTZ FROM read_xml('{TEST_DIR}/offsets.xml', record_element := 'i', columns := {'t': 'TIMESTAMPTZ'}) ORDER BY t;
+----
+2024-01-01 05:00:00+00	1
+2024-01-02 10:00:00+00	1
+
+# A nested field has no recorded format either, so it takes the same path
+query T
+SELECT n.t FROM read_xml('{TEST_DIR}/offsets.xml', record_element := 'i', columns := {'n': 'STRUCT(t TIMESTAMPTZ)'}) ORDER BY n.t;
+----
+2024-01-01 05:00:00+00
+2024-01-02 10:00:00+00
+
+# Dates beside timestamps in one file stay VARCHAR while DATE is a candidate, as in read_csv. The default cast would
+# drop an offset that the sample didn't see, so the text keeps it.
+statement ok
+COPY (SELECT '<r><i><t>2024-01-01</t></i><i><t>2024-01-02 10:00:00</t></i>' || repeat('<i><t>2024-01-03</t></i>', 60) || '<i><t>2024-01-01 10:00:00+05</t></i></r>') TO '{TEST_DIR}/mixed.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+query TT
+SELECT typeof(t), t FROM read_xml('{TEST_DIR}/mixed.xml', record_element := 'i', sample_size := 10) WHERE t LIKE '%+05';
+----
+VARCHAR	2024-01-01 10:00:00+05
+
+# With DATE excluded the column is TIMESTAMP, as in read_csv, and a date reads as midnight
+query TT
+SELECT typeof(t), min(t) FROM read_xml('{TEST_DIR}/mixed.xml', record_element := 'i', sample_size := 10, auto_type_candidates := ['TIMESTAMP']) GROUP BY ALL;
+----
+TIMESTAMP	2024-01-01 00:00:00
