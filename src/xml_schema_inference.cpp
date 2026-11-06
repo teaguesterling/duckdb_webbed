@@ -1413,9 +1413,10 @@ static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalT
 		return;
 	}
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_TZ) {
-		throw ConversionException("Could not read '%s' as TIMESTAMPTZ: read_xml cannot resolve the time zone name '%s'. "
-		                          "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ",
-		                          text, tz_name);
+		throw ConversionException(
+		    "Could not read '%s' as TIMESTAMPTZ: read_xml cannot resolve the time zone name '%s'. "
+		    "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ",
+		    text, tz_name);
 	}
 	throw ConversionException("Could not read '%s' as a timestamp without discarding its '%s' suffix, which is not a "
 	                          "resolvable time zone. Supply datetime_format if it is a meridiem marker",
