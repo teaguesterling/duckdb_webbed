@@ -67,6 +67,28 @@ xmlParserInputPtr SecureNoExternalEntityLoader(const char *URL, const char *ID, 
 }
 
 } // namespace
+// A text node from text that may hold NUL bytes. XML 1.0 cannot hold a NUL, even as &#0;, and libxml2 takes a C
+// string, so it ended the text at the first NUL. A NUL becomes U+FFFD instead, as in html_escape.
+static std::string ReplaceNulForXML(const std::string &text) {
+	if (text.find('\0') == std::string::npos) {
+		return text;
+	}
+	std::string result;
+	result.reserve(text.size() + 8);
+	for (char c : text) {
+		if (c == '\0') {
+			result += "\xEF\xBF\xBD";
+		} else {
+			result += c;
+		}
+	}
+	return result;
+}
+
+static xmlNodePtr NewXMLTextNode(const std::string &text) {
+	return xmlNewText(BAD_CAST ReplaceNulForXML(text).c_str());
+}
+
 // Append input to out as JSON string contents. libxml2 returns entity-decoded text, so
 // characters illegal raw in a JSON string are re-escaped here. Only ", \ and the C0 control
 // range (0x00-0x1F) need escaping per RFC 8259, so runs of other bytes are appended whole.
@@ -1852,7 +1874,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 
 		if (yyjson_is_str(val)) {
 			std::string str_content(yyjson_get_str(val), yyjson_get_len(val));
-			xmlNodePtr text_node = xmlNewText(BAD_CAST str_content.c_str());
+			xmlNodePtr text_node = NewXMLTextNode(str_content);
 			if (text_node) {
 				xmlAddChild(node, text_node);
 			}
@@ -1905,7 +1927,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 						}
 						return node;
 					}
-					xmlSetProp(node, BAD_CAST attr_name.c_str(), BAD_CAST attr_value.c_str());
+					xmlSetProp(node, BAD_CAST attr_name.c_str(), BAD_CAST ReplaceNulForXML(attr_value).c_str());
 				} else if (prop.first == "#text") {
 					if (yyjson_is_str(prop.second)) {
 						text_content = std::string(yyjson_get_str(prop.second), yyjson_get_len(prop.second));
@@ -1926,7 +1948,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 			}
 
 			if (!text_content.empty()) {
-				xmlNodePtr text_node = xmlNewText(BAD_CAST text_content.c_str());
+				xmlNodePtr text_node = NewXMLTextNode(text_content);
 				if (text_node) {
 					xmlAddChild(node, text_node);
 				}
@@ -2653,7 +2675,7 @@ std::string XMLUtils::ScalarToXML(const std::string &value, const std::string &n
 	xmlDocSetRootElement(doc.get(), root_node);
 
 	// Add text content (libxml2 handles XML escaping automatically)
-	xmlNodePtr text_node = xmlNewText(BAD_CAST value.c_str());
+	xmlNodePtr text_node = NewXMLTextNode(value);
 	if (text_node) {
 		xmlAddChild(root_node, text_node);
 	}
@@ -2723,7 +2745,7 @@ void XMLUtils::ConvertListToXML(Vector &input_vector, Vector &result, idx_t coun
 				// Plain text content (NULL list elements stay as empty nodes)
 				if (!child_value.IsNull()) {
 					std::string child_str = StringValue::Get(child_value);
-					xmlNodePtr text_node = xmlNewText(BAD_CAST child_str.c_str());
+					xmlNodePtr text_node = NewXMLTextNode(child_str);
 					if (text_node)
 						xmlAddChild(item_node, text_node);
 				}
@@ -2858,14 +2880,14 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 	if (XMLTypes::IsXMLFragmentType(type)) {
 		// XMLFragment → Insert verbatim as text
 		std::string content = value.GetValue<string>();
-		xmlNodePtr text_node = xmlNewText(BAD_CAST content.c_str());
+		xmlNodePtr text_node = NewXMLTextNode(content);
 		if (text_node)
 			xmlAddChild(node, text_node);
 		return node;
 	} else if (XMLTypes::IsXMLType(type)) {
 		// XML → Insert verbatim as text
 		std::string content = value.GetValue<string>();
-		xmlNodePtr text_node = xmlNewText(BAD_CAST content.c_str());
+		xmlNodePtr text_node = NewXMLTextNode(content);
 		if (text_node)
 			xmlAddChild(node, text_node);
 		return node;
@@ -2935,7 +2957,7 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 				xmlFreeDoc(temp_doc);
 			} else {
 				// Fallback to text
-				xmlNodePtr text_node = xmlNewText(BAD_CAST json_str.c_str());
+				xmlNodePtr text_node = NewXMLTextNode(json_str);
 				if (text_node)
 					xmlAddChild(node, text_node);
 			}
@@ -2965,13 +2987,13 @@ xmlNodePtr XMLUtils::ConvertValueToXMLNode(const Value &value, const LogicalType
 					xmlFreeDoc(temp_doc);
 				} else {
 					// Fallback to text
-					xmlNodePtr text_node = xmlNewText(BAD_CAST value_str.c_str());
+					xmlNodePtr text_node = NewXMLTextNode(value_str);
 					if (text_node)
 						xmlAddChild(node, text_node);
 				}
 			} else {
 				// Simple text content
-				xmlNodePtr text_node = xmlNewText(BAD_CAST value_str.c_str());
+				xmlNodePtr text_node = NewXMLTextNode(value_str);
 				if (text_node)
 					xmlAddChild(node, text_node);
 			}

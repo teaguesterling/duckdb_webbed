@@ -1,0 +1,45 @@
+# name: test/sql/xml_writer_nul.test
+# description: A NUL byte in text written as XML becomes U+FFFD, and the text after it is kept
+# group: [sql]
+
+require webbed
+
+# XML 1.0 cannot hold a NUL, even as &#0;. Each writer used to end the text at the NUL, so 'a' || chr(0) || 'secret'
+# wrote 'a'. U+FFFD is the replacement html_escape uses (#216).
+
+query II
+SELECT to_xml('a' || chr(0) || 'secret')::VARCHAR LIKE '%<xml>a' || chr(65533) || 'secret</xml>%', xml_valid(to_xml('a' || chr(0) || 'secret'));
+----
+true	true
+
+query II
+SELECT to_xml(['a' || chr(0) || 'b'])::VARCHAR LIKE '%<xml>a' || chr(65533) || 'b</xml>%', xml_valid(to_xml(['a' || chr(0) || 'b']));
+----
+true	true
+
+query II
+SELECT to_xml({'k': 'a' || chr(0) || 'b'})::VARCHAR LIKE '%<k>a' || chr(65533) || 'b</k>%', xml_valid(to_xml({'k': 'a' || chr(0) || 'b'}));
+----
+true	true
+
+query II
+SELECT to_xml(MAP {'k': 'a' || chr(0) || 'b'})::VARCHAR LIKE '%a' || chr(65533) || 'b}%', xml_valid(to_xml(MAP {'k': 'a' || chr(0) || 'b'}));
+----
+true	true
+
+# JSON text, a JSON #text key and a JSON @attribute value
+query II
+SELECT json_to_xml('{"a":"x\u0000y"}')::VARCHAR LIKE '%<a>x' || chr(65533) || 'y</a>%', xml_valid(json_to_xml('{"a":"x\u0000y"}'));
+----
+true	true
+
+query II
+SELECT json_to_xml('{"r":{"@id":"x\u0000y","#text":"p\u0000q"}}')::VARCHAR LIKE '%<r id="x' || chr(65533) || 'y">p' || chr(65533) || 'q</r>%', xml_valid(json_to_xml('{"r":{"@id":"x\u0000y","#text":"p\u0000q"}}'));
+----
+true	true
+
+# Text without a NUL is unchanged
+query I
+SELECT to_xml('plain')::VARCHAR LIKE '%<xml>plain</xml>%';
+----
+true
