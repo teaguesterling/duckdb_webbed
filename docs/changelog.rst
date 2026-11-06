@@ -47,8 +47,9 @@ Fixes from the pre-release scan.
 - ``read_xml``: a tag-name ``record_element`` matches only the outermost elements. A nested
   match stays in its parent's column, as streaming always read it. Use an XPath expression to
   select nested elements as rows (#235).
-- ``read_xml``: a record no longer fills a column with its own name beside other columns. A
-  record without that child reads NULL (#235).
+- ``read_xml``: a record no longer fills a column with its own name beside other columns,
+  inferred or declared. A record without that child reads NULL. A one-column schema named
+  after the record still reads the record (#235).
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
 - ``html_extract_tables`` returns ``<tfoot>`` rows after the body rows (#232).
