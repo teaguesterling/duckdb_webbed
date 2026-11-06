@@ -3582,6 +3582,30 @@ static size_t SkipPastUnquoted(const std::string &xml_str, size_t pos, char term
 	return std::string::npos;
 }
 
+// Index just past the ']' that closes a DOCTYPE internal subset starting at pos, or npos if there is none. Quoted
+// text, comments and processing instructions can hold ']'. Conditional sections are not allowed in an internal subset.
+static size_t SkipInternalSubset(const std::string &xml_str, size_t pos) {
+	while (pos < xml_str.length()) {
+		char c = xml_str[pos];
+		size_t end;
+		if (c == '"' || c == '\'') {
+			end = xml_str.find(c, pos + 1);
+			pos = end == std::string::npos ? end : end + 1;
+		} else if (xml_str.compare(pos, 4, "<!--") == 0) {
+			end = xml_str.find("-->", pos + 4);
+			pos = end == std::string::npos ? end : end + 3;
+		} else if (xml_str.compare(pos, 2, "<?") == 0) {
+			end = xml_str.find("?>", pos + 2);
+			pos = end == std::string::npos ? end : end + 2;
+		} else if (c == ']') {
+			return pos + 1;
+		} else {
+			pos++;
+		}
+	}
+	return std::string::npos;
+}
+
 bool DeclaresNamespacePrefix(const std::string &xml_str, const std::string &prefix) {
 	// xmlns:prefix, then optional whitespace, then '=': XML allows whitespace around the '='
 	std::string name = "xmlns:" + prefix;
@@ -3638,7 +3662,7 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 				end++;
 			}
 			if (end < xml_str.length() && xml_str[end] == '[') {
-				end = SkipPastUnquoted(xml_str, end + 1, ']');
+				end = SkipInternalSubset(xml_str, end + 1);
 				if (end == std::string::npos) {
 					return xml_str;
 				}
