@@ -22,8 +22,9 @@ CREATE TABLE atcd_classes AS SELECT * FROM (VALUES
 
 # A disagreement is acceptable only where docs/parameters.rst documents it:
 # - zoneless text stays VARCHAR where read_csv reads TIMESTAMPTZ in the session time zone.
-# - dates beside timestamps read as TIMESTAMP, in one file or a union. read_csv reads them as
-#   TIMESTAMP, or as VARCHAR when DATE is a candidate.
+# - one file mixing dates and timestamps is VARCHAR while DATE is a candidate. The union of a date
+#   file and a timestamp file is TIMESTAMP. read_csv reads the joined file as TIMESTAMP when its
+#   timestamps come first, and as VARCHAR when its dates do.
 statement ok
 CREATE MACRO atcd_agrees(xt, xv, ot, ov) AS
     (xt = ot AND xv = ov) OR (xt = 'VARCHAR' AND ot = 'TIMESTAMP WITH TIME ZONE');
@@ -32,7 +33,7 @@ statement ok
 CREATE MACRO atcd_union_agrees(ut, uv, jt, jv, ct, cv) AS
     (ut = jt AND uv = jv AND atcd_agrees(ut, uv, ct, cv))
     OR (ut = 'VARCHAR' AND jt = 'VARCHAR' AND ct = 'TIMESTAMP WITH TIME ZONE')
-    OR (ut = 'TIMESTAMP' AND jt = 'TIMESTAMP' AND uv = jv AND ct = 'VARCHAR');
+    OR (ut = 'TIMESTAMP' AND jt = 'VARCHAR' AND ((ut = ct AND uv = cv) OR ct = 'VARCHAR'));
 
 foreach a ints zero_one big decs mixed bools dates ts tsz times text
 

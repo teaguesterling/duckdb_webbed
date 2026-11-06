@@ -267,7 +267,7 @@ When ``datetime_format='auto'`` (the default), the extension tries a built-in li
 
 When an explicit format or preset is specified, only those formats are tried. If no format matches all samples, the column falls back to VARCHAR.
 
-When no one format reads every sample but each is a date or timestamp that a date or timestamp format reads, and DuckDB's cast reads it too, the column is TIMESTAMP and a date reads as midnight. This matches ``read_csv`` and a union of a date file with a timestamp file.
+When no one format reads every sample but each is a date or timestamp, the column stays VARCHAR, as in ``read_csv``. With ``DATE`` excluded from ``auto_type_candidates``, the column is TIMESTAMP and a date reads as midnight, as in ``read_csv``. This needs each sample to be one that a date or timestamp format reads and DuckDB's cast reads too. Such a column keeps no format: DuckDB's cast reads its values and drops a UTC offset, as ``read_csv`` does. A union of a date file with a timestamp file is TIMESTAMP in the same way.
 
 .. note::
 
@@ -287,7 +287,7 @@ When no one format reads every sample but each is a date or timestamp that a dat
 
 **Explicit columns:**
 
-A column declared through ``columns`` has no recorded format. Its values are read with DuckDB's strict casts, then with the candidate list above. An explicit ``TIME`` column reads ``01:30:00 PM`` as ``13:30:00``, as inference does. The marker needs a space before it: ``01:30:00PM`` matches no candidate, so it raises, or reads NULL under ``ignore_errors``. A zero UTC offset (``Z``, ``UTC``, ``+00:00``) reads as the bare time. A non-zero offset such as ``+05:00`` raises instead of being dropped. Declare the column ``TIMETZ`` to keep it.
+A column declared through ``columns`` has no recorded format. Its values are read with DuckDB's strict casts, then with the candidate list above. An explicit ``TIME`` column reads ``01:30:00 PM`` as ``13:30:00``, as inference does. The marker needs a space before it: ``01:30:00PM`` matches no candidate, so it raises, or reads NULL under ``ignore_errors``. A zero UTC offset (``Z``, ``UTC``, ``+00:00``) reads as the bare time. A non-zero offset such as ``+05:00`` raises instead of being dropped. Declare the column ``TIMETZ`` to keep it. A ``TIMESTAMPTZ`` column applies a numeric offset, as DuckDB's cast does: ``2024-01-01 10:00:00+05`` reads as 05:00 UTC.
 
 **Interactions with other parameters:**
 
