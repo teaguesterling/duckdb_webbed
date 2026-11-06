@@ -202,4 +202,4 @@ COPY (SELECT '<r>' || repeat('<i><b>true</b></i>', 60) || '<i><b>maybe</b></i></
 statement error
 SELECT * FROM read_xml('{TEST_DIR}/bool_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1);
 ----
-<REGEX>:.*value 'maybe' does not match column type BOOLEAN\. Set all_varchar := true, or set ignore_errors := true to skip such values\. \(issue #102\)
+value 'maybe' does not match column type BOOLEAN. Set all_varchar := true, or set ignore_errors := true to skip such values. (issue #102)
