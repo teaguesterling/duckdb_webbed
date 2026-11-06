@@ -2750,15 +2750,17 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 
 // The attribute a STRUCT field reads, or "" when it reads only child elements. CollectAttributeNames gives an attribute
 // named like a child element the field attr_prefix + name, so field X reads only the child when field @X exists, and
-// field @X reads attribute X. attribute_only is set for @X: a child element named @X cannot exist.
+// field @X reads attribute X. attribute_only is set for @X: a child element named @X cannot exist. any_prefixed_field
+// says whether any field starts with attr_prefix: without one there is no clash, so no field lookup is needed.
 static std::string StructFieldAttribute(const std::string &field_name, const child_list_t<LogicalType> &fields,
-                                        const XMLSchemaOptions &options, bool &attribute_only) {
+                                        const XMLSchemaOptions &options, bool any_prefixed_field,
+                                        bool &attribute_only) {
 	attribute_only = false;
 	if (options.attr_mode == "discard") {
 		return "";
 	}
 	const std::string &prefix = options.attr_prefix;
-	if (prefix.empty()) {
+	if (prefix.empty() || !any_prefixed_field) {
 		return field_name;
 	}
 	auto has_field = [&](const std::string &name) {
@@ -2783,6 +2785,10 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
                                              const XMLSchemaOptions &options, const std::string &datetime_format) {
 	CompatFlatValidity(out).SetValid(row);
 	auto &struct_children = StructType::GetChildTypes(struct_type);
+	bool any_prefixed_field = false;
+	for (const auto &field : struct_children) {
+		any_prefixed_field = any_prefixed_field || StartsWithAttrPrefix(CompatIdentifierName(field.first), options);
+	}
 	for (idx_t field_idx = 0; field_idx < struct_children.size(); field_idx++) {
 		const auto &field_type = struct_children[field_idx].second;
 		auto &field_out = CompatStructGetField(out, field_idx);
@@ -2796,7 +2802,8 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 		// overload is a pass-through), so both helpers take a plain name on both lines.
 		const auto &field_name_str = CompatIdentifierName(struct_children[field_idx].first);
 		bool attribute_only;
-		std::string attr_name = StructFieldAttribute(field_name_str, struct_children, options, attribute_only);
+		std::string attr_name =
+		    StructFieldAttribute(field_name_str, struct_children, options, any_prefixed_field, attribute_only);
 		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
 		    IsOwnTextField(node, field_name_str)) {
 			std::string text = CleanNodeText(node, options.preserve_whitespace);
