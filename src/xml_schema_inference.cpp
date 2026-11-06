@@ -40,19 +40,21 @@ std::string XMLSchemaInference::StripNamespacePrefix(const std::string &name) {
 
 namespace {
 
-// A name inside a node's own storage, so grouping children doesn't allocate per child.
+// A name inside a node's own storage, so grouping children doesn't allocate per child. Names compare
+// without case: DuckDB struct field names must be unique without case, and WriteStructFromNode reads
+// a field from children of either case, so <a> and <A> are one field (issue #257).
 struct NameRef {
 	const char *data;
 	size_t size;
 
 	bool operator==(const NameRef &other) const {
-		return size == other.size && memcmp(data, other.data, size) == 0;
+		return size == other.size && StringUtil::CIEquals(data, size, other.data, other.size);
 	}
 };
 
 struct NameRefHash {
 	size_t operator()(const NameRef &name) const {
-		return Hash(name.data, name.size);
+		return StringUtil::CIHash(name.data, name.size);
 	}
 };
 
