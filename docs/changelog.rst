@@ -64,6 +64,8 @@ Fixes from the pre-release scan.
   (#246).
 - ``namespaces := 'auto'`` ignores ``xmlns:p=`` in text or an attribute value. It used to treat
   that text as a declaration, skip the injection and return ``[]`` (#243).
+- XPath can use a namespace prefix declared on an inner element. Only prefixes declared at the
+  root used to be registered.
 - ``namespaces := 'auto'`` works after more than one processing instruction, with a ``>`` in a
   root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. A
   comment or processing instruction inside the DOCTYPE may hold ``]``. It used to return ``[]``
