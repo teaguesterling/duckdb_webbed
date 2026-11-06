@@ -119,3 +119,15 @@ query I
 SELECT xml_extract_text('<root><x xmlns:p="urn:a"><p:v>a</p:v></x><y xmlns:p="urn:b"><p:v>b</p:v></y></root>', '//p:v');
 ----
 [a]
+
+# An element name may start with '_' or a non-ASCII letter. Its declaration still counts, so nothing is injected
+# beside it; a second xmlns:gml would make the document malformed.
+query I
+SELECT xml_extract_text('<_root xmlns:gml="urn:mine"><gml:p>v</gml:p></_root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+query I
+SELECT xml_extract_text('<élan xmlns:gml="urn:mine"><gml:p>v</gml:p></élan>', '//gml:p', namespaces := 'auto');
+----
+[v]

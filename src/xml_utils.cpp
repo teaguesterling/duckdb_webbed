@@ -3640,7 +3640,13 @@ static bool IsInStartTag(const std::string &xml_str, size_t pos) {
 		return false;
 	}
 	size_t open = xml_str.rfind('<', pos);
-	if (open == std::string::npos || open + 1 >= pos || !std::isalpha(static_cast<unsigned char>(xml_str[open + 1]))) {
+	if (open == std::string::npos || open + 1 >= pos) {
+		return false;
+	}
+	// An element name starts with a letter, '_', ':' or a non-ASCII character. '/', '!' and '?' begin an end tag, a
+	// comment or declaration, and a processing instruction.
+	auto first = static_cast<unsigned char>(xml_str[open + 1]);
+	if (!std::isalpha(first) && first != '_' && first != ':' && first < 0x80) {
 		return false;
 	}
 	char quote = 0;
