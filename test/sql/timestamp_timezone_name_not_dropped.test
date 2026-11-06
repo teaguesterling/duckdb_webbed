@@ -36,3 +36,16 @@ query I
 SELECT utc::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'utc': 'TIMESTAMP'}, streaming := false);
 ----
 2024-01-15 10:00:00
+
+# Issue #242. DuckDB's cast resolves 'EST', but read_xml cannot, so the TIMESTAMPTZ error must
+# not call the name unresolvable. It points to the VARCHAR-then-cast route instead.
+statement error
+SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMPTZ'}, streaming := false);
+----
+<REGEX>:.*cannot resolve the time zone name 'EST'.*VARCHAR.*
+
+# The route the error gives works.
+query I
+SELECT epoch(named::TIMESTAMPTZ)::BIGINT FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'VARCHAR'}, streaming := false);
+----
+1705330800
