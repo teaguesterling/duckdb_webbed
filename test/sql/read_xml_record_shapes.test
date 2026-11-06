@@ -63,3 +63,41 @@ query I
 SELECT count(*) FROM read_xml('test/xml/record_shapes/nested_rec.xml', record_element := '//*[local-name()=''item'']');
 ----
 3
+
+# Inside a STRUCT, an attribute and a child element with the same name are two fields, as at the top level (#230):
+# the attribute takes attr_prefix. The field used to be typed from the child but read from the attribute: 7, not 8.
+query TTTT
+SELECT p."@id", p.id, p.n, typeof(p) FROM read_xml('test/xml/record_shapes/structcollide.xml') ORDER BY p.id;
+----
+7	8	z	STRUCT("@id" VARCHAR, id INTEGER, n VARCHAR)
+9	10	y	STRUCT("@id" VARCHAR, id INTEGER, n VARCHAR)
+
+query TTT
+SELECT p."@id", p.id, p.n FROM read_xml('test/xml/record_shapes/structcollide.xml', maximum_file_size := 1) ORDER BY p.id;
+----
+7	8	z
+9	10	y
+
+# A repeated element becomes a LIST of the same STRUCT
+query T
+SELECT p FROM read_xml('test/xml/record_shapes/structcollide_list.xml');
+----
+[{'@id': 1, 'id': 2}, {'@id': 3, 'id': 4}]
+
+query T
+SELECT p FROM read_xml('test/xml/record_shapes/structcollide_list.xml', maximum_file_size := 1);
+----
+[{'@id': 1, 'id': 2}, {'@id': 3, 'id': 4}]
+
+# A custom attr_prefix names the attribute field
+query TT
+SELECT p."_id", p.id FROM read_xml('test/xml/record_shapes/structcollide.xml', attr_prefix := '_') ORDER BY p.id;
+----
+7	8
+9	10
+
+# Without a clash the attribute keeps its bare name
+query TT
+SELECT p.id, p.n FROM read_xml('test/xml/record_shapes/struct_noclash.xml');
+----
+7	z

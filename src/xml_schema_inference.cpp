@@ -485,6 +485,7 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 	if (options.attr_mode == "discard") {
 		return names;
 	}
+	const case_insensitive_set_t children(child_names.begin(), child_names.end());
 	case_insensitive_set_t seen(child_names.begin(), child_names.end());
 	for (xmlNodePtr instance : instances) {
 		for (xmlAttrPtr attr = instance->properties; attr; attr = attr->next) {
@@ -494,6 +495,11 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 			std::string attr_name((const char *)attr->name);
 			if (options.namespaces == "strip") {
 				attr_name = StripNamespacePrefix(attr_name);
+			}
+			// An attribute named like a child element takes attr_prefix, so both get a field (see
+			// StructFieldAttribute). With an empty attr_prefix the child's field wins.
+			if (!options.attr_prefix.empty() && children.count(attr_name)) {
+				attr_name = options.attr_prefix + attr_name;
 			}
 			if (seen.insert(attr_name).second) {
 				names.push_back(attr_name);
@@ -2742,6 +2748,37 @@ static bool IsOwnTextField(xmlNodePtr node, const std::string &text_key) {
 	return true;
 }
 
+// The attribute a STRUCT field reads, or "" when it reads only child elements. CollectAttributeNames gives an attribute
+// named like a child element the field attr_prefix + name, so field X reads only the child when field @X exists, and
+// field @X reads attribute X. attribute_only is set for @X: a child element named @X cannot exist.
+static std::string StructFieldAttribute(const std::string &field_name, const child_list_t<LogicalType> &fields,
+                                        const XMLSchemaOptions &options, bool &attribute_only) {
+	attribute_only = false;
+	if (options.attr_mode == "discard") {
+		return "";
+	}
+	const std::string &prefix = options.attr_prefix;
+	if (prefix.empty()) {
+		return field_name;
+	}
+	auto has_field = [&](const std::string &name) {
+		for (const auto &field : fields) {
+			if (StringUtil::CIEquals(CompatIdentifierName(field.first), name)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (StartsWithAttrPrefix(field_name, options) && has_field(field_name.substr(prefix.size()))) {
+		attribute_only = true;
+		return field_name.substr(prefix.size());
+	}
+	if (has_field(prefix + field_name)) {
+		return "";
+	}
+	return field_name;
+}
+
 void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType &struct_type, Vector &out, idx_t row,
                                              const XMLSchemaOptions &options, const std::string &datetime_format) {
 	CompatFlatValidity(out).SetValid(row);
@@ -2758,6 +2795,8 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 		// parameter. CompatIdentifierName reads the raw name out of either (the string
 		// overload is a pass-through), so both helpers take a plain name on both lines.
 		const auto &field_name_str = CompatIdentifierName(struct_children[field_idx].first);
+		bool attribute_only;
+		std::string attr_name = StructFieldAttribute(field_name_str, struct_children, options, attribute_only);
 		if (field_name_str == options.text_key && !HasAttributeOrChildNamed(node, field_name_str) &&
 		    IsOwnTextField(node, field_name_str)) {
 			std::string text = CleanNodeText(node, options.preserve_whitespace);
@@ -2766,15 +2805,14 @@ void XMLSchemaInference::WriteStructFromNode(xmlNodePtr node, const LogicalType 
 				found = true;
 			}
 		}
-		// Check if this field is an attribute on the node itself (never under attr_mode='discard')
-		else if (xmlChar *attr_value = options.attr_mode == "discard"
-		                                   ? nullptr
-		                                   : xmlGetProp(node, (const xmlChar *)field_name_str.c_str())) {
+		// Check if this field is an attribute on the node itself (see StructFieldAttribute)
+		else if (xmlChar *attr_value =
+		             attr_name.empty() ? nullptr : xmlGetProp(node, (const xmlChar *)attr_name.c_str())) {
 			std::string str_value = (const char *)attr_value;
 			WriteConverted(str_value, field_type, field_out, row, options, datetime_format);
 			xmlFree(attr_value);
 			found = true;
-		} else {
+		} else if (!attribute_only) {
 			// Look for child element(s) with matching name. Match case-insensitively because
 			// DuckDB STRUCTs enforce case-insensitive uniqueness of field names. Cross-file
 			// union_by_name widening (MergeXMLColumnType) keeps the first-seen casing, so an
