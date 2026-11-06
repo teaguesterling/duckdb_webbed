@@ -19,27 +19,51 @@ idx_t DOMsThatFit(ClientContext &context, idx_t file_size, idx_t bytes_per_file_
 	return memory / bytes_per_file_byte / MaxValue<idx_t>(file_size, 1);
 }
 
+static bool IsDOMCostSpace(char c) {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+}
+
 void DOMCostCounter::Feed(const char *data, idx_t size) {
-	char previous = last;
-	bool tag = in_tag;
 	for (idx_t i = 0; i < size; i++) {
 		char c = data[i];
-		if (previous == '<' && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
-			nodes++;
-			tag = true;
-		} else if (previous == '>' && c != '<') {
+		bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+		// Nodes ignore the tag state, so a quote left open in a script can't hide the elements after it.
+		if ((last == '<' && (letter || c == '!' || c == '?')) || (last == '>' && c != '<')) {
 			nodes++;
 		}
-		if (c == '>') {
-			tag = false;
-		} else if (c == '=' && tag) {
-			attributes++;
+		if (in_tag) {
+			if (quote) {
+				if (c == quote) {
+					quote = '\0';
+					after_space = true;
+				}
+			} else if (c == '>') {
+				in_tag = false;
+			} else if (IsDOMCostSpace(c)) {
+				after_space = true;
+			} else if (c == '=') {
+				after_equals = true;
+				after_space = false;
+			} else if (after_equals) {
+				after_equals = false;
+				after_space = false;
+				if (c == '"' || c == '\'') {
+					quote = c;
+				}
+			} else {
+				if (after_space && c != '/') {
+					attributes++;
+				}
+				after_space = false;
+			}
+		} else if (last == '<' && letter) {
+			in_tag = true;
+			after_equals = false;
+			after_space = false;
 		}
-		previous = c;
+		last = c;
 	}
 	bytes += size;
-	last = previous;
-	in_tag = tag;
 }
 
 vector<OpenFileInfo> GlobFilePatterns(FileSystem &fs, const vector<string> &patterns, bool skip_missing) {

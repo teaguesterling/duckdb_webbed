@@ -114,3 +114,29 @@ query I
 SELECT length(content) FROM read_html_blocks('{TEST_DIR}/equals_text.html') WHERE element_type = 'paragraph';
 ----
 2000000
+
+# Each attribute counts toward the estimate, past a '>' in a quoted value and without '='
+statement ok
+COPY (SELECT '<p a=">" ' || string_agg('b' || i || '=x', ' ') || '>z</p>' FROM range(400000) t(i)) TO '{TEST_DIR}/attrs_after_quoted_gt.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/attrs_after_quoted_gt.html');
+----
+Out of Memory Error: Reading '
+
+statement ok
+COPY (SELECT '<p ' || string_agg('b' || i, ' ') || '>z</p>' FROM range(600000) t(i)) TO '{TEST_DIR}/boolean_attrs.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/boolean_attrs.html');
+----
+Out of Memory Error: Reading '
+
+# Comments are DOM nodes
+statement ok
+COPY (SELECT repeat('<!--x-->', 1000000)) TO '{TEST_DIR}/comments.html' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT count(*) FROM read_html_blocks('{TEST_DIR}/comments.html');
+----
+Out of Memory Error: Reading '
