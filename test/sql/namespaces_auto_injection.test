@@ -24,6 +24,17 @@ SELECT xml_extract_text('<!DOCTYPE root [<!ENTITY e "a>b">]><root><gml:p>v</gml:
 ----
 [v]
 
+# A comment or processing instruction inside the internal subset can hold ']' and '>'
+query I
+SELECT xml_extract_text('<!DOCTYPE root [<!-- a ]> b --><!ENTITY e "x">]><root><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+query I
+SELECT xml_extract_text('<!DOCTYPE root [<?pi a ]> b?><!ENTITY e "x">]><root><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
 # A '>' inside a root attribute value, double- and single-quoted
 query I
 SELECT xml_extract_text('<root a="1>2"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
