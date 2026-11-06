@@ -1,0 +1,52 @@
+# name: test/sql/json_to_xml_names.test
+# description: JSON keys become XML names, so a key that is not an XML Name must raise an error, not inject markup
+# group: [sql]
+
+require webbed
+
+require json
+
+# An element key that closes the tag and opens another: before, the output held a real <evil/> element
+statement error
+SELECT json_to_xml('{"x":1,"a><evil/><b":2}');
+----
+key 'a><evil/><b' is not a valid XML element name
+
+# The same through an "@" attribute key
+statement error
+SELECT json_to_xml('{"r":{"@x\"><evil/":1}}');
+----
+is not a valid XML attribute name
+
+# Nested keys and the other paths into the converter are checked too
+statement error
+SELECT json_to_xml('{"r":{"ok":{"a b":1}}}');
+----
+key 'a b' is not a valid XML element name
+
+statement error
+SELECT ('{"r":{"<x>":1}}')::JSON::XML;
+----
+is not a valid XML element name
+
+statement error
+SELECT to_xml('{"r":{"<x>":1}}'::JSON);
+----
+is not a valid XML element name
+
+statement error
+SELECT json_to_xml('{"r":{"":1}}');
+----
+is not a valid XML element name
+
+# Valid names convert exactly as before: namespaced keys, "@" attributes, "#text"
+query I
+SELECT json_to_xml('{"r":{"ns:k":1,"@id":"7","#text":"t"}}') = '<?xml version="1.0" encoding="UTF-8"?>' || chr(10) || '<r id="7"><ns:k>1</ns:k>t</r>';
+----
+true
+
+# Every converted document parses back
+query I
+SELECT xml_valid(json_to_xml('{"items":{"item":[{"@n":"1","v":"a"},{"@n":"2","v":"b"}],"_x.y-z":true}}'));
+----
+true
