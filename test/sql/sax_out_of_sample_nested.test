@@ -30,3 +30,34 @@ FROM read_xml('{TEST_DIR}/sax_nested_late.xml', record_element := 'i', sample_si
 WHERE s.a = 'x';
 ----
 x	y	z	8
+
+# Struct fields match element names case-insensitively, as DOM merges them and extraction reads
+# them. A late <A> fills field a.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><s><a>1</a></s></i>', 60) || '<i><s><A>x</A></s></i></r>' AS c)
+TO '{TEST_DIR}/sax_nested_case.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query I
+SELECT DISTINCT typeof(s) FROM read_xml('{TEST_DIR}/sax_nested_case.xml', record_element := 'i', sample_size := -1, streaming := false);
+----
+STRUCT(a VARCHAR)
+
+query II
+SELECT DISTINCT typeof(s), max(s.a) FROM read_xml('{TEST_DIR}/sax_nested_case.xml', record_element := 'i', sample_size := -1, streaming := true, maximum_file_size := 1) GROUP BY ALL;
+----
+STRUCT(a VARCHAR)	x
+
+# A leaf empty in every sampled record, then given text, reads as DOM types it.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><s><a>1</a><e></e></s></i>', 60) || '<i><s><a>1</a><e>q</e></s></i></r>' AS c)
+TO '{TEST_DIR}/sax_nested_empty.xml' (FORMAT csv, HEADER false, QUOTE '');
+
+query I
+SELECT DISTINCT typeof(s) FROM read_xml('{TEST_DIR}/sax_nested_empty.xml', record_element := 'i', sample_size := -1, streaming := false);
+----
+STRUCT(a INTEGER, e VARCHAR)
+
+query II
+SELECT DISTINCT typeof(s), max(s.e) FROM read_xml('{TEST_DIR}/sax_nested_empty.xml', record_element := 'i', sample_size := -1, streaming := true, maximum_file_size := 1) GROUP BY ALL;
+----
+STRUCT(a INTEGER, e VARCHAR)	q
