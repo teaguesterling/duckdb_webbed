@@ -508,6 +508,59 @@ static std::string FieldText(xmlNodePtr field, const XMLSchemaOptions &options) 
 	return text;
 }
 
+// Widen each scalar leaf of a STRUCT or LIST type to VARCHAR when this node's value for it does not
+// cast, as DOM inference over every record would type it (issue #224). A LIST leaf is one element
+// occurrence, so its node is the element itself. Struct fields match child elements by name. Nested
+// leaves carry no datetime format. Returns true when the type changed.
+static bool WidenNestedLeaves(LogicalType &type, xmlNodePtr node, const XMLSchemaOptions &options,
+                              const XMLSchemaOptions &verify_opts) {
+	switch (type.id()) {
+	case LogicalTypeId::LIST: {
+		auto child = ListType::GetChildType(type);
+		if (!WidenNestedLeaves(child, node, options, verify_opts)) {
+			return false;
+		}
+		type = LogicalType::LIST(child);
+		return true;
+	}
+	case LogicalTypeId::STRUCT: {
+		auto children = StructType::GetChildTypes(type);
+		bool changed = false;
+		for (xmlNodePtr child = node->children; child; child = child->next) {
+			if (child->type != XML_ELEMENT_NODE) {
+				continue;
+			}
+			std::string name(reinterpret_cast<const char *>(child->name));
+			for (auto &entry : children) {
+				if (entry.first == name) {
+					changed = WidenNestedLeaves(entry.second, child, options, verify_opts) || changed;
+					break;
+				}
+			}
+		}
+		if (!changed) {
+			return false;
+		}
+		type = LogicalType::STRUCT(std::move(children));
+		return true;
+	}
+	default: {
+		if (!IsWidenableScalar(type) || IsStructuredField(node, options)) {
+			return false;
+		}
+		auto text = FieldText(node, options);
+		if (text.empty() || IsNullString(text, options)) {
+			return false;
+		}
+		if (!XMLSchemaInference::ConvertToValuePublic(text, type, verify_opts, "").IsNull()) {
+			return false;
+		}
+		type = LogicalType::VARCHAR;
+		return true;
+	}
+	}
+}
+
 void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std::string &filename,
                                                       const XMLSchemaOptions &options,
                                                       std::vector<XMLColumnInfo> &columns) {
@@ -535,6 +588,10 @@ void SAXStreamReader::WidenSchemaForOutOfSampleValues(FileSystem &fs, const std:
 	auto test_field = [&](xmlNodePtr field, idx_t i) {
 		auto &type = columns[i].type;
 		bool unknown = IsUnknownType(type);
+		if (!unknown && (type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::LIST)) {
+			WidenNestedLeaves(type, field, options, verify_opts);
+			return;
+		}
 		if (!unknown && !IsWidenableScalar(type)) {
 			return;
 		}
