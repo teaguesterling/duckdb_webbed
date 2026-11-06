@@ -177,11 +177,11 @@ SELECT html_extract_text(
 # PART 4: html_unescape also handles UTF-8 correctly
 # ============================================================================
 
-# Test 4.1: html_unescape with UTF-8
+# Test 4.1: html_unescape with UTF-8 (tags are text, so they stay)
 query I
-SELECT html_unescape('<p>Café résumé</p>');
+SELECT html_unescape('<p>Caf&eacute; résumé</p>');
 ----
-Café résumé
+<p>Café résumé</p>
 
 # Test 4.2: html_unescape with file content
 query I

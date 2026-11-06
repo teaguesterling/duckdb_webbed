@@ -52,11 +52,6 @@ SELECT html_extract_text(repeat('<div>', 300) || 'x' || repeat('</div>', 300), '
 ----
 deeper than libxml2's limit of 256 levels
 
-statement error
-SELECT html_unescape(repeat('<div>', 300) || 'x' || repeat('</div>', 300));
-----
-deeper than libxml2's limit of 256 levels
-
 # ============================================================================
 # Character encoding of HTML files. A file's bytes are decoded per a BOM, then a <meta> charset, then as UTF-8 when
 # they are valid UTF-8, else as windows-1252. A VARCHAR is already decoded, so its <meta> is ignored.
