@@ -263,6 +263,24 @@ static bool SchemaHasUnsupportedSAXType(const std::vector<LogicalType> &column_t
 	return false;
 }
 
+// XML names are case-sensitive and DuckDB column names are not, so <Name> beside <name> would be a duplicate column.
+// The later one takes the first free suffix, name_1, as read_csv and read_json name duplicate headers. Extraction keeps
+// the element names in column_names, so only the output names change.
+static void RenameCaseDuplicateNames(vector<CompatName> &names) {
+	case_insensitive_set_t seen;
+	for (auto &name : names) {
+		auto base = CompatIdentifierName(name);
+		auto candidate = base;
+		for (idx_t suffix = 1; seen.count(candidate); suffix++) {
+			candidate = base + "_" + std::to_string(suffix);
+		}
+		seen.insert(candidate);
+		if (candidate != base) {
+			name = CompatMakeName(candidate);
+		}
+	}
+}
+
 // Merge per-file inferred columns into the running union schema for union_by_name.
 // New columns are appended; existing columns are widened via MergeXMLColumnType.
 // When the merged type differs from the previous one, the column's datetime format
@@ -879,6 +897,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
+				RenameCaseDuplicateNames(names);
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				if (mode == ParseMode::HTML) {
@@ -1718,6 +1737,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 					auto fmt_it = union_formats.find(CompatIdentifierName(names[i]));
 					result->column_datetime_formats[i] = (fmt_it != union_formats.end()) ? fmt_it->second : "";
 				}
+				RenameCaseDuplicateNames(names);
 			} else {
 				// Fallback to simple schema if no columns were inferred
 				return_types.push_back(XMLTypes::XMLType());
@@ -2107,6 +2127,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 				for (size_t i = 0; i < inferred_columns.size(); i++) {
 					result->column_datetime_formats[i] = inferred_columns[i].winning_datetime_format;
 				}
+				RenameCaseDuplicateNames(names);
 			} else {
 				// Fallback to simple schema
 				if (mode == ParseMode::HTML) {

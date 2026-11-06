@@ -53,6 +53,9 @@ Fixes from the pre-release scan.
   after the record still reads the record (#235).
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
+- ``read_xml`` and ``parse_xml``: a column whose name differs from another only in case, such as
+  ``<name>`` beside ``<Name>``, is renamed ``name_1``, as ``read_csv`` does. The read used to fail
+  with a duplicate-column error (#248).
 - ``numeric_inference := 'lenient'`` types numbers by DuckDB's cast, as in v2.14.1 and earlier,
   so ``1.10`` is DOUBLE ``1.1``. The default, ``'exact'``, keeps the rule from #221 (#224).
 - With ``sample_size := -1``, the out-of-sample error no longer advises ``sample_size := -1``.
