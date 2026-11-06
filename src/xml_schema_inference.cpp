@@ -3,6 +3,7 @@
 #include "xml_numeric_lexeme.hpp"
 #include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -511,7 +512,7 @@ static Value XmlUncastableValue(const std::string &text, const LogicalType &targ
 		return Value(target_type);
 	}
 	if (options.sample_size <= 0) {
-		// sample_size := -1 is already set, so don't advise it
+		// sample_size <= 0 already asks to sample every value, so don't advise a larger sample
 		throw InvalidInputException("read_xml: value '%s' does not match column type %s. Set all_varchar := true, or "
 		                            "set ignore_errors := true to skip such values. (issue #102)",
 		                            text, target_type.ToString());
@@ -2694,10 +2695,13 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 		default: {
 			// A declared type with no branch above, such as DECIMAL or UUID. Cast here, so a failure gets the
 			// ignore_errors NULL instead of failing later as the vector is written.
+			// Only a failed cast becomes NULL. Out of memory and internal errors still raise.
 			try {
 				return Value(text).DefaultCastAs(target_type);
-			} catch (std::exception &) {
-				if (options.ignore_errors) {
+			} catch (std::exception &e) {
+				auto type = ErrorData(e).Type();
+				if (options.ignore_errors &&
+				    (type == ExceptionType::CONVERSION || type == ExceptionType::INVALID_INPUT)) {
 					return Value(target_type);
 				}
 				throw;
