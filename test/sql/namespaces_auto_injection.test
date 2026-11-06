@@ -1,0 +1,75 @@
+# name: test/sql/namespaces_auto_injection.test
+# description: namespaces:='auto' declares undeclared prefixes on the root tag without breaking valid XML
+# group: [sql]
+
+require webbed
+
+# Each case used to return [] with no error: the injected declarations made the document invalid, or found no root
+
+# More than one processing instruction before the root
+query I
+SELECT xml_extract_text('<?xml version="1.0"?><?xml-stylesheet href="s"?><root><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A comment before the root
+query I
+SELECT xml_extract_text('<?xml version="1.0"?><!-- c --><root><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A DOCTYPE whose internal subset quotes a '>'
+query I
+SELECT xml_extract_text('<!DOCTYPE root [<!ENTITY e "a>b">]><root><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A '>' inside a root attribute value, double- and single-quoted
+query I
+SELECT xml_extract_text('<root a="1>2"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+query I
+SELECT xml_extract_text('<root a=''1>2''><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A declaration with whitespace around '=' counts as declared, so it is not declared twice
+query I
+SELECT xml_extract_text('<root xmlns:gml = "http://www.opengis.net/gml"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# A declaration of a longer prefix does not count as one for gml
+query I
+SELECT xml_extract_text('<root xmlns:gmlx="urn:x"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
+----
+[v]
+
+# The other entry points share the injection
+query I
+SELECT xml_extract_elements_string('<root a="1>2"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto') LIKE '%>v</gml:p>%';
+----
+true
+
+query I
+SELECT len(xml_extract_elements('<root a="1>2"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto'));
+----
+1
+
+query I
+SELECT len(xml_extract_attributes('<root a="1>2"><gml:p k="1">v</gml:p></root>', '//gml:p', namespaces := 'auto'));
+----
+1
+
+# xml_add_namespace_declarations puts the declaration inside the root tag, past a quoted '/>'
+query I
+SELECT xml_add_namespace_declarations('<r a="x/>y"/>', MAP {'p': 'urn:a'});
+----
+<r a="x/>y" xmlns:p="urn:a"/>
+
+query I
+SELECT xml_add_namespace_declarations('<?a?><?b?><r/>', MAP {'p': 'urn:a'});
+----
+<?a?><?b?><r xmlns:p="urn:a"/>

@@ -222,6 +222,9 @@ std::set<std::string> DetectXPathPrefixes(const std::string &xpath);
 std::string TransformXPathForUndeclaredPrefixes(const std::string &xpath,
                                                 const std::set<std::string> &undeclared_prefixes);
 
+// True when the text declares xmlns:prefix, allowing whitespace around the '='
+bool DeclaresNamespacePrefix(const std::string &xml_str, const std::string &prefix);
+
 // Inject namespace declarations into an XML document's root element
 // Returns modified XML string with xmlns:prefix="uri" declarations added
 std::string InjectNamespaceDeclarations(const std::string &xml_str,

@@ -926,8 +926,7 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
 
 		for (const auto &prefix : all_prefixes) {
-			std::string decl_pattern = "xmlns:" + prefix + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, prefix)) {
 				std::string uri = GetCommonNamespaceURI(prefix);
 				if (uri.empty()) {
 					uri = "urn:mock:" + prefix;
@@ -940,8 +939,7 @@ std::vector<XMLElement> XMLUtils::ExtractByXPath(const std::string &xml_str, con
 	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
 	if (ns_config.HasCustomNamespaces()) {
 		for (const auto &ns : ns_config.custom_namespaces) {
-			std::string decl_pattern = "xmlns:" + ns.first + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, ns.first)) {
 				namespaces_to_inject[ns.first] = ns.second;
 			}
 		}
@@ -1217,9 +1215,8 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 
 		// Build namespace map for undeclared prefixes
 		for (const auto &prefix : all_prefixes) {
-			// Check if already declared in document (look for xmlns:prefix=)
-			std::string decl_pattern = "xmlns:" + prefix + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			// Check if already declared in document
+			if (!DeclaresNamespacePrefix(xml_str, prefix)) {
 				// Not declared - look up in common namespaces or create mock
 				std::string uri = GetCommonNamespaceURI(prefix);
 				if (uri.empty()) {
@@ -1236,8 +1233,7 @@ std::vector<std::string> XMLUtils::ExtractAllTextByXPath(const std::string &xml_
 	if (ns_config.HasCustomNamespaces()) {
 		for (const auto &ns : ns_config.custom_namespaces) {
 			// Check if this prefix is declared in the document
-			std::string decl_pattern = "xmlns:" + ns.first + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, ns.first)) {
 				// Not declared - inject the user-provided namespace
 				namespaces_to_inject[ns.first] = ns.second;
 			}
@@ -2319,8 +2315,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
 
 		for (const auto &prefix : all_prefixes) {
-			std::string decl_pattern = "xmlns:" + prefix + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, prefix)) {
 				std::string uri = GetCommonNamespaceURI(prefix);
 				if (uri.empty()) {
 					uri = "urn:mock:" + prefix;
@@ -2333,8 +2328,7 @@ std::string XMLUtils::ExtractXMLFragmentAll(const std::string &xml_str, const st
 	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
 	if (ns_config.HasCustomNamespaces()) {
 		for (const auto &ns : ns_config.custom_namespaces) {
-			std::string decl_pattern = "xmlns:" + ns.first + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, ns.first)) {
 				namespaces_to_inject[ns.first] = ns.second;
 			}
 		}
@@ -2563,8 +2557,7 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 		all_prefixes.insert(xpath_prefixes.begin(), xpath_prefixes.end());
 
 		for (const auto &prefix : all_prefixes) {
-			std::string decl_pattern = "xmlns:" + prefix + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, prefix)) {
 				std::string uri = GetCommonNamespaceURI(prefix);
 				if (uri.empty()) {
 					uri = "urn:mock:" + prefix;
@@ -2577,8 +2570,7 @@ std::vector<std::string> XMLUtils::ExtractXMLFragmentList(const std::string &xml
 	// When explicit custom namespaces are provided, also inject them for undeclared prefixes
 	if (ns_config.HasCustomNamespaces()) {
 		for (const auto &ns : ns_config.custom_namespaces) {
-			std::string decl_pattern = "xmlns:" + ns.first + "=";
-			if (xml_str.find(decl_pattern) == std::string::npos) {
+			if (!DeclaresNamespacePrefix(xml_str, ns.first)) {
 				namespaces_to_inject[ns.first] = ns.second;
 			}
 		}
@@ -3572,6 +3564,39 @@ std::set<std::string> DetectXPathPrefixes(const std::string &xpath) {
 	return prefixes;
 }
 
+// Index just past the first `terminator` at or after pos, skipping quoted text, or npos if there is none
+static size_t SkipPastUnquoted(const std::string &xml_str, size_t pos, char terminator) {
+	char quote = 0;
+	for (; pos < xml_str.length(); pos++) {
+		char c = xml_str[pos];
+		if (quote) {
+			if (c == quote) {
+				quote = 0;
+			}
+		} else if (c == '"' || c == '\'') {
+			quote = c;
+		} else if (c == terminator) {
+			return pos + 1;
+		}
+	}
+	return std::string::npos;
+}
+
+bool DeclaresNamespacePrefix(const std::string &xml_str, const std::string &prefix) {
+	// xmlns:prefix, then optional whitespace, then '=': XML allows whitespace around the '='
+	std::string name = "xmlns:" + prefix;
+	for (size_t pos = xml_str.find(name); pos != std::string::npos; pos = xml_str.find(name, pos + 1)) {
+		size_t after = pos + name.length();
+		while (after < xml_str.length() && std::isspace(static_cast<unsigned char>(xml_str[after]))) {
+			after++;
+		}
+		if (after < xml_str.length() && xml_str[after] == '=') {
+			return true;
+		}
+	}
+	return false;
+}
+
 // Inject namespace declarations into XML document for undeclared prefixes
 // This modifies the root element to add xmlns:prefix="uri" declarations
 // Example: <root><gml:pos>...</gml:pos></root> becomes
@@ -3582,45 +3607,54 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 		return xml_str;
 	}
 
-	// Find the first element's opening tag
-	// Skip XML declaration if present, then find the first '<' that starts an element
+	// Skip the prolog: whitespace, any number of processing instructions and comments, and a DOCTYPE
 	size_t pos = 0;
-
-	// Skip whitespace
-	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
-		pos++;
-	}
-
-	// Skip XML declaration if present: <?xml ... ?>
-	if (pos + 1 < xml_str.length() && xml_str[pos] == '<' && xml_str[pos + 1] == '?') {
-		size_t end = xml_str.find("?>", pos);
-		if (end != std::string::npos) {
-			pos = end + 2;
-		}
-	}
-
-	// Skip whitespace again
-	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
-		pos++;
-	}
-
-	// Skip DOCTYPE if present: <!DOCTYPE ... >
-	if (pos + 1 < xml_str.length() && xml_str[pos] == '<' && xml_str[pos + 1] == '!') {
-		// Find matching >
-		int depth = 1;
-		pos += 2;
-		while (pos < xml_str.length() && depth > 0) {
-			if (xml_str[pos] == '<')
-				depth++;
-			else if (xml_str[pos] == '>')
-				depth--;
+	while (true) {
+		while (pos < xml_str.length() && std::isspace(static_cast<unsigned char>(xml_str[pos]))) {
 			pos++;
 		}
-	}
-
-	// Skip whitespace again
-	while (pos < xml_str.length() && std::isspace(xml_str[pos])) {
-		pos++;
+		if (xml_str.compare(pos, 2, "<?") == 0) {
+			size_t end = xml_str.find("?>", pos + 2);
+			if (end == std::string::npos) {
+				return xml_str;
+			}
+			pos = end + 2;
+		} else if (xml_str.compare(pos, 4, "<!--") == 0) {
+			size_t end = xml_str.find("-->", pos + 4);
+			if (end == std::string::npos) {
+				return xml_str;
+			}
+			pos = end + 3;
+		} else if (xml_str.compare(pos, 2, "<!") == 0) {
+			// DOCTYPE: an internal subset in [...] can hold '>' in its declarations and in quoted text
+			size_t end = pos + 2;
+			while (end < xml_str.length() && xml_str[end] != '[' && xml_str[end] != '>') {
+				if (xml_str[end] == '"' || xml_str[end] == '\'') {
+					end = xml_str.find(xml_str[end], end + 1);
+					if (end == std::string::npos) {
+						return xml_str;
+					}
+				}
+				end++;
+			}
+			if (end < xml_str.length() && xml_str[end] == '[') {
+				end = SkipPastUnquoted(xml_str, end + 1, ']');
+				if (end == std::string::npos) {
+					return xml_str;
+				}
+				end = SkipPastUnquoted(xml_str, end, '>');
+			} else if (end < xml_str.length()) {
+				end++;
+			} else {
+				end = std::string::npos;
+			}
+			if (end == std::string::npos) {
+				return xml_str;
+			}
+			pos = end;
+		} else {
+			break;
+		}
 	}
 
 	// Now we should be at the root element
@@ -3628,34 +3662,21 @@ std::string InjectNamespaceDeclarations(const std::string &xml_str,
 		return xml_str; // Can't find root element
 	}
 
-	// Find the end of the opening tag (either > or />)
-	size_t tag_start = pos;
-	pos++; // Skip <
-
-	// Skip element name
-	while (pos < xml_str.length() && !std::isspace(xml_str[pos]) && xml_str[pos] != '>' && xml_str[pos] != '/') {
-		pos++;
+	// The root start tag ends at the first '>' outside a quoted attribute value. The declarations go before it, or
+	// before the '/' of an empty-element tag.
+	size_t tag_end = SkipPastUnquoted(xml_str, pos + 1, '>');
+	if (tag_end == std::string::npos) {
+		return xml_str;
+	}
+	size_t insert_pos = tag_end - 1;
+	if (insert_pos > pos && xml_str[insert_pos - 1] == '/') {
+		insert_pos--;
 	}
 
 	// Build the namespace declarations string
 	std::string ns_declarations;
 	for (const auto &ns : namespaces_to_inject) {
 		ns_declarations += " xmlns:" + ns.first + "=\"" + ns.second + "\"";
-	}
-
-	// Find where to insert (before the first > or />)
-	size_t insert_pos = pos;
-
-	// Skip existing attributes to find the end of the tag
-	while (pos < xml_str.length()) {
-		if (xml_str[pos] == '>') {
-			insert_pos = pos;
-			break;
-		} else if (pos + 1 < xml_str.length() && xml_str[pos] == '/' && xml_str[pos + 1] == '>') {
-			insert_pos = pos;
-			break;
-		}
-		pos++;
 	}
 
 	// Insert the namespace declarations
