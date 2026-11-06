@@ -2268,9 +2268,10 @@ struct HTMLBlocksReadGlobalState : public GlobalTableFunctionState {
 };
 
 // Parses a file within the shared budget, reparsing it alone when other parses held the memory it needed. The
-// reservation holds the DOM's estimate until the caller frees the DOM.
+// reservation holds the DOM's estimate until the caller frees the DOM. A file that doesn't fit alone raises, or
+// returns no document when skip_oversize is set.
 static XMLDocPtr ParseHTMLFileInBudget(FileSystem &fs, const string &path, unique_ptr<FileHandle> handle,
-                                       HTMLDOMReservation &reservation) {
+                                       HTMLDOMReservation &reservation, bool skip_oversize) {
 	auto reserve = [&](idx_t bytes) {
 		reservation.Reserve(bytes);
 	};
@@ -2284,6 +2285,9 @@ static XMLDocPtr ParseHTMLFileInBudget(FileSystem &fs, const string &path, uniqu
 		} catch (HTMLBudgetExceeded &e) {
 			reservation.ReleaseBytes();
 			if (reservation.exclusive || !e.others_held) {
+				if (skip_oversize) {
+					return XMLDocPtr();
+				}
 				throw OutOfMemoryException(
 				    "Reading '%s' needs more than memory_limit (%s) for its parsed document, by an estimate of at "
 				    "least %s. Raise memory_limit to read it.",
@@ -2490,6 +2494,12 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 					continue;
 				}
 				if (DOMsThatFit(context, file_size, DOM_MIN_BYTES_PER_FILE_BYTE) == 0) {
+					// The file can't fit memory_limit even alone, so ignore_errors skips it, as it does a file over
+					// maximum_file_size.
+					if (bind_data.ignore_errors) {
+						lstate.have_file = false;
+						continue;
+					}
 					auto memory = BufferManager::GetBufferManager(context).GetMaxMemory();
 					throw OutOfMemoryException(
 					    "Reading '%s' (%s) needs at least %llu times its size for the parsed document, more than "
@@ -2500,7 +2510,8 @@ void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFun
 				// The parse streams the file, so its bytes are never held whole. The DOM is freed once its
 				// blocks are in the row buffer, and then its reservation.
 				HTMLDOMReservation reservation(gstate.budget);
-				auto doc = ParseHTMLFileInBudget(fs, lstate.current_filename, std::move(file_handle), reservation);
+				auto doc = ParseHTMLFileInBudget(fs, lstate.current_filename, std::move(file_handle), reservation,
+				                                 bind_data.ignore_errors);
 				if (doc) {
 					WalkHTMLDocument(doc.get(), bind_data.capture, lstate.blocks);
 				}

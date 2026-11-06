@@ -17,6 +17,7 @@ Fixes from the duck_block review in #217.
   memory. Each parse estimates its document's memory from the markup as it reads and reserves
   it from ``memory_limit``, shared by the threads. A file that doesn't fit beside the others is
   read again alone, and one that doesn't fit alone raises an Out of Memory error.
+  ``ignore_errors`` skips such a file instead.
 - A text node, attribute value, comment or tag past libxml2's 10,000,000-byte limit raises an
   error that names the limit. It used to read as empty.
 - ``read_html_blocks`` reads a named pipe. It used to return no rows.
@@ -30,8 +31,8 @@ Fixes from the duck_block review in #217.
 - ``read_xml``, ``read_html``, their ``_objects`` variants and ``read_html_blocks`` raise an
   error naming a pattern or path that matches no file, even inside a list. ``ignore_errors``
   skips it. A negative ``maximum_file_size`` raises an error.
-- ``ignore_errors`` on ``read_html_blocks`` skips document errors only, and
-  ``parse_html_blocks`` now honors it.
+- ``ignore_errors`` on ``read_html_blocks`` skips document errors and a file too large for
+  ``memory_limit`` alone, and ``parse_html_blocks`` now honors it.
 
 Fixes from the pre-release scan.
 
