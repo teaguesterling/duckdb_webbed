@@ -308,7 +308,8 @@ streaming instead of building a full DOM tree. This affects schema inference in 
    always-correct detection at the cost of scanning the whole input. In SAX mode ``sample_size <= 0``
    triggers a second, memory-bounded pass: after typing from the first 50 records it streams the
    whole file and widens to ``VARCHAR`` any column, or any STRUCT or LIST leaf, whose later values
-   do not fit the sampled type (see "Out-of-Sample Values" below). This is the SAX equivalent of the DOM path's "sample every
+   do not fit the sampled type (see "Out-of-Sample Values" below). A BOOLEAN column or leaf is not
+   widened: a later value that isn't a boolean raises, or reads as NULL under ``ignore_errors``. This is the SAX equivalent of the DOM path's "sample every
    value" — records are tested and discarded per chunk, so detection is complete without buffering
    the whole prefix in memory, at the cost of one extra read of the file.
 

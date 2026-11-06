@@ -1,6 +1,7 @@
 #include "xml_sax_reader.hpp"
 #include "xml_utils.hpp"
 #include "xml_file_io.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include <libxml/SAX2.h>
@@ -510,7 +511,8 @@ static std::string FieldText(xmlNodePtr field, const XMLSchemaOptions &options) 
 
 // Widen each scalar leaf of a STRUCT or LIST type to VARCHAR when this node's value for it does not
 // cast, as DOM inference over every record would type it (issue #224). A LIST leaf is one element
-// occurrence, so its node is the element itself. Struct fields match child elements by name. Nested
+// occurrence, so its node is the element itself. Struct fields match child elements by name, without
+// case, as WriteStructFromNode reads them. Nested
 // leaves carry no datetime format. Returns true when the type changed.
 static bool WidenNestedLeaves(LogicalType &type, xmlNodePtr node, const XMLSchemaOptions &options,
                               const XMLSchemaOptions &verify_opts) {
@@ -530,9 +532,8 @@ static bool WidenNestedLeaves(LogicalType &type, xmlNodePtr node, const XMLSchem
 			if (child->type != XML_ELEMENT_NODE) {
 				continue;
 			}
-			std::string name(reinterpret_cast<const char *>(child->name));
 			for (auto &entry : children) {
-				if (entry.first == name) {
+				if (xmlStrcasecmp(child->name, (const xmlChar *)CompatIdentifierName(entry.first).c_str()) == 0) {
 					changed = WidenNestedLeaves(entry.second, child, options, verify_opts) || changed;
 					break;
 				}
