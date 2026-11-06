@@ -2770,6 +2770,11 @@ unique_ptr<GlobalTableFunctionState> XMLReaderFunctions::HTMLExtractTablesInit(C
 			table_rows.push_back(data_row);
 		}
 
+		// Footer rows follow the body, wherever <tfoot> sits in the markup
+		for (const auto &row : table.footers) {
+			table_rows.push_back(vector<string>(row.begin(), row.end()));
+		}
+
 		result->all_tables.push_back(table_rows);
 	}
 

@@ -1,0 +1,34 @@
+# name: test/sql/html_extract_tables_tfoot.test
+# description: html_extract_tables returns <tfoot> rows after the body rows, as html_extract_table_rows does
+# group: [sql]
+
+require webbed
+
+# A footer row used to be dropped
+query IIT
+SELECT * FROM html_extract_tables('<table><tr><td>a</td></tr><tfoot><tr><td>total</td></tr></tfoot></table>');
+----
+0	0	[a]
+0	1	[total]
+
+# The footer comes after the body even when the markup puts it first, as an HTML table renders
+query IIT
+SELECT * FROM html_extract_tables('<table><thead><tr><th>h</th></tr></thead><tfoot><tr><td>f</td></tr></tfoot><tbody><tr><td>b1</td></tr><tr><td>b2</td></tr></tbody></table>');
+----
+0	0	[h]
+0	1	[b1]
+0	2	[b2]
+0	3	[f]
+
+# A footer-only table used to return no rows, so table_index jumped from nothing to 1
+query IIT
+SELECT * FROM html_extract_tables('<table><tfoot><tr><td>only</td></tr></tfoot></table><table><tr><td>b</td></tr></table>');
+----
+0	0	[only]
+1	0	[b]
+
+# The table function and html_extract_table_rows agree on the footer cells
+query I
+SELECT list_sort(list_transform(list_filter(html_extract_table_rows('<table><tr><td>a</td></tr><tfoot><tr><td>x</td><td>y</td></tr></tfoot></table>'), lambda r: r.row_type = 'footer'), lambda r: r.cell_value)) = (SELECT list_sort(columns) FROM html_extract_tables('<table><tr><td>a</td></tr><tfoot><tr><td>x</td><td>y</td></tr></tfoot></table>') WHERE row_index = 1);
+----
+true
