@@ -3393,8 +3393,18 @@ std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	}
 
 	// Use libxml2's HTML parser to decode entities
-	// Wrap the string in a minimal HTML document to parse it
-	std::string wrapped = "<html><body>" + html_str + "</body></html>";
+	// Wrap the string in a minimal HTML document to parse it. Each '<' goes in as "&lt;", so the parser sees only text
+	// and entities: a tag in the input stays as text, and the text after it is kept.
+	std::string wrapped = "<html><body>";
+	wrapped.reserve(html_str.size() + 32);
+	for (char c : html_str) {
+		if (c == '<') {
+			wrapped += "&lt;";
+		} else {
+			wrapped += c;
+		}
+	}
+	wrapped += "</body></html>";
 
 	// A depth or other limit error propagates. Only a parse that produced no document falls back to the input.
 	XMLDocPtr doc = ParseHTMLDocument(wrapped.data(), wrapped.size(), HTMLInputEncoding::DECODED_TEXT);
