@@ -119,8 +119,9 @@ Each ``force_list`` entry is an element name or a path of element names separate
      - ``items`` elements whose parent is a ``columns`` element, at any depth
 
 A path is relative to the record element, like an XPath child path. It pins one location in
-the tree, so an element with the same name elsewhere keeps its inferred type. A forced element
-that is missing from a record reads as NULL, at the top level and nested alike.
+the tree, so an element with the same name elsewhere keeps its inferred type. A step matches
+inside every instance of its parent, so a path reaches through a parent that is itself a list.
+A forced element that is missing from a record reads as NULL, at the top level and nested alike.
 
 .. code-block:: sql
 

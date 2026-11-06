@@ -44,6 +44,26 @@ A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)
 B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	NULL
 C	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Empty, 'layoutColumns': NULL}]
 
+# A path steps through a list level: layoutSections repeats in A, so it is a list without force_list,
+# and the path still forces layoutColumns inside every section. B's single section gets the same type
+query TTT
+SELECT fullName, typeof(layoutSections), layoutSections
+FROM read_xml('test/xml/force_list_nested/repeated_sections.xml', record_element := 'Layout',
+    force_list := ['layoutSections/layoutColumns', 'layoutSections/layoutColumns/layoutItems'])
+ORDER BY fullName;
+----
+A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': First, 'layoutColumns': [{'layoutItems': [{'field': Name}]}]}, {'label': Second, 'layoutColumns': [{'layoutItems': [{'field': Phone}]}]}, {'label': Third, 'layoutColumns': NULL}]
+B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Only, 'layoutColumns': [{'layoutItems': [{'field': Email}]}]}]
+
+query TTT
+SELECT fullName, typeof(layoutSections), layoutSections
+FROM read_xml('test/xml/force_list_nested/repeated_sections.xml', record_element := 'Layout', maximum_file_size := 64,
+    force_list := ['layoutSections/layoutColumns', 'layoutSections/layoutColumns/layoutItems'])
+ORDER BY fullName;
+----
+A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': First, 'layoutColumns': [{'layoutItems': [{'field': Name}]}]}, {'label': Second, 'layoutColumns': [{'layoutItems': [{'field': Phone}]}]}, {'label': Third, 'layoutColumns': NULL}]
+B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Only, 'layoutColumns': [{'layoutItems': [{'field': Email}]}]}]
+
 # A top-level name mixes with a nested path, which may start with ./
 query TTT
 SELECT fullName, typeof(fullName), typeof(layoutSections)
