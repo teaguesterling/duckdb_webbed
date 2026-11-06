@@ -55,8 +55,9 @@ Fixes from the pre-release scan.
   tags, and the text after ``</body>`` (#231).
 - ``html_extract_tables`` returns ``<tfoot>`` rows after the body rows (#232).
 - ``namespaces := 'auto'`` works after more than one processing instruction, with a ``>`` in a
-  root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. It used
-  to return ``[]`` (#233).
+  root attribute value or a DOCTYPE, and with whitespace around ``=`` in a declaration. A
+  comment or processing instruction inside the DOCTYPE may hold ``]``. It used to return ``[]``
+  (#233).
 - ``to_xml`` and ``json_to_xml`` write a NUL byte as U+FFFD and keep the text after it. They
   used to end the text at the NUL (#234).
 
