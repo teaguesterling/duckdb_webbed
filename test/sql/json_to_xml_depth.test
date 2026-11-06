@@ -1,0 +1,58 @@
+# name: test/sql/json_to_xml_depth.test
+# description: Deeply nested JSON must raise an error, not overflow the stack; json_to_node recursed once per level
+# group: [sql]
+
+require webbed
+
+require json
+
+# Up to libxml2's parse depth (xmlParserMaxDepth, 256) the output is XML that webbed can read back
+query II
+SELECT xml_valid(x), len(x) > 0 FROM (SELECT json_to_xml(repeat('[', 256) || '1' || repeat(']', 256)) x);
+----
+true	true
+
+# A single-key outer object becomes the root element itself, so 257 objects are 256 levels below it
+query I
+SELECT xml_valid(json_to_xml(repeat('{"a":', 257) || '1' || repeat('}', 257)));
+----
+true
+
+# One level more would give XML that no webbed function can parse, so it is an error
+statement error
+SELECT json_to_xml(repeat('[', 257) || '1' || repeat(']', 257));
+----
+nested deeper than 256 levels
+
+statement error
+SELECT json_to_xml(repeat('{"a":', 258) || '1' || repeat('}', 258));
+----
+nested deeper than 256 levels
+
+# The crash: 60 KB of crafted JSON took the whole process down with SIGSEGV
+statement error
+SELECT json_to_xml(repeat('[', 30000) || repeat(']', 30000));
+----
+nested deeper than 256 levels
+
+statement error
+SELECT json_to_xml(repeat('{"a":', 30000) || '1' || repeat('}', 30000));
+----
+nested deeper than 256 levels
+
+# The same limit on the other paths into JSONToXML
+statement error
+SELECT (repeat('[', 30000) || repeat(']', 30000))::JSON::XML;
+----
+nested deeper than 256 levels
+
+statement error
+SELECT to_xml((repeat('[', 30000) || repeat(']', 30000))::JSON);
+----
+nested deeper than 256 levels
+
+# A shallow document still converts after a rejected one on the same connection
+query I
+SELECT json_to_xml('{"a":{"b":[1,2]}}') = '<?xml version="1.0" encoding="UTF-8"?>' || chr(10) || '<a><b_list><b>1</b><b>2</b></b_list></a>';
+----
+true

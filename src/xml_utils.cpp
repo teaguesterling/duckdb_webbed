@@ -1815,8 +1815,32 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 		return "<?xml version=\"1.0\"?>\n<root></root>\n";
 	}
 
-	std::function<xmlNodePtr(yyjson_val *, const std::string &, xmlDocPtr)> json_to_node =
-	    [&](yyjson_val *val, const std::string &node_name, xmlDocPtr document) -> xmlNodePtr {
+	// The recursion follows the JSON nesting, so crafted input overflowed the stack. Stop at libxml2's
+	// own parse depth: deeper output is XML that no webbed function can read back. The flag unwinds
+	// without throwing, so every node made so far stays in the tree and the document frees it.
+	static constexpr int MAX_JSON_DEPTH = 256; // libxml2's xmlParserMaxDepth
+	bool too_deep = false;
+	// JSON keys become element and attribute names verbatim, so a key such as "a><evil/><b" injected
+	// markup into the xml-typed output. A key that is not an XML Name stops the walk the same way.
+	bool has_bad_name = false;
+	std::string bad_name;
+	const char *bad_name_kind = "element";
+	auto is_xml_name = [](const std::string &name) {
+		return !name.empty() && name.find('\0') == std::string::npos &&
+		       xmlValidateName(reinterpret_cast<const xmlChar *>(name.c_str()), 0) == 0;
+	};
+	std::function<xmlNodePtr(yyjson_val *, const std::string &, xmlDocPtr, int)> json_to_node =
+	    [&](yyjson_val *val, const std::string &node_name, xmlDocPtr document, int depth) -> xmlNodePtr {
+		if (depth > MAX_JSON_DEPTH) {
+			too_deep = true;
+		}
+		if (!too_deep && !has_bad_name && !is_xml_name(node_name)) {
+			has_bad_name = true;
+			bad_name = node_name;
+		}
+		if (too_deep || has_bad_name) {
+			return nullptr;
+		}
 		xmlNodePtr node = xmlNewNode(nullptr, BAD_CAST node_name.c_str());
 		if (!node) {
 			return nullptr;
@@ -1839,7 +1863,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 			size_t idx, max;
 			yyjson_val *elem;
 			yyjson_arr_foreach(val, idx, max, elem) {
-				xmlNodePtr child = json_to_node(elem, node_name, document);
+				xmlNodePtr child = json_to_node(elem, node_name, document, depth + 1);
 				if (child) {
 					xmlAddChild(node, child);
 				}
@@ -1873,6 +1897,14 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 							free(s);
 						}
 					}
+					if (!is_xml_name(attr_name)) {
+						if (!has_bad_name) {
+							has_bad_name = true;
+							bad_name = attr_name;
+							bad_name_kind = "attribute";
+						}
+						return node;
+					}
 					xmlSetProp(node, BAD_CAST attr_name.c_str(), BAD_CAST attr_value.c_str());
 				} else if (prop.first == "#text") {
 					if (yyjson_is_str(prop.second)) {
@@ -1886,7 +1918,7 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 						}
 					}
 				} else {
-					xmlNodePtr child = json_to_node(prop.second, prop.first, document);
+					xmlNodePtr child = json_to_node(prop.second, prop.first, document, depth + 1);
 					if (child) {
 						xmlAddChild(node, child);
 					}
@@ -1939,12 +1971,19 @@ std::string XMLUtils::JSONToXML(const std::string &json_str) {
 		}
 	}
 
-	xmlNodePtr root_node = json_to_node(actual_content, root_element_name, doc.get());
+	xmlNodePtr root_node = json_to_node(actual_content, root_element_name, doc.get(), 0);
 	if (root_node) {
 		xmlDocSetRootElement(doc.get(), root_node);
 	}
 
 	yyjson_doc_free(json_doc);
+	if (too_deep) {
+		throw InvalidInputException("Cannot convert JSON to XML: it is nested deeper than %d levels", MAX_JSON_DEPTH);
+	}
+	if (has_bad_name) {
+		throw InvalidInputException("Cannot convert JSON to XML: key '%s' is not a valid XML %s name", bad_name,
+		                            bad_name_kind);
+	}
 
 	xmlChar *xml_string = nullptr;
 	int size = 0;

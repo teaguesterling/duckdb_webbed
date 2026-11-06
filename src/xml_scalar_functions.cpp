@@ -1693,7 +1693,7 @@ void XMLScalarFunctions::Register(ExtensionLoader &loader) {
 
 	// Register json_to_xml function
 	auto json_to_xml_function =
-	    ScalarFunction("json_to_xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction);
+	    Fallible(ScalarFunction("json_to_xml", {LogicalType::VARCHAR}, LogicalType::VARCHAR, JSONToXMLFunction));
 	register_scalar(loader, json_to_xml_function, {"json"}, "Convert a JSON string to XML.",
 	                {"json_to_xml('{\"root\": {\"item\": \"Hello\"}}')"});
 
