@@ -59,6 +59,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb_compat.hpp"
 #include "duckdb/function/table_function.hpp"
 
 #if __has_include("duckdb/main/capi/capi_function_signature.hpp")
@@ -168,7 +169,7 @@ inline void RejectNullBooleanParameters(const MAP &params) {
 	for (const auto &kv : params) {
 		if (kv.second.IsNull() && kv.second.type().id() == LogicalTypeId::BOOLEAN) {
 			throw BinderException("\"%s\" expects a non-null boolean value (e.g. TRUE or 1)",
-			                      static_cast<const string &>(kv.first));
+			                      CompatIdentifierName(kv.first));
 		}
 	}
 }
