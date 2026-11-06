@@ -1,0 +1,36 @@
+# name: test/sql/struct_case_fields.test
+# description: Issue #257. Struct fields whose element names differ only in case became two fields with the same name, which DuckDB doesn't allow, and the read failed. They are one field, as union_by_name merges them and extraction reads them. The first-seen spelling names the field. Top-level columns are renamed instead (#248).
+# group: [sql]
+
+require webbed
+
+# <a>1</a> and <A>x</A> are one field, typed from both values.
+query I
+DESCRIBE SELECT s FROM read_xml('test/xml/struct_case/mixed.xml', record_element := 'i');
+----
+<REGEX>:.*STRUCT\(a VARCHAR\).*
+
+query T
+SELECT s.a FROM read_xml('test/xml/struct_case/mixed.xml', record_element := 'i') ORDER BY 1;
+----
+1
+x
+
+# Both spellings are sampled: two integers keep the field INTEGER and read both.
+query TI
+SELECT typeof(s), s.a FROM read_xml('test/xml/struct_case/ints.xml', record_element := 'i') ORDER BY 2;
+----
+STRUCT(a INTEGER)	1
+STRUCT(a INTEGER)	2
+
+# The repeated-element (LIST of STRUCT) branch merges the same way.
+query TT
+SELECT typeof(s), s[2].a FROM read_xml('test/xml/struct_case/list.xml', record_element := 'i');
+----
+STRUCT(a VARCHAR)[]	x
+
+# Both spellings in one element repeat the field, so it is a LIST, and extraction reads both.
+query TT
+SELECT typeof(s), s.a FROM read_xml('test/xml/struct_case/same_record.xml', record_element := 'i');
+----
+STRUCT(a INTEGER[])	[1, 2]
