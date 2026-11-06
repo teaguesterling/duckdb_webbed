@@ -1459,9 +1459,18 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 	}
 
-	// No one format reads dates beside timestamps. With DATE excluded the column is TIMESTAMP, as in
-	// read_csv. It keeps no format, and the default cast reads ISO forms. With DATE allowed it stays
-	// VARCHAR, as in read_csv: the default cast would drop an offset past the sample.
+	// No one format reads every sample, but each is a date or timestamp: the column is TIMESTAMP, as in
+	// read_csv. It keeps no format, and the default cast reads ISO forms. A date-only sample keeps it
+	// VARCHAR while DATE is a candidate, as in read_csv.
+	auto is_date_only = [&](const std::string &sample) {
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			if (candidate_types[i].id() == LogicalTypeId::DATE &&
+			    TryMatchDatetimeFormat(sample, compiled_formats[i], candidate_types[i])) {
+				return true;
+			}
+		}
+		return false;
+	};
 	auto is_date_or_timestamp = [&](const std::string &sample) {
 		timestamp_t ts;
 		if (!TryCast::Operation(string_t(sample), ts, true)) {
@@ -1476,8 +1485,8 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 		return false;
 	};
-	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP) &&
-	    !IsAutoTypeCandidate(options, LogicalTypeId::DATE)) {
+	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+		bool date_allowed = IsAutoTypeCandidate(options, LogicalTypeId::DATE);
 		bool any_sample = false;
 		bool all_match = true;
 		for (const auto &sample : samples) {
@@ -1485,7 +1494,7 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 				continue;
 			}
 			any_sample = true;
-			if (!is_date_or_timestamp(sample)) {
+			if (!is_date_or_timestamp(sample) || (date_allowed && is_date_only(sample))) {
 				all_match = false;
 				break;
 			}

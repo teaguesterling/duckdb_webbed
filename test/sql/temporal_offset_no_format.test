@@ -36,3 +36,10 @@ query TT
 SELECT typeof(t), min(t) FROM read_xml('{TEST_DIR}/mixed.xml', record_element := 'i', sample_size := 10, auto_type_candidates := ['TIMESTAMP']) GROUP BY ALL;
 ----
 TIMESTAMP	2024-01-01 00:00:00
+
+# Timestamps in two formats and no date read as TIMESTAMP, as in read_csv. Only a date-only value
+# keeps the column VARCHAR while DATE is a candidate.
+query T
+SELECT DISTINCT typeof(v) FROM parse_xml('<r><i><v>2024-01-01T10:00:00</v></i><i><v>2024-01-02 10:00:00</v></i></r>');
+----
+TIMESTAMP

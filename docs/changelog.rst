@@ -54,7 +54,8 @@ Fixes from the pre-release scan.
 - ``read_xml``: a ``TIMESTAMPTZ`` column with no recorded format, declared or nested, applies a
   numeric UTC offset. ``10:00:00+05`` used to read as 10:00 UTC.
 - ``read_xml``: dates beside timestamps in one file stay VARCHAR while ``DATE`` is a candidate,
-  and read as TIMESTAMP when ``auto_type_candidates`` excludes it. This matches ``read_csv``.
+  and read as TIMESTAMP when ``auto_type_candidates`` excludes it. Timestamps in two formats
+  read as TIMESTAMP. This matches ``read_csv``.
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
 - ``numeric_inference := 'lenient'`` types numbers by DuckDB's cast, as in v2.14.1 and earlier,
