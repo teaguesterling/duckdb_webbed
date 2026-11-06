@@ -437,10 +437,8 @@ static bool IsNullString(const std::string &text, const XMLSchemaOptions &option
 // accepts anything; BOOLEAN maps unknowns to NULL without erroring; STRUCT/LIST/MAP/ARRAY take a
 // different extraction path. Only these can need widening.
 //
-// EXCLUDING BOOLEAN IS LOAD-BEARING, do not "fix" it by adding BOOLEAN here: the widen test treats a
-// NULL result from ConvertToValuePublic (under ignore_errors) as a cast failure, but BOOLEAN returns
-// NULL for an unrecognized literal WITHOUT going through XmlUncastableValue — so adding BOOLEAN would
-// make every unrecognized boolean silently widen the column to VARCHAR.
+// BOOLEAN is not widened: an unreadable value in a BOOLEAN column is an error, or NULL under
+// ignore_errors, as on the DOM path, rather than turning the column VARCHAR.
 static bool IsWidenableScalar(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:

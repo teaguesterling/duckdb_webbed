@@ -152,6 +152,72 @@ static void ParseNullstrParameter(const Value &val, const char *function_name, s
 	}
 }
 
+// Parse auto_type_candidates, a LIST(VARCHAR) of type names, with read_csv's validation. VARCHAR is
+// always a candidate. Core also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM, which
+// webbed inference never produces, so naming one is an error rather than a silent no-op.
+static void ParseAutoTypeCandidatesParameter(const Value &val, ClientContext &context, const char *function_name,
+                                             std::vector<LogicalTypeId> &candidates) {
+	if (val.type().id() != LogicalTypeId::LIST) {
+		throw BinderException("%s \"auto_type_candidates\" requires a list as input", function_name);
+	}
+	if (val.IsNull()) {
+		throw BinderException("%s \"auto_type_candidates\" cannot be NULL", function_name);
+	}
+	auto &list_children = ListValue::GetChildren(val);
+	if (list_children.empty()) {
+		throw BinderException("%s \"auto_type_candidates\" requires at least one type", function_name);
+	}
+	candidates = {LogicalTypeId::VARCHAR};
+	for (const auto &child : list_children) {
+		if (child.type().id() != LogicalTypeId::VARCHAR) {
+			throw BinderException("%s \"auto_type_candidates\" requires a type specification as string", function_name);
+		}
+		if (child.IsNull()) {
+			throw BinderException("%s \"auto_type_candidates\" cannot contain NULL types", function_name);
+		}
+		auto type = TransformStringToLogicalType(StringValue::Get(child), context);
+		// JSON and XML are VARCHAR under an alias. Inference never produces them.
+		auto id = type.HasAlias() ? LogicalTypeId::INVALID : type.id();
+		switch (id) {
+		case LogicalTypeId::VARCHAR:
+		case LogicalTypeId::BOOLEAN:
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DOUBLE:
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+			candidates.push_back(type.id());
+			break;
+		default:
+			throw BinderException("%s \"auto_type_candidates\" does not accept %s. Inference chooses among "
+			                      "VARCHAR, BOOLEAN, INTEGER, BIGINT, DOUBLE, DATE, TIME, TIMETZ, TIMESTAMP and "
+			                      "TIMESTAMPTZ",
+			                      function_name, type.ToString());
+		}
+	}
+}
+
+// Reject auto_type_candidates alongside options that already settle every column's type.
+static void CheckAutoTypeCandidatesConflicts(const XMLSchemaOptions &options, bool has_explicit_columns,
+                                             const char *function_name) {
+	if (options.auto_type_candidates.empty()) {
+		return;
+	}
+	if (has_explicit_columns) {
+		throw BinderException("%s cannot use both \"columns\" parameter and \"auto_type_candidates\" option. "
+		                      "\"columns\" turns schema inference off.",
+		                      function_name);
+	}
+	if (options.all_varchar) {
+		throw BinderException("%s cannot use both \"all_varchar\" and \"auto_type_candidates\" options. "
+		                      "\"all_varchar\" is auto_type_candidates := ['VARCHAR'].",
+		                      function_name);
+	}
+}
+
 // True if a column type contains MAP or ARRAY at any nesting. These DuckDB types have no
 // XML extraction path, so SAX cannot materialize them. STRUCT and LIST<STRUCT> are supported
 // through the DOM extraction of each streamed record.
@@ -200,16 +266,31 @@ static bool IsUnknownElementType(const LogicalType &type) {
 static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_columns,
                                  std::unordered_map<std::string, LogicalType> &union_schema,
                                  std::unordered_map<std::string, std::string> &union_formats,
-                                 std::vector<std::string> &column_order, const std::string &text_key) {
+                                 std::unordered_map<std::string, bool> &union_fits_double,
+                                 std::vector<std::string> &column_order, const XMLSchemaOptions &options) {
 	for (const auto &col_info : inferred_columns) {
 		auto it = union_schema.find(col_info.name);
 		if (it == union_schema.end()) {
 			union_schema[col_info.name] = col_info.type;
 			union_formats[col_info.name] = col_info.winning_datetime_format;
+			union_fits_double[col_info.name] = col_info.integers_fit_double;
 			column_order.push_back(col_info.name);
 			continue;
 		}
-		auto merged = XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, text_key);
+		auto &fits_double = union_fits_double[col_info.name];
+		// MergeXMLColumnType keeps BIGINT beside DOUBLE VARCHAR, since it cannot see the values. These
+		// files' samples all fit a DOUBLE exactly, as within one file.
+		auto is_bigint_and_double = [](const LogicalType &x, const LogicalType &y) {
+			return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
+		};
+		bool widen_to_double =
+		    fits_double && col_info.integers_fit_double &&
+		    (is_bigint_and_double(it->second, col_info.type) || is_bigint_and_double(col_info.type, it->second));
+		fits_double = fits_double && col_info.integers_fit_double;
+		auto merged = XMLSchemaInference::RestrictToAutoTypeCandidates(
+		    widen_to_double ? LogicalType::DOUBLE
+		                    : XMLSchemaInference::MergeXMLColumnType(it->second, col_info.type, options.text_key),
+		    options);
 		if (merged != it->second) {
 			if (IsUnknownElementType(it->second)) {
 				union_formats[col_info.name] = col_info.winning_datetime_format;
@@ -217,11 +298,13 @@ static void MergeInferredColumns(const std::vector<XMLColumnInfo> &inferred_colu
 				union_formats[col_info.name] = "";
 			}
 			it->second = merged;
+		} else if (!IsUnknownElementType(col_info.type) &&
+		           union_formats[col_info.name] != col_info.winning_datetime_format) {
+			// Files can agree on a type through different formats: `%Y-%m-%d` widened to TIMESTAMP
+			// beside `%Y-%m-%d %H:%M:%S`. One file's format would misread the other's values. The
+			// column uses the default cast instead, which reads ISO forms of both.
+			union_formats[col_info.name] = "";
 		}
-		// NOTE(#38): When types match across files but datetime formats differ,
-		// the first file's format wins. This is acceptable since the format was
-		// determined by that file's samples and both files parse successfully
-		// with it (same type implies compatible format during inference).
 	}
 }
 
@@ -692,6 +775,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "auto_type_candidates") {
+			ParseAutoTypeCandidatesParameter(kv.second, context, function_name, schema_options.auto_type_candidates);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -780,6 +865,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.",
 		                      function_name);
 	}
+	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, function_name);
 
 	// Store schema options in bind_data for use during execution
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
@@ -807,7 +893,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order;                      // Track order of first appearance
+			std::unordered_map<std::string, bool> union_fits_double;
+			std::vector<std::string> column_order; // Track order of first appearance
 
 			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, mode);
 			for (auto &file_result : file_results) {
@@ -819,8 +906,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 					result->inferred_schema = file_result.columns;
 					XMLSchemaInference::ResolveUnknownTypes(result->inferred_schema);
 				}
-				MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order,
-				                     schema_options.text_key);
+				MergeInferredColumns(file_result.columns, union_schema, union_formats, union_fits_double, column_order,
+				                     schema_options);
 			}
 
 			// Convert union schema to return types
@@ -1591,6 +1678,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "auto_type_candidates") {
+			ParseAutoTypeCandidatesParameter(kv.second, context, "read_xml", schema_options.auto_type_candidates);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -1677,6 +1766,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 		throw BinderException("read_xml cannot use both \"columns\" parameter and \"all_varchar\" option. "
 		                      "Use \"all_varchar\" for automatic schema inference, or specify explicit column types.");
 	}
+	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, "read_xml");
 
 	// Store schema options in bind_data for use during execution
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
@@ -1704,13 +1794,14 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 			// Map to track all unique columns and their types across files
 			std::unordered_map<std::string, LogicalType> union_schema;
 			std::unordered_map<std::string, std::string> union_formats; // Per-column winning datetime format
-			std::vector<std::string> column_order;                      // Track order of first appearance
+			std::unordered_map<std::string, bool> union_fits_double;
+			std::vector<std::string> column_order; // Track order of first appearance
 
 			auto file_results = InferFilesColumns(context, fs, files_to_scan, *result, schema_options, ParseMode::XML);
 			for (auto &file_result : file_results) {
 				if (ResolveFileInference(file_result)) {
-					MergeInferredColumns(file_result.columns, union_schema, union_formats, column_order,
-					                     schema_options.text_key);
+					MergeInferredColumns(file_result.columns, union_schema, union_formats, union_fits_double,
+					                     column_order, schema_options);
 				}
 			}
 
@@ -2019,6 +2110,8 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 			}
 		} else if (kv.first == "all_varchar") {
 			schema_options.all_varchar = kv.second.GetValue<bool>();
+		} else if (kv.first == "auto_type_candidates") {
+			ParseAutoTypeCandidatesParameter(kv.second, context, function_name, schema_options.auto_type_candidates);
 		} else if (kv.first == "datetime_format") {
 			// Handle both VARCHAR and LIST(VARCHAR)
 			std::vector<std::string> all_formats;
@@ -2096,6 +2189,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 	if (has_explicit_columns && schema_options.all_varchar) {
 		throw BinderException("%s cannot use both \"columns\" parameter and \"all_varchar\" option.", function_name);
 	}
+	CheckAutoTypeCandidatesConflicts(schema_options, has_explicit_columns, function_name);
 
 	// Inferred numeric columns admit only text they can reproduce. A `columns :=` type is the user's cast.
 	schema_options.lossless_numeric_text = !has_explicit_columns;
@@ -2347,6 +2441,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_single, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
+	                                           {"auto_type_candidates", LogicalType::ANY},
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"streaming", LogicalType::BOOLEAN},
@@ -2388,6 +2483,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_xml_array, {
 	                                          {"columns", LogicalType::ANY},
 	                                          {"all_varchar", LogicalType::BOOLEAN},
+	                                          {"auto_type_candidates", LogicalType::ANY},
 	                                          {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                          {"nullstr", LogicalType::ANY},
 	                                          {"streaming", LogicalType::BOOLEAN},
@@ -2444,6 +2540,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_single, {
 	                                            {"columns", LogicalType::ANY},
 	                                            {"all_varchar", LogicalType::BOOLEAN},
+	                                            {"auto_type_candidates", LogicalType::ANY},
 	                                            {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                            {"nullstr", LogicalType::ANY},
 	                                            {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2484,6 +2581,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	ExtendNamedParameters(read_html_array, {
 	                                           {"columns", LogicalType::ANY},
 	                                           {"all_varchar", LogicalType::BOOLEAN},
+	                                           {"auto_type_candidates", LogicalType::ANY},
 	                                           {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                           {"nullstr", LogicalType::ANY},
 	                                           {"preserve_whitespace", LogicalType::BOOLEAN},
@@ -2623,6 +2721,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                     {"sample_size", LogicalType::INTEGER},
 	                                     {"unnest_as", LogicalType::VARCHAR},
 	                                     {"all_varchar", LogicalType::BOOLEAN},
+	                                     {"auto_type_candidates", LogicalType::ANY},
 	                                     {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                     {"nullstr", LogicalType::ANY},
 	                                     {"columns", LogicalType::ANY},
@@ -2662,6 +2761,7 @@ void XMLReaderFunctions::Register(ExtensionLoader &loader) {
 	                                      {"sample_size", LogicalType::INTEGER},
 	                                      {"unnest_as", LogicalType::VARCHAR},
 	                                      {"all_varchar", LogicalType::BOOLEAN},
+	                                      {"auto_type_candidates", LogicalType::ANY},
 	                                      {"datetime_format", LogicalType::ANY}, // VARCHAR or LIST(VARCHAR)
 	                                      {"nullstr", LogicalType::ANY},
 	                                      {"columns", LogicalType::ANY},

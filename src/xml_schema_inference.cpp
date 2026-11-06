@@ -7,6 +7,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/types/time.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include <algorithm>
@@ -179,6 +180,9 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 		double confidence = static_cast<double>(col_analysis.occurrence_count) / record_elements.size();
 		XMLColumnInfo col_info(col_analysis.name, col_type, col_analysis.is_attribute, "", confidence);
 		col_info.winning_datetime_format = winning_fmt;
+		if (col_type.id() == LogicalTypeId::BIGINT) {
+			col_info.integers_fit_double = SampledIntegersFitDouble(col_analysis, options);
+		}
 		columns.push_back(std::move(col_info));
 	}
 
@@ -483,6 +487,26 @@ std::vector<std::string> XMLSchemaInference::CollectAttributeNames(const std::ve
 		}
 	}
 	return names;
+}
+
+bool XMLSchemaInference::SampledIntegersFitDouble(const ColumnAnalysis &column, const XMLSchemaOptions &options) {
+	constexpr int64_t max_exact = int64_t(1) << 53;
+	size_t sampled = 0;
+	for (xmlNodePtr node : column.instances) {
+		if (sampled >= XmlSampleLimit(options)) {
+			break;
+		}
+		std::string text = CleanNodeText(node, options.preserve_whitespace);
+		if (text.empty() || IsNullString(text, options)) {
+			continue;
+		}
+		sampled++;
+		int64_t value;
+		if (!TryCast::Operation(string_t(text), value, true) || value > max_exact || value < -max_exact) {
+			return false;
+		}
+	}
+	return true;
 }
 
 LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, int remaining_depth,
@@ -1036,6 +1060,11 @@ void XMLSchemaInference::AnalyzeElement(xmlNodePtr node, std::unordered_map<std:
 	}
 }
 
+// The wall-clock time a TIMETZ keeps beside its offset. TryToTime rejects any nonzero offset.
+static dtime_t ParsedWallClockTime(const StrpTimeFormat::ParseResult &parse_result) {
+	return Time::FromTime(parse_result.data[3], parse_result.data[4], parse_result.data[5], parse_result.GetMicros());
+}
+
 static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &strp_format,
                                    const LogicalType &expected_type) {
 	switch (expected_type.id()) {
@@ -1048,14 +1077,17 @@ static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &str
 		timestamp_t result;
 		return strp_format.TryParseTimestamp(value.c_str(), value.size(), result);
 	}
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_TZ: {
+	case LogicalTypeId::TIME: {
 		StrpTimeFormat::ParseResult parse_result;
 		if (!strp_format.Parse(value.c_str(), value.size(), parse_result)) {
 			return false;
 		}
 		dtime_t time_result;
 		return parse_result.TryToTime(time_result);
+	}
+	case LogicalTypeId::TIME_TZ: {
+		StrpTimeFormat::ParseResult parse_result;
+		return strp_format.Parse(value.c_str(), value.size(), parse_result);
 	}
 	default:
 		return false;
@@ -1153,11 +1185,10 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 		}
 		case LogicalTypeId::TIME_TZ: {
 			StrpTimeFormat::ParseResult parse_result;
-			dtime_t time_result;
-			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) || !parse_result.TryToTime(time_result)) {
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result)) {
 				continue;
 			}
-			parsed = Value::TIMETZ(dtime_tz_t(time_result, parse_result.data[7]));
+			parsed = Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
 			break;
 		}
 		default:
@@ -1300,7 +1331,15 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		StrTimeFormat::ParseFormatSpecifier(effective_candidates[i], compiled_formats[i]);
 	}
 
-	bool any_alive = !effective_candidates.empty();
+	// The type each format yields under auto_type_candidates. Like an integer, a date widens to
+	// TIMESTAMP when DATE is excluded, as read_csv's sniffer does. A format with no allowed type
+	// starts eliminated.
+	std::vector<LogicalType> result_types;
+	for (size_t i = 0; i < effective_candidates.size(); i++) {
+		result_types.push_back(AllowedTemporalType(options, candidate_types[i]));
+		alive[i] = result_types[i].id() != LogicalTypeId::INVALID;
+	}
+	bool any_alive = std::find(alive.begin(), alive.end(), true) != alive.end();
 	for (const auto &sample : samples) {
 		if (sample.empty()) {
 			continue; // Nulls/empty skip elimination
@@ -1328,28 +1367,66 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		for (size_t i = 0; i < effective_candidates.size(); i++) {
 			if (alive[i]) {
 				winning_datetime_format = effective_candidates[i];
-				return candidate_types[i];
+				return result_types[i];
 			}
 		}
 	}
 
-	// Fall through to numeric/boolean/VARCHAR detection (existing logic)
+	// No one format reads dates beside timestamps, but the column is TIMESTAMP, as the union of a
+	// date file and a timestamp file is. It keeps no format, and the default cast reads ISO forms.
+	auto is_date_or_timestamp = [&](const std::string &sample) {
+		timestamp_t ts;
+		if (!TryCast::Operation(string_t(sample), ts, true)) {
+			return false;
+		}
+		for (size_t i = 0; i < effective_candidates.size(); i++) {
+			auto id = candidate_types[i].id();
+			if ((id == LogicalTypeId::DATE || id == LogicalTypeId::TIMESTAMP) &&
+			    TryMatchDatetimeFormat(sample, compiled_formats[i], candidate_types[i])) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (!effective_candidates.empty() && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+		bool any_sample = false;
+		bool all_match = true;
+		for (const auto &sample : samples) {
+			if (sample.empty()) {
+				continue;
+			}
+			any_sample = true;
+			if (!is_date_or_timestamp(sample)) {
+				all_match = false;
+				break;
+			}
+		}
+		if (any_sample && all_match) {
+			return LogicalType::TIMESTAMP;
+		}
+	}
+
+	// Each sample takes the narrowest allowed type that reads it: an integer the candidates exclude
+	// from INTEGER widens to BIGINT, then DOUBLE, as read_csv's sniffer does.
+	// GetMostSpecificType widens INTEGER to BIGINT when samples mix.
+	auto allowed = [&options](LogicalTypeId id) {
+		return IsAutoTypeCandidate(options, id);
+	};
 	std::vector<LogicalType> detected_types;
 	for (const auto &sample : samples) {
 		if (sample.empty())
 			continue;
-		if (options.numeric_detection && IsInteger(sample)) {
-			// Pick the narrowest integer type that can hold the value;
-			// GetMostSpecificType widens INTEGER to BIGINT when samples mix.
-			int32_t int32_result;
-			if (TryCast::Operation(string_t(sample), int32_result, true)) {
-				detected_types.push_back(LogicalType::INTEGER);
-			} else {
-				detected_types.push_back(LogicalType::BIGINT);
-			}
-		} else if (options.numeric_detection && IsDouble(sample)) {
+		bool is_integer = options.numeric_detection && IsInteger(sample);
+		int32_t int32_result;
+		if (is_integer && allowed(LogicalTypeId::INTEGER) && TryCast::Operation(string_t(sample), int32_result, true)) {
+			detected_types.push_back(LogicalType::INTEGER);
+		} else if (is_integer && allowed(LogicalTypeId::BIGINT)) {
+			detected_types.push_back(LogicalType::BIGINT);
+		} else if (options.numeric_detection && allowed(LogicalTypeId::DOUBLE) && IsDouble(sample)) {
 			detected_types.push_back(LogicalType::DOUBLE);
-		} else if (options.boolean_detection && IsBoolean(sample)) {
+		} else if (!is_integer && options.boolean_detection && allowed(LogicalTypeId::BOOLEAN) && IsBoolean(sample)) {
+			// `1` and `0` read as integers first, so excluding the integer types cannot turn an
+			// integer column BOOLEAN. read_csv keeps them VARCHAR under ['BOOLEAN'] too.
 			detected_types.push_back(LogicalType::BOOLEAN);
 		} else {
 			detected_types.push_back(LogicalType::VARCHAR);
@@ -1364,7 +1441,49 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 			return LogicalType::VARCHAR;
 		}
 	}
-	return column_type;
+	return RestrictToAutoTypeCandidates(column_type, options);
+}
+
+LogicalType XMLSchemaInference::AllowedTemporalType(const XMLSchemaOptions &options, const LogicalType &type) {
+	if (IsAutoTypeCandidate(options, type.id())) {
+		return type;
+	}
+	// Zoneless text never widens to TIMESTAMPTZ: webbed reads it as UTC, where read_csv assumes
+	// the session time zone, so the two would disagree on the instant.
+	if (type.id() == LogicalTypeId::DATE && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
+		return LogicalType::TIMESTAMP;
+	}
+	return LogicalType::INVALID;
+}
+
+bool XMLSchemaInference::IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id) {
+	if (options.auto_type_candidates.empty() || id == LogicalTypeId::VARCHAR) {
+		return true;
+	}
+	return std::find(options.auto_type_candidates.begin(), options.auto_type_candidates.end(), id) !=
+	       options.auto_type_candidates.end();
+}
+
+LogicalType XMLSchemaInference::RestrictToAutoTypeCandidates(const LogicalType &type, const XMLSchemaOptions &options) {
+	if (options.auto_type_candidates.empty()) {
+		return type;
+	}
+	return TypeVisitor::VisitReplace(type, [&options](const LogicalType &t) {
+		switch (t.id()) {
+		case LogicalTypeId::BOOLEAN:
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DOUBLE:
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return IsAutoTypeCandidate(options, t.id()) ? t : LogicalType::VARCHAR;
+		default:
+			return t;
+		}
+	});
 }
 
 LogicalType XMLSchemaInference::InferNestedType(const ElementPattern &pattern,
@@ -1724,6 +1843,24 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 		return x.id() == LogicalTypeId::BIGINT && y.id() == LogicalTypeId::DOUBLE;
 	};
 	if (is_bigint_and_double(a, b) || is_bigint_and_double(b, a)) {
+		return LogicalType::VARCHAR;
+	}
+	// Zoneless text in a zoned column reads as UTC, not as the session time zone read_csv assumes.
+	// Within a file, zoned and zoneless samples share no format and stay VARCHAR. Across files the
+	// merge would widen to the zoned type. It stays VARCHAR here too.
+	auto is_zoneless_beside_zoned = [](const LogicalType &x, const LogicalType &y) {
+		switch (y.id()) {
+		case LogicalTypeId::TIMESTAMP_TZ:
+			return x.id() == LogicalTypeId::DATE || x.id() == LogicalTypeId::TIMESTAMP ||
+			       x.id() == LogicalTypeId::TIMESTAMP_SEC || x.id() == LogicalTypeId::TIMESTAMP_MS ||
+			       x.id() == LogicalTypeId::TIMESTAMP_NS;
+		case LogicalTypeId::TIME_TZ:
+			return x.id() == LogicalTypeId::TIME;
+		default:
+			return false;
+		}
+	};
+	if (is_zoneless_beside_zoned(a, b) || is_zoneless_beside_zoned(b, a)) {
 		return LogicalType::VARCHAR;
 	}
 
@@ -2236,7 +2373,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			} else if (lower == "false" || lower == "no" || lower == "0" || lower == "off") {
 				return Value::BOOLEAN(false);
 			}
-			return Value(); // NULL for unrecognized boolean
+			return XmlUncastableValue(text, target_type, options);
 		}
 		case LogicalTypeId::INTEGER: {
 			if (options.lossless_numeric_text && !NumericTypeReproduces(text, target_type)) {
@@ -2370,11 +2507,7 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
 				StrpTimeFormat::ParseResult parse_result;
 				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
-					dtime_t time_result;
-					if (parse_result.TryToTime(time_result)) {
-						dtime_tz_t result(time_result, parse_result.data[7]);
-						return Value::TIMETZ(result);
-					}
+					return Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
 				}
 				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
 			}

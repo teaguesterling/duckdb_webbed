@@ -77,6 +77,9 @@ struct XMLSchemaOptions {
 	// Type forcing
 	bool all_varchar = false;              // Force all scalar types to VARCHAR (nested structure preserved)
 	std::vector<std::string> null_strings; // Values to treat as NULL (empty = default behavior)
+	// Scalar types inference may choose (read_csv's auto_type_candidates). Empty allows every type
+	// inference produces. VARCHAR is always allowed, whether listed or not.
+	std::vector<LogicalTypeId> auto_type_candidates;
 
 	// Source type tracking
 	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
@@ -91,6 +94,7 @@ struct XMLColumnInfo {
 	double confidence;                      // Schema inference confidence (0.0-1.0)
 	std::vector<std::string> sample_values; // Sample values used for type detection
 	std::string winning_datetime_format;    // Format string that won during inference (empty = no format)
+	bool integers_fit_double = true;        // Every sampled integer is exact in a DOUBLE (under 2^53)
 
 	XMLColumnInfo(const std::string &name, LogicalType type, bool is_attribute = false, const std::string &xpath = "",
 	              double confidence = 1.0)
@@ -225,6 +229,17 @@ public:
 	static LogicalType InferTypeFromSamples(const std::vector<std::string> &samples, const XMLSchemaOptions &options,
 	                                        std::string &winning_datetime_format);
 
+	// Whether inference may choose this scalar type under options.auto_type_candidates.
+	static bool IsAutoTypeCandidate(const XMLSchemaOptions &options, LogicalTypeId id);
+
+	// The type a datetime format of this type yields under auto_type_candidates: itself, or
+	// TIMESTAMP for an excluded DATE. INVALID when neither is allowed.
+	static LogicalType AllowedTemporalType(const XMLSchemaOptions &options, const LogicalType &type);
+
+	// Replace every scalar inferable type outside options.auto_type_candidates with VARCHAR,
+	// including inside nested types, so a union_by_name merge cannot widen past the candidates.
+	static LogicalType RestrictToAutoTypeCandidates(const LogicalType &type, const XMLSchemaOptions &options);
+
 	// Detect nested structures (LIST and STRUCT types)
 	static LogicalType InferNestedType(const ElementPattern &pattern,
 	                                   const std::unordered_map<std::string, ElementPattern> &all_patterns,
@@ -285,6 +300,7 @@ private:
 	// Returns columns in first-seen document order so the inferred column order is deterministic.
 	static std::vector<ColumnAnalysis> IdentifyColumns(const std::vector<xmlNodePtr> &record_elements,
 	                                                   const XMLSchemaOptions &options);
+	static bool SampledIntegersFitDouble(const ColumnAnalysis &column, const XMLSchemaOptions &options);
 	static LogicalType InferColumnType(const ColumnAnalysis &column, int remaining_depth,
 	                                   const XMLSchemaOptions &options, std::string &winning_datetime_format);
 
