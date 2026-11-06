@@ -18,15 +18,16 @@ enum class XMLTier {
 };
 
 // One force_list entry. Steps are element names from outer to inner. A relative pattern (`a/b`)
-// is anchored at the record element. A descendant pattern (`//a/b`, or a bare name, which bind
-// rewrites to `//name`) matches at any depth.
+// is anchored at the record element. A descendant pattern (`//a/b`, or a bare name) matches at any
+// depth.
 struct ForceListPattern {
-	bool descendant;
+	bool descendant = false;
 	std::vector<std::string> steps;
 };
 
-// Parses the joined force_list union (`//a | b/c`). Throws BinderException on unsupported XPath.
-std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list);
+// Parses the force_list parameter (VARCHAR or LIST of VARCHAR). Throws BinderException on
+// unsupported XPath.
+std::vector<ForceListPattern> ParseForceList(const Value &value);
 
 // Configuration options for schema inference
 struct XMLSchemaOptions {
@@ -70,8 +71,7 @@ struct XMLSchemaOptions {
 	double array_threshold = 0.8;    // Minimum homogeneity for arrays (80%)
 	int32_t max_array_depth = 3;     // Maximum nested array depth
 	std::string record_element = ""; // XPath or tag name for elements that should be rows (e.g., "//item" or "item")
-	std::string force_list = "";     // Elements that should always be LIST type, joined as an XPath union
-	std::vector<ForceListPattern> force_list_patterns; // force_list parsed at bind
+	std::vector<ForceListPattern> force_list; // Elements that should always be LIST type
 
 	// Error handling
 	bool ignore_errors = false;         // Continue on parsing errors
@@ -184,7 +184,7 @@ struct ColumnAnalysis {
 	std::vector<xmlNodePtr> instances;  // All occurrences of this column across records
 	int occurrence_count;               // Total times this appears
 	bool repeats_in_record;             // True if any record has multiple instances
-	std::vector<std::string> ancestors; // Element names from the record's child down to this element's parent
+	std::vector<std::string> ancestors; // Record element, then each element down to this one's parent
 
 	ColumnAnalysis(const std::string &name, bool is_attribute = false)
 	    : name(name), is_attribute(is_attribute), occurrence_count(0), repeats_in_record(false) {

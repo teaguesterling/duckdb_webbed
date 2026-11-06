@@ -728,7 +728,7 @@ read_xml('pattern',
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference
 - **`record_element`**: XPath expression or tag name identifying which elements become table rows (e.g., `'item'` or `'//item'`)
-- **`force_list`**: Element names or paths that should always be inferred as LIST type, even if they appear only once (similar to xml_to_json). A bare name (`'tag'`) or `'//tag'` matches the element at any depth, including inside STRUCTs. A path such as `'sections/columns/items'` matches only that chain of child elements under the record element, and `'//columns/items'` matches the chain at any depth
+- **`force_list`**: Element names or paths that should always be inferred as LIST type, even if they appear only once. A bare name (`'tag'`) or `'//tag'` matches the element at any depth, including inside STRUCTs. A path such as `'sections/columns/items'` matches only that chain of child elements under the record element, and `'//columns/items'` matches the chain at any depth
 - **`auto_detect`**: Enable automatic schema detection and type inference
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)

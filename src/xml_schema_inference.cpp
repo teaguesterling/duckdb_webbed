@@ -172,7 +172,11 @@ std::vector<XMLColumnInfo> XMLSchemaInference::InferSchemaFromDocument(XMLDocRAI
 	auto column_list = IdentifyColumns(record_elements, options);
 
 	// Phase 3: Infer Type for each column
+	std::string record_local_name = StripNamespacePrefix((const char *)record_elements[0]->name);
 	for (auto &col_analysis : column_list) {
+		if (!options.force_list.empty()) {
+			col_analysis.ancestors.push_back(record_local_name);
+		}
 		std::string winning_fmt;
 		LogicalType col_type = InferColumnType(col_analysis, remaining_depth, options, winning_fmt);
 
@@ -374,61 +378,79 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 	return columns;
 }
 
-static std::string TrimWhitespace(const std::string &text) {
-	size_t first = text.find_first_not_of(" \t\n\r");
-	if (first == std::string::npos) {
-		return "";
+// Parses one force_list entry as the user wrote it. A bare name matches at any depth, as it did
+// before paths existed.
+static ForceListPattern ParseForceListEntry(const std::string &entry) {
+	ForceListPattern pattern;
+	std::string rest = entry;
+	if (StringUtil::StartsWith(rest, "//")) {
+		pattern.descendant = true;
+		rest = rest.substr(2);
+	} else if (StringUtil::StartsWith(rest, "./")) {
+		rest = rest.substr(2);
+	} else if (StringUtil::StartsWith(rest, "/")) {
+		throw BinderException("force_list path '%s' is absolute. Paths are relative to the record element, "
+		                      "e.g. 'parent/child', or use '//child' to match at any depth",
+		                      entry);
+	} else {
+		pattern.descendant = rest.find('/') == std::string::npos;
 	}
-	size_t last = text.find_last_not_of(" \t\n\r");
-	return text.substr(first, last - first + 1);
+	for (const auto &step : StringUtil::Split(rest, '/')) {
+		if (step.empty() || xmlValidateQName(reinterpret_cast<const xmlChar *>(step.c_str()), 0) != 0) {
+			throw BinderException("force_list path '%s' is not supported. Use element names separated by '/', "
+			                      "optionally prefixed with '//' to match at any depth",
+			                      entry);
+		}
+		pattern.steps.push_back(step);
+	}
+	// Split drops a trailing empty piece, so `a/` would otherwise pass as `a`
+	if (StringUtil::EndsWith(rest, "/") || rest.empty()) {
+		throw BinderException("force_list path '%s' is not supported. Use element names separated by '/', "
+		                      "optionally prefixed with '//' to match at any depth",
+		                      entry);
+	}
+	return pattern;
 }
 
-std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list_str) {
+std::vector<ForceListPattern> ParseForceList(const Value &value) {
+	std::vector<std::string> entries;
+	if (value.IsNull()) {
+		return {};
+	}
+	if (value.type().id() == LogicalTypeId::LIST) {
+		for (const auto &child : ListValue::GetChildren(value)) {
+			if (!child.IsNull() && child.type().id() == LogicalTypeId::VARCHAR) {
+				entries.push_back(StringValue::Get(child));
+			}
+		}
+	} else {
+		entries.push_back(value.ToString());
+	}
 	std::vector<ForceListPattern> patterns;
-	for (const auto &segment : StringUtil::Split(force_list_str, '|')) {
-		std::string expr = TrimWhitespace(segment);
-		if (expr.empty()) {
-			continue;
-		}
-		ForceListPattern pattern;
-		std::string rest = expr;
-		if (StringUtil::StartsWith(rest, "//")) {
-			pattern.descendant = true;
-			rest = rest.substr(2);
-		} else if (StringUtil::StartsWith(rest, "./")) {
-			pattern.descendant = false;
-			rest = rest.substr(2);
-		} else if (StringUtil::StartsWith(rest, "/")) {
-			throw BinderException("force_list path '%s' is absolute. Paths are relative to the record element, "
-			                      "e.g. 'parent/child', or use '//child' to match at any depth",
-			                      expr);
-		} else {
-			pattern.descendant = false;
-		}
-		size_t pos = 0;
-		while (true) {
-			size_t slash = rest.find('/', pos);
-			std::string step = rest.substr(pos, slash == std::string::npos ? std::string::npos : slash - pos);
-			if (step.empty() || step == "." || step == ".." ||
-			    step.find_first_of("[]@*()= \t\n\r") != std::string::npos) {
-				throw BinderException("force_list path '%s' is not supported. Use element names separated by '/', "
-				                      "optionally prefixed with '//' to match at any depth",
-				                      expr);
+	for (const auto &entry : entries) {
+		// An entry may itself be an XPath union (`//a | //b`)
+		for (auto piece : StringUtil::Split(entry, '|')) {
+			StringUtil::Trim(piece);
+			if (!piece.empty()) {
+				patterns.push_back(ParseForceListEntry(piece));
 			}
-			// Inference names elements by their local name in every namespaces mode
-			size_t colon = step.find(':');
-			pattern.steps.push_back(colon == std::string::npos ? step : step.substr(colon + 1));
-			if (slash == std::string::npos) {
-				break;
-			}
-			pos = slash + 1;
 		}
-		patterns.push_back(std::move(pattern));
 	}
 	return patterns;
 }
 
-// The element's path is its ancestors below the record element followed by its own name
+// Element names keep a namespace prefix in some modes and lose it in others, so a step matches the
+// name as written or by its local part
+static bool ForceListStepMatches(const std::string &step, const std::string &name) {
+	if (step == name) {
+		return true;
+	}
+	size_t colon = step.find(':');
+	return colon != std::string::npos && step.compare(colon + 1, std::string::npos, name) == 0;
+}
+
+// The element's path is its ancestors (the record element first) followed by its own name. A
+// relative pattern starts below the record element. A descendant pattern may include it.
 static bool MatchesForceList(const std::vector<ForceListPattern> &patterns, const std::vector<std::string> &ancestors,
                              const std::string &name) {
 	idx_t path_len = ancestors.size() + 1;
@@ -437,13 +459,13 @@ static bool MatchesForceList(const std::vector<ForceListPattern> &patterns, cons
 	};
 	for (const auto &pattern : patterns) {
 		idx_t steps = pattern.steps.size();
-		if (steps > path_len || (!pattern.descendant && steps != path_len)) {
+		if (steps > path_len || (!pattern.descendant && steps != path_len - 1)) {
 			continue;
 		}
 		idx_t offset = path_len - steps;
 		bool matched = true;
 		for (idx_t i = 0; i < steps && matched; i++) {
-			matched = pattern.steps[i] == path_at(offset + i);
+			matched = ForceListStepMatches(pattern.steps[i], path_at(offset + i));
 		}
 		if (matched) {
 			return true;
@@ -526,7 +548,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	// Check if this column is in force_list (should always be LIST type)
-	bool force_as_list = MatchesForceList(options.force_list_patterns, column.ancestors, column.name);
+	bool force_as_list =
+	    !options.force_list.empty() && MatchesForceList(options.force_list, column.ancestors, column.name);
 
 	// Check if all instances are leaf nodes (text only, no children and no attributes)
 	// Elements with attributes should be treated as complex (STRUCT), not leaf
@@ -672,8 +695,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			for (idx_t g = 0; g < children.names.size(); g++) {
 				const std::string &child_name = children.names[g];
 				ColumnAnalysis nested_col(child_name, false);
-				nested_col.ancestors = column.ancestors;
-				nested_col.ancestors.push_back(column.name);
+				if (!options.force_list.empty()) {
+					nested_col.ancestors = column.ancestors;
+					nested_col.ancestors.push_back(column.name);
+				}
 				nested_col.instances = std::move(children.nodes[g]);
 				nested_col.occurrence_count = children.max_counts[g];
 				nested_col.repeats_in_record = children.max_counts[g] > 1;
@@ -716,8 +741,10 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		for (idx_t g = 0; g < children.names.size(); g++) {
 			const std::string &child_name = children.names[g];
 			ColumnAnalysis nested_col(child_name, false);
-			nested_col.ancestors = column.ancestors;
-			nested_col.ancestors.push_back(column.name);
+			if (!options.force_list.empty()) {
+				nested_col.ancestors = column.ancestors;
+				nested_col.ancestors.push_back(column.name);
+			}
 			nested_col.instances = std::move(children.nodes[g]);
 			nested_col.occurrence_count = children.max_counts[g];
 			nested_col.repeats_in_record = children.max_counts[g] > 1;

@@ -124,6 +124,30 @@ SELECT typeof("a.b") FROM read_xml('test/xml/force_list_nested/names.xml', recor
 ----
 STRUCT("c-d" STRUCT("é" INTEGER))
 
+# Empty entries are ignored
+query I
+SELECT count(*) FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := ['fullName', '']);
+----
+3
+
+# Every bare name in a | union matches at any depth
+query T
+SELECT typeof(layoutSections) FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'fullName | layoutItems') LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[]))
+
+# A // path may name the record element, as in XPath
+query T
+SELECT typeof(layoutSections) FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '//Layout/layoutSections') LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)))[]
+
+# An undeclared prefix stays in the element name under namespaces := 'keep', and the step matches it as written
+query T
+SELECT typeof("sf:a") FROM read_xml('test/xml/force_list_nested/undeclared_prefix.xml', record_element := 'r', namespaces := 'keep', force_list := 'sf:a');
+----
+STRUCT(b INTEGER)[]
+
 # XPath beyond element-name steps is rejected
 statement error
 SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '/Layout/layoutSections');
@@ -154,5 +178,31 @@ is not supported
 # The check runs even when inference never reaches a nested element
 statement error
 SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', max_depth := 1, force_list := 'layoutSections[1]');
+----
+is not supported
+
+# Each step must be an XML name, and errors quote the entry as written
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'a[1]');
+----
+force_list path 'a[1]' is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'child::item');
+----
+is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'sf:');
+----
+is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'a,b');
+----
+is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'layoutSections/');
 ----
 is not supported
