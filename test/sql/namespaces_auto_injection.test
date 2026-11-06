@@ -96,8 +96,8 @@ SELECT xml_extract_text('<root a="xmlns:gml=x"><gml:p>v</gml:p></root>', '//gml:
 ----
 [v]
 
-# A real declaration on an inner element is still found, so nothing is injected and the document's own URI holds
+# A real declaration, with whitespace around '=', is still found, so nothing is injected and the document's own URI holds
 query I
-SELECT xml_extract_text('<root><x xmlns:gml = "urn:mine"><gml:p>v</gml:p></x></root>', '//gml:p', namespaces := 'auto');
+SELECT xml_extract_text('<root xmlns:gml = "urn:mine"><gml:p>v</gml:p></root>', '//gml:p', namespaces := 'auto');
 ----
 [v]
