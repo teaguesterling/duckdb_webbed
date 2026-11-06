@@ -1,0 +1,31 @@
+# name: test/sql/date_order_union_message.test
+# description: Issue #247. Two files that read a date column through different day/month orders raise at scan. The error must say that the value fits more than one format and point to datetime_format, not name the ISO format, which neither file uses.
+# group: [sql]
+
+require webbed
+
+# Each file alone reads as DATE. date_order_eu.xml settles on %d/%m/%Y; date_order_ambiguous.xml
+# fits both orders and takes the US default.
+query TT
+SELECT typeof(d), d FROM read_xml('test/xml/date_order_ambiguous.xml', record_element := 'i');
+----
+DATE	2024-05-06
+
+# The union keeps DATE with no format, and '05/06/2024' fits both orders. The error names both
+# formats and the option that settles it.
+statement error
+SELECT d FROM read_xml(['test/xml/date_order_eu.xml', 'test/xml/date_order_ambiguous.xml'], record_element := 'i');
+----
+<REGEX>:.*'05/06/2024'.*%m/%d/%Y.*%d/%m/%Y.*datetime_format.*
+
+statement error
+SELECT d FROM read_xml(['test/xml/date_order_eu.xml', 'test/xml/date_order_ambiguous.xml'], record_element := 'i', streaming := true, maximum_file_size := 1);
+----
+<REGEX>:.*'05/06/2024'.*%m/%d/%Y.*%d/%m/%Y.*datetime_format.*
+
+# The advice works: one declared format reads both files.
+query T
+SELECT d FROM read_xml(['test/xml/date_order_eu.xml', 'test/xml/date_order_ambiguous.xml'], record_element := 'i', datetime_format := '%d/%m/%Y') ORDER BY d;
+----
+2024-01-13
+2024-06-05

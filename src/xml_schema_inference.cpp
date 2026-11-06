@@ -1227,10 +1227,14 @@ static const std::vector<std::string> &EffectiveDatetimeCandidates(const XMLSche
 // A value arrives here with no format whenever none was ever recorded: InferColumnType computes a
 // nested field's winning format and discards it, and LIST elements never carried one. Only
 // consulted after default parsing has failed, so a value that already parsed keeps its meaning.
+// When two candidates disagree, ambiguous_formats (if given) receives them, so the caller's error can
+// name the formats instead of the ISO form neither one is (issue #247).
 static bool TryParseTemporalWithCandidates(const std::string &text, const LogicalType &target_type,
-                                           const XMLSchemaOptions &options, Value &result) {
+                                           const XMLSchemaOptions &options, Value &result,
+                                           std::string *ambiguous_formats = nullptr) {
 	bool found = false;
 	Value agreed;
+	std::string agreed_format;
 	for (const auto &format : EffectiveDatetimeCandidates(options)) {
 		StrpTimeFormat strp_format;
 		if (!StrTimeFormat::ParseFormatSpecifier(format, strp_format).empty()) {
@@ -1285,11 +1289,15 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 
 		if (!found) {
 			agreed = parsed;
+			agreed_format = format;
 			found = true;
 		} else if (!(agreed == parsed)) {
 			// Two candidates read the same text as different instants. Inference could settle this
 			// by eliminating across the whole column; from a single value we cannot. Decline rather
 			// than guess, so the caller surfaces its conversion error instead of a wrong date.
+			if (ambiguous_formats) {
+				*ambiguous_formats = "'" + agreed_format + "' and '" + format + "'";
+			}
 			return false;
 		}
 	}
@@ -1297,6 +1305,18 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 		result = agreed;
 	}
 	return found;
+}
+
+// The value fits two candidate formats that read it differently, and no format was recorded for its
+// column: files in a union inferred different day/month orders, or the column is nested.
+static void ThrowIfAmbiguousTemporal(const std::string &text, const LogicalType &target_type,
+                                     const std::string &ambiguous_formats) {
+	if (ambiguous_formats.empty()) {
+		return;
+	}
+	throw ConversionException("Could not read '%s' as %s: it fits both %s, which read it differently. Supply "
+	                          "datetime_format to choose one",
+	                          text, target_type.ToString(), ambiguous_formats);
 }
 
 // Split a trailing UTC designator ('Z', or 'UTC' with optional leading whitespace) off a time value.
@@ -1373,7 +1393,10 @@ static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
 // set, and is accepted-and-ignored for TIMESTAMP on both lines. Narrowing that would change
 // behaviour well beyond the defect, so this inspects the name only. UTC is allowed because it names
 // a zero offset, so the bare timestamp is the same instant.
-static void RejectUnresolvedTimezoneName(const std::string &text) {
+//
+// DuckDB's TIMESTAMPTZ cast resolves names such as 'EST' through ICU, but this function has no client
+// context to reach ICU's cast. For TIMESTAMPTZ the error says so, and gives the cast route (issue #242).
+static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalType &target_type) {
 	timestamp_t parsed;
 	bool has_offset = false;
 	string_t tz(nullptr, 0);
@@ -1388,6 +1411,13 @@ static void RejectUnresolvedTimezoneName(const std::string &text) {
 	const auto tz_name = tz.GetString();
 	if (StringUtil::CIEquals(tz_name, "UTC")) {
 		return;
+	}
+	if (target_type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+		throw ConversionException(
+		    "Could not read '%s' as TIMESTAMPTZ: read_xml cannot resolve the time zone name '%s'. "
+		    "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ, which "
+		    "resolves zone names through ICU",
+		    text, tz_name);
 	}
 	throw ConversionException("Could not read '%s' as a timestamp without discarding its '%s' suffix, which is not a "
 	                          "resolvable time zone. Supply datetime_format if it is a meridiem marker",
@@ -2594,9 +2624,11 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				return Value::DATE(Date::FromString(text));
 			} catch (...) {
 				Value fallback;
-				if (TryParseTemporalWithCandidates(text, target_type, options, fallback)) {
+				std::string ambiguous;
+				if (TryParseTemporalWithCandidates(text, target_type, options, fallback, &ambiguous)) {
 					return fallback;
 				}
+				ThrowIfAmbiguousTemporal(text, target_type, ambiguous);
 				throw;
 			}
 		}
@@ -2612,13 +2644,15 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
-				RejectUnresolvedTimezoneName(text);
+				RejectUnresolvedTimezoneName(text, target_type);
 				return Value::TIMESTAMP(Timestamp::FromString(text, false));
 			} catch (...) {
 				Value fallback;
-				if (TryParseTemporalWithCandidates(text, target_type, options, fallback)) {
+				std::string ambiguous;
+				if (TryParseTemporalWithCandidates(text, target_type, options, fallback, &ambiguous)) {
 					return fallback;
 				}
+				ThrowIfAmbiguousTemporal(text, target_type, ambiguous);
 				throw;
 			}
 		}
@@ -2635,14 +2669,16 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
-				RejectUnresolvedTimezoneName(text);
+				RejectUnresolvedTimezoneName(text, target_type);
 				// Apply a numeric offset, as DuckDB's cast does. Zoneless text reads as UTC.
 				return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, true)));
 			} catch (...) {
 				Value fallback;
-				if (TryParseTemporalWithCandidates(text, target_type, options, fallback)) {
+				std::string ambiguous;
+				if (TryParseTemporalWithCandidates(text, target_type, options, fallback, &ambiguous)) {
 					return fallback;
 				}
+				ThrowIfAmbiguousTemporal(text, target_type, ambiguous);
 				throw;
 			}
 		}
