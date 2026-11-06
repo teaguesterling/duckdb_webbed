@@ -529,6 +529,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentObjectsBind(ClientConte
                                                                      vector<LogicalType> &return_types,
                                                                      vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 	result->parse_mode = mode;
 
 	// Get file pattern(s) from first argument
@@ -633,6 +634,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
                                                               vector<LogicalType> &return_types,
                                                               vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLReadFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 	result->parse_mode = mode;
 
 	const char *function_name = (mode == ParseMode::HTML) ? "read_html" : "read_xml";
@@ -1326,6 +1328,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLObjectsBind(ClientContext &c
                                                                 vector<LogicalType> &return_types,
                                                                 vector<CompatName> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 
 	// Get file pattern(s) from first argument
 	if (input.inputs.empty()) {
@@ -1484,6 +1487,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<CompatName> &names) {
 	auto result = make_uniq<XMLReadFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 	result->parse_mode = ParseMode::XML;
 
 	// Get file pattern(s) from first argument
@@ -1850,6 +1854,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentObjectsBind(ClientCont
                                                                       vector<LogicalType> &return_types,
                                                                       vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
+	RejectNullBooleanParameters(input.named_parameters);
 	result->parse_mode = mode;
 
 	const char *function_name = (mode == ParseMode::HTML) ? "parse_html_objects" : "parse_xml_objects";
@@ -1940,6 +1945,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
                                                                vector<LogicalType> &return_types,
                                                                vector<CompatName> &names, ParseMode mode) {
 	auto result = make_uniq<XMLParseData>();
+	RejectNullBooleanParameters(input.named_parameters);
 	result->parse_mode = mode;
 
 	const char *function_name = (mode == ParseMode::HTML) ? "parse_html" : "parse_xml";
@@ -2684,6 +2690,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::HTMLExtractTablesBind(ClientContext
                                                                    vector<LogicalType> &return_types,
                                                                    vector<CompatName> &names) {
 	auto result = make_uniq<HTMLTableExtractionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 
 	// Get HTML content from first argument
 	if (input.inputs.empty()) {

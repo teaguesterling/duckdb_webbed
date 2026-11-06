@@ -57,6 +57,7 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/table_function.hpp"
 
@@ -157,6 +158,19 @@ inline const Value &NamedParamAt(const MAP &params, const char *name) {
 		throw InvalidInputException("named parameter '%s' was not provided", name);
 	}
 	return *value;
+}
+
+//! Reject a NULL boolean parameter at bind, as read_csv does. Reading it with GetValue<bool>()
+//! fails an internal assertion instead (issue #244). Both lines cast a named value to its declared
+//! type, so a NULL passed to a BOOLEAN parameter arrives typed BOOLEAN.
+template <class MAP>
+inline void RejectNullBooleanParameters(const MAP &params) {
+	for (const auto &kv : params) {
+		if (kv.second.IsNull() && kv.second.type().id() == LogicalTypeId::BOOLEAN) {
+			throw BinderException("\"%s\" expects a non-null boolean value (e.g. TRUE or 1)",
+			                      static_cast<const string &>(kv.first));
+		}
+	}
 }
 
 //! Whether the call provided `name` at all.

@@ -2320,6 +2320,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
                                                                 vector<LogicalType> &return_types,
                                                                 vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksReadFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 
 	if (input.inputs.empty()) {
 		throw InvalidInputException(
@@ -2591,6 +2592,7 @@ unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &
                                                                  vector<LogicalType> &return_types,
                                                                  vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksParseFunctionData>();
+	RejectNullBooleanParameters(input.named_parameters);
 
 	if (input.inputs.empty()) {
 		throw InvalidInputException("parse_html_blocks requires HTML content as first argument");
