@@ -1,0 +1,46 @@
+# name: test/sql/null_boolean_parameters.test
+# description: Issue #244. A NULL boolean named parameter raised an INTERNAL assertion at bind. It must raise a binder error that names the parameter, as read_csv does.
+# group: [sql]
+
+require webbed
+
+statement error
+SELECT * FROM read_html_blocks('test/html/complex.html', ignore_errors := NULL);
+----
+"ignore_errors" expects a non-null boolean value
+
+statement error
+SELECT * FROM parse_html_blocks('<p>x</p>', ignore_errors := NULL);
+----
+"ignore_errors" expects a non-null boolean value
+
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', ignore_errors := NULL);
+----
+"ignore_errors" expects a non-null boolean value
+
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', streaming := NULL);
+----
+"streaming" expects a non-null boolean value
+
+statement error
+SELECT * FROM read_xml('test/xml/simple.xml', all_varchar := NULL);
+----
+"all_varchar" expects a non-null boolean value
+
+statement error
+SELECT * FROM read_xml_objects('test/xml/simple.xml', include_filename := NULL);
+----
+"include_filename" expects a non-null boolean value
+
+statement error
+SELECT * FROM parse_xml('<r><i>1</i></r>', auto_detect := NULL);
+----
+"auto_detect" expects a non-null boolean value
+
+# The connection still works after each error.
+query I
+SELECT count(*) FROM read_html_blocks('test/html/complex.html', ignore_errors := false) LIMIT 1;
+----
+<REGEX>:[1-9][0-9]*
