@@ -42,3 +42,26 @@ query I
 SELECT html_unescape(repeat('<div>', 300) || 'x&amp;' || repeat('</div>', 300)) = repeat('<div>', 300) || 'x&' || repeat('</div>', 300);
 ----
 true
+
+# The input is one text node, so it is decoded in chunks under libxml2's 10,000,000-byte text limit.
+# A 17,600,000-byte input with tags used to raise that limit's error.
+query I
+SELECT length(html_unescape(repeat('<p>abc&amp;</p>', 1100000)));
+----
+12100000
+
+# A chunk boundary does not split an entity, a CR LF pair or a UTF-8 character
+query I
+SELECT html_unescape(repeat('a', 999998) || '&amp;b') = repeat('a', 999998) || '&b';
+----
+true
+
+query I
+SELECT html_unescape(repeat('a', 999999) || chr(13) || chr(10) || 'b') = repeat('a', 999999) || chr(10) || 'b';
+----
+true
+
+query I
+SELECT html_unescape(repeat('a', 999999) || 'é' || 'b') = repeat('a', 999999) || 'éb';
+----
+true

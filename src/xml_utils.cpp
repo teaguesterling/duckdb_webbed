@@ -3387,58 +3387,76 @@ std::vector<std::string> XMLUtils::ExtractHTMLAllTextByXPath(const std::string &
 // prefixed elements like "svg:circle" are treated as literal names with colons.
 // Users should use name()="prefix:element" XPath predicates for HTML content.
 
+// Decode the entities in text with libxml2's HTML parser, wrapped in a minimal document. Each '<' goes in as "&lt;", so
+// the parser sees only text and entities: a tag in the input stays as text, and the text after it is kept. False when
+// the parse produced no body.
+static bool DecodeHTMLEntities(const char *text, size_t len, std::string &out) {
+	std::string wrapped = "<html><body>";
+	wrapped.reserve(len + 32);
+	for (size_t i = 0; i < len; i++) {
+		if (text[i] == '<') {
+			wrapped += "&lt;";
+		} else {
+			wrapped += text[i];
+		}
+	}
+	wrapped += "</body></html>";
+
+	// A depth or other limit error propagates
+	XMLDocPtr doc = XMLUtils::ParseHTMLDocument(wrapped.data(), wrapped.size(), HTMLInputEncoding::DECODED_TEXT);
+	if (!doc) {
+		return false;
+	}
+	xmlNodePtr root = xmlDocGetRootElement(doc.get());
+	if (!root) {
+		return false;
+	}
+	for (xmlNodePtr child = root->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, BAD_CAST "body") == 0) {
+			// Get content which has entities decoded (may be empty if content is empty - this is correct)
+			XMLCharPtr content(xmlNodeGetContent(child));
+			if (content) {
+				out += reinterpret_cast<const char *>(content.get());
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 std::string XMLUtils::HTMLUnescape(const std::string &html_str) {
 	if (html_str.empty()) {
 		return html_str;
 	}
 
-	// Use libxml2's HTML parser to decode entities
-	// Wrap the string in a minimal HTML document to parse it. Each '<' goes in as "&lt;", so the parser sees only text
-	// and entities: a tag in the input stays as text, and the text after it is kept.
-	std::string wrapped = "<html><body>";
-	wrapped.reserve(html_str.size() + 32);
-	for (char c : html_str) {
-		if (c == '<') {
-			wrapped += "&lt;";
-		} else {
-			wrapped += c;
-		}
-	}
-	wrapped += "</body></html>";
-
-	// A depth or other limit error propagates. Only a parse that produced no document falls back to the input.
-	XMLDocPtr doc = ParseHTMLDocument(wrapped.data(), wrapped.size(), HTMLInputEncoding::DECODED_TEXT);
-	if (!doc) {
-		return html_str;
-	}
-
-	// Extract text content from body element
-	xmlNodePtr root = xmlDocGetRootElement(doc.get());
+	// The input is one text node, and libxml2 rejects a text node over 10,000,000 bytes, so decode it in chunks. Even a
+	// chunk of only '<' stays under the limit after escaping. A chunk ends just before an '&' when one is near its end,
+	// so no entity is split, and never inside a UTF-8 character or a CR LF pair.
+	const size_t chunk_size = 1000000;
 	std::string result;
-
-	if (root) {
-		// Find body element
-		xmlNodePtr body = nullptr;
-		for (xmlNodePtr child = root->children; child; child = child->next) {
-			if (child->type == XML_ELEMENT_NODE && xmlStrcmp(child->name, BAD_CAST "body") == 0) {
-				body = child;
-				break;
+	result.reserve(html_str.size());
+	size_t start = 0;
+	while (start < html_str.size()) {
+		size_t split = html_str.size();
+		if (html_str.size() - start > chunk_size) {
+			split = start + chunk_size;
+			size_t amp = html_str.rfind('&', split);
+			if (amp != std::string::npos && amp > start + chunk_size / 2) {
+				split = amp;
+			} else {
+				while (split > start + 1 && ((static_cast<unsigned char>(html_str[split]) & 0xC0) == 0x80 ||
+				                             (html_str[split - 1] == '\r' && html_str[split] == '\n'))) {
+					split--;
+				}
 			}
 		}
-
-		if (body) {
-			// Get content which has entities decoded
-			XMLCharPtr content(xmlNodeGetContent(body));
-			if (content) {
-				result = std::string(reinterpret_cast<const char *>(content.get()));
-			}
-			// Return decoded result (may be empty if content is empty - this is correct)
-			return result;
+		if (!DecodeHTMLEntities(html_str.data() + start, split - start, result)) {
+			// Only return original string if parsing failed (body not found)
+			return html_str;
 		}
+		start = split;
 	}
-
-	// Only return original string if parsing failed (body not found)
-	return html_str;
+	return result;
 }
 
 std::string XMLUtils::HTMLEscape(const std::string &text) {
