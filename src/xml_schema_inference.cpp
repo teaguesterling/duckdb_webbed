@@ -424,7 +424,9 @@ static std::vector<ForceListPattern> ParseForceListPatterns(const std::string &f
 				                      "optionally prefixed with '//' to match at any depth",
 				                      expr);
 			}
-			pattern.steps.push_back(step);
+			// Inference names elements by their local name in every namespaces mode
+			size_t colon = step.find(':');
+			pattern.steps.push_back(colon == std::string::npos ? step : step.substr(colon + 1));
 			if (slash == std::string::npos) {
 				break;
 			}

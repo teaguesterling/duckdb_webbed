@@ -106,6 +106,24 @@ LIMIT 1;
 ----
 STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)))	STRUCT(layoutItems STRUCT(field VARCHAR))
 
+# XML names can't contain /, so steps need no escaping. Steps keep ., -, and non-ASCII characters
+query T
+SELECT typeof("a.b") FROM read_xml('test/xml/force_list_nested/names.xml', record_element := 'r', force_list := 'a.b/c-d/é') LIMIT 1;
+----
+STRUCT("c-d" STRUCT("é" INTEGER[]))
+
+# Inference names elements by their local name, so a namespace prefix on a step is dropped
+query T
+SELECT typeof("a.b") FROM read_xml('test/xml/force_list_nested/names.xml', record_element := 'r', namespaces := 'keep', force_list := 'sf:a.b/c-d') LIMIT 1;
+----
+STRUCT("c-d" STRUCT("é" INTEGER)[])
+
+# Matching is case-sensitive, like XML names
+query T
+SELECT typeof("a.b") FROM read_xml('test/xml/force_list_nested/names.xml', record_element := 'r', force_list := 'A.B/c-d') LIMIT 1;
+----
+STRUCT("c-d" STRUCT("é" INTEGER))
+
 # XPath beyond element-name steps is rejected
 statement error
 SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '/Layout/layoutSections');

@@ -133,6 +133,10 @@ A forced element that is missing from a record reads as NULL, at the top level a
                       'layoutSections/layoutColumns/layoutItems']);
    -- layoutSections STRUCT(..., layoutColumns STRUCT(layoutItems STRUCT(...)[])[])[]
 
+XML names can't contain ``/``, so steps need no escaping. A step may hold any other name
+character, such as ``.``, ``-``, or non-ASCII letters. Matching is case-sensitive. A namespace
+prefix on a step is dropped, because inference names elements by their local name.
+
 Predicates (``[...]``), attributes (``@``), wildcards (``*``), ``..``, ``//`` within a path, and
 absolute paths (``/Layout/...``) are rejected with an error.
 
