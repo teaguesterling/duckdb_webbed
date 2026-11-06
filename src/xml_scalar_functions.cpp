@@ -1122,51 +1122,28 @@ void XMLScalarFunctions::JSONToXMLFunction(DataChunk &args, ExpressionState &sta
 	});
 }
 
-void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &input_vector = args.data[0];
+// Convert `count` values of input_vector into result, naming scalar/list/struct elements node_name.
+static void ConvertValuesToXML(Vector &input_vector, idx_t count, const std::string &default_node_name,
+                               Vector &result) {
 	auto &input_type = input_vector.GetType();
-
-	// Type debugging (can be removed in production)
-	// printf("DEBUG to_xml: input_type=%s, id=%d, has_alias=%s, alias=%s\n",
-	//	input_type.ToString().c_str(),
-	//	(int)input_type.id(),
-	//	input_type.HasAlias() ? "true" : "false",
-	//	input_type.HasAlias() ? input_type.GetAlias().c_str() : "none");
-
-	// Get node name (default "xml" if not provided)
-	std::string default_node_name = "xml";
-	if (args.ColumnCount() == 2) {
-		// Node name provided as second argument - for now, assume it's constant
-		// TODO: Handle variable node names per row
-		auto &node_name_vector = args.data[1];
-		if (node_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-			auto node_name_data = ConstantVector::GetData<string_t>(node_name_vector);
-			if (!ConstantVector::IsNull(node_name_vector)) {
-				default_node_name = node_name_data->GetString();
-			}
-		}
-	}
-	// The node name becomes an element name; reject any that would inject markup into the
-	// trusted xml-typed output (e.g. to_xml(v, 'a><evil')).
-	XMLUtils::ValidateXMLElementName(default_node_name);
 
 	// Apply our type hierarchy
 	if (XMLTypes::IsXMLFragmentType(input_type)) {
 		// XMLFragment → Insert verbatim
-		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t input) {
+		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, count, [&](string_t input) {
 			return StringVector::AddString(result, input.GetString());
 		});
 	} else if (XMLTypes::IsXMLType(input_type)) {
 		// XML → Insert verbatim
-		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t input) {
+		UnaryExecutor::Execute<string_t, string_t>(input_vector, result, count, [&](string_t input) {
 			return StringVector::AddString(result, input.GetString());
 		});
 	} else if (input_type.id() == LogicalTypeId::LIST) {
 		// LIST → Recursive conversion
-		XMLUtils::ConvertListToXML(input_vector, result, args.size(), default_node_name);
+		XMLUtils::ConvertListToXML(input_vector, result, count, default_node_name);
 	} else if (input_type.id() == LogicalTypeId::STRUCT) {
 		// STRUCT → Recursive conversion
-		XMLUtils::ConvertStructToXML(input_vector, result, args.size(), default_node_name);
+		XMLUtils::ConvertStructToXML(input_vector, result, count, default_node_name);
 	} else {
 		// Check if this is an explicit JSON type (has JSON alias)
 		bool is_json_type = false;
@@ -1182,14 +1159,14 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 
 		if (is_json_type) {
 			// JSON → Structural conversion (same as JSON::XML casting)
-			UnaryExecutor::Execute<string_t, string_t>(input_vector, result, args.size(), [&](string_t json_input) {
+			UnaryExecutor::Execute<string_t, string_t>(input_vector, result, count, [&](string_t json_input) {
 				std::string json_str = json_input.GetString();
 				std::string xml_result = XMLUtils::JSONToXML(json_str);
 				return StringVector::AddString(result, xml_result);
 			});
 		} else {
 			// STRING/Other → Convert to string representation, then to XML
-			for (idx_t i = 0; i < args.size(); i++) {
+			for (idx_t i = 0; i < count; i++) {
 				Value input_value = input_vector.GetValue(i);
 				std::string input_str;
 
@@ -1214,6 +1191,37 @@ void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &st
 				}
 			}
 		}
+	}
+}
+
+void XMLScalarFunctions::ValueToXMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &input_vector = args.data[0];
+
+	// One-argument form, or a constant name: convert the whole chunk with one name (default "xml")
+	if (args.ColumnCount() < 2 || args.data[1].GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		std::string node_name = "xml";
+		if (args.ColumnCount() == 2 && !ConstantVector::IsNull(args.data[1])) {
+			node_name = ConstantVector::GetData<string_t>(args.data[1])->GetString();
+		}
+		// The node name becomes an element name; reject any that would inject markup into the
+		// trusted xml-typed output (e.g. to_xml(v, 'a><evil')).
+		XMLUtils::ValidateXMLElementName(node_name);
+		ConvertValuesToXML(input_vector, args.size(), node_name, result);
+		return;
+	}
+
+	// A name per row (e.g. a column): the converters take one name, so convert each row on its own.
+	// A NULL name falls back to "xml", as a NULL constant name does.
+	auto &name_vector = args.data[1];
+	Vector row_input(input_vector.GetType(), 1);
+	Vector row_result(result.GetType(), 1);
+	for (idx_t i = 0; i < args.size(); i++) {
+		Value name_value = name_vector.GetValue(i);
+		std::string node_name = name_value.IsNull() ? "xml" : name_value.GetValue<std::string>();
+		XMLUtils::ValidateXMLElementName(node_name);
+		row_input.SetValue(0, input_vector.GetValue(i));
+		ConvertValuesToXML(row_input, 1, node_name, row_result);
+		result.SetValue(i, row_result.GetValue(0));
 	}
 }
 

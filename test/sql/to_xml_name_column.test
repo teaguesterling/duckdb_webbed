@@ -1,0 +1,45 @@
+# name: test/sql/to_xml_name_column.test
+# description: to_xml(value, name) must use each row's name when the name is a column, not fall back to <xml>
+# group: [sql]
+
+require webbed
+
+# Scalars: every row gets its own element name; a NULL name falls back to "xml" like a NULL constant
+query II
+SELECT v, contains(to_xml(v, n), e) FROM (VALUES (1, 'a', '<a>1</a>'), (2, 'b', '<b>2</b>'), (3, NULL, '<xml>3</xml>')) t(v, n, e) ORDER BY v;
+----
+1	true
+2	true
+3	true
+
+# LIST and STRUCT values take the row's name too (lists name the wrapper <name>_list)
+query I
+SELECT contains(to_xml(v, n), e) FROM (VALUES ([1, 2], 'p', '<p_list><p>1</p><p>2</p></p_list>'), ([3], 'q', '<q_list><q>3</q></q_list>')) t(v, n, e);
+----
+true
+true
+
+query I
+SELECT contains(to_xml(v, n), e) FROM (VALUES ({'k': 1}, 'r', '<r><k>1</k></r>'), ({'k': 2}, 's', '<s><k>2</k></s>')) t(v, n, e);
+----
+true
+true
+
+# A NULL value stays NULL whatever its name
+query I
+SELECT to_xml(v, n) IS NULL FROM (VALUES (NULL::INT, 'a'), (5, 'b')) t(v, n) ORDER BY v NULLS FIRST;
+----
+true
+false
+
+# More rows than one vector: each row still gets its own name
+query I
+SELECT count(*) FROM (SELECT i, to_xml(i, 'n' || i) AS x FROM range(5000) r(i)) WHERE contains(x, '<n' || i || '>' || i || '</n' || i || '>');
+----
+5000
+
+# A per-row name is validated like a constant one: no markup injection through a column
+statement error
+SELECT to_xml(v, n) FROM (VALUES (1, 'ok'), (2, 'a><evil/><b')) t(v, n);
+----
+Invalid XML element name
