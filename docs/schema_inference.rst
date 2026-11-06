@@ -117,8 +117,8 @@ The extension automatically detects these types:
      - Whole numbers, written the way DuckDB prints them
      - ``42``, ``-100``, ``999999``
    * - DOUBLE
-     - Decimal numbers, written the way DuckDB prints them
-     - ``3.14``, ``-0.5``, ``1.0``
+     - Decimal numbers in positional notation, whose digits a DOUBLE gives back exactly
+     - ``3.14``, ``-0.5``, ``1.0``, ``0.00001``
    * - DATE
      - Date formats (ISO, US, EU)
      - ``2024-01-15``, ``03/15/2024``
