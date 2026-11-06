@@ -179,12 +179,27 @@ WHERE id = 60;
 ----
 7	1.1
 
-# Streaming with sample_size := -1 widens a top-level column at the verify pass, but not a nested
-# leaf, which then raises. The error doesn't advise the sample_size := -1 already set.
+# Streaming with sample_size := -1 widens a nested leaf at the verify pass too, as DOM types it,
+# and keeps the spelling (#224).
 statement ok
 COPY (SELECT '<r>' || repeat('<i><n><x>1.5</x></n></i>', 60) || '<i><n><x>1.10</x></n></i></r>') TO '{TEST_DIR}/nested_late.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
 
-statement error
-SELECT * FROM read_xml('{TEST_DIR}/nested_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1);
+query II
+SELECT typeof(n), max(n.x) FROM read_xml('{TEST_DIR}/nested_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1) GROUP BY ALL;
 ----
-value '1.10' does not match column type DOUBLE. Set all_varchar := true
+STRUCT(x VARCHAR)	1.5
+
+query I
+SELECT count(*) FROM read_xml('{TEST_DIR}/nested_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1) WHERE n.x = '1.10';
+----
+1
+
+# The verify pass doesn't widen BOOLEAN, so a late non-boolean still raises. The error doesn't
+# advise the sample_size := -1 already set.
+statement ok
+COPY (SELECT '<r>' || repeat('<i><b>true</b></i>', 60) || '<i><b>maybe</b></i></r>') TO '{TEST_DIR}/bool_late.xml' (HEADER false, QUOTE '', ESCAPE '', DELIMITER '\x01');
+
+statement error
+SELECT * FROM read_xml('{TEST_DIR}/bool_late.xml', record_element := 'i', maximum_file_size := 16, streaming := true, sample_size := -1);
+----
+value 'maybe' does not match column type BOOLEAN. Set all_varchar := true, or set ignore_errors := true to skip such values. (issue #102)
