@@ -51,6 +51,9 @@ Fixes from the pre-release scan.
 - ``read_xml``: a record no longer fills a column with its own name beside other columns,
   inferred or declared. A record without that child reads NULL. A one-column schema named
   after the record still reads the record (#235).
+- ``read_xml`` and ``parse_xml``: a column whose name differs from another only in case, such as
+  ``<name>`` beside ``<Name>``, is renamed ``name_1``, as ``read_csv`` does. The read used to fail
+  with a duplicate-column error (#248).
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
 - ``numeric_inference := 'lenient'`` types numbers by DuckDB's cast, as in v2.14.1 and earlier,
