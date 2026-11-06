@@ -2253,10 +2253,13 @@ idx_t XMLSchemaInference::WriteRecordWithSchema(xmlNodePtr record, const std::ve
 		bool written = false;
 
 		// First check if it's an attribute (strip attr_prefix in 'prefixed' mode). attr_mode='discard'
-		// ignores attributes, so a column can only come from an element.
+		// ignores attributes, so a column can only come from an element. In 'prefixed' mode only a
+		// prefixed column names an attribute: <row id="7"><id>5</id> has both @id = 7 and id = 5.
 		std::string attr_name = AttributeNameFromColumn(column_name, options);
-		xmlChar *attr_value =
-		    options.attr_mode == "discard" ? nullptr : xmlGetProp(record, (const xmlChar *)attr_name.c_str());
+		bool may_be_attribute =
+		    options.attr_mode != "discard" &&
+		    !(options.attr_mode == "prefixed" && !options.attr_prefix.empty() && attr_name == column_name);
+		xmlChar *attr_value = may_be_attribute ? xmlGetProp(record, (const xmlChar *)attr_name.c_str()) : nullptr;
 		if (attr_value) {
 			std::string str_value = (const char *)attr_value;
 			xmlFree(attr_value);
