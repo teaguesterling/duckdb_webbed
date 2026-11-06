@@ -491,10 +491,16 @@ SELECT typeof(v) FROM parse_xml('<r><i><v>7</v></i></r>', auto_type_candidates :
 ----
 BIGINT
 
-# Dates beside timestamps read as TIMESTAMP in one file, as in a union of a date file and a
-# timestamp file. Without TIMESTAMP as a candidate they stay VARCHAR.
+# Dates beside timestamps in one file stay VARCHAR while DATE is a candidate, as in read_csv. With DATE
+# excluded they read as TIMESTAMP, as in read_csv. Without TIMESTAMP as a candidate they stay VARCHAR.
 query TT
 SELECT typeof(v), v FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-01-02 10:00:00</v></i></r>') ORDER BY v;
+----
+VARCHAR	2024-01-01
+VARCHAR	2024-01-02 10:00:00
+
+query TT
+SELECT typeof(v), v FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-01-02 10:00:00</v></i></r>', auto_type_candidates := ['TIMESTAMP']) ORDER BY v;
 ----
 TIMESTAMP	2024-01-01 00:00:00
 TIMESTAMP	2024-01-02 10:00:00

@@ -51,6 +51,11 @@ Fixes from the pre-release scan.
 - ``read_xml``: a record no longer fills a column with its own name beside other columns,
   inferred or declared. A record without that child reads NULL. A one-column schema named
   after the record still reads the record (#235).
+- ``read_xml``: a ``TIMESTAMPTZ`` column with no recorded format, declared or nested, applies a
+  numeric UTC offset. ``10:00:00+05`` used to read as 10:00 UTC.
+- ``read_xml``: dates beside timestamps in one file stay VARCHAR while ``DATE`` is a candidate,
+  and read as TIMESTAMP when ``auto_type_candidates`` excludes it. Timestamps in two formats
+  read as TIMESTAMP. This matches ``read_csv``.
 - ``html_unescape`` decodes entities and leaves all other text, tags included. It used to drop
   tags, and the text after ``</body>`` (#231).
 - ``read_xml`` and ``parse_xml``: a column whose name differs from another only in case, such as
