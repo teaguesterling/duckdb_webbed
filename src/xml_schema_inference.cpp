@@ -374,51 +374,89 @@ std::vector<ColumnAnalysis> XMLSchemaInference::IdentifyColumns(const std::vecto
 	return columns;
 }
 
-// Helper: Parse force_list XPath string into set of element names
-static std::unordered_set<std::string> ParseForceListElements(const std::string &force_list_str) {
-	std::unordered_set<std::string> elements;
-	if (force_list_str.empty()) {
-		return elements;
+// One force_list entry. Steps are element names from outer to inner. A relative pattern (`a/b`)
+// is anchored at the record element. A descendant pattern (`//a/b`, or a bare name, which bind
+// rewrites to `//name`) matches at any depth.
+struct ForceListPattern {
+	bool descendant;
+	std::vector<std::string> steps;
+};
+
+static std::string TrimWhitespace(const std::string &text) {
+	size_t first = text.find_first_not_of(" \t\n\r");
+	if (first == std::string::npos) {
+		return "";
 	}
+	size_t last = text.find_last_not_of(" \t\n\r");
+	return text.substr(first, last - first + 1);
+}
 
-	// force_list can be:
-	// - "//name" - single element
-	// - "//name | //item" - multiple elements joined with |
-	// Parse each XPath expression and extract the element name
-	size_t start = 0;
-	while (start < force_list_str.size()) {
-		// Find the next | separator or end of string
-		size_t end = force_list_str.find('|', start);
-		if (end == std::string::npos) {
-			end = force_list_str.size();
+// Bind joins the force_list entries into one XPath union (`//a | b/c`)
+static std::vector<ForceListPattern> ParseForceListPatterns(const std::string &force_list_str) {
+	std::vector<ForceListPattern> patterns;
+	for (const auto &segment : StringUtil::Split(force_list_str, '|')) {
+		std::string expr = TrimWhitespace(segment);
+		if (expr.empty()) {
+			continue;
 		}
-
-		// Extract this XPath segment and trim whitespace
-		std::string xpath_segment = force_list_str.substr(start, end - start);
-		// Trim leading/trailing whitespace
-		size_t first = xpath_segment.find_first_not_of(" \t\n\r");
-		if (first != std::string::npos) {
-			size_t last = xpath_segment.find_last_not_of(" \t\n\r");
-			xpath_segment = xpath_segment.substr(first, last - first + 1);
-
-			// Extract element name from XPath (e.g., "//name" -> "name")
-			if (xpath_segment.substr(0, 2) == "//") {
-				std::string element_name = xpath_segment.substr(2);
-				// Remove any further XPath syntax (/, [, @, etc.)
-				size_t xpath_end = element_name.find_first_of("/[@");
-				if (xpath_end != std::string::npos) {
-					element_name = element_name.substr(0, xpath_end);
-				}
-				if (!element_name.empty()) {
-					elements.insert(element_name);
-				}
+		ForceListPattern pattern;
+		std::string rest = expr;
+		if (StringUtil::StartsWith(rest, "//")) {
+			pattern.descendant = true;
+			rest = rest.substr(2);
+		} else if (StringUtil::StartsWith(rest, "./")) {
+			pattern.descendant = false;
+			rest = rest.substr(2);
+		} else if (StringUtil::StartsWith(rest, "/")) {
+			throw BinderException("force_list path '%s' is absolute. Paths are relative to the record element, "
+			                      "e.g. 'parent/child', or use '//child' to match at any depth",
+			                      expr);
+		} else {
+			pattern.descendant = false;
+		}
+		size_t pos = 0;
+		while (true) {
+			size_t slash = rest.find('/', pos);
+			std::string step = rest.substr(pos, slash == std::string::npos ? std::string::npos : slash - pos);
+			if (step.empty() || step == "." || step == ".." ||
+			    step.find_first_of("[]@*()= \t\n\r") != std::string::npos) {
+				throw BinderException("force_list path '%s' is not supported. Use element names separated by '/', "
+				                      "optionally prefixed with '//' to match at any depth",
+				                      expr);
 			}
+			pattern.steps.push_back(step);
+			if (slash == std::string::npos) {
+				break;
+			}
+			pos = slash + 1;
 		}
-
-		start = end + 1;
+		patterns.push_back(std::move(pattern));
 	}
+	return patterns;
+}
 
-	return elements;
+// The element's path is its ancestors below the record element followed by its own name
+static bool MatchesForceList(const std::vector<ForceListPattern> &patterns, const std::vector<std::string> &ancestors,
+                             const std::string &name) {
+	idx_t path_len = ancestors.size() + 1;
+	auto path_at = [&](idx_t i) -> const std::string & {
+		return i < ancestors.size() ? ancestors[i] : name;
+	};
+	for (const auto &pattern : patterns) {
+		idx_t steps = pattern.steps.size();
+		if (steps > path_len || (!pattern.descendant && steps != path_len)) {
+			continue;
+		}
+		idx_t offset = path_len - steps;
+		bool matched = true;
+		for (idx_t i = 0; i < steps && matched; i++) {
+			matched = pattern.steps[i] == path_at(offset + i);
+		}
+		if (matched) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // Phase 3: Infer Column Type
@@ -495,8 +533,7 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 	}
 
 	// Check if this column is in force_list (should always be LIST type)
-	std::unordered_set<std::string> force_list_elements = ParseForceListElements(options.force_list);
-	bool force_as_list = force_list_elements.count(column.name) > 0;
+	bool force_as_list = MatchesForceList(ParseForceListPatterns(options.force_list), column.ancestors, column.name);
 
 	// Check if all instances are leaf nodes (text only, no children and no attributes)
 	// Elements with attributes should be treated as complex (STRUCT), not leaf
@@ -642,6 +679,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 			for (idx_t g = 0; g < children.names.size(); g++) {
 				const std::string &child_name = children.names[g];
 				ColumnAnalysis nested_col(child_name, false);
+				nested_col.ancestors = column.ancestors;
+				nested_col.ancestors.push_back(column.name);
 				nested_col.instances = std::move(children.nodes[g]);
 				nested_col.occurrence_count = children.max_counts[g];
 				nested_col.repeats_in_record = children.max_counts[g] > 1;
@@ -684,6 +723,8 @@ LogicalType XMLSchemaInference::InferColumnType(const ColumnAnalysis &column, in
 		for (idx_t g = 0; g < children.names.size(); g++) {
 			const std::string &child_name = children.names[g];
 			ColumnAnalysis nested_col(child_name, false);
+			nested_col.ancestors = column.ancestors;
+			nested_col.ancestors.push_back(column.name);
 			nested_col.instances = std::move(children.nodes[g]);
 			nested_col.occurrence_count = children.max_counts[g];
 			nested_col.repeats_in_record = children.max_counts[g] > 1;

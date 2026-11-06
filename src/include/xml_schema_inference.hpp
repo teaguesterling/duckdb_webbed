@@ -173,6 +173,7 @@ struct ColumnAnalysis {
 	std::vector<xmlNodePtr> instances; // All occurrences of this column across records
 	int occurrence_count;              // Total times this appears
 	bool repeats_in_record;            // True if any record has multiple instances
+	std::vector<std::string> ancestors; // Element names from the record's child down to this element's parent
 
 	ColumnAnalysis(const std::string &name, bool is_attribute = false)
 	    : name(name), is_attribute(is_attribute), occurrence_count(0), repeats_in_record(false) {

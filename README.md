@@ -704,7 +704,7 @@ read_xml('pattern',
     columns=['name', 'value'],    -- Specify expected columns
     root_element='root',          -- Specify root element name
     record_element='item',        -- XPath/tag name for elements that become rows
-    force_list=['tags'],          -- Column names that should always be LIST type
+    force_list=['tags'],          -- Element names or paths that should always be LIST type
     auto_detect=true,             -- Auto-detect schema structure
     max_depth=10,                 -- Maximum parsing depth
     unnest_as='struct',           -- How to unnest nested elements
@@ -728,7 +728,7 @@ read_xml('pattern',
 - **`columns`**: Pre-specify expected column names for better performance
 - **`root_element`**: Specify the XML root element for schema inference
 - **`record_element`**: XPath expression or tag name identifying which elements become table rows (e.g., `'item'` or `'//item'`)
-- **`force_list`**: Element name(s) that should always be inferred as LIST type columns, even if they appear only once (similar to xml_to_json)
+- **`force_list`**: Element names or paths that should always be inferred as LIST type, even if they appear only once (similar to xml_to_json). A bare name (`'tag'`) or `'//tag'` matches the element at any depth, including inside STRUCTs. A path such as `'sections/columns/items'` matches only that chain of child elements under the record element, and `'//columns/items'` matches the chain at any depth
 - **`auto_detect`**: Enable automatic schema detection and type inference
 - **`max_depth`**: Maximum nesting depth to parse (prevents infinite recursion, -1 for unlimited with safety cap at 10)
 - **`unnest_as`**: How to handle nested elements ('columns' for flattening, 'struct' for preservation)
@@ -834,7 +834,7 @@ SELECT * FROM read_xml('feed.xml', record_element := '//item');
 **Understanding record_element vs force_list:**
 
 - **`record_element`**: Identifies which XML elements become **rows** (affects table structure)
-- **`force_list`**: Forces specific column names to be **LIST type** (affects column schema)
+- **`force_list`**: Forces specific elements, top-level or nested, to be **LIST type** (affects column schema)
 
 ```sql
 -- Example: Product catalog with optional tags
@@ -850,6 +850,12 @@ SELECT * FROM read_xml('products.xml', record_element := 'product');
 SELECT * FROM read_xml('products.xml',
     record_element := 'product',
     force_list := ['tag']
+);
+
+-- Paths pin nested elements: only <variants> under <options> becomes a list
+SELECT * FROM read_xml('products.xml',
+    record_element := 'product',
+    force_list := ['options/variants']
 );
 ```
 

@@ -98,6 +98,43 @@ Use ``force_list`` to ensure array types even for single occurrences:
 
    SELECT * FROM read_xml('orders.xml', force_list := ['item']);
 
+.. _force-list-paths:
+
+Forcing nested elements to lists
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Each ``force_list`` entry is an element name or a path of element names separated by ``/``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Entry
+     - Matches
+   * - ``'item'`` or ``'//item'``
+     - Every ``item`` element, at any depth below the record element
+   * - ``'sections/columns'`` or ``'./sections/columns'``
+     - ``columns`` elements whose parent is a ``sections`` child of the record element
+   * - ``'//columns/items'``
+     - ``items`` elements whose parent is a ``columns`` element, at any depth
+
+A path is relative to the record element, like an XPath child path. It pins one location in
+the tree, so an element with the same name elsewhere keeps its inferred type. A forced element
+that is missing from a record reads as NULL, at the top level and nested alike.
+
+.. code-block:: sql
+
+   -- <Layout><layoutSections><layoutColumns><layoutItems>...</layoutItems></layoutColumns></layoutSections></Layout>
+   SELECT * FROM read_xml('layouts.xml',
+       record_element := 'Layout',
+       force_list := ['layoutSections',
+                      'layoutSections/layoutColumns',
+                      'layoutSections/layoutColumns/layoutItems']);
+   -- layoutSections STRUCT(..., layoutColumns STRUCT(layoutItems STRUCT(...)[])[])[]
+
+Predicates (``[...]``), attributes (``@``), wildcards (``*``), ``..``, ``//`` within a path, and
+absolute paths (``/Layout/...``) are rejected with an error.
+
 Phase 3: Infer Types
 --------------------
 

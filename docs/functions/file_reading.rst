@@ -43,7 +43,7 @@ Read XML files with automatic schema inference.
      - Specify root element for schema inference
    * - ``force_list``
      - VARCHAR[]
-     - Column names that should always be LIST type
+     - Element names or paths that should always be LIST type (see :ref:`force-list-paths`)
    * - ``auto_detect``
      - BOOLEAN
      - Enable automatic schema detection (default: true)
@@ -227,7 +227,7 @@ Parse XML string with automatic schema inference.
      - Specify root element for schema inference
    * - ``force_list``
      - VARCHAR[]
-     - Column names that should always be LIST type
+     - Element names or paths that should always be LIST type (see :ref:`force-list-paths`)
    * - ``auto_detect``
      - BOOLEAN
      - Enable automatic schema detection (default: true)

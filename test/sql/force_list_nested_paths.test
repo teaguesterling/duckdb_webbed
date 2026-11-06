@@ -1,0 +1,108 @@
+# name: test/sql/force_list_nested_paths.test
+# description: force_list names nested elements by path relative to the record element, or by name at any depth
+# group: [sql]
+
+require webbed
+
+# Without force_list, each single-occurrence element infers as a STRUCT
+query TT
+SELECT typeof(layoutSections), typeof(summaryLayout)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout')
+LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)))	STRUCT(layoutItems STRUCT(field VARCHAR))
+
+# A nested path forces only that element. A record without the parent reads NULL, and a parent without the child holds NULL
+query TTT
+SELECT fullName, typeof(layoutSections), layoutSections
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'layoutSections/layoutColumns')
+ORDER BY fullName;
+----
+A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR))[])	{'label': Information, 'layoutColumns': [{'layoutItems': {'field': Name}}]}
+B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR))[])	NULL
+C	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR))[])	{'label': Empty, 'layoutColumns': NULL}
+
+# Paths at every level force each one. layoutItems under summaryLayout is a different path and stays a STRUCT
+query TTTT
+SELECT fullName, typeof(layoutSections), layoutSections, summaryLayout
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout',
+    force_list := ['layoutSections', 'layoutSections/layoutColumns', 'layoutSections/layoutColumns/layoutItems'])
+ORDER BY fullName;
+----
+A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Information, 'layoutColumns': [{'layoutItems': [{'field': Name}]}]}]	{'layoutItems': {'field': Owner}}
+B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	NULL	NULL
+C	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Empty, 'layoutColumns': NULL}]	NULL
+
+# Streaming (SAX) infers the same types
+query TTT
+SELECT fullName, typeof(layoutSections), layoutSections
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', maximum_file_size := 64,
+    force_list := ['layoutSections', 'layoutSections/layoutColumns', 'layoutSections/layoutColumns/layoutItems'])
+ORDER BY fullName;
+----
+A	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Information, 'layoutColumns': [{'layoutItems': [{'field': Name}]}]}]
+B	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	NULL
+C	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[])[])[]	[{'label': Empty, 'layoutColumns': NULL}]
+
+# A top-level name mixes with a nested path, which may start with ./
+query TTT
+SELECT fullName, typeof(fullName), typeof(layoutSections)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout',
+    force_list := ['fullName', './layoutSections/layoutColumns/layoutItems'])
+ORDER BY fullName
+LIMIT 1;
+----
+[A]	VARCHAR[]	STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[]))
+
+# A bare name and // match the element at any depth
+query TT
+SELECT typeof(layoutSections), typeof(summaryLayout)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'layoutItems')
+LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[]))	STRUCT(layoutItems STRUCT(field VARCHAR)[])
+
+query TT
+SELECT typeof(layoutSections), typeof(summaryLayout)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '//layoutItems')
+LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[]))	STRUCT(layoutItems STRUCT(field VARCHAR)[])
+
+# // before a path matches the chain at any depth, so the parent decides
+query TT
+SELECT typeof(layoutSections), typeof(summaryLayout)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '//layoutColumns/layoutItems')
+LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)[]))	STRUCT(layoutItems STRUCT(field VARCHAR))
+
+# A path that matches nothing changes nothing. A relative path must start at a child of the record element
+query TT
+SELECT typeof(layoutSections), typeof(summaryLayout)
+FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout',
+    force_list := ['layoutColumns/layoutItems', 'missing/child', 'missing'])
+LIMIT 1;
+----
+STRUCT("label" VARCHAR, layoutColumns STRUCT(layoutItems STRUCT(field VARCHAR)))	STRUCT(layoutItems STRUCT(field VARCHAR))
+
+# XPath beyond element-name steps is rejected
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := '/Layout/layoutSections');
+----
+is absolute
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'layoutSections[1]');
+----
+is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := 'layoutSections//layoutItems');
+----
+is not supported
+
+statement error
+SELECT * FROM read_xml('test/xml/force_list_nested/layouts.xml', record_element := 'Layout', force_list := ['layoutSections', '//@id']);
+----
+is not supported
