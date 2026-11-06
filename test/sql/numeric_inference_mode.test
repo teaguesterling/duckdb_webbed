@@ -39,6 +39,18 @@ SELECT typeof(v), v FROM parse_xml('<root><p><v>1.9</v></p><p><v>1.10</v></p></r
 DOUBLE	1.9
 DOUBLE	1.1
 
+# In one file, 'exact' re-checks the unified type: 9007199254740993 is an exact BIGINT but not an exact DOUBLE beside
+# 2.5. 'lenient' skips the re-check, as before #221.
+query T
+SELECT DISTINCT typeof(v) FROM parse_xml('<root><p><v>9007199254740993</v></p><p><v>2.5</v></p></root>');
+----
+VARCHAR
+
+query II
+SELECT typeof(v), max(v) FROM parse_xml('<root><p><v>9007199254740993</v></p><p><v>2.5</v></p></root>', numeric_inference := 'lenient') GROUP BY ALL;
+----
+DOUBLE	9007199254740992.0
+
 # NULL is the default
 query I
 SELECT typeof(v) FROM parse_xml('<root><p><v>1.10</v></p></root>', numeric_inference := NULL);
