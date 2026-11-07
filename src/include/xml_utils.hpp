@@ -412,9 +412,12 @@ public:
 	// The error for bytes that aren't valid in `encoding`.
 	static InvalidInputException InvalidHTMLBytes(const std::string &encoding);
 	// The encoding that raw HTML file bytes declare with a BOM or a <meta> in `head`, the file's first
-	// HTML_ENCODING_SNIFF_BYTES. Labels map the way browsers map them. "" when nothing usable is declared.
+	// HTML_ENCODING_HEAD_BYTES. A <meta> must start in the first HTML_ENCODING_SNIFF_BYTES, and is read to its end
+	// within `head`, so a label that crosses byte 1024 is read whole. Labels map the way browsers map them. "" when
+	// nothing usable is declared.
 	static std::string DeclaredHTMLEncoding(const char *head, idx_t head_size);
 	static constexpr idx_t HTML_ENCODING_SNIFF_BYTES = 1024;
+	static constexpr idx_t HTML_ENCODING_HEAD_BYTES = 2 * HTML_ENCODING_SNIFF_BYTES;
 
 	// HTML entity escaping/unescaping
 	static std::string HTMLUnescape(const std::string &html_str);

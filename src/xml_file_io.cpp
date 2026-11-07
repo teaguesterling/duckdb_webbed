@@ -190,7 +190,7 @@ static idx_t ReadUpTo(FileHandle &handle, char *buffer, idx_t size) {
 static std::string DetectHTMLHandleEncoding(FileHandle &handle, std::string &prefix) {
 	constexpr idx_t CHUNK_SIZE = idx_t(1) << 20;
 	constexpr idx_t SNIFF_KEEP_BYTES = CHUNK_SIZE;
-	prefix.resize(XMLUtils::HTML_ENCODING_SNIFF_BYTES);
+	prefix.resize(XMLUtils::HTML_ENCODING_HEAD_BYTES);
 	prefix.resize(ReadUpTo(handle, &prefix[0], prefix.size()));
 	auto encoding = XMLUtils::DeclaredHTMLEncoding(prefix.data(), prefix.size());
 	if (!encoding.empty()) {
