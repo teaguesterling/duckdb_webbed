@@ -46,6 +46,9 @@ Fixes from the duck_block review in #217.
   ``memory_limit`` alone, and ``parse_html_blocks`` now honors it.
 - A NULL boolean parameter, such as ``ignore_errors := NULL``, raises a binder error, as in
   ``read_csv``. It used to raise an INTERNAL error (#244).
+- ``read_xml_objects`` and ``read_html_objects`` raise an error that names a file that isn't
+  UTF-8, and point to ``read_xml``, ``read_html`` or ``read_blob``. They return each file as text,
+  so a Latin-1 file can't be a value. The error used to be DuckDB's "Invalid unicode" (#244).
 
 Fixes from the pre-release scan.
 

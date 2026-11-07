@@ -1,5 +1,6 @@
 #include "xml_reader_functions.hpp"
 #include "named_parameter_compat.hpp"
+#include "utf8proc_wrapper.hpp"
 #include "xml_utils.hpp"
 #include "xml_file_io.hpp"
 #include "xml_schema_inference.hpp"
@@ -950,6 +951,17 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 	return std::move(result);
 }
 
+// The _objects readers return each file as text, so it must be UTF-8. The other readers decode its declared encoding.
+static void CheckObjectsFileIsUTF8(const string &content, const string &filename, bool is_html) {
+	if (Utf8Proc::IsValid(content.data(), content.size())) {
+		return;
+	}
+	throw InvalidInputException(
+	    "File %s is not valid UTF-8. %s returns each file as text, which must be UTF-8. Use %s, "
+	    "which decodes the file's declared encoding, or read_blob for its bytes",
+	    filename, is_html ? "read_html_objects" : "read_xml_objects", is_html ? "read_html" : "read_xml");
+}
+
 void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, TableFunctionInput &data_p,
                                                      DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<XMLReadFunctionData>();
@@ -1013,6 +1025,7 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 				}
 
 				if (valid) {
+					CheckObjectsFileIsUTF8(content, filename, true);
 					// Set output values based on schema
 					idx_t col_idx = 0;
 					if (bind_data.include_filename) {
@@ -1449,6 +1462,7 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 					}
 					// Skip this invalid file
 				} else {
+					CheckObjectsFileIsUTF8(content, filename, false);
 					// Set output values based on schema
 					idx_t col_idx = 0;
 					if (output.data.size() == 2) {
