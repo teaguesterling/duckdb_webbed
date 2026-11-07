@@ -1,0 +1,99 @@
+# name: test/sql/timestamptz_zone_names.test
+# description: Issue #242. A TIMESTAMPTZ or TIMETZ value reads the same instant as DuckDB's ::TIMESTAMPTZ and ::TIMETZ casts, and read_csv. With ICU loaded, a zone name such as America/New_York or EST resolves, and text with no zone reads in the session TimeZone. A numeric offset fixes the instant in every session. Each case runs on the DOM path and on the SAX path.
+# group: [sql]
+
+require webbed
+
+require icu
+
+# A session zone that is not UTC. CI hosts run in UTC, where a zoneless case would pass vacuously.
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+foreach opts streaming:=false maximum_file_size:=1
+
+# Zone names resolve. EST is a fixed -05:00 zone, so in July it differs from America/New_York (EDT).
+query IIII
+SELECT named = '2024-01-01 10:00:00 America/New_York'::TIMESTAMPTZ, epoch(named)::BIGINT,
+       est = '2024-07-01 10:00:00 EST'::TIMESTAMPTZ, epoch(est)::BIGINT
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'named': 'TIMESTAMPTZ', 'est': 'TIMESTAMPTZ'}, ${opts});
+----
+true	1704121200	true	1719846000
+
+# Zoneless text reads in the session TimeZone (10:00 PST is 18:00 UTC), as the cast reads it.
+query II
+SELECT zoneless = '2024-01-01 10:00:00'::TIMESTAMPTZ, epoch(zoneless)::BIGINT
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'zoneless': 'TIMESTAMPTZ'}, ${opts});
+----
+true	1704132000
+
+# A numeric offset and the UTC name fix the instant. The session zone does not change them.
+query II
+SELECT epoch("offset")::BIGINT, epoch(utc)::BIGINT
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'offset': 'TIMESTAMPTZ', 'utc': 'TIMESTAMPTZ'}, ${opts});
+----
+1704085200	1704103200
+
+# Text that only a datetime candidate reads (a US date) is zoneless too, so it is midnight in the session zone.
+query II
+SELECT us_date = '2024-12-25'::TIMESTAMPTZ, epoch(us_date)::BIGINT
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'us_date': 'TIMESTAMPTZ'}, ${opts});
+----
+true	1735113600
+
+# STRUCT fields and LIST elements read the same way as top-level columns.
+query III
+SELECT epoch(nested.ts)::BIGINT, epoch(nested.tn)::BIGINT, list_transform(list.ts, lambda x: epoch(x)::BIGINT)
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'nested': 'STRUCT(ts TIMESTAMPTZ, tn TIMESTAMPTZ)', 'list': 'STRUCT(ts TIMESTAMPTZ[])'}, ${opts});
+----
+1704132000	1704121200	[1704132000, 1719842400]
+
+# A %Z datetime_format keeps the zone name it parsed. It must not read the wall-clock time as UTC.
+query III
+SELECT typeof(f), epoch(f)::BIGINT, f = '2024-01-01 10:00 America/New_York'::TIMESTAMPTZ
+FROM read_xml('test/xml/tz/formatted.xml', record_element := 'row', datetime_format := '%d.%m.%Y %H:%M %Z', ${opts})
+LIMIT 1;
+----
+TIMESTAMP WITH TIME ZONE	1704121200	true
+
+query I
+SELECT epoch(f)::BIGINT
+FROM read_xml('test/xml/tz/formatted.xml', record_element := 'row', datetime_format := '%d.%m.%Y %H:%M %Z', ${opts})
+OFFSET 1;
+----
+1719846000
+
+# A zone name that does not resolve is an error. The value is never read as some other instant.
+statement error
+SELECT unknown FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'unknown': 'TIMESTAMPTZ'}, ${opts});
+----
+time zone name 'Mars/Olympus'
+
+query I
+SELECT unknown IS NULL
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'unknown': 'TIMESTAMPTZ'}, ignore_errors := true, ${opts});
+----
+true
+
+# A TIMESTAMP column has no zone to keep, so a zone name still raises instead of being dropped.
+statement error
+SELECT named FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'named': 'TIMESTAMP'}, ${opts});
+----
+America/New_York
+
+endloop
+
+# TIMETZ without an offset takes the session zone's offset, as ::TIMETZ does. Asia/Kolkata has no
+# daylight saving time, so the expected offset does not depend on the date the test runs.
+statement ok
+SET TimeZone = 'Asia/Kolkata';
+
+foreach opts streaming:=false maximum_file_size:=1
+
+query III
+SELECT t::VARCHAR, t = '10:00:00'::TIMETZ, toff::VARCHAR
+FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'t': 'TIMETZ', 'toff': 'TIMETZ'}, ${opts});
+----
+10:00:00+05:30	true	10:00:00+05
+
+endloop

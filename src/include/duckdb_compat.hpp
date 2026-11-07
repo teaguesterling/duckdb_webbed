@@ -4,6 +4,7 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/enums/file_compression_type.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -171,6 +172,60 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 // pin: only this one is OK in all three.
 inline bool CompatIsFinite(timestamp_t ts) {
 	return ts != timestamp_t::infinity() && ts != timestamp_t::ninfinity();
+}
+
+// --- Running a BoundCastInfo ---
+//
+// v1.5: public members function, init_local_state and cast_data.
+// v2.0: the members are private, behind Cast(), HasInitLocalState() and GetCastData().
+//
+// Probed for GetCastData(), with the tag dispatch above. The v1.5 overload names the members
+// through a template parameter, so on v2.0 it is never instantiated.
+template <class T, class = void>
+struct CompatHasGetCastData : std::false_type {};
+template <class T>
+struct CompatHasGetCastData<T, decltype(void(std::declval<const T &>().GetCastData()))> : std::true_type {};
+
+template <class CAST>
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalStateImpl(const CAST &cast, std::true_type) {
+	if (!cast.HasInitLocalState()) {
+		return nullptr;
+	}
+	CastLocalStateParameters local_parameters(nullptr, cast.GetCastData());
+	return cast.InitLocalState(local_parameters);
+}
+template <class CAST>
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalStateImpl(const CAST &cast, std::false_type) {
+	if (!cast.init_local_state) {
+		return nullptr;
+	}
+	CastLocalStateParameters local_parameters(nullptr, cast.cast_data.get());
+	return cast.init_local_state(local_parameters);
+}
+
+template <class CAST>
+inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
+                              optional_ptr<FunctionLocalState> local_state, std::true_type) {
+	CastParameters parameters(cast.GetCastData(), false, error, local_state);
+	return cast.Cast(source, result, count, parameters);
+}
+template <class CAST>
+inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
+                              optional_ptr<FunctionLocalState> local_state, std::false_type) {
+	CastParameters parameters(cast.cast_data.get(), false, error, local_state);
+	return cast.function(source, result, count, parameters);
+}
+
+// The cast's local state, or null when it has none. It is made with no client context. ICU's VARCHAR to
+// TIMESTAMPTZ cast on v2.0 keeps its calendar there and needs only the cast data.
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalState(const BoundCastInfo &cast) {
+	return CompatInitCastLocalStateImpl(cast, CompatHasGetCastData<BoundCastInfo>());
+}
+
+// Run a cast with errors written to *error instead of thrown. False when the cast reports a failure.
+inline bool CompatRunCast(const BoundCastInfo &cast, Vector &source, Vector &result, idx_t count, string *error,
+                          optional_ptr<FunctionLocalState> local_state) {
+	return CompatRunCastImpl(cast, source, result, count, error, local_state, CompatHasGetCastData<BoundCastInfo>());
 }
 
 // --- FileCompressionType from a parameter string ---

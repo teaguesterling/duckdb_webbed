@@ -9,8 +9,10 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/types/time.hpp"
+#include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/function/cast_rules.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
+#include "duckdb/main/config.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -1184,6 +1186,162 @@ static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &str
 	}
 }
 
+// DuckDB's VARCHAR to TIMESTAMPTZ and TIMETZ casts, as the query bound them. With ICU loaded they are ICU's casts,
+// which resolve zone names and read zoneless text in the session TimeZone. Without ICU they are the core casts, which
+// read zoneless text as UTC and reject zone names. Either way read_xml reads the instant ::TIMESTAMPTZ reads (#242).
+struct XMLZoneCasts {
+	explicit XMLZoneCasts(ClientContext &context)
+	    : timestamp_tz(Bind(context, LogicalType::TIMESTAMP_TZ), LogicalType::TIMESTAMP_TZ),
+	      time_tz(Bind(context, LogicalType::TIME_TZ), LogicalType::TIME_TZ) {
+	}
+
+	// Cast text to TIMESTAMPTZ or TIMETZ. False when the cast rejects it, for example for an unknown zone name.
+	bool TryCast(const std::string &text, const LogicalType &target_type, Value &result) const {
+		auto &entry = target_type.id() == LogicalTypeId::TIME_TZ ? time_tz : timestamp_tz;
+		auto call = entry.Acquire();
+		// The string_t points at text, which outlives the call. SetValue would copy each value into the pooled
+		// vector's string heap, which then grows with every value read.
+		CompatFlatData<string_t>(call->source)[0] = string_t(text.c_str(), UnsafeNumericCast<uint32_t>(text.size()));
+		CompatFlatValidity(call->source).SetValid(0);
+		CompatFlatValidity(call->target).SetValid(0);
+		std::string error;
+		const bool ok = CompatRunCast(entry.cast, call->source, call->target, 1, &error, call->local_state.get());
+		if (ok && error.empty()) {
+			result = call->target.GetValue(0);
+		}
+		entry.Release(std::move(call));
+		return ok && error.empty() && !result.IsNull();
+	}
+
+private:
+	// What one call needs: the cast's local state and a one-row vector each way.
+	struct CallState {
+		CallState(const BoundCastInfo &cast, const LogicalType &target_type)
+		    : local_state(CompatInitCastLocalState(cast)), source(LogicalType::VARCHAR, 1), target(target_type, 1) {
+		}
+		unique_ptr<FunctionLocalState> local_state;
+		Vector source;
+		Vector target;
+	};
+
+	// One bound cast, and the call states its calls have finished with. A call takes a free one when there is
+	// one: making ICU's calendar and the two vectors for every value doubled the time to read a column.
+	struct Entry {
+		Entry(BoundCastInfo cast_p, const LogicalType &target_type_p)
+		    : cast(std::move(cast_p)), target_type(target_type_p) {
+		}
+		unique_ptr<CallState> Acquire() const {
+			{
+				lock_guard<mutex> guard(lock);
+				if (!free_calls.empty()) {
+					auto call = std::move(free_calls.back());
+					free_calls.pop_back();
+					return call;
+				}
+			}
+			return make_uniq<CallState>(cast, target_type);
+		}
+		void Release(unique_ptr<CallState> call) const {
+			lock_guard<mutex> guard(lock);
+			free_calls.push_back(std::move(call));
+		}
+
+		BoundCastInfo cast;
+		LogicalType target_type;
+		mutable mutex lock;
+		mutable vector<unique_ptr<CallState>> free_calls;
+	};
+
+	static BoundCastInfo Bind(ClientContext &context, const LogicalType &target_type) {
+		GetCastFunctionInput input(context);
+		return DBConfig::GetConfig(context).GetCastFunctions().GetCastFunction(LogicalType::VARCHAR, target_type,
+		                                                                       input);
+	}
+
+	Entry timestamp_tz;
+	Entry time_tz;
+};
+
+std::shared_ptr<const XMLZoneCasts> XMLSchemaInference::BindZoneCasts(ClientContext &context) {
+	return std::make_shared<const XMLZoneCasts>(context);
+}
+
+static void ThrowUnresolvedZoneName(const std::string &text, const std::string &zone) {
+	throw ConversionException("Could not read '%s' as TIMESTAMPTZ: the time zone name '%s' is not known. Zone names "
+	                          "resolve when the ICU extension is loaded, to the zones ICU knows. Otherwise use a "
+	                          "numeric offset",
+	                          text, zone);
+}
+
+// A wall-clock timestamp with no numeric offset, and the zone name its text gave (or empty), read as ::TIMESTAMPTZ
+// reads it. Without zone casts, zoneless text reads as UTC. False for a zone name that does not resolve.
+static bool TryReadWallClockTimestampTZ(timestamp_t wall_clock, const std::string &zone,
+                                        const XMLSchemaOptions &options, Value &result) {
+	if (options.zone_casts) {
+		auto text = Timestamp::ToString(wall_clock);
+		if (!zone.empty()) {
+			text += " " + zone;
+		}
+		return options.zone_casts->TryCast(text, LogicalType::TIMESTAMP_TZ, result);
+	}
+	if (!zone.empty() && !StringUtil::CIEquals(zone, "UTC")) {
+		return false;
+	}
+	result = Value::TIMESTAMPTZ(timestamp_tz_t(wall_clock));
+	return true;
+}
+
+// A strptime result as TIMESTAMPTZ. A %z offset fixes the instant. Otherwise the wall-clock time reads in the %Z
+// zone, or in the session TimeZone, as ::TIMESTAMPTZ reads it (issue #242). Core strptime discards a %Z name.
+static bool TryParseResultToTimestampTZ(const StrpTimeFormat &format, StrpTimeFormat::ParseResult &parse_result,
+                                        const XMLSchemaOptions &options, Value &result) {
+	timestamp_t parsed;
+	if (!parse_result.TryToTimestamp(parsed)) {
+		return false;
+	}
+	if (format.HasFormatSpecifier(StrTimeSpecifier::UTC_OFFSET)) {
+		result = Value::TIMESTAMPTZ(timestamp_tz_t(parsed));
+		return true;
+	}
+	return TryReadWallClockTimestampTZ(parsed, parse_result.tz, options, result);
+}
+
+// A strptime result as TIMETZ. A %z offset is kept. ::TIMETZ takes no zone name, so a %Z name other than UTC is
+// rejected, not dropped. Otherwise the time takes the session zone's offset, as ::TIMETZ gives it (issue #242).
+static bool TryParseResultToTimeTZ(const StrpTimeFormat &format, StrpTimeFormat::ParseResult &parse_result,
+                                   const XMLSchemaOptions &options, Value &result) {
+	const auto wall_clock = ParsedWallClockTime(parse_result);
+	if (format.HasFormatSpecifier(StrTimeSpecifier::UTC_OFFSET)) {
+		result = Value::TIMETZ(dtime_tz_t(wall_clock, parse_result.data[7]));
+		return true;
+	}
+	if (!parse_result.tz.empty() && !StringUtil::CIEquals(parse_result.tz, "UTC")) {
+		return false;
+	}
+	if (parse_result.tz.empty() && options.zone_casts) {
+		return options.zone_casts->TryCast(Time::ToString(wall_clock), LogicalType::TIME_TZ, result);
+	}
+	result = Value::TIMETZ(dtime_tz_t(wall_clock, 0));
+	return true;
+}
+
+// Text DuckDB's timestamp parser reads, with no numeric offset, read as ::TIMESTAMPTZ reads it (issue #242). False
+// for a numeric offset, which Timestamp::FromString(text, true) applies the same way, and for text the parser rejects.
+static bool TryReadTimestampTZWithoutOffset(const std::string &text, const XMLSchemaOptions &options, Value &result) {
+	if (!options.zone_casts) {
+		return false;
+	}
+	timestamp_t parsed;
+	bool has_offset = false;
+	string_t tz(nullptr, 0);
+	if (Timestamp::TryConvertTimestampTZ(text.c_str(), text.size(), parsed, true, has_offset, tz) !=
+	        TimestampCastResult::SUCCESS ||
+	    has_offset) {
+		return false;
+	}
+	return options.zone_casts->TryCast(text, LogicalType::TIMESTAMP_TZ, result);
+}
+
 // The datetime formats scanned when the user supplied none. Defined once, at file scope,
 // because BOTH inference and extraction must consult the same list: the whole defect behind
 // issue #159 was the two disagreeing about what a temporal value looks like.
@@ -1261,11 +1419,11 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 			break;
 		}
 		case LogicalTypeId::TIMESTAMP_TZ: {
-			timestamp_t ts_result;
-			if (!strp_format.TryParseTimestamp(text.c_str(), text.size(), ts_result)) {
+			StrpTimeFormat::ParseResult parse_result;
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) ||
+			    !TryParseResultToTimestampTZ(strp_format, parse_result, options, parsed)) {
 				continue;
 			}
-			parsed = Value::TIMESTAMPTZ(timestamp_tz_t(ts_result));
 			break;
 		}
 		case LogicalTypeId::TIME: {
@@ -1279,10 +1437,10 @@ static bool TryParseTemporalWithCandidates(const std::string &text, const Logica
 		}
 		case LogicalTypeId::TIME_TZ: {
 			StrpTimeFormat::ParseResult parse_result;
-			if (!strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+			if (!strp_format.Parse(text.c_str(), text.size(), parse_result) ||
+			    !TryParseResultToTimeTZ(strp_format, parse_result, options, parsed)) {
 				continue;
 			}
-			parsed = Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
 			break;
 		}
 		default:
@@ -1396,8 +1554,7 @@ static bool TryParseTimeOfDay(const std::string &text, dtime_t &result) {
 // behaviour well beyond the defect, so this inspects the name only. UTC is allowed because it names
 // a zero offset, so the bare timestamp is the same instant.
 //
-// DuckDB's TIMESTAMPTZ cast resolves names such as 'EST' through ICU, but this function has no client
-// context to reach ICU's cast. For TIMESTAMPTZ the error says so, and gives the cast route (issue #242).
+// For TIMESTAMPTZ this runs only after the zone casts rejected the name, or when there are none (issue #242).
 static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalType &target_type) {
 	timestamp_t parsed;
 	bool has_offset = false;
@@ -1415,11 +1572,7 @@ static void RejectUnresolvedTimezoneName(const std::string &text, const LogicalT
 		return;
 	}
 	if (target_type.id() == LogicalTypeId::TIMESTAMP_TZ) {
-		throw ConversionException(
-		    "Could not read '%s' as TIMESTAMPTZ: read_xml cannot resolve the time zone name '%s'. "
-		    "Use a numeric offset, or read the column as VARCHAR and cast it with ::TIMESTAMPTZ, which "
-		    "resolves zone names through ICU",
-		    text, tz_name);
+		ThrowUnresolvedZoneName(text, tz_name);
 	}
 	throw ConversionException("Could not read '%s' as a timestamp without discarding its '%s' suffix, which is not a "
 	                          "resolvable time zone. Supply datetime_format if it is a meridiem marker",
@@ -1580,8 +1733,8 @@ LogicalType XMLSchemaInference::AllowedTemporalType(const XMLSchemaOptions &opti
 	if (IsAutoTypeCandidate(options, type.id())) {
 		return type;
 	}
-	// Zoneless text never widens to TIMESTAMPTZ: webbed reads it as UTC, where read_csv assumes
-	// the session time zone, so the two would disagree on the instant.
+	// Zoneless text never widens to TIMESTAMPTZ. An explicit TIMESTAMPTZ column reads it in the session
+	// time zone, as read_csv does, but inference does not choose that type for it (issue #242).
 	if (type.id() == LogicalTypeId::DATE && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
 		return LogicalType::TIMESTAMP;
 	}
@@ -2662,17 +2815,27 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 			if (!datetime_format.empty()) {
 				StrpTimeFormat strp_format;
 				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
-				timestamp_t result;
-				if (strp_format.TryParseTimestamp(text.c_str(), text.size(), result)) {
-					return Value::TIMESTAMPTZ(timestamp_tz_t(result));
+				StrpTimeFormat::ParseResult parse_result;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
+					Value zoned;
+					if (TryParseResultToTimestampTZ(strp_format, parse_result, options, zoned)) {
+						return zoned;
+					}
+					if (!parse_result.tz.empty()) {
+						ThrowUnresolvedZoneName(text, parse_result.tz);
+					}
 				}
 				throw ConversionException("Could not parse '%s' as TIMESTAMPTZ with format '%s'", text,
 				                          datetime_format);
 			}
 			// See the DATE branch: fall back to the candidate list inference used (issue #159).
 			try {
+				Value zoned;
+				if (TryReadTimestampTZWithoutOffset(text, options, zoned)) {
+					return zoned;
+				}
 				RejectUnresolvedTimezoneName(text, target_type);
-				// Apply a numeric offset, as DuckDB's cast does. Zoneless text reads as UTC.
+				// Apply a numeric offset, as DuckDB's cast does. Without zone casts, zoneless text reads as UTC.
 				return Value::TIMESTAMPTZ(timestamp_tz_t(Timestamp::FromString(text, true)));
 			} catch (...) {
 				Value fallback;
@@ -2716,10 +2879,18 @@ Value XMLSchemaInference::ConvertToValue(const std::string &text, const LogicalT
 				StrpTimeFormat strp_format;
 				StrTimeFormat::ParseFormatSpecifier(datetime_format, strp_format);
 				StrpTimeFormat::ParseResult parse_result;
-				if (strp_format.Parse(text.c_str(), text.size(), parse_result)) {
-					return Value::TIMETZ(dtime_tz_t(ParsedWallClockTime(parse_result), parse_result.data[7]));
+				Value zoned;
+				if (strp_format.Parse(text.c_str(), text.size(), parse_result) &&
+				    TryParseResultToTimeTZ(strp_format, parse_result, options, zoned)) {
+					return zoned;
 				}
 				throw ConversionException("Could not parse '%s' as TIMETZ with format '%s'", text, datetime_format);
+			}
+			// Read as ::TIMETZ reads it: an offset is kept, and with ICU a zoneless time takes the session zone's
+			// offset (issue #242).
+			Value zoned;
+			if (options.zone_casts && options.zone_casts->TryCast(text, target_type, zoned)) {
+				return zoned;
 			}
 			// #102: empty datetime_format — parse via DuckDB's default cast and route failures through
 			// the chokepoint instead of returning a VARCHAR Value.

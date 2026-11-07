@@ -287,7 +287,7 @@ When no one format reads every sample but each is a date or timestamp, the colum
 
 **Explicit columns:**
 
-A column declared through ``columns`` has no recorded format. Its values are read with DuckDB's strict casts, then with the candidate list above. An explicit ``TIME`` column reads ``01:30:00 PM`` as ``13:30:00``, as inference does. The marker needs a space before it: ``01:30:00PM`` matches no candidate, so it raises, or reads NULL under ``ignore_errors``. A zero UTC offset (``Z``, ``UTC``, ``+00:00``) reads as the bare time. A non-zero offset such as ``+05:00`` raises instead of being dropped. Declare the column ``TIMETZ`` to keep it. A ``TIMESTAMPTZ`` column applies a numeric offset, as DuckDB's cast does: ``2024-01-01 10:00:00+05`` reads as 05:00 UTC.
+A column declared through ``columns`` has no recorded format. Its values are read with DuckDB's strict casts, then with the candidate list above. An explicit ``TIME`` column reads ``01:30:00 PM`` as ``13:30:00``, as inference does. The marker needs a space before it: ``01:30:00PM`` matches no candidate, so it raises, or reads NULL under ``ignore_errors``. A zero UTC offset (``Z``, ``UTC``, ``+00:00``) reads as the bare time. A non-zero offset such as ``+05:00`` raises instead of being dropped. Declare the column ``TIMETZ`` to keep it. A ``TIMESTAMPTZ`` column applies a numeric offset, as DuckDB's cast does: ``2024-01-01 10:00:00+05`` reads as 05:00 UTC. Without an offset, a ``TIMESTAMPTZ`` or ``TIMETZ`` value reads as DuckDB's cast reads it. With ICU loaded, a zone name such as ``America/New_York`` resolves, and zoneless text reads in the session ``TimeZone``. Without ICU, zoneless text reads as UTC, and a zone name raises. A ``TIMESTAMP`` column has no zone to keep, so a zone name other than UTC raises.
 
 **Interactions with other parameters:**
 
@@ -347,10 +347,10 @@ another name, and inference never produces them, so naming either is an error.
 - ``read_csv`` also accepts TINYINT, SMALLINT, HUGEINT, FLOAT, DECIMAL and BIGNUM, and honours
   each. Inference here never produces them, so naming one is an error.
 - ``read_csv`` widens a zoneless date or timestamp to TIMESTAMPTZ, read in the session time zone.
-  Webbed reads zoneless text in a TIMESTAMPTZ column as UTC, so the two would disagree on the
-  instant. Here zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, and only text carrying an
-  offset becomes TIMESTAMPTZ. A ``union_by_name`` merge of a zoneless file with a zoned one is
-  VARCHAR for the same reason, with or without this option.
+  Here zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, and only text carrying an offset
+  becomes TIMESTAMPTZ. A ``union_by_name`` merge of a zoneless file with a zoned one is VARCHAR in
+  the same way, with or without this option. A declared TIMESTAMPTZ column reads zoneless text in
+  the session time zone, as ``read_csv`` does.
 - ``read_csv`` ignores the option alongside ``columns`` or ``all_varchar``. Here either pairing is
   an error, as ``columns`` with ``all_varchar`` already is. ``all_varchar := true`` is
   ``auto_type_candidates := ['VARCHAR']``.

@@ -29,6 +29,9 @@ struct ForceListPattern {
 // unsupported XPath.
 std::vector<ForceListPattern> ParseForceList(const Value &value);
 
+// DuckDB's VARCHAR to TIMESTAMPTZ and TIMETZ casts, bound once for the query. Defined in xml_schema_inference.cpp.
+struct XMLZoneCasts;
+
 // Configuration options for schema inference
 struct XMLSchemaOptions {
 	// Schema inference controls
@@ -99,6 +102,11 @@ struct XMLSchemaOptions {
 	std::string opaque_type_name = "XML"; // Type name to use for opaque elements: "XML" or "HTML"
 	// How HTML content is decoded. read_html sets FILE_BYTES. parse_html's content is a decoded value.
 	HTMLInputEncoding html_input = HTMLInputEncoding::DECODED_TEXT;
+
+	// Text with no numeric offset reads through these casts, so a TIMESTAMPTZ or TIMETZ value is the instant
+	// ::TIMESTAMPTZ gives: ICU resolves zone names and reads zoneless text in the session TimeZone (issue #242).
+	// Null (no client context) reads zoneless text as UTC and rejects zone names.
+	std::shared_ptr<const XMLZoneCasts> zone_casts;
 };
 
 // Information about an inferred column
@@ -270,6 +278,9 @@ public:
 	// Datetime format helpers
 	static LogicalType ClassifyDatetimeFormat(const std::string &format);
 	static void ValidateDatetimeFormatString(const std::string &format);
+
+	// Bind the zone casts for XMLSchemaOptions::zone_casts. Call it in the bind, before inference.
+	static std::shared_ptr<const XMLZoneCasts> BindZoneCasts(ClientContext &context);
 
 	// Public wrapper for ConvertToValue (used by SAX streaming reader)
 	static Value ConvertToValuePublic(const std::string &text, const LogicalType &target_type,
