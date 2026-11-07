@@ -1657,7 +1657,21 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 		return false;
 	};
-	auto is_date_or_timestamp = [&](const std::string &sample) {
+	auto is_date_or_timestamp = [&](const std::string &sample_p) {
+		// read_csv reads a trailing UTC name as a TIMESTAMP, since it names a zero offset (issue #242).
+		auto sample = sample_p;
+		auto end = sample.size();
+		while (end > 0 && StringUtil::CharacterIsSpace(sample[end - 1])) {
+			end--;
+		}
+		if (end > 3 && StringUtil::CIEquals(sample.substr(end - 3, 3), "UTC") &&
+		    StringUtil::CharacterIsSpace(sample[end - 4])) {
+			end -= 3;
+			while (end > 0 && StringUtil::CharacterIsSpace(sample[end - 1])) {
+				end--;
+			}
+			sample = sample.substr(0, end);
+		}
 		timestamp_t ts;
 		if (!TryCast::Operation(string_t(sample), ts, true)) {
 			return false;
@@ -1687,6 +1701,38 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 		}
 		if (any_sample && all_match) {
 			return LogicalType::TIMESTAMP;
+		}
+	}
+
+	// No date or timestamp form reads every sample, but DuckDB's cast reads each one as TIMESTAMPTZ: text with an
+	// offset or a zone name, and zoneless text beside it. The column is TIMESTAMPTZ, as in read_csv, and keeps no
+	// format, so each value reads through the same cast (issue #242). A date-only sample keeps it VARCHAR while
+	// DATE is a candidate, as above.
+	if (!effective_candidates.empty() && options.zone_casts &&
+	    IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP_TZ)) {
+		bool date_allowed = IsAutoTypeCandidate(options, LogicalTypeId::DATE);
+		bool any_sample = false;
+		bool all_match = true;
+		for (const auto &sample : samples) {
+			if (sample.empty()) {
+				continue;
+			}
+			any_sample = true;
+			// The core parser rejects most text cheaply, before the cast.
+			timestamp_t parsed;
+			bool has_offset = false;
+			string_t tz(nullptr, 0);
+			Value zoned;
+			if (Timestamp::TryConvertTimestampTZ(sample.c_str(), sample.size(), parsed, true, has_offset, tz) !=
+			        TimestampCastResult::SUCCESS ||
+			    (date_allowed && is_date_only(sample)) ||
+			    !options.zone_casts->TryCast(sample, LogicalType::TIMESTAMP_TZ, zoned)) {
+				all_match = false;
+				break;
+			}
+		}
+		if (any_sample && all_match) {
+			return LogicalType::TIMESTAMP_TZ;
 		}
 	}
 
@@ -1733,10 +1779,14 @@ LogicalType XMLSchemaInference::AllowedTemporalType(const XMLSchemaOptions &opti
 	if (IsAutoTypeCandidate(options, type.id())) {
 		return type;
 	}
-	// Zoneless text never widens to TIMESTAMPTZ. An explicit TIMESTAMPTZ column reads it in the session
-	// time zone, as read_csv does, but inference does not choose that type for it (issue #242).
+	// A date widens to TIMESTAMP, as read_csv's sniffer does. With TIMESTAMP excluded, a date or a zoneless
+	// timestamp widens to TIMESTAMPTZ, read in the session time zone, as read_csv reads it (issue #242).
 	if (type.id() == LogicalTypeId::DATE && IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP)) {
 		return LogicalType::TIMESTAMP;
+	}
+	if ((type.id() == LogicalTypeId::DATE || type.id() == LogicalTypeId::TIMESTAMP) && options.zone_casts &&
+	    IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP_TZ)) {
+		return LogicalType::TIMESTAMP_TZ;
 	}
 	return LogicalType::INVALID;
 }
@@ -2141,20 +2191,11 @@ LogicalType XMLSchemaInference::MergeXMLColumnType(const LogicalType &a, const L
 	if (exact_numeric && (is_bigint_and_double(a, b) || is_bigint_and_double(b, a))) {
 		return LogicalType::VARCHAR;
 	}
-	// Zoneless text in a zoned column reads as UTC, not as the session time zone read_csv assumes.
-	// Within a file, zoned and zoneless samples share no format and stay VARCHAR. Across files the
-	// merge would widen to the zoned type. It stays VARCHAR here too.
+	// A DATE or TIMESTAMP file beside a TIMESTAMPTZ file widens to TIMESTAMPTZ below, as in read_csv. The
+	// zoneless values read in the session time zone, as the cast reads them (issue #242). A TIME file beside a
+	// TIMETZ file stays VARCHAR, as read_csv keeps that mix.
 	auto is_zoneless_beside_zoned = [](const LogicalType &x, const LogicalType &y) {
-		switch (y.id()) {
-		case LogicalTypeId::TIMESTAMP_TZ:
-			return x.id() == LogicalTypeId::DATE || x.id() == LogicalTypeId::TIMESTAMP ||
-			       x.id() == LogicalTypeId::TIMESTAMP_SEC || x.id() == LogicalTypeId::TIMESTAMP_MS ||
-			       x.id() == LogicalTypeId::TIMESTAMP_NS;
-		case LogicalTypeId::TIME_TZ:
-			return x.id() == LogicalTypeId::TIME;
-		default:
-			return false;
-		}
+		return y.id() == LogicalTypeId::TIME_TZ && x.id() == LogicalTypeId::TIME;
 	};
 	if (is_zoneless_beside_zoned(a, b) || is_zoneless_beside_zoned(b, a)) {
 		return LogicalType::VARCHAR;
