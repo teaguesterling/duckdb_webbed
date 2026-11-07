@@ -267,7 +267,9 @@ When ``datetime_format='auto'`` (the default), the extension tries a built-in li
 
 When an explicit format or preset is specified, only those formats are tried. If no format matches all samples, the column falls back to VARCHAR.
 
-When no one format reads every sample but each is a date or timestamp, the column is TIMESTAMP, as in ``read_csv``. A trailing ``UTC`` counts as a timestamp here. When instead DuckDB's ``::TIMESTAMPTZ`` cast reads every sample, the column is TIMESTAMPTZ, as in ``read_csv``. This covers zoneless text beside text with an offset, a zone name or ``Z``, and each value reads as the cast reads it. A date-only sample keeps it VARCHAR while ``DATE`` is a candidate, ``inf`` does not count, and an explicit ``datetime_format`` turns this rule off. A union of a zoneless file with a zoned one is TIMESTAMPTZ in the same way. With ``TIMESTAMP`` excluded from ``auto_type_candidates``, a date or zoneless timestamp widens to TIMESTAMPTZ. This covers timestamps in two formats, such as ``2024-01-01T10:00:00`` beside ``2024-01-02 10:00:00``. A date-only sample keeps the column VARCHAR while ``DATE`` is a candidate, as in ``read_csv``. With ``DATE`` excluded from ``auto_type_candidates``, a date reads as midnight. This needs each sample to be one that a date or timestamp format reads and DuckDB's cast reads too. Such a column keeps no format: DuckDB's cast reads its values and drops a UTC offset, as ``read_csv`` does. A union of files whose formats differ, such as a date file and a timestamp file, is TIMESTAMP in the same way, and it also drops a UTC offset in a value past the sample. One file read with its own format raises on such a value instead.
+When no one format reads every sample but each is a date or timestamp, the column is TIMESTAMP, as in ``read_csv``. This covers timestamps in two formats, such as ``2024-01-01T10:00:00`` beside ``2024-01-02 10:00:00``. A date-only sample keeps the column VARCHAR while ``DATE`` is a candidate, as in ``read_csv``. With ``DATE`` excluded from ``auto_type_candidates``, a date reads as midnight. This needs each sample to be one that a date or timestamp format reads and DuckDB's cast reads too. Such a column keeps no format: DuckDB's cast reads its values and drops a UTC offset, as ``read_csv`` does. A union of files whose formats differ, such as a date file and a timestamp file, is TIMESTAMP in the same way, and it also drops a UTC offset in a value past the sample. One file read with its own format raises on such a value instead.
+
+A trailing ``UTC`` counts as a timestamp for that rule, as in ``read_csv``. When no date or timestamp form reads every sample, but DuckDB's ``::TIMESTAMPTZ`` cast does, the column is TIMESTAMPTZ, as in ``read_csv``. This covers zoneless text beside text with an offset, a zone name or ``Z``. The column keeps no format, so each value reads as the cast reads it. A date-only sample keeps the column VARCHAR while ``DATE`` is a candidate. ``inf`` does not count, and an explicit ``datetime_format`` turns this rule off. A union of a zoneless file with a zoned one is TIMESTAMPTZ in the same way. With ``TIMESTAMP`` excluded from ``auto_type_candidates``, a date or zoneless timestamp widens to TIMESTAMPTZ (issue #242).
 
 .. note::
 
@@ -353,7 +355,8 @@ another name, and inference never produces them, so naming either is an error.
 **Interactions with other parameters:**
 
 - ``datetime_format`` supplies the formats temporal detection tries. A date format yields TIMESTAMP
-  when only TIMESTAMP is allowed. Any other format whose type is not a candidate is skipped, and the
+  when only TIMESTAMP is allowed, and a date or zoneless timestamp format yields TIMESTAMPTZ when
+  only TIMESTAMPTZ is. Any other format whose type is not a candidate is skipped, and the
   value falls through to the numeric and boolean checks.
 - ``union_by_name`` can give a date file and a timestamp file the same TIMESTAMP type. When files
   agree on a temporal type through different formats, the column reads with DuckDB's default
