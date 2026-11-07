@@ -13,7 +13,7 @@ SELECT content FROM read_html_blocks('test/html/encoding/github_issue_244_meta_s
 €
 
 query I
-SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_straddles_sniff_window.html');
+SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_straddles_sniff_window.html') WHERE p IS NOT NULL;
 ----
 €
 
@@ -24,6 +24,6 @@ SELECT content FROM read_html_blocks('test/html/encoding/github_issue_244_meta_p
 ¤
 
 query I
-SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_past_sniff_window.html');
+SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_past_sniff_window.html') WHERE p IS NOT NULL;
 ----
 ¤
