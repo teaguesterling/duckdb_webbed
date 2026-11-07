@@ -189,24 +189,29 @@ struct CompatHasGetCastData<T, decltype(void(std::declval<const T &>().GetCastDa
 template <class CAST>
 inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
                               std::true_type) {
+	unique_ptr<FunctionLocalState> local_state;
 	if (cast.HasInitLocalState()) {
-		return false;
+		CastLocalStateParameters local_parameters(nullptr, cast.GetCastData());
+		local_state = cast.InitLocalState(local_parameters);
 	}
-	CastParameters parameters(cast.GetCastData(), false, error, nullptr);
+	CastParameters parameters(cast.GetCastData(), false, error, local_state.get());
 	return cast.Cast(source, result, count, parameters);
 }
 template <class CAST>
 inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
                               std::false_type) {
+	unique_ptr<FunctionLocalState> local_state;
 	if (cast.init_local_state) {
-		return false;
+		CastLocalStateParameters local_parameters(nullptr, cast.cast_data.get());
+		local_state = cast.init_local_state(local_parameters);
 	}
-	CastParameters parameters(cast.cast_data.get(), false, error, nullptr);
+	CastParameters parameters(cast.cast_data.get(), false, error, local_state.get());
 	return cast.function(source, result, count, parameters);
 }
 
-// Run a cast that needs no local state, with errors written to *error instead of thrown. False when the cast
-// needs local state, or when it reports a failure.
+// Run a cast with errors written to *error instead of thrown. False when the cast reports a failure. A cast's
+// local state is made for this call, with no client context. ICU's VARCHAR to TIMESTAMPTZ cast on v2.0 keeps
+// its calendar there and needs only the cast data.
 inline bool CompatRunCast(const BoundCastInfo &cast, Vector &source, Vector &result, idx_t count, string *error) {
 	return CompatRunCastImpl(cast, source, result, count, error, CompatHasGetCastData<BoundCastInfo>());
 }

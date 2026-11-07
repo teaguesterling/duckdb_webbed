@@ -1197,11 +1197,10 @@ struct XMLZoneCasts {
 	// Cast text to TIMESTAMPTZ or TIMETZ. False when the cast rejects it, for example for an unknown zone name.
 	bool TryCast(const std::string &text, const LogicalType &target_type, Value &result) const {
 		auto &cast = target_type.id() == LogicalTypeId::TIME_TZ ? time_tz : timestamp_tz;
-		const Value text_value(text);
-		Vector source(text_value);
-		Vector target(target_type);
+		Vector source(LogicalType::VARCHAR, 1);
+		source.SetValue(0, Value(text));
+		Vector target(target_type, 1);
 		std::string error;
-		// No cast DuckDB registers for these types has local state. If one does, this keeps the core reading.
 		if (!CompatRunCast(cast, source, target, 1, &error) || !error.empty()) {
 			return false;
 		}
