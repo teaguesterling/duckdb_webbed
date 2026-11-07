@@ -679,6 +679,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadDocumentBind(ClientContext &con
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	schema_options.zone_casts = XMLSchemaInference::BindZoneCasts(context);
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
@@ -1529,6 +1530,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ReadXMLBind(ClientContext &context,
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	schema_options.zone_casts = XMLSchemaInference::BindZoneCasts(context);
 	schema_options.max_record_bytes = StreamedRecordLimit(context);
 	// Set opaque type name based on parse mode
 	schema_options.opaque_type_name = (result->parse_mode == ParseMode::HTML) ? "HTML" : "XML";
@@ -1959,6 +1961,7 @@ unique_ptr<FunctionData> XMLReaderFunctions::ParseDocumentBind(ClientContext &co
 
 	// Handle optional parameters with schema inference defaults
 	XMLSchemaOptions schema_options;
+	schema_options.zone_casts = XMLSchemaInference::BindZoneCasts(context);
 	schema_options.opaque_type_name = (mode == ParseMode::HTML) ? "HTML" : "XML";
 	bool has_explicit_columns = false;
 
