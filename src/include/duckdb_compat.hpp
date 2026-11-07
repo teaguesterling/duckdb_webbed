@@ -4,6 +4,7 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/enums/file_compression_type.hpp"
+#include "duckdb/function/cast/default_casts.hpp"
 #include <type_traits>
 #include <utility>
 
@@ -171,6 +172,43 @@ inline LogicalType CompatWithAlias(TYPE type, string alias) {
 // pin: only this one is OK in all three.
 inline bool CompatIsFinite(timestamp_t ts) {
 	return ts != timestamp_t::infinity() && ts != timestamp_t::ninfinity();
+}
+
+// --- Running a BoundCastInfo ---
+//
+// v1.5: public members function, init_local_state and cast_data.
+// v2.0: the members are private, behind Cast(), HasInitLocalState() and GetCastData().
+//
+// Probed for GetCastData(), with the tag dispatch above. The v1.5 overload names the members
+// through a template parameter, so on v2.0 it is never instantiated.
+template <class T, class = void>
+struct CompatHasGetCastData : std::false_type {};
+template <class T>
+struct CompatHasGetCastData<T, decltype(void(std::declval<const T &>().GetCastData()))> : std::true_type {};
+
+template <class CAST>
+inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
+                              std::true_type) {
+	if (cast.HasInitLocalState()) {
+		return false;
+	}
+	CastParameters parameters(cast.GetCastData(), false, error, nullptr);
+	return cast.Cast(source, result, count, parameters);
+}
+template <class CAST>
+inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
+                              std::false_type) {
+	if (cast.init_local_state) {
+		return false;
+	}
+	CastParameters parameters(cast.cast_data.get(), false, error, nullptr);
+	return cast.function(source, result, count, parameters);
+}
+
+// Run a cast that needs no local state, with errors written to *error instead of thrown. False when the cast
+// needs local state, or when it reports a failure.
+inline bool CompatRunCast(const BoundCastInfo &cast, Vector &source, Vector &result, idx_t count, string *error) {
+	return CompatRunCastImpl(cast, source, result, count, error, CompatHasGetCastData<BoundCastInfo>());
 }
 
 // --- FileCompressionType from a parameter string ---
