@@ -23,7 +23,8 @@ Fixes from the duck_block review in #217.
   a Latin-1 or windows-1252 page no longer reads as U+FFFD. ASCII and Latin-1 labels decode as
   windows-1252, and only labels from the WHATWG Encoding Standard count, as in browsers. A byte
   that isn't UTF-8 in a UTF-8 file reads as U+FFFD. A byte another declared charset doesn't
-  define raises an error. It used to end the document there.
+  define raises an error, and ``ignore_errors`` skips the file. It used to end the document
+  there.
 - ``read_html_blocks`` streams each file into its parse and buffers rows in buffer-managed
   memory. Each parse estimates its document's memory from the markup as it reads and reserves
   it from ``memory_limit``, shared by the threads. A file that doesn't fit beside the others is
@@ -49,6 +50,9 @@ Fixes from the duck_block review in #217.
 - ``read_xml_objects`` and ``read_html_objects`` raise an error that names a file that isn't
   UTF-8, and point to ``read_xml``, ``read_html`` or ``read_blob``. They return each file as text,
   so a Latin-1 file can't be a value. The error used to be DuckDB's "Invalid unicode" (#244).
+- A ``<meta>`` charset that starts in a file's first 1024 bytes is read to its end, so a label
+  that crosses byte 1024 is read whole. ``iso-8859-15`` there used to read as ``iso-8859-1``
+  (#244).
 
 Fixes from the pre-release scan.
 

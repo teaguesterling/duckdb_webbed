@@ -231,13 +231,14 @@ Convert HTML content into a list of structured document blocks. This function pa
   negative value raises an error.
 
 **Encoding:** ``read_html_blocks`` and ``read_html`` decode each file by its byte order mark,
-then the first ``<meta charset>`` or ``http-equiv`` declaration naming a label from the WHATWG
-Encoding Standard, then its bytes. As in browsers, other labels are ignored, and ASCII and
+then the first ``<meta charset>`` or ``http-equiv`` declaration that starts in the file's first
+1024 bytes and names a label from the WHATWG Encoding Standard, then its bytes. As in browsers, other labels are ignored, and ASCII and
 Latin-1 labels decode as windows-1252. A
 file that declares nothing reads as UTF-8 when its well-formed UTF-8 multibyte sequences are
 at least as many as its other bytes above ASCII, and as windows-1252 otherwise. A pipe is judged by its first megabyte, since it can't
 be read twice. A byte that isn't UTF-8 in a UTF-8 file reads as
-U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error.
+U+FFFD, as in browsers. A byte that another declared charset doesn't define raises an error,
+and ``ignore_errors`` skips the file.
 
 **Limits:** libxml2 parses at most 256 levels of nested elements, and a text node,
 attribute value, comment or tag of at most 10,000,000 bytes. A document past either raises an error naming
