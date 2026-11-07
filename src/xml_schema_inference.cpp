@@ -1199,7 +1199,10 @@ struct XMLZoneCasts {
 	bool TryCast(const std::string &text, const LogicalType &target_type, Value &result) const {
 		auto &entry = target_type.id() == LogicalTypeId::TIME_TZ ? time_tz : timestamp_tz;
 		auto call = entry.Acquire();
-		call->source.SetValue(0, Value(text));
+		// The string_t points at text, which outlives the call. SetValue would copy each value into the pooled
+		// vector's string heap, which then grows with every value read.
+		CompatFlatData<string_t>(call->source)[0] = string_t(text.c_str(), UnsafeNumericCast<uint32_t>(text.size()));
+		CompatFlatValidity(call->source).SetValid(0);
 		CompatFlatValidity(call->target).SetValid(0);
 		std::string error;
 		const bool ok = CompatRunCast(entry.cast, call->source, call->target, 1, &error, call->local_state.get());
