@@ -43,7 +43,7 @@ true	1735113600
 
 # STRUCT fields and LIST elements read the same way as top-level columns.
 query III
-SELECT epoch(nested.ts)::BIGINT, epoch(nested.tn)::BIGINT, list_transform(list.ts, x -> epoch(x)::BIGINT)
+SELECT epoch(nested.ts)::BIGINT, epoch(nested.tn)::BIGINT, list_transform(list.ts, lambda x: epoch(x)::BIGINT)
 FROM read_xml('test/xml/tz/zones.xml', record_element := 'row', columns := {'nested': 'STRUCT(ts TIMESTAMPTZ, tn TIMESTAMPTZ)', 'list': 'STRUCT(ts TIMESTAMPTZ[])'}, ${opts});
 ----
 1704132000	1704121200	[1704132000, 1719842400]
