@@ -101,9 +101,12 @@ Fixes from the pre-release scan.
 - ``read_xml``: a date that fits two candidate formats, such as ``05/06/2024`` in a union of
   files with different day/month orders, raises an error that names both formats and
   ``datetime_format``. It used to name the ISO format (#247).
-- ``read_xml``: a declared ``TIMESTAMPTZ`` column with a zone name, such as ``EST``, raises an
-  error that says ``read_xml`` cannot resolve the name, and gives the VARCHAR-then-cast route. It
-  used to say the name was not resolvable (#242).
+- ``read_xml``: a ``TIMESTAMPTZ`` or ``TIMETZ`` value reads the instant that ``::TIMESTAMPTZ`` and
+  ``::TIMETZ`` read, as in ``read_csv``. With ICU loaded, a zone name such as ``America/New_York``
+  or ``EST`` resolves. It used to raise. **Text with no offset reads in the session** ``TimeZone``.
+  It used to read as UTC, so results change where ``TimeZone`` is not UTC. A ``%Z`` name in
+  ``datetime_format`` is kept. It used to be dropped. Without ICU, zoneless text reads as UTC and
+  a zone name raises, as before. Inference is unchanged (#242).
 
 v2.14.1 (Current)
 -----------------
