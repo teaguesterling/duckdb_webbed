@@ -1,0 +1,15 @@
+<rows>
+  <row>
+    <named>2024-01-01 10:00:00 America/New_York</named>
+    <est>2024-07-01 10:00:00 EST</est>
+    <zoneless>2024-01-01 10:00:00</zoneless>
+    <offset>2024-01-01 10:00:00+05</offset>
+    <utc>2024-01-01 10:00:00 UTC</utc>
+    <unknown>2024-01-01 10:00:00 Mars/Olympus</unknown>
+    <us_date>12/25/2024</us_date>
+    <nested><ts>2024-01-01 10:00:00</ts><tn>2024-01-01 10:00:00 America/New_York</tn></nested>
+    <list><ts>2024-01-01 10:00:00</ts><ts>2024-07-01 10:00:00 America/New_York</ts></list>
+    <t>10:00:00</t>
+    <toff>10:00:00+05</toff>
+  </row>
+</rows>

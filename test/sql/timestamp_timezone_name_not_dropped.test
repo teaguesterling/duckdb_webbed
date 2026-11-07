@@ -15,13 +15,6 @@ SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'name
 ----
 EST
 
-# TIMESTAMPTZ reaches the same lenient cast, so it must refuse the same input rather than
-# silently drop the name and claim a zone it never applied.
-statement error
-SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMPTZ'}, streaming := false);
-----
-EST
-
 # REGRESSION GUARD ON THE NARROWING. A numeric offset is NOT the rejected case: it parses with
 # the zone name empty, and TIMESTAMP accepts-and-ignores it on both DuckDB lines. If the check
 # above is ever widened from "unresolvable name" to "any trailing text", this query starts
@@ -37,18 +30,11 @@ SELECT utc::VARCHAR FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns :=
 ----
 2024-01-15 10:00:00
 
-# Issue #242. DuckDB's cast resolves 'EST', but read_xml cannot, so the TIMESTAMPTZ error must
-# not call the name unresolvable. It points to the VARCHAR-then-cast route instead.
-statement error
-SELECT named FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMPTZ'}, streaming := false);
-----
-<REGEX>:.*cannot resolve the time zone name 'EST'.*VARCHAR.*
-
-# The route the error gives works where ICU resolves the name. The DuckDB CLI links ICU; the test
-# runner loads it only on request.
+# A TIMESTAMPTZ column keeps the zone, so it resolves 'EST' through ICU instead of refusing it.
+# test/sql/timestamptz_zone_names.test covers that case (issue #242).
 require icu
 
 query I
-SELECT epoch(named::TIMESTAMPTZ)::BIGINT FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'VARCHAR'}, streaming := false);
+SELECT named = '2024-01-15 10:00:00 EST'::TIMESTAMPTZ FROM read_xml('test/xml/timestamp_tz_suffix.xml', columns := {'named': 'TIMESTAMPTZ'}, streaming := false);
 ----
-1705330800
+true

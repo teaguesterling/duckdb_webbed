@@ -16,3 +16,5 @@ duckdb_extension_load(webbed
 
 # Any extra extensions that should be built
 duckdb_extension_load(json)
+# ICU resolves time zone names and the session TimeZone. The TIMESTAMPTZ tests need it (issue #242).
+duckdb_extension_load(icu)
