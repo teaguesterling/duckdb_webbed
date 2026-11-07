@@ -31,7 +31,7 @@ query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item')) ORDER BY column_name;
 ----
 availabilityZone	VARCHAR
-createTime	VARCHAR
+createTime	TIMESTAMP WITH TIME ZONE
 encrypted	BOOLEAN
 iops	INTEGER
 size	INTEGER
@@ -40,6 +40,15 @@ status	VARCHAR
 throughput	INTEGER
 volumeId	VARCHAR
 volumeType	VARCHAR
+
+# createTime ends in 'Z'. It is TIMESTAMPTZ, as in read_csv, and each value is the instant the cast gives
+# the same text (issue #242).
+query I
+SELECT bool_and(createTime = raw::TIMESTAMPTZ)
+FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item') x
+POSITIONAL JOIN (SELECT createTime AS raw FROM read_xml('test/xml/github_issues/aws_ec2_volumes_no_ns.xml', record_element := 'item', all_varchar := true)) r;
+----
+true
 
 # Sample volume data
 query III
@@ -108,7 +117,7 @@ query II
 SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_xml('test/xml/github_issues/aws_ec2_volumes_simple.xml', record_element := 'item')) ORDER BY column_name;
 ----
 availabilityZone	VARCHAR
-createTime	VARCHAR
+createTime	TIMESTAMP WITH TIME ZONE
 encrypted	BOOLEAN
 iops	INTEGER
 size	INTEGER
