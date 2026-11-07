@@ -1191,32 +1191,72 @@ static bool TryMatchDatetimeFormat(const std::string &value, StrpTimeFormat &str
 // read zoneless text as UTC and reject zone names. Either way read_xml reads the instant ::TIMESTAMPTZ reads (#242).
 struct XMLZoneCasts {
 	explicit XMLZoneCasts(ClientContext &context)
-	    : timestamp_tz(Bind(context, LogicalType::TIMESTAMP_TZ)), time_tz(Bind(context, LogicalType::TIME_TZ)) {
+	    : timestamp_tz(Bind(context, LogicalType::TIMESTAMP_TZ), LogicalType::TIMESTAMP_TZ),
+	      time_tz(Bind(context, LogicalType::TIME_TZ), LogicalType::TIME_TZ) {
 	}
 
 	// Cast text to TIMESTAMPTZ or TIMETZ. False when the cast rejects it, for example for an unknown zone name.
 	bool TryCast(const std::string &text, const LogicalType &target_type, Value &result) const {
-		auto &cast = target_type.id() == LogicalTypeId::TIME_TZ ? time_tz : timestamp_tz;
-		Vector source(LogicalType::VARCHAR, 1);
-		source.SetValue(0, Value(text));
-		Vector target(target_type, 1);
+		auto &entry = target_type.id() == LogicalTypeId::TIME_TZ ? time_tz : timestamp_tz;
+		auto call = entry.Acquire();
+		call->source.SetValue(0, Value(text));
+		CompatFlatValidity(call->target).SetValid(0);
 		std::string error;
-		if (!CompatRunCast(cast, source, target, 1, &error) || !error.empty()) {
-			return false;
+		const bool ok = CompatRunCast(entry.cast, call->source, call->target, 1, &error, call->local_state.get());
+		if (ok && error.empty()) {
+			result = call->target.GetValue(0);
 		}
-		result = target.GetValue(0);
-		return !result.IsNull();
+		entry.Release(std::move(call));
+		return ok && error.empty() && !result.IsNull();
 	}
 
 private:
+	// What one call needs: the cast's local state and a one-row vector each way.
+	struct CallState {
+		CallState(const BoundCastInfo &cast, const LogicalType &target_type)
+		    : local_state(CompatInitCastLocalState(cast)), source(LogicalType::VARCHAR, 1), target(target_type, 1) {
+		}
+		unique_ptr<FunctionLocalState> local_state;
+		Vector source;
+		Vector target;
+	};
+
+	// One bound cast, and the call states its calls have finished with. A call takes a free one when there is
+	// one: making ICU's calendar and the two vectors for every value doubled the time to read a column.
+	struct Entry {
+		Entry(BoundCastInfo cast_p, const LogicalType &target_type_p)
+		    : cast(std::move(cast_p)), target_type(target_type_p) {
+		}
+		unique_ptr<CallState> Acquire() const {
+			{
+				lock_guard<mutex> guard(lock);
+				if (!free_calls.empty()) {
+					auto call = std::move(free_calls.back());
+					free_calls.pop_back();
+					return call;
+				}
+			}
+			return make_uniq<CallState>(cast, target_type);
+		}
+		void Release(unique_ptr<CallState> call) const {
+			lock_guard<mutex> guard(lock);
+			free_calls.push_back(std::move(call));
+		}
+
+		BoundCastInfo cast;
+		LogicalType target_type;
+		mutable mutex lock;
+		mutable vector<unique_ptr<CallState>> free_calls;
+	};
+
 	static BoundCastInfo Bind(ClientContext &context, const LogicalType &target_type) {
 		GetCastFunctionInput input(context);
 		return DBConfig::GetConfig(context).GetCastFunctions().GetCastFunction(LogicalType::VARCHAR, target_type,
 		                                                                       input);
 	}
 
-	BoundCastInfo timestamp_tz;
-	BoundCastInfo time_tz;
+	Entry timestamp_tz;
+	Entry time_tz;
 };
 
 std::shared_ptr<const XMLZoneCasts> XMLSchemaInference::BindZoneCasts(ClientContext &context) {

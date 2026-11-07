@@ -187,33 +187,45 @@ template <class T>
 struct CompatHasGetCastData<T, decltype(void(std::declval<const T &>().GetCastData()))> : std::true_type {};
 
 template <class CAST>
-inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
-                              std::true_type) {
-	unique_ptr<FunctionLocalState> local_state;
-	if (cast.HasInitLocalState()) {
-		CastLocalStateParameters local_parameters(nullptr, cast.GetCastData());
-		local_state = cast.InitLocalState(local_parameters);
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalStateImpl(const CAST &cast, std::true_type) {
+	if (!cast.HasInitLocalState()) {
+		return nullptr;
 	}
-	CastParameters parameters(cast.GetCastData(), false, error, local_state.get());
+	CastLocalStateParameters local_parameters(nullptr, cast.GetCastData());
+	return cast.InitLocalState(local_parameters);
+}
+template <class CAST>
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalStateImpl(const CAST &cast, std::false_type) {
+	if (!cast.init_local_state) {
+		return nullptr;
+	}
+	CastLocalStateParameters local_parameters(nullptr, cast.cast_data.get());
+	return cast.init_local_state(local_parameters);
+}
+
+template <class CAST>
+inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
+                              optional_ptr<FunctionLocalState> local_state, std::true_type) {
+	CastParameters parameters(cast.GetCastData(), false, error, local_state);
 	return cast.Cast(source, result, count, parameters);
 }
 template <class CAST>
 inline bool CompatRunCastImpl(const CAST &cast, Vector &source, Vector &result, idx_t count, string *error,
-                              std::false_type) {
-	unique_ptr<FunctionLocalState> local_state;
-	if (cast.init_local_state) {
-		CastLocalStateParameters local_parameters(nullptr, cast.cast_data.get());
-		local_state = cast.init_local_state(local_parameters);
-	}
-	CastParameters parameters(cast.cast_data.get(), false, error, local_state.get());
+                              optional_ptr<FunctionLocalState> local_state, std::false_type) {
+	CastParameters parameters(cast.cast_data.get(), false, error, local_state);
 	return cast.function(source, result, count, parameters);
 }
 
-// Run a cast with errors written to *error instead of thrown. False when the cast reports a failure. A cast's
-// local state is made for this call, with no client context. ICU's VARCHAR to TIMESTAMPTZ cast on v2.0 keeps
-// its calendar there and needs only the cast data.
-inline bool CompatRunCast(const BoundCastInfo &cast, Vector &source, Vector &result, idx_t count, string *error) {
-	return CompatRunCastImpl(cast, source, result, count, error, CompatHasGetCastData<BoundCastInfo>());
+// The cast's local state, or null when it has none. It is made with no client context. ICU's VARCHAR to
+// TIMESTAMPTZ cast on v2.0 keeps its calendar there and needs only the cast data.
+inline unique_ptr<FunctionLocalState> CompatInitCastLocalState(const BoundCastInfo &cast) {
+	return CompatInitCastLocalStateImpl(cast, CompatHasGetCastData<BoundCastInfo>());
+}
+
+// Run a cast with errors written to *error instead of thrown. False when the cast reports a failure.
+inline bool CompatRunCast(const BoundCastInfo &cast, Vector &source, Vector &result, idx_t count, string *error,
+                          optional_ptr<FunctionLocalState> local_state) {
+	return CompatRunCastImpl(cast, source, result, count, error, local_state, CompatHasGetCastData<BoundCastInfo>());
 }
 
 // --- FileCompressionType from a parameter string ---
