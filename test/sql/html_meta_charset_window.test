@@ -1,0 +1,29 @@
+# name: test/sql/html_meta_charset_window.test
+# description: A <meta> that starts in the first 1024 bytes declares the charset its whole label names (#244)
+# group: [sql]
+
+require webbed
+
+# The label is iso-8859-15 and its last byte is byte 1025. Reading only the first 1024 bytes gave iso-8859-1, which
+# reads the 0xA4 byte as '¤'. In iso-8859-15 it is '€'. read_html_blocks reads the file through a handle, and read_html
+# reads it whole, so the two take different paths to the sniff.
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_244_meta_straddles_sniff_window.html') WHERE element_type = 'paragraph';
+----
+€
+
+query I
+SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_straddles_sniff_window.html');
+----
+€
+
+# A <meta> that starts past the first 1024 bytes still declares nothing, so the undeclared rule reads windows-1252.
+query I
+SELECT content FROM read_html_blocks('test/html/encoding/github_issue_244_meta_past_sniff_window.html') WHERE element_type = 'paragraph';
+----
+¤
+
+query I
+SELECT p[1] FROM read_html('test/html/encoding/github_issue_244_meta_past_sniff_window.html');
+----
+¤
