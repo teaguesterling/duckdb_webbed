@@ -1707,8 +1707,9 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 	// No date or timestamp form reads every sample, but DuckDB's cast reads each one as TIMESTAMPTZ: text with an
 	// offset or a zone name, and zoneless text beside it. The column is TIMESTAMPTZ, as in read_csv, and keeps no
 	// format, so each value reads through the same cast (issue #242). A date-only sample keeps it VARCHAR while
-	// DATE is a candidate, as above.
-	if (!effective_candidates.empty() && options.zone_casts &&
+	// DATE is a candidate, as above. An explicit datetime_format decides alone, so this does not apply to it. An
+	// infinite timestamp ('inf') does not count, as read_csv keeps 'infinity' beside zoned text VARCHAR.
+	if (!effective_candidates.empty() && !options.has_explicit_datetime_format && options.zone_casts &&
 	    IsAutoTypeCandidate(options, LogicalTypeId::TIMESTAMP_TZ)) {
 		bool date_allowed = IsAutoTypeCandidate(options, LogicalTypeId::DATE);
 		bool any_sample = false;
@@ -1725,7 +1726,7 @@ LogicalType XMLSchemaInference::InferTypeFromSamples(const std::vector<std::stri
 			Value zoned;
 			if (Timestamp::TryConvertTimestampTZ(sample.c_str(), sample.size(), parsed, true, has_offset, tz) !=
 			        TimestampCastResult::SUCCESS ||
-			    (date_allowed && is_date_only(sample)) ||
+			    !CompatIsFinite(parsed) || (date_allowed && is_date_only(sample)) ||
 			    !options.zone_casts->TryCast(sample, LogicalType::TIMESTAMP_TZ, zoned)) {
 				all_match = false;
 				break;
