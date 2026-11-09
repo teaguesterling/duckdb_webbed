@@ -97,8 +97,8 @@ SELECT * FROM (
 [DOUBLE]	7	DOUBLE
 [INTEGER, DOUBLE]	9999999999	DOUBLE
 [INTEGER]	9999999999	VARCHAR
-[TIMESTAMPTZ]	2024-01-01	VARCHAR
-[TIMESTAMPTZ]	2024-01-01 10:00:00	VARCHAR
+[TIMESTAMPTZ]	2024-01-01	TIMESTAMP WITH TIME ZONE
+[TIMESTAMPTZ]	2024-01-01 10:00:00	TIMESTAMP WITH TIME ZONE
 [TIMESTAMPTZ]	2024-01-01 10:00:00+02	TIMESTAMP WITH TIME ZONE
 [TIMESTAMP]	2024-01-01	TIMESTAMP
 [TIMESTAMP]	2024-01-01 10:00:00	TIMESTAMP
@@ -114,8 +114,8 @@ SELECT a, b FROM parse_xml('<r><i><a>7</a><b>8</b></i></r>', auto_type_candidate
 7	8
 
 # A date widens to TIMESTAMP when DATE is excluded, at midnight, as read_csv
-# reads it. Zoneless text never widens to TIMESTAMPTZ (see the ladder above):
-# webbed reads it as UTC where read_csv assumes the session time zone.
+# reads it. With only TIMESTAMPTZ allowed it widens to TIMESTAMPTZ, read in the
+# session time zone, as read_csv reads it (see the ladder above, issue #242).
 query II
 SELECT typeof(v), v FROM parse_xml('<r><i><v>2024-01-01</v></i><i><v>2024-02-03</v></i></r>',
                                    auto_type_candidates := ['TIMESTAMP'])
@@ -304,8 +304,8 @@ TIMESTAMP	2024-01-02 11:30:00
 
 endloop
 
-# Zoneless text never becomes TIMESTAMPTZ, including through a union with a
-# zoned file. Within one file the mix is VARCHAR, and so is the union.
+# A union of a zoneless file with a zoned file is TIMESTAMPTZ, as in read_csv.
+# The zoneless values read in the session time zone (issue #242).
 statement ok
 COPY (SELECT '<r><i><v>2024-01-01 10:00:00+02</v></i></r>' AS c)
 TO '__TEST_DIR__/atc_zoned.xml' (FORMAT csv, HEADER false, QUOTE '');
@@ -314,13 +314,13 @@ query I
 SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_dates.xml', '__TEST_DIR__/atc_zoned.xml'],
                                         union_by_name := true, auto_type_candidates := ['DATE', 'TIMESTAMPTZ']);
 ----
-VARCHAR
+TIMESTAMP WITH TIME ZONE
 
 query I
 SELECT DISTINCT typeof(v) FROM read_xml(['__TEST_DIR__/atc_timestamps.xml', '__TEST_DIR__/atc_zoned.xml'],
                                         union_by_name := true);
 ----
-VARCHAR
+TIMESTAMP WITH TIME ZONE
 
 # =============================================================================
 # Values past the sample: a value the inferred type cannot read is an error, or

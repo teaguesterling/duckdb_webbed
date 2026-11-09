@@ -4,6 +4,13 @@
 
 require webbed
 
+# read_csv resolves zones through ICU and reads zoneless TIMESTAMPTZ text in the session time zone.
+# A session zone that is not UTC keeps the zoned classes from agreeing by accident (issue #242).
+require icu
+
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
 # Each value class is one column of text, written once as XML and once as CSV.
 statement ok
 CREATE TABLE atcd_classes AS SELECT * FROM (VALUES
@@ -17,25 +24,30 @@ CREATE TABLE atcd_classes AS SELECT * FROM (VALUES
     ('ts', 1, '2024-01-01 10:00:00'), ('ts', 2, '2024-02-03 11:30:00'), ('ts', 3, '2024-03-04 00:00:01'),
     ('tsz', 1, '2024-01-01 10:00:00+02'), ('tsz', 2, '2024-02-03 11:30:00+00'), ('tsz', 3, '2024-03-04 00:00:01-05'),
     ('times', 1, '10:00:00'), ('times', 2, '11:30:00'), ('times', 3, '23:59:59'),
+    ('tsmix', 1, '2024-01-01 10:00:00'), ('tsmix', 2, '2024-02-03 11:30:00+02'), ('tsmix', 3, '2024-03-04 00:00:01'),
+    ('named', 1, '2024-01-01 10:00:00 America/New_York'), ('named', 2, '2024-07-01 10:00:00 EST'), ('named', 3, '2024-03-04 00:00:01 Europe/Paris'),
+    ('tsutcz', 1, '2024-01-01T10:00:00Z'), ('tsutcz', 2, '2024-02-03T11:30:00Z'), ('tsutcz', 3, '2024-03-04T00:00:01Z'),
+    ('tsutc', 1, '2024-01-01 10:00:00 UTC'), ('tsutc', 2, '2024-02-03 11:30:00 UTC'), ('tsutc', 3, '2024-03-04 00:00:01 UTC'),
+    ('badzone', 1, '2024-01-01 10:00:00 Mars/Olympus'), ('badzone', 2, '2024-02-03 11:30:00'), ('badzone', 3, '2024-03-04 00:00:01'),
     ('text', 1, 'abc'), ('text', 2, '1'), ('text', 3, '2024-01-01')
 ) t(name, ord, val);
 
 # A disagreement is acceptable only where docs/parameters.rst documents it:
-# - zoneless text stays VARCHAR where read_csv reads TIMESTAMPTZ in the session time zone.
 # - one file mixing dates and timestamps is VARCHAR while DATE is a candidate. The union of a date
-#   file and a timestamp file is TIMESTAMP. read_csv reads the joined file as TIMESTAMP when its
-#   timestamps come first, and as VARCHAR when its dates do.
+#   file and a timestamp file is TIMESTAMP, or TIMESTAMPTZ when TIMESTAMP is not a candidate.
+#   read_csv reads the joined file as that type when its timestamps come first, and as VARCHAR when
+#   its dates do.
 statement ok
 CREATE MACRO atcd_agrees(xt, xv, ot, ov) AS
-    (xt = ot AND xv = ov) OR (xt = 'VARCHAR' AND ot = 'TIMESTAMP WITH TIME ZONE');
+    xt = ot AND xv = ov;
 
 statement ok
 CREATE MACRO atcd_union_agrees(ut, uv, jt, jv, ct, cv) AS
     (ut = jt AND uv = jv AND atcd_agrees(ut, uv, ct, cv))
-    OR (ut = 'VARCHAR' AND jt = 'VARCHAR' AND ct = 'TIMESTAMP WITH TIME ZONE')
-    OR (ut = 'TIMESTAMP' AND jt = 'VARCHAR' AND ((ut = ct AND uv = cv) OR (ct = 'VARCHAR' AND jv = cv)));
+    OR (ut IN ('TIMESTAMP', 'TIMESTAMP WITH TIME ZONE') AND jt = 'VARCHAR'
+        AND ((ut = ct AND uv = cv) OR (ct = 'VARCHAR' AND jv = cv)));
 
-foreach a ints zero_one big decs mixed bools dates ts tsz times text
+foreach a ints zero_one big decs mixed bools dates ts tsz times tsmix named tsutcz tsutc badzone text
 
 statement ok
 COPY (SELECT '<r>' || string_agg('<i><v>' || val || '</v></i>', '' ORDER BY ord) || '</r>' FROM atcd_classes WHERE name = '${a}')
@@ -44,7 +56,7 @@ TO '__TEST_DIR__/atcd_${a}.xml' (FORMAT csv, HEADER false, QUOTE '');
 statement ok
 COPY (SELECT val AS v FROM atcd_classes WHERE name = '${a}' ORDER BY ord) TO '__TEST_DIR__/atcd_${a}.csv' (HEADER, QUOTE '');
 
-foreach b ints zero_one big decs mixed bools dates ts tsz times text
+foreach b ints zero_one big decs mixed bools dates ts tsz times tsmix named tsutcz tsutc badzone text
 
 # The rows of a then b in one file: what a union of the two files should match.
 statement ok
@@ -65,7 +77,7 @@ endloop
 
 foreach cands ['BOOLEAN'] ['INTEGER'] ['BIGINT'] ['DOUBLE'] ['BIGINT','DOUBLE'] ['BOOLEAN','DOUBLE'] ['DATE'] ['TIMESTAMP'] ['TIMESTAMPTZ'] ['DATE','TIMESTAMPTZ'] ['TIME'] ['BOOLEAN','INTEGER','BIGINT','DOUBLE','DATE','TIME','TIMESTAMP','TIMESTAMPTZ']
 
-foreach a ints zero_one big decs mixed bools dates ts tsz times text
+foreach a ints zero_one big decs mixed bools dates ts tsz times tsmix named tsutcz tsutc badzone text
 
 # One file, in the sample and streamed past maximum_file_size, against read_csv.
 query I
@@ -80,7 +92,7 @@ FROM (SELECT any_value(typeof(v)) AS t, list_sort(list(v::VARCHAR)) AS vals
 WHERE NOT (atcd_agrees(x.t, x.vals, c.t, c.vals) AND x.t = s.t AND x.vals = s.vals);
 ----
 
-foreach b ints zero_one big decs mixed bools dates ts tsz times text
+foreach b ints zero_one big decs mixed bools dates ts tsz times tsmix named tsutcz tsutc badzone text
 
 # A union of two files against one file holding both, read by read_xml and by read_csv.
 query I

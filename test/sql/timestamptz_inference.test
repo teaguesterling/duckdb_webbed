@@ -1,0 +1,32 @@
+# name: test/sql/timestamptz_inference.test
+# description: Issue #242. Inference types zoned and mixed timestamp text as read_csv does. A column of zoneless text and text with an offset or a zone name is TIMESTAMPTZ, and each value is the instant ::TIMESTAMPTZ gives it. Text with only a UTC suffix is TIMESTAMP, as in read_csv. STRUCT leaves follow the same rule. Each case runs on the DOM path and on the SAX path.
+# group: [sql]
+
+require webbed
+
+require icu
+
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+foreach opts streaming:=false maximum_file_size:=1
+
+query IIII
+SELECT typeof(mixed), typeof(named), typeof(utc), typeof(s)
+FROM read_xml('test/xml/tz/inferred.xml', record_element := 'row', ${opts}) LIMIT 1;
+----
+TIMESTAMP WITH TIME ZONE	TIMESTAMP WITH TIME ZONE	TIMESTAMP	STRUCT(ts TIMESTAMP WITH TIME ZONE)
+
+# Each value is the instant the cast gives the same text.
+query II
+SELECT x.id, mixed = c_mixed AND named = c_named AND s.ts = c_ts
+FROM read_xml('test/xml/tz/inferred.xml', record_element := 'row', ${opts}) x
+JOIN (VALUES (1, '2024-01-01 10:00:00'::TIMESTAMPTZ, '2024-01-01 10:00:00 America/New_York'::TIMESTAMPTZ, '2024-01-01 10:00:00'::TIMESTAMPTZ),
+             (2, '2024-01-01 10:00:00+05'::TIMESTAMPTZ, '2024-07-01 10:00:00 EST'::TIMESTAMPTZ, '2024-01-01 10:00:00 America/New_York'::TIMESTAMPTZ)) c(id, c_mixed, c_named, c_ts)
+  ON x.id = c.id
+ORDER BY x.id;
+----
+1	true
+2	true
+
+endloop
