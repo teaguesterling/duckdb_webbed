@@ -90,7 +90,8 @@ Pull Request Process
 2. **Write tests** for your changes
 3. **Ensure all tests pass** (``make test``)
 4. **Update documentation** if needed
-5. **Submit a pull request** with a clear description
+5. **Submit a pull request** with a clear description. If the change alters what a query
+   returns, its class decides how it ships: see :doc:`release-policy`.
 
 Commit Messages
 ~~~~~~~~~~~~~~~

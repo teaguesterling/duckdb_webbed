@@ -808,7 +808,7 @@ The extension uses a **3-phase deterministic approach** for intelligent schema i
 
 - **Dates**: Common date formats (ISO, US, EU) → DATE type
 - **Timestamps**: Date with time → TIMESTAMP type
-- **Timestamps with timezone**: Date with time and offset → TIMESTAMPTZ type
+- **Timestamps with timezone**: Date with time and offset → TIMESTAMPTZ type. A TIMESTAMPTZ value reads the instant `::TIMESTAMPTZ` reads: with ICU loaded, zone names such as `America/New_York` resolve, and text with no zone reads in the session `TimeZone`. See [Time zones](docs/schema_inference.rst#time-zones)
 - **Times**: Time of day → TIME type
 - **Numbers**: Integer and decimal → INTEGER/BIGINT/DOUBLE types, only when the type reads back the exact text. `007`, `1.10`, `1e3`, and `+5` stay VARCHAR, in the sample and beyond it
 - **Booleans**: true/false, 1/0 → BOOLEAN type

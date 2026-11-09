@@ -1,0 +1,31 @@
+# name: test/sql/objects_non_utf8.test
+# description: Issue #244. read_xml_objects and read_html_objects return each file verbatim as text, so a file that isn't UTF-8 can't be a value. The error must name the file and point to the readers that decode it, not DuckDB's generic "Invalid unicode". ignore_errors skips the file.
+# group: [sql]
+
+require webbed
+
+statement error
+SELECT * FROM read_xml_objects('test/xml/encoding/latin1.xml');
+----
+<REGEX>:.*latin1\.xml is not valid UTF-8.*read_xml.*read_blob.*
+
+statement error
+SELECT * FROM read_html_objects('test/xml/encoding/latin1.html');
+----
+<REGEX>:.*latin1\.html is not valid UTF-8.*read_html.*read_blob.*
+
+query I
+SELECT count(*) FROM read_xml_objects('test/xml/encoding/latin1.xml', ignore_errors := true);
+----
+0
+
+# The readers the error names decode the file.
+query T
+SELECT n FROM read_xml('test/xml/encoding/latin1.xml');
+----
+café
+
+query T
+SELECT p FROM read_html('test/xml/encoding/latin1.html') WHERE p IS NOT NULL;
+----
+café

@@ -173,7 +173,7 @@ The extension automatically detects these types:
      - Date with time
      - ``2024-01-15T10:30:00``
    * - TIMESTAMPTZ
-     - Date with time and timezone
+     - Date with time and a numeric offset (see :ref:`time-zones`)
      - ``2024-01-15T10:30:00+05:00``
    * - TIME
      - Time of day
@@ -197,6 +197,49 @@ Elimination runs per column, across every sample. Nested STRUCT fields and repea
 elements are typed the same way, but no per-field format is recorded — so when extracting an
 *ambiguous* nested value the reader declines rather than guessing. See the note in
 :doc:`parameters`.
+
+.. _time-zones:
+
+Time zones
+~~~~~~~~~~
+
+A ``TIMESTAMPTZ`` or ``TIMETZ`` value reads the same instant that DuckDB's ``::TIMESTAMPTZ`` and
+``::TIMETZ`` casts read from the same text, as ``read_csv`` does. Zone names and the session time
+zone come from the ICU extension. Load it with ``LOAD icu`` if your DuckDB build does not load it.
+
+.. code-block:: sql
+
+   SET TimeZone = 'America/Los_Angeles';
+   SELECT t FROM read_xml('events.xml', record_element := 'event',
+                          columns := {'t': 'TIMESTAMPTZ'});
+
+.. list-table:: A TIMESTAMPTZ column, session zone America/Los_Angeles
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Text
+     - Value
+   * - ``2024-01-01 10:00:00``
+     - ``2024-01-01 10:00:00-08``: no zone, so the session zone applies
+   * - ``2024-01-01 10:00:00+05``
+     - ``2023-12-31 21:00:00-08``: the offset fixes the instant
+   * - ``2024-01-01 10:00:00 America/New_York``
+     - ``2024-01-01 07:00:00-08``
+   * - ``2024-07-01 10:00:00 EST``
+     - ``2024-07-01 08:00:00-07``: EST is a fixed -05:00 zone
+   * - ``2024-01-01 10:00:00 Mars/Olympus``
+     - An error, or NULL under ``ignore_errors``
+
+The same rules apply to STRUCT fields, LIST elements, and a ``%Z`` name in ``datetime_format``.
+A ``TIMETZ`` value with no offset takes the session zone's offset. A ``TIMESTAMP`` column has no
+zone to keep, so a zone name other than ``UTC`` is an error, not dropped.
+
+Without ICU there is no session zone. Text with no zone then reads as UTC, and a zone name is an
+error.
+
+Inference types a column as ``TIMESTAMPTZ`` when its text carries a numeric offset. A column of zone
+names, or of zoneless text mixed with offsets, stays ``VARCHAR``. Declare it ``TIMESTAMPTZ`` through
+``columns`` to read it as shown above.
 
 Numbers and booleans are detected from the text itself, so the answer has to be a type every
 sampled lexeme can be read as. ``0`` and ``1`` are read as integers, not booleans, when they

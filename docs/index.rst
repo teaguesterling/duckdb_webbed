@@ -36,6 +36,7 @@ A comprehensive XML and HTML processing extension for DuckDB that enables SQL-na
 
    changelog
    contributing
+   release-policy
 
 
 Features

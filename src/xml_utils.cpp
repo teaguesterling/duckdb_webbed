@@ -454,7 +454,7 @@ InvalidInputException XMLUtils::InvalidHTMLBytes(const std::string &encoding) {
 XMLDocPtr XMLUtils::ParseHTMLDocument(const char *data, idx_t size, HTMLInputEncoding input) {
 	std::string encoding = "UTF-8";
 	if (input == HTMLInputEncoding::FILE_BYTES) {
-		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_SNIFF_BYTES));
+		encoding = DeclaredHTMLEncoding(data, MinValue<idx_t>(size, HTML_ENCODING_HEAD_BYTES));
 		if (encoding.empty()) {
 			UndeclaredEncodingSniffer sniffer;
 			sniffer.Feed(data, size);
@@ -547,14 +547,15 @@ static bool IsASCIIAlpha(char c) {
 // The encoding the first usable <meta> in `head` declares, through a charset attribute or an http-equiv content-type
 // content, or "". It follows the prescan in the HTML standard: comments are skipped, every tag's attributes are parsed
 // so a quoted value can't hide or fake a <meta>, and a <meta> naming an encoding libxml2 can't decode is passed over
-// for a later one.
+// for a later one. Only a tag that starts in the first HTML_ENCODING_SNIFF_BYTES counts, but it is read past them.
 static std::string FindMetaCharset(const char *head, idx_t size) {
 	std::string lower(head, size);
 	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+	const size_t start_limit = MinValue<idx_t>(size, XMLUtils::HTML_ENCODING_SNIFF_BYTES);
 	size_t pos = 0;
 	std::string name;
 	std::string value;
-	while ((pos = lower.find('<', pos)) != std::string::npos) {
+	while ((pos = lower.find('<', pos)) != std::string::npos && pos < start_limit) {
 		if (lower.compare(pos, 4, "<!--") == 0) {
 			auto end = lower.find("-->", pos + 4);
 			if (end == std::string::npos) {
