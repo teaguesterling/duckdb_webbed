@@ -173,8 +173,8 @@ The extension automatically detects these types:
      - Date with time
      - ``2024-01-15T10:30:00``
    * - TIMESTAMPTZ
-     - Date with time and a numeric offset (see :ref:`time-zones`)
-     - ``2024-01-15T10:30:00+05:00``
+     - Date with time and an offset, ``Z`` or a zone name, alone or mixed with zoneless text (see :ref:`time-zones`)
+     - ``2024-01-15T10:30:00+05:00``, ``2024-01-15 10:30:00 America/New_York``
    * - TIME
      - Time of day
      - ``10:30:00``, ``02:30:00 PM``
