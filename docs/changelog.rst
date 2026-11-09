@@ -1,8 +1,8 @@
 Changelog
 =========
 
-Unreleased
-----------
+v2.15.0 (Current)
+-----------------
 
 Inference changes contributed by **@bendrucker** (#221, #222).
 
@@ -11,8 +11,9 @@ Inference changes contributed by **@bendrucker** (#221, #222).
   file is DOUBLE only when every sampled integer is exact in a DOUBLE (#221).
 - ``auto_type_candidates`` restricts the scalar types inference may choose, as in ``read_csv``.
   VARCHAR is always a candidate. Naming a type that inference never produces, such as DECIMAL,
-  is an error. Zoneless text stays VARCHAR under ``['TIMESTAMPTZ']``, where ``read_csv`` reads it
-  in the session time zone. The option with ``columns`` or ``all_varchar`` is an error. See
+  is an error. Under ``['TIMESTAMPTZ']``, a date or zoneless timestamp is TIMESTAMPTZ, read in
+  the session time zone, as in ``read_csv`` (#242). The option with ``columns`` or ``all_varchar``
+  is an error. See
   :ref:`auto-type-candidates` (#222).
 
 Fixes from the duck_block review in #217.
@@ -113,10 +114,14 @@ Fixes from the pre-release scan.
   or ``EST`` resolves. It used to raise. **Text with no offset reads in the session** ``TimeZone``.
   It used to read as UTC, so results change where ``TimeZone`` is not UTC. A ``%Z`` name in
   ``datetime_format`` is kept. It used to be dropped. Without ICU, zoneless text reads as UTC and
-  a zone name raises, as before. Inference is unchanged (#242).
+  a zone name raises, as before (#242).
+- ``read_xml``: inference types zoned timestamp text as ``read_csv`` does. A column of zoneless
+  text beside text with an offset, a zone name or ``Z`` is TIMESTAMPTZ. So is a union of a
+  zoneless file with a zoned one. These used to be VARCHAR. Text with a ``UTC`` suffix is
+  TIMESTAMP. TIME beside TIMETZ stays VARCHAR (#242).
 
-v2.14.1 (Current)
------------------
+v2.14.1
+-------
 
 **Security: a long class on** ``<pre><code>`` **crashed DuckDB.** ``html_to_duck_blocks``,
 ``read_html_blocks`` and ``parse_html_blocks`` matched the ``language-`` class with
