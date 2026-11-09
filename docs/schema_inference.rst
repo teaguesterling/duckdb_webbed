@@ -237,9 +237,11 @@ zone to keep, so a zone name other than ``UTC`` is an error, not dropped.
 Without ICU there is no session zone. Text with no zone then reads as UTC, and a zone name is an
 error.
 
-Inference types a column as ``TIMESTAMPTZ`` when its text carries a numeric offset. A column of zone
-names, or of zoneless text mixed with offsets, stays ``VARCHAR``. Declare it ``TIMESTAMPTZ`` through
-``columns`` to read it as shown above.
+Inference types a column as ``TIMESTAMPTZ`` when DuckDB's ``::TIMESTAMPTZ`` cast reads every
+sample, as ``read_csv`` does. This covers text with a numeric offset, a zone name or ``Z``, and
+zoneless text mixed with any of these. Each value is the instant that the cast gives it, as in the
+table above. Text with only a ``UTC`` suffix is ``TIMESTAMP``, as in ``read_csv``. See
+:ref:`datetime-format` for the full rule.
 
 Numbers and booleans are detected from the text itself, so the answer has to be a type every
 sampled lexeme can be read as. ``0`` and ``1`` are read as integers, not booleans, when they

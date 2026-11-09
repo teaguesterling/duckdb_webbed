@@ -1,8 +1,8 @@
 Changelog
 =========
 
-Unreleased
-----------
+v2.15.0 (Current)
+-----------------
 
 Inference changes contributed by **@bendrucker** (#221, #222).
 
@@ -120,8 +120,8 @@ Fixes from the pre-release scan.
   zoneless file with a zoned one. These used to be VARCHAR. Text with a ``UTC`` suffix is
   TIMESTAMP. TIME beside TIMETZ stays VARCHAR (#242).
 
-v2.14.1 (Current)
------------------
+v2.14.1
+-------
 
 **Security: a long class on** ``<pre><code>`` **crashed DuckDB.** ``html_to_duck_blocks``,
 ``read_html_blocks`` and ``parse_html_blocks`` matched the ``language-`` class with
