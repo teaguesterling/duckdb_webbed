@@ -367,14 +367,28 @@ jobs:
   #      no duckdb-wasm runtime needed. It inspects whatever .wasm files are in
   #      the directory it is given, so retiring the v1.5.6 download narrowed its
   #      input to v2.0.0 without weakening the check.
-  #   2. live load+query in duckdb-wasm (informational / continue-on-error).
-  #      THE ENGINE NOW MATCHES THE BUILD EXACTLY, which it never did before:
+  #   2. live load+query in duckdb-wasm (hard gate since 2026-11-10).
+  #      THE ENGINE MATCHES THE BUILD EXACTLY, which it never did before:
   #      @duckdb/duckdb-wasm@1.33.1-dev113.0 is built from duckdb commit
   #      d54cbbe3df17e8e5ce68312f483b4155836112aa — the same v2.0.0 tag commit
   #      this repo pins. Measured 2026-11-02 by grepping that package's
   #      duckdb-base.wasm / duckdb-threads.wasm for `d54cbbe3df`; the `latest`
   #      tag (dev57.0) carries a v1.5.4-era engine and does NOT contain it.
-  #      Kept informational anyway: the pin is `next`, so it can move under us.
+  #
+  #      It was informational for as long as it had never passed. It first passed
+  #      on main run 42838679133 (2026-11-10):
+  #        PASS: webbed loaded into duckdb-wasm v2.0.0 (eh) and query returned
+  #        [{"ok":true}]
+  #      so it is now a gate. Two defects had hidden that, both in test/wasm:
+  #      the bundle names changed on the 2.0 engine line, and the harness
+  #      server's traversal guard compared a relative path and answered 403 to
+  #      the extension fetch itself.
+  #
+  #      `npm ci` against the committed package-lock.json, not `npm install`:
+  #      package.json pins the engine exactly, but its transitive deps are caret
+  #      ranges (apache-arrow ^17.0.0, qs ^6.14.1), so without the lockfile a
+  #      third-party minor release could turn this gate red with no change of
+  #      ours. A gate a stranger can fail is not a gate.
   wasm-load-test:
     name: WASM load test
     needs: [duckdb-stable-build]
@@ -391,13 +405,12 @@ jobs:
           path: wasm-artifacts
       - name: Static symbol check (libxml2/zlib must be linked, not unresolved)
         run: bash test/wasm/run_wasm_checks.sh wasm-artifacts
-      - name: Live load test in duckdb-wasm (exact engine match, still informational)
-        continue-on-error: true
+      - name: Live load test in duckdb-wasm (exact engine match)
         timeout-minutes: 10
         working-directory: test/wasm
         run: |
-          set -uo pipefail
-          timeout 300 npm install --no-save
+          set -euo pipefail
+          timeout 300 npm ci
           mkdir -p repo/v2.0.0/wasm_eh
           cp "$GITHUB_WORKSPACE/wasm-artifacts/webbed-v2.0.0-extension-wasm_eh/webbed.duckdb_extension.wasm" \
              repo/v2.0.0/wasm_eh/
