@@ -14,9 +14,11 @@ const Worker = require("web-worker");
 function arg(name, def) { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : def; }
 
 const repoDir = arg("repo"), name = arg("name"), platform = arg("platform", "eh");
-// @duckdb/duckdb-wasm@1.33.1-dev55.0 ships engine v1.5.3 (source_id 14eca11bd9) -- the exact
-// duckdb commit the v1.5.3 build targets -- so it loads the v1.5.3/wasm_eh artifact cleanly.
-// (@haybarn/haybarn-wasm has drifted to v1.5.4-dev, a version skew that fails to load.)
+// The engine must be built from the same duckdb commit as the artifact under test.
+// @duckdb/duckdb-wasm@1.33.1-dev113.0 is built from d54cbbe3df17e8e5ce68312f483b4155836112aa,
+// the v2.0.0 tag commit this repo pins. The URL the engine requests carries ITS OWN
+// version, not the extension's: the v1.5-line engine asked for v1.5.3/wasm_eh while
+// the workflow served v1.5.6/wasm_eh, so that pairing could never have loaded.
 const enginePkg = arg("engine", "@duckdb/duckdb-wasm"), query = arg("query"), expect = arg("expect");
 
 if (!repoDir || !name || !query) {
@@ -26,10 +28,28 @@ if (!repoDir || !name || !query) {
 
 const duckdb = require(`${enginePkg}/dist/duckdb-node`);
 const dist = path.dirname(require.resolve(`${enginePkg}/dist/duckdb-node.cjs`));
-const BUNDLES = {
-  mvp: { mainModule: path.join(dist, "duckdb-mvp.wasm"), mainWorker: path.join(dist, "duckdb-node-mvp.worker.cjs") },
-  eh: { mainModule: path.join(dist, "duckdb-eh.wasm"), mainWorker: path.join(dist, "duckdb-node-eh.worker.cjs") },
-};
+// Bundle file names are NOT stable across engine generations, so resolve them
+// from what the installed engine actually ships. The v1.5 line shipped one pair
+// per platform (duckdb-{mvp,eh}.wasm + duckdb-node-{mvp,eh}.worker.cjs); the 2.0
+// line collapsed them into a single pair (duckdb-base.wasm +
+// duckdb-node-base.worker.cjs), and its duckdb-base.wasm carries the one platform
+// string `wasm_eh`, so base IS the eh build. Hard-coding the old names made the
+// 2.0 engine die with MODULE_NOT_FOUND on duckdb-node-eh.worker.cjs.
+function bundleFor(p) {
+  const perPlatform = {
+    mainModule: path.join(dist, `duckdb-${p}.wasm`),
+    mainWorker: path.join(dist, `duckdb-node-${p}.worker.cjs`),
+  };
+  if (fs.existsSync(perPlatform.mainWorker)) return perPlatform;
+  const base = {
+    mainModule: path.join(dist, "duckdb-base.wasm"),
+    mainWorker: path.join(dist, "duckdb-node-base.worker.cjs"),
+  };
+  if (fs.existsSync(base.mainWorker)) return base;
+  console.error(`FAIL: ${enginePkg} ships neither ${path.basename(perPlatform.mainWorker)} ` +
+                `nor ${path.basename(base.mainWorker)} in ${dist}`);
+  process.exit(1);
+}
 
 const repoRoot = path.resolve(repoDir);
 const server = http.createServer((req, res) => {
@@ -54,7 +74,7 @@ const server = http.createServer((req, res) => {
   const repoUrl = `http://127.0.0.1:${server.address().port}`;
   console.error(`[load_test] serving ${repoDir} at ${repoUrl}; engine=${enginePkg} platform=${platform}`);
 
-  const bundle = BUNDLES[platform];
+  const bundle = bundleFor(platform);
   const worker = new Worker(bundle.mainWorker);
   const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
   await db.instantiate(bundle.mainModule);
