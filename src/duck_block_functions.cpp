@@ -1290,6 +1290,11 @@ static bool IsPresentationMetaName(const std::string &name) {
 }
 
 void WebbedDuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec, DuckBlockSink &blocks) {
+	// Source indentation is layout, not text: collapse each whitespace run to one space, as a browser renders
+	// it, so text such as "\n      " never reaches a writer as an indented line. <pre>, <textarea> and the
+	// frontmatter <script> keep theirs. Every caller owns `doc` and frees it after this walk.
+	XMLUtils::CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false);
+
 	XMLXPathContextPtr xpath_handle(xmlXPathNewContext(doc));
 	if (!xpath_handle) {
 		throw OutOfMemoryException("Could not allocate an XPath context for an HTML document");
@@ -3233,6 +3238,51 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 	return html.str();
 }
 
+// Append a cell's text, with a space where a browser starts a new line: at <br> and around a block child.
+static void AccumulateCellText(xmlNodePtr node, std::string &result) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) {
+			if (child->content) {
+				result += reinterpret_cast<const char *>(child->content);
+			}
+		} else if (child->type == XML_ELEMENT_NODE && child->name) {
+			std::string tag = reinterpret_cast<const char *>(child->name);
+			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg") {
+				continue;
+			}
+			bool breaks_line = tag == "br" || tag == "div" || IsBlockLevelTag(tag);
+			if (breaks_line) {
+				result += ' ';
+			}
+			AccumulateCellText(child, result);
+			if (breaks_line) {
+				result += ' ';
+			}
+		}
+	}
+}
+
+// A cell is one line of text: a line break becomes one space, whitespace runs collapse, and the edges are
+// trimmed. GetNodeTextContent gave "xy" for "x<br>y". A "\n" separator would end the row in a markdown table.
+static std::string GetCellText(xmlNodePtr cell) {
+	std::string raw;
+	AccumulateCellText(cell, raw);
+	std::string result;
+	bool pending_space = false;
+	for (char c : raw) {
+		if (XMLUtils::IsHTMLWhitespace(c)) {
+			pending_space = !result.empty();
+			continue;
+		}
+		if (pending_space) {
+			result += ' ';
+			pending_space = false;
+		}
+		result += c;
+	}
+	return result;
+}
+
 static std::string TableToJson(xmlNodePtr node) {
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
@@ -3249,7 +3299,7 @@ static std::string TableToJson(xmlNodePtr node) {
 			}
 			bool is_th = xmlStrcmp(cell->name, BAD_CAST "th") == 0;
 			if (is_th || xmlStrcmp(cell->name, BAD_CAST "td") == 0) {
-				row.push_back(GetNodeTextContent(cell));
+				row.push_back(GetCellText(cell));
 				all_th = all_th && is_th;
 			}
 		}
@@ -3275,7 +3325,7 @@ static std::string TableToJson(xmlNodePtr node) {
 						while (th) {
 							if (th->type == XML_ELEMENT_NODE && th->name &&
 							    (xmlStrcmp(th->name, BAD_CAST "th") == 0 || xmlStrcmp(th->name, BAD_CAST "td") == 0)) {
-								headers.push_back(GetNodeTextContent(th));
+								headers.push_back(GetCellText(th));
 							}
 							th = th->next;
 						}
@@ -3300,7 +3350,7 @@ static std::string TableToJson(xmlNodePtr node) {
 						while (td) {
 							if (td->type == XML_ELEMENT_NODE && td->name &&
 							    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
-								row.push_back(GetNodeTextContent(td));
+								row.push_back(GetCellText(td));
 							}
 							td = td->next;
 						}

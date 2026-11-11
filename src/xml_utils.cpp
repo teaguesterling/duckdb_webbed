@@ -3956,4 +3956,52 @@ NamespaceConfig ParseNamespacesParam(const Value &param) {
 	                            "MAP(VARCHAR, VARCHAR), LIST<STRUCT>, or STRUCT.");
 }
 
+// Elements whose descendant text is whitespace-significant and must be preserved verbatim:
+// raw-text elements (script, style) and preformatted elements (pre, textarea).
+bool XMLUtils::IsWhitespacePreservingElement(const xmlChar *name) {
+	if (!name) {
+		return false;
+	}
+	std::string n(reinterpret_cast<const char *>(name));
+	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") || StringUtil::CIEquals(n, "script") ||
+	       StringUtil::CIEquals(n, "style");
+}
+
+// Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
+// on the parse tree before serialization. CDATA and comment nodes are left untouched, and text
+// inside whitespace-preserving elements (pre/textarea/script/style) is left verbatim. Working on
+// the tree (rather than the serialized string) means a literal '>' or '&' in raw content is never
+// mistaken for a tag boundary, and libxml2 still handles escaping, CDATA wrapping and self-closing
+// on dump. The rewrite is done in place because the collapsed text is never longer than the
+// original, so no reallocation or entity round-trip is required. `is_space` tests single ASCII bytes,
+// so UTF-8 continuation bytes are never misclassified as whitespace.
+void XMLUtils::CollapseTextWhitespace(xmlNodePtr node, bool preserve, bool (*is_space)(char)) {
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type == XML_ELEMENT_NODE) {
+			CollapseTextWhitespace(child, preserve || IsWhitespacePreservingElement(child->name), is_space);
+		} else if (child->type == XML_TEXT_NODE && !preserve && child->content) {
+			xmlChar *content = child->content;
+			size_t w = 0;
+			bool pending_space = false;
+			for (size_t r = 0; content[r] != '\0'; r++) {
+				if (is_space(static_cast<char>(content[r]))) {
+					pending_space = true;
+					continue;
+				}
+				if (pending_space) {
+					// Keep a single separating space (significant between inline elements)
+					content[w++] = ' ';
+					pending_space = false;
+				}
+				content[w++] = content[r];
+			}
+			if (pending_space) {
+				content[w++] = ' ';
+			}
+			content[w] = '\0';
+		}
+		// CDATA_SECTION_NODE, COMMENT_NODE, etc. are intentionally left untouched
+	}
+}
+
 } // namespace duckdb
