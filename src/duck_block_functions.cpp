@@ -1275,6 +1275,20 @@ void WebbedDuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, con
 	}
 }
 
+// <meta name> values that tell a browser or a crawler how to handle the page, not what the document is. As
+// metadata rows, a markdown writer put them in the front matter beside the title. HTML compares meta names
+// without case.
+static bool IsPresentationMetaName(const std::string &name) {
+	static const char *const NAMES[] = {"viewport", "theme-color", "color-scheme", "format-detection",
+	                                    "referrer", "robots",      "generator"};
+	for (auto n : NAMES) {
+		if (StringUtil::CIEquals(name, n)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void WebbedDuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec, DuckBlockSink &blocks) {
 	XMLXPathContextPtr xpath_handle(xmlXPathNewContext(doc));
 	if (!xpath_handle) {
@@ -1301,7 +1315,8 @@ void WebbedDuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec
 	// and <meta name=...content=...> -- <meta charset>, <meta http-equiv>, and
 	// <meta property> are transport/presentation metadata, not document
 	// metadata, and <link> carries no `content` to map at all; all are
-	// silently skipped, not an error and not a best-effort mapping.
+	// silently skipped, not an error and not a best-effort mapping. So are
+	// the presentation names in IsPresentationMetaName, such as viewport.
 	//
 	// Each field becomes kind='value', element_type='string' (VALUE_STRING),
 	// level 1, attributes['key'] = field name, content = the value -- a
@@ -1326,7 +1341,7 @@ void WebbedDuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec
 				continue;
 			}
 			std::string name = GetNodeAttribute(node, "name");
-			if (name.empty()) {
+			if (name.empty() || IsPresentationMetaName(name)) {
 				continue;
 			}
 			head_metadata_fields.emplace_back(name, GetNodeAttribute(node, "content"));

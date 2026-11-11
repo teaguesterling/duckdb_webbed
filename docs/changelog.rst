@@ -1,6 +1,15 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck_blocks``.
+
+- ``<meta name>`` values for the browser or a crawler are no longer document metadata:
+  ``viewport``, ``theme-color``, ``color-scheme``, ``format-detection``, ``referrer``,
+  ``robots`` and ``generator``. A markdown writer used to put them in the front matter.
+
 v2.15.0 (Current)
 -----------------
 
