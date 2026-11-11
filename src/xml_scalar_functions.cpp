@@ -2193,60 +2193,14 @@ void XMLScalarFunctions::HTMLExtractTablesJSONFunction(DataChunk &args, Expressi
 	});
 }
 
-// Elements whose descendant text is whitespace-significant and must be preserved verbatim:
-// raw-text elements (script, style) and preformatted elements (pre, textarea).
-static bool IsWhitespacePreservingElement(const xmlChar *name) {
-	if (!name) {
-		return false;
-	}
-	std::string n(reinterpret_cast<const char *>(name));
-	return StringUtil::CIEquals(n, "pre") || StringUtil::CIEquals(n, "textarea") || StringUtil::CIEquals(n, "script") ||
-	       StringUtil::CIEquals(n, "style");
-}
-
-// Collapse each run of ASCII whitespace in TEXT nodes to a single space, recursively, operating
-// on the parse tree before serialization. CDATA and comment nodes are left untouched, and text
-// inside whitespace-preserving elements (pre/textarea/script/style) is left verbatim. Working on
-// the tree (rather than the serialized string) means a literal '>' or '&' in raw content is never
-// mistaken for a tag boundary, and libxml2 still handles escaping, CDATA wrapping and self-closing
-// on dump. The rewrite is done in place because the collapsed text is never longer than the
-// original, so no reallocation or entity round-trip is required. StringUtil::CharacterIsSpace is
-// used so UTF-8 continuation bytes are never misclassified as whitespace.
-static void CollapseTextWhitespace(xmlNodePtr node, bool preserve) {
-	for (xmlNodePtr child = node->children; child; child = child->next) {
-		if (child->type == XML_ELEMENT_NODE) {
-			CollapseTextWhitespace(child, preserve || IsWhitespacePreservingElement(child->name));
-		} else if (child->type == XML_TEXT_NODE && !preserve && child->content) {
-			xmlChar *content = child->content;
-			size_t w = 0;
-			bool pending_space = false;
-			for (size_t r = 0; content[r] != '\0'; r++) {
-				if (StringUtil::CharacterIsSpace(static_cast<char>(content[r]))) {
-					pending_space = true;
-					continue;
-				}
-				if (pending_space) {
-					// Keep a single separating space (significant between inline elements)
-					content[w++] = ' ';
-					pending_space = false;
-				}
-				content[w++] = content[r];
-			}
-			if (pending_space) {
-				content[w++] = ' ';
-			}
-			content[w] = '\0';
-		}
-		// CDATA_SECTION_NODE, COMMENT_NODE, etc. are intentionally left untouched
-	}
-}
-
 // Serialize a parsed HTML document without the XML declaration or DOCTYPE, collapsing each run of
 // whitespace to a single space except inside CDATA sections, comments, and whitespace-preserving
-// elements (see CollapseTextWhitespace). Returns false if the document could not be serialized.
+// elements (see XMLUtils::CollapseTextWhitespace). Returns false if the document could not be serialized.
 static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
 	// Normalize whitespace on the parse tree first, then let libxml2 serialize.
-	CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false);
+	// CharacterIsSpace also collapses a vertical tab. HTML keeps it as text, but the serializer then writes it
+	// as &#xFFFD;, so parse_html keeps its own set.
+	XMLUtils::CollapseTextWhitespace(reinterpret_cast<xmlNodePtr>(doc), false, StringUtil::CharacterIsSpace);
 
 	xmlChar *html_output = nullptr;
 	int output_size = 0;

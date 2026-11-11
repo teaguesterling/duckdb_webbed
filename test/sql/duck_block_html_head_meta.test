@@ -1,0 +1,41 @@
+# name: test/sql/duck_block_html_head_meta.test
+# description: Presentation <meta> names are not document metadata, so the HTML block reader skips them
+# group: [sql]
+
+require webbed
+
+# viewport, theme-color and the others tell the browser how to render the page.
+# They do not describe the document. As kind='value' rows, a markdown writer
+# puts them in the YAML front matter beside the title.
+
+query II
+SELECT b.attributes['key'], b.content
+FROM (SELECT unnest(html_to_duck_blocks('<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>T</title></head><body><p>Hi</p></body></html>')) b)
+WHERE b.kind = 'value';
+----
+title	T
+
+# Each name in the group is skipped, and the name compares without case, as HTML does.
+query I
+SELECT count(*)
+FROM (SELECT unnest(html_to_duck_blocks('<html><head>
+<meta name="Viewport" content="a">
+<meta name="theme-color" content="#fff">
+<meta name="color-scheme" content="light dark">
+<meta name="format-detection" content="telephone=no">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="generator" content="Hugo">
+</head><body><p>Hi</p></body></html>')) b)
+WHERE b.kind = 'value';
+----
+0
+
+# Document metadata stays, in document order.
+query II
+SELECT b.attributes['key'], b.content
+FROM (SELECT unnest(html_to_duck_blocks('<html><head><meta name="description" content="About us"><meta name="viewport" content="x"><meta name="author" content="Ada"></head><body><p>Hi</p></body></html>')) b)
+WHERE b.kind = 'value';
+----
+description	About us
+author	Ada

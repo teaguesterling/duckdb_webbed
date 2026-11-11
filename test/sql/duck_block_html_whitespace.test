@@ -1,0 +1,89 @@
+# name: test/sql/duck_block_html_whitespace.test
+# description: The HTML block reader collapses source whitespace as a browser renders it, outside pre and textarea
+# group: [sql]
+
+require webbed
+
+# Source indentation is layout, not text. A browser shows each whitespace run
+# outside <pre> as one space. Kept verbatim, "\n      " reaches a markdown
+# writer as a line with 6 leading spaces, which markdown reads as a code block.
+
+# Each inline text run between elements becomes one space.
+query III
+SELECT b.kind, b.element_type, '[' || replace(b.content, chr(10), '\n') || ']'
+FROM (SELECT unnest(html_to_duck_blocks(E'<div class="hud">\n      <strong>Triple Threat Arcade</strong>\n      <span>Driver: <b>Lincoln</b></span>\n</div>')) b);
+----
+block	div	NULL
+inline	text	[ ]
+inline	bold	[Triple Threat Arcade]
+inline	text	[ ]
+inline	span	NULL
+inline	text	[Driver: ]
+inline	bold	[Lincoln]
+inline	text	[ ]
+
+# No text row of a pretty-printed paragraph keeps a newline or a run of spaces.
+query I
+SELECT count(*)
+FROM (SELECT unnest(html_to_duck_blocks(E'<p>\n  <b>one</b>\n  two\n    three   four\n</p>')) b)
+WHERE b.content LIKE E'%\n%' OR b.content LIKE '%  %';
+----
+0
+
+# A leaf paragraph collapses the same way.
+query I
+SELECT '[' || replace((html_to_duck_blocks(E'<p>Hello\n     world</p>'))[1].content, chr(10), '\n') || ']';
+----
+[Hello world]
+
+# A heading collapses the same way.
+query I
+SELECT '[' || replace((html_to_duck_blocks(E'<h2>Two\n    words</h2>'))[1].content, chr(10), '\n') || ']';
+----
+[Two words]
+
+# <pre> is whitespace-significant: its text stays verbatim.
+query I
+SELECT '[' || replace((html_to_duck_blocks(E'<pre>def f():\n    return 1</pre>'))[1].content, chr(10), '\n') || ']';
+----
+[def f():\n    return 1]
+
+# A non-ASCII byte is not whitespace (UTF-8 continuation bytes such as 0xA0).
+query I
+SELECT '[' || replace((html_to_duck_blocks(E'<p>voilà\n   café</p>'))[1].content, chr(10), '\n') || ']';
+----
+[voilà café]
+
+# The file reader applies the same rule as the string form.
+query I
+SELECT count(*) FROM read_html_blocks('test/html/whitespace/indented_inline.html')
+WHERE content LIKE E'%\n%' OR content LIKE '%  %';
+----
+0
+
+# Table cells: a browser shows <br> and a block child as a line break, and
+# collapses each whitespace run. A cell is one line of text here, so a line
+# break becomes one space. Without a separator, "x<br>y" read as "xy".
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>x<br>y</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["x y"]]}
+
+# Indentation inside a cell collapses, and the cell edges are trimmed.
+query I
+SELECT (html_to_duck_blocks(E'<table><tr><td>\n  Python frameworks\n  BlueBream\n</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["Python frameworks BlueBream"]]}
+
+# Block children of a cell are separated as lines are.
+query I
+SELECT (html_to_duck_blocks(E'<table><tr><th>A</th></tr><tr><td>\n<ul>\n<li>x</li>\n<li>y</li>\n</ul>\n</td></tr></table>'))[1].content;
+----
+{"headers":["A"],"rows":[["x y"]]}
+
+# Adjacent inline elements in a cell keep their text joined, as a browser shows them.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td><b>Lin</b>coln</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["Lincoln"]]}

@@ -350,6 +350,15 @@ public:
 	// Content manipulation
 	static std::string PrettyPrintXML(const std::string &xml_str);
 	static std::string MinifyXML(const std::string &xml_str);
+	// HTML's ASCII whitespace: tab, LF, FF, CR and space. A vertical tab is text in HTML.
+	static bool IsHTMLWhitespace(char c) {
+		return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+	}
+	// True for pre, textarea, script and style, whose descendant text keeps its whitespace.
+	static bool IsWhitespacePreservingElement(const xmlChar *name);
+	// Collapse each whitespace run in the text nodes under `node` to one space, in place, as a browser
+	// renders it. Text inside a whitespace-preserving element stays verbatim. `is_space` defines a run.
+	static void CollapseTextWhitespace(xmlNodePtr node, bool preserve, bool (*is_space)(char) = IsHTMLWhitespace);
 
 	// Analysis functions
 	static XMLStats GetXMLStats(const std::string &xml_str);

@@ -30,6 +30,12 @@ again</p>') AS html_content;
 ----
 <html><body><p>Hello <b>world</b> again</p></body></html>
 
+# A vertical tab collapses with the whitespace around it. Kept, the serializer would write it as &#xFFFD;.
+query I
+SELECT parse_html('<p>a' || chr(11) || 'b</p>') AS html_content;
+----
+<html><body><p>a b</p></body></html>
+
 # Non-ASCII text survives minification (UTF-8 continuation bytes such as 0xA0
 # in 'à' must not be treated as whitespace)
 query I

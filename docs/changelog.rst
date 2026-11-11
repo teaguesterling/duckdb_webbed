@@ -1,6 +1,21 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck_blocks``.
+
+- Text collapses each whitespace run to one space, as a browser renders it. Source indentation
+  such as ``"\n      "`` used to pass through, and a markdown writer then read it as a code
+  block. ``<pre>`` and ``<textarea>`` keep their whitespace.
+- A table cell is one line of text. ``<br>`` and a block child, such as a list, become one space,
+  and the cell edges are trimmed. ``x<br>y`` used to read as ``xy``, and source newlines and
+  indentation stayed in the cell.
+- ``<meta name>`` values for the browser or a crawler are no longer document metadata:
+  ``viewport``, ``theme-color``, ``color-scheme``, ``format-detection``, ``referrer``,
+  ``robots`` and ``generator``. A markdown writer used to put them in the front matter.
+
 v2.15.0 (Current)
 -----------------
 
