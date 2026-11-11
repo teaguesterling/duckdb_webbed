@@ -33,7 +33,7 @@ public:
 };
 
 /**
- * DuckBlockFunctions provides scalar functions for converting between HTML/XML and duck_blocks.
+ * WebbedDuckBlockFunctions provides scalar functions for converting between HTML/XML and duck_blocks.
  *
  * Functions:
  * - html_to_duck_blocks(html HTML) -> LIST(duck_block)
@@ -42,7 +42,7 @@ public:
  * - duck_blocks_to_html(blocks LIST(duck_block)) -> HTML
  *   Serializes a list of duck_block structs back to HTML.
  */
-class DuckBlockFunctions {
+class WebbedDuckBlockFunctions {
 public:
 	static void Register(ExtensionLoader &loader);
 
