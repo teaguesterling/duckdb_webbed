@@ -28,7 +28,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	XMLReaderFunctions::Register(loader);
 
 	// Register duck_block conversion functions
-	DuckBlockFunctions::Register(loader);
+	WebbedDuckBlockFunctions::Register(loader);
 
 	// Register replacement scan for direct file querying (FROM 'file.xml')
 	auto &config = DBConfig::GetConfig(loader.GetDatabaseInstance());

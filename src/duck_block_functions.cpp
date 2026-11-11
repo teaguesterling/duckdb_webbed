@@ -1264,8 +1264,8 @@ static void EmitContainerOrLeaf(xmlNodePtr node, const std::string &block_type, 
 	}
 }
 
-void DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec, DuckBlockSink &sink,
-                                          HTMLInputEncoding input) {
+void WebbedDuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const CaptureSpec &spec,
+                                                DuckBlockSink &sink, HTMLInputEncoding input) {
 	if (html_str.empty()) {
 		return;
 	}
@@ -1275,7 +1275,7 @@ void DuckBlockFunctions::HtmlToDuckBlocks(const std::string &html_str, const Cap
 	}
 }
 
-void DuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec, DuckBlockSink &blocks) {
+void WebbedDuckBlockFunctions::WalkHTMLDocument(xmlDocPtr doc, const CaptureSpec &spec, DuckBlockSink &blocks) {
 	XMLXPathContextPtr xpath_handle(xmlXPathNewContext(doc));
 	if (!xpath_handle) {
 		throw OutOfMemoryException("Could not allocate an XPath context for an HTML document");
@@ -1467,7 +1467,7 @@ static unique_ptr<FunctionData> HtmlToDuckBlocksBind(DUCKDB_SCALAR_BIND_PARAMS) 
 	return make_uniq<HtmlToDuckBlocksBindData>(std::move(spec));
 }
 
-void DuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+void WebbedDuckBlockFunctions::HtmlToDuckBlocksFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 	CaptureSpec spec = CaptureSpec::Default();
 #ifdef DUCKDB_HAS_NEW_VECTOR_HEADERS
@@ -1560,7 +1560,7 @@ static std::string ListItemTagForRole(const std::string &role) {
 	return "li";
 }
 
-void DuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
 
@@ -2316,9 +2316,10 @@ struct HTMLBlocksReadLocalState : public LocalTableFunctionState {
 	DuckBlockRowBuffer blocks;
 };
 
-unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                vector<LogicalType> &return_types,
-                                                                vector<CompatName> &names) {
+unique_ptr<FunctionData> WebbedDuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &context,
+                                                                      TableFunctionBindInput &input,
+                                                                      vector<LogicalType> &return_types,
+                                                                      vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksReadFunctionData>();
 	RejectNullBooleanParameters(input.named_parameters);
 
@@ -2416,8 +2417,8 @@ unique_ptr<FunctionData> DuckBlockFunctions::ReadHTMLBlocksBind(ClientContext &c
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(ClientContext &context,
-                                                                            TableFunctionInitInput &input) {
+unique_ptr<GlobalTableFunctionState> WebbedDuckBlockFunctions::ReadHTMLBlocksInit(ClientContext &context,
+                                                                                  TableFunctionInitInput &input) {
 	auto result = make_uniq<HTMLBlocksReadGlobalState>();
 	auto &bind_data = input.bind_data->Cast<HTMLBlocksReadFunctionData>();
 	result->files = bind_data.files;
@@ -2447,13 +2448,13 @@ unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ReadHTMLBlocksInit(Clie
 }
 
 unique_ptr<LocalTableFunctionState>
-DuckBlockFunctions::ReadHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
-                                            GlobalTableFunctionState *global_state) {
+WebbedDuckBlockFunctions::ReadHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                                  GlobalTableFunctionState *global_state) {
 	return make_uniq<HTMLBlocksReadLocalState>(context.client);
 }
 
-OperatorPartitionData DuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientContext &context,
-                                                                         TableFunctionGetPartitionInput &input) {
+OperatorPartitionData WebbedDuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientContext &context,
+                                                                               TableFunctionGetPartitionInput &input) {
 	auto &lstate = input.local_state->Cast<HTMLBlocksReadLocalState>();
 	// Each chunk holds one file, and the next file is claimed only on the next call, so file_index
 	// still names the tagged chunk's file. chunk_counter has already advanced past it.
@@ -2461,7 +2462,8 @@ OperatorPartitionData DuckBlockFunctions::ReadHTMLBlocksGetPartitionData(ClientC
 	return OperatorPartitionData(lstate.last_batch_index);
 }
 
-void DuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+void WebbedDuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                      DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<HTMLBlocksReadFunctionData>();
 	auto &gstate = data_p.global_state->Cast<HTMLBlocksReadGlobalState>();
 	auto &lstate = data_p.local_state->Cast<HTMLBlocksReadLocalState>();
@@ -2588,9 +2590,10 @@ struct HTMLBlocksParseLocalState : public LocalTableFunctionState {
 	DuckBlockRowBuffer blocks;
 };
 
-unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &context, TableFunctionBindInput &input,
-                                                                 vector<LogicalType> &return_types,
-                                                                 vector<CompatName> &names) {
+unique_ptr<FunctionData> WebbedDuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &context,
+                                                                       TableFunctionBindInput &input,
+                                                                       vector<LogicalType> &return_types,
+                                                                       vector<CompatName> &names) {
 	auto result = make_uniq<HTMLBlocksParseFunctionData>();
 	RejectNullBooleanParameters(input.named_parameters);
 
@@ -2644,8 +2647,8 @@ unique_ptr<FunctionData> DuckBlockFunctions::ParseHTMLBlocksBind(ClientContext &
 	return std::move(result);
 }
 
-unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ParseHTMLBlocksInit(ClientContext &context,
-                                                                             TableFunctionInitInput &input) {
+unique_ptr<GlobalTableFunctionState> WebbedDuckBlockFunctions::ParseHTMLBlocksInit(ClientContext &context,
+                                                                                   TableFunctionInitInput &input) {
 	auto result = make_uniq<HTMLBlocksParseGlobalState>();
 	auto &bind_data = input.bind_data->Cast<HTMLBlocksParseFunctionData>();
 	result->html_contents = bind_data.html_contents;
@@ -2653,13 +2656,13 @@ unique_ptr<GlobalTableFunctionState> DuckBlockFunctions::ParseHTMLBlocksInit(Cli
 }
 
 unique_ptr<LocalTableFunctionState>
-DuckBlockFunctions::ParseHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
-                                             GlobalTableFunctionState *global_state) {
+WebbedDuckBlockFunctions::ParseHTMLBlocksInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                                   GlobalTableFunctionState *global_state) {
 	return make_uniq<HTMLBlocksParseLocalState>(context.client);
 }
 
-void DuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p,
-                                                 DataChunk &output) {
+void WebbedDuckBlockFunctions::ParseHTMLBlocksFunction(ClientContext &context, TableFunctionInput &data_p,
+                                                       DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<HTMLBlocksParseFunctionData>();
 	auto &gstate = data_p.global_state->Cast<HTMLBlocksParseGlobalState>();
 	auto &lstate = data_p.local_state->Cast<HTMLBlocksParseLocalState>();
@@ -2709,7 +2712,7 @@ static BoundCastInfo BindDefaultCast(BindCastInput &input, const LogicalType &so
 	return DefaultCasts::GetDefaultCastFunction(input, source, target);
 }
 
-void DuckBlockFunctions::Register(ExtensionLoader &loader) {
+void WebbedDuckBlockFunctions::Register(ExtensionLoader &loader) {
 	{
 		auto with_filename = DuckBlockTypes::DuckBlockWithFilenameType();
 		loader.RegisterCastFunction(with_filename, DuckBlockTypes::DuckBlockType(), BindDefaultCast, 10);

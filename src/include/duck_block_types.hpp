@@ -60,7 +60,7 @@ public:
 	// The ONE widened shape duck_block spec 6.4 accepts: the canonical seven,
 	// then a trailing `filename VARCHAR`. Derived from DuckBlockType() rather
 	// than restated, so the two cannot drift. Consumers accept this shape via a
-	// registered implicit cast (see DuckBlockFunctions::Register); producers may
+	// registered implicit cast (see WebbedDuckBlockFunctions::Register); producers may
 	// emit it (read_html_blocks does, behind filename := true).
 	//
 	// FIELD_FILENAME comes from the vendored vocabulary (6.4), so the name is
