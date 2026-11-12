@@ -16,8 +16,20 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
   ``viewport``, ``theme-color``, ``color-scheme``, ``format-detection``, ``referrer``,
   ``robots`` and ``generator``. A markdown writer used to put them in the front matter.
 
-v2.15.0 (Current)
+v2.15.1 (Current)
 -----------------
+
+No query results change. One internal C++ class is renamed, so webbed and markdown link into one
+static binary.
+
+- webbed and markdown both defined ``duckdb::DuckBlockFunctions::Register``, so a build that linked
+  both statically, such as a mobile app, failed with a duplicate symbol. webbed now names the class
+  ``WebbedDuckBlockFunctions`` (#270). markdown v1.9.9 makes the matching change.
+- CI: the WASM load test finds the duckdb-wasm bundle by the files the engine ships (#268). The
+  live WASM load test is now a gate, pinned by a lockfile (#269).
+
+v2.15.0
+-------
 
 Inference changes contributed by **@bendrucker** (#221, #222).
 
