@@ -3396,35 +3396,64 @@ static bool IsTableCell(xmlNodePtr n) {
 // shift the rest of the row left. Empty reads back as NULL; no value is repeated.
 // `pending[c]` counts the rows below that column c is still covered for. Returns an
 // empty row for a <tr> with no cells.
-static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_t> &pending, bool &all_th) {
+//
+// `filler_budget` bounds the empty cells one table may add: 1,000,000 plus one per real
+// cell, the bound duck_block_table_read uses for its own padding. The per-cell clamps
+// alone let 7 KB of spans become 60 MB of JSON (measured). Once the budget is spent,
+// spans stop expanding and every pending span ends; the table stays readable, and its
+// later rows may be short.
+static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_t> &pending, bool &all_th,
+                                               size_t &filler_budget) {
 	std::vector<std::string> row;
 	all_th = true;
 	size_t col = 0;
 	bool any = false;
+	auto pad = [&]() {
+		if (filler_budget == 0) {
+			std::fill(pending.begin(), pending.end(), 0);
+			return false;
+		}
+		filler_budget--;
+		row.emplace_back();
+		return true;
+	};
 	for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
 		if (!IsTableCell(cell)) {
 			continue;
 		}
-		while (col < pending.size() && pending[col] > 0) {
-			row.emplace_back();
+		while (col < pending.size() && pending[col] > 0 && pad()) {
 			pending[col]--;
 			col++;
 		}
 		any = true;
+		filler_budget++;
 		all_th = all_th && xmlStrcmp(cell->name, BAD_CAST "th") == 0;
 		int32_t colspan = TableSpan(cell, "colspan", 1000);
 		int32_t rowspan = TableSpan(cell, "rowspan", 65534);
 		row.push_back(GetCellText(cell));
-		row.resize(row.size() + static_cast<size_t>(colspan - 1));
-		if (pending.size() < col + colspan) {
-			pending.resize(col + colspan, 0);
+		size_t width = 1;
+		while (width < static_cast<size_t>(colspan) && pad()) {
+			width++;
 		}
-		for (size_t c = col; c < col + colspan; c++) {
+		if (filler_budget == 0) {
+			rowspan = 1;
+		}
+		if (pending.size() < col + width) {
+			pending.resize(col + width, 0);
+		}
+		for (size_t c = col; c < col + width; c++) {
 			pending[c] = rowspan - 1;
 		}
-		col += colspan;
+		col += width;
 	}
 	if (!any) {
+		// A <tr> with no cells is a row every pending span covers: it still uses up one
+		// row of each, or the next row would shift right. It emits nothing.
+		for (auto &p : pending) {
+			if (p > 0) {
+				p--;
+			}
+		}
 		return row;
 	}
 	// Columns past the last cell that a span from above still covers.
@@ -3433,8 +3462,11 @@ static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_
 		last--;
 	}
 	for (; col < last; col++) {
-		row.emplace_back();
-		if (pending[col] > 0) {
+		bool covered = pending[col] > 0;
+		if (!pad()) {
+			break;
+		}
+		if (covered) {
 			pending[col]--;
 		}
 	}
@@ -3446,6 +3478,7 @@ static std::string TableToJson(xmlNodePtr node) {
 	std::vector<std::vector<std::string>> rows;
 	std::vector<std::vector<std::string>> footers;
 	bool saw_thead = false;
+	size_t filler_budget = 1000000;
 
 	// Each row group (<thead>, each <tbody>, <tfoot>, a run of bare <tr>) has its own
 	// grid: an HTML row span ends at its group's end.
@@ -3459,7 +3492,7 @@ static std::string TableToJson(xmlNodePtr node) {
 	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
 	auto add_body_row = [&](xmlNodePtr tr, std::vector<int32_t> &pending) {
 		bool all_th = true;
-		auto row = LayoutTableRow(tr, pending, all_th);
+		auto row = LayoutTableRow(tr, pending, all_th, filler_budget);
 		if (row.empty()) {
 			return;
 		}
@@ -3488,7 +3521,7 @@ static std::string TableToJson(xmlNodePtr node) {
 			each_row(child, [&](xmlNodePtr tr) {
 				if (!taken) {
 					bool all_th = true;
-					headers = LayoutTableRow(tr, pending, all_th);
+					headers = LayoutTableRow(tr, pending, all_th, filler_budget);
 					taken = true;
 				}
 			});
@@ -3497,7 +3530,7 @@ static std::string TableToJson(xmlNodePtr node) {
 		} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
 			each_row(child, [&](xmlNodePtr tr) {
 				bool all_th = true;
-				auto row = LayoutTableRow(tr, pending, all_th);
+				auto row = LayoutTableRow(tr, pending, all_th, filler_budget);
 				if (!row.empty()) {
 					footers.push_back(std::move(row));
 				}

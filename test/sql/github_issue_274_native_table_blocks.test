@@ -66,6 +66,18 @@ SELECT (html_to_duck_blocks('<table><tr><td rowspan="5">x</td><td>1</td></tr></t
 ----
 {"headers":[],"rows":[["x","1"]]}
 
+# A <tr> with no cells (every position covered from above) still uses up one row of
+# each pending span, so the next row is not shifted right.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td rowspan="2">a</td><td rowspan="2">b</td></tr><tr></tr><tr><td>c</td><td>d</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["a","b"],["c","d"]]}
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th></tr><tr><td rowspan="2">x</td><td>1</td></tr><tr></tr><tr><td>p</td><td>q</td></tr></table>'))[1].content;
+----
+{"headers":["a","b"],"rows":[["x","1"],["p","q"]]}
+
 # --- hostile span values ----------------------------------------------------------
 
 # Non-numeric, zero and negative spans count as 1.
@@ -80,6 +92,17 @@ SELECT (length(c) - length(replace(c, ',""', ''))) // 3
 FROM (SELECT (html_to_duck_blocks('<table><tr><td colspan="99999">a</td></tr></table>'))[1].content AS c);
 ----
 999
+
+# Spans cannot multiply a small page into a huge table: filler cells per table are
+# capped at 1,000,000 plus one per real cell, about the bound duck_block_table_read
+# uses for its own padding. Without it, these 7 KB gave 60 MB of JSON and 1.29 GB of memory (measured
+# by the branch review, 2026-11-13). Past the cap, spans stop expanding.
+query I
+SELECT length(c) < 4000000
+FROM (SELECT (html_to_duck_blocks('<table><tr>' || repeat('<td colspan="1000" rowspan="65534"></td>', 100) || '</tr>'
+                                  || repeat('<tr><td></td></tr>', 200) || '</table>'))[1].content AS c);
+----
+true
 
 # --- footers keep their extra key; spans align there too ---------------------------
 
