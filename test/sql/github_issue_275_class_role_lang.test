@@ -1,0 +1,117 @@
+# name: test/sql/github_issue_275_class_role_lang.test
+# description: capture_attributes := 'classes' keeps class, role and lang on every block; the vocabulary's role is never forged
+# group: [sql]
+
+#
+# GitHub Issue #275: https://github.com/teaguesterling/duckdb_webbed/issues/275
+#
+# WHY: the DCS transform language and duckeye's "documents as databases" read
+# attributes['class'] the same way for every reader, and ARIA role and lang are the
+# other per-element facts a selector or a language filter needs. #142 already made
+# class opt-in through the 'classes' preset; role and lang now come with it. The
+# default capture stays id, name, href, src (decided 2026-11-13 with Teague).
+#
+# role is also a vocabulary key: section blocks carry role=section|nav|..., list_item
+# carries role=term|definition, caption carries role=summary, and the HTML writer
+# picks the output tag from it. A source role on those elements must never reach
+# attributes['role'], or <li role="term"> would export as <dt>.
+#
+
+require webbed
+
+# --- class, role, lang under 'classes' ----------------------------------------
+
+query III
+SELECT b.attributes['class'], b.attributes['role'], b.attributes['lang']
+FROM (SELECT unnest(html_to_duck_blocks('<p class="lead" role="note" lang="fr">t</p>', capture_attributes := 'classes')) AS b);
+----
+lead	note	fr
+
+query IIII
+SELECT b.element_type, b.attributes['class'], b.attributes['role'], b.attributes['lang']
+FROM (SELECT unnest(html_to_duck_blocks(
+    '<h2 class="c1" role="r1" lang="de">H</h2>'
+    || '<ul class="c2" role="r2" lang="es"><li>i</li></ul>'
+    || '<blockquote class="c3" role="r3" lang="it">q</blockquote>'
+    || '<table class="c4" role="r4" lang="nl"><tr><td>1</td></tr></table>'
+    || '<figure class="c5" role="r5" lang="pt"><img src="a.png"></figure>',
+    capture_attributes := 'classes')) AS b)
+WHERE b.element_type IN ('heading', 'list', 'blockquote', 'table', 'figure')
+ORDER BY b.element_order;
+----
+heading	c1	r1	de
+list	c2	r2	es
+blockquote	c3	r3	it
+table	c4	r4	nl
+figure	c5	r5	pt
+
+# --- the default capture is unchanged ----------------------------------------
+
+query III
+SELECT map_contains(b.attributes, 'class'), map_contains(b.attributes, 'role'), map_contains(b.attributes, 'lang')
+FROM (SELECT unnest(html_to_duck_blocks('<p class="lead" role="note" lang="fr">t</p>')) AS b);
+----
+false	false	false
+
+# --- '*' passes role too -------------------------------------------------------
+
+query I
+SELECT (html_to_duck_blocks('<p role="note">t</p>', capture_attributes := '*'))[1].attributes['role'];
+----
+note
+
+# --- the vocabulary's role is never forged --------------------------------------
+
+# A sectioning element keeps its semantic role, and no key appears twice.
+query II
+SELECT b.attributes['role'], len(map_keys(b.attributes)) - len(list_distinct(map_keys(b.attributes)))
+FROM (SELECT unnest(html_to_duck_blocks('<section role="region" class="s"><p>x</p></section>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'section';
+----
+section	0
+
+query I
+SELECT b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<nav role="navigation"><p>n</p></nav>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'section';
+----
+nav
+
+# role_never_forges_vocabulary: a plain <li> with an ARIA role stays a plain item.
+query I
+SELECT map_contains(b.attributes, 'role')
+FROM (SELECT unnest(html_to_duck_blocks('<ul><li role="term">x</li></ul>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'list_item';
+----
+false
+
+query II
+SELECT contains(h, '<li'), contains(h, '<dt')
+FROM (SELECT duck_blocks_to_html(html_to_duck_blocks('<ul><li role="term">x</li></ul>', capture_attributes := '*')) AS h);
+----
+true	false
+
+# <dt>, <dd> and <summary> keep the role the vocabulary gives them.
+query I
+SELECT b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<dl><dt role="x">T</dt><dd role="y">D</dd></dl>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'list_item'
+ORDER BY b.element_order;
+----
+term
+definition
+
+query I
+SELECT b.attributes['role']
+FROM (SELECT unnest(html_to_duck_blocks('<details><summary role="x">S</summary><p>b</p></details>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'caption';
+----
+summary
+
+# <figcaption role="..."> keeps no source role.
+query I
+SELECT map_contains(b.attributes, 'role')
+FROM (SELECT unnest(html_to_duck_blocks('<figure><img src="a.png"><figcaption role="x">C</figcaption></figure>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'caption';
+----
+false

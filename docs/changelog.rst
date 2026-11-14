@@ -15,6 +15,21 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
 - ``<meta name>`` values for the browser or a crawler are no longer document metadata:
   ``viewport``, ``theme-color``, ``color-scheme``, ``format-detection``, ``referrer``,
   ``robots`` and ``generator``. A markdown writer used to put them in the front matter.
+- A heading with no ``id`` gets a slug id of its text, by ``read_markdown_blocks``' rule:
+  ``<h2>Field guide</h2>`` gives ``attributes['id'] = 'field-guide'`` (#275). ``id`` was absent.
+  ``duck_blocks_to_html`` therefore writes ``<h2 id="field-guide">`` after a round trip.
+- ``capture_attributes := 'classes'`` also copies ``role`` and ``lang`` (#275). A source ``role``
+  was dropped on every element, even under ``'*'``. It now passes on every element except those
+  whose block the vocabulary gives a role (``section``, ``list_item``, ``caption``). The default
+  capture is unchanged.
+- Table blocks keep their columns aligned when a cell spans (#274). ``<td colspan="2">x</td><td>y</td>``
+  under three headers gave ``["x","y"]``, so ``y`` sat under the second header. It now gives
+  ``["x","","y"]``. ``rowspan`` fills the rows below the same way.
+- Table blocks carry the ``<caption>`` text in ``attributes['caption']`` (#274). It was dropped.
+  A table nested in the caption is left out of that text.
+- Spans read as HTML reads them: ``rowspan="0"`` spans the rest of its row group, and a leading
+  ``+`` is allowed (``colspan="+2"``). Spans are bounded per table, so a small page cannot
+  expand into a huge one.
 
 v2.15.1 (Current)
 -----------------

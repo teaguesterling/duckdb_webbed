@@ -200,7 +200,7 @@ Convert HTML content into a list of structured document blocks. This function pa
      * - ``'default'`` *(or omitted)*
        - ``['id', 'name', 'href', 'src']`` -- identity and references
      * - ``'classes'``
-       - the default plus ``'class'``
+       - the default plus ``'class'``, ``'role'`` and ``'lang'``
      * - ``'*'`` or ``true``
        - every source attribute
      * - ``false``
@@ -214,9 +214,14 @@ Convert HTML content into a list of structured document blocks. This function pa
   that must keep their styling hooks. The same parameter is accepted by ``read_html_blocks``
   and ``parse_html_blocks``.
 
-  Attribute keys the vocabulary gives a meaning to (``role``, ``heading_level``, ``list_type``,
-  ...) are reserved and never copied from the source in any mode, so a document cannot forge
-  them: ``<section role="banner">`` keeps the vocabulary's ``role = 'section'``.
+  Attribute keys the vocabulary gives a meaning to (``heading_level``, ``list_type``, ...) are
+  reserved and never copied from the source in any mode, so a document cannot forge them.
+  ``role`` is reserved only on the elements whose block the vocabulary gives a role: sectioning
+  elements (``section``), ``<li>``, ``<dt>`` and ``<dd>`` (``list_item``), and ``<figcaption>``
+  and ``<summary>`` (``caption``). ``<section role="banner">`` keeps the vocabulary's
+  ``role = 'section'``, and ``<li role="term">`` stays a plain item. On every other element a
+  source (ARIA) ``role`` is copied like any attribute, for example ``<p role="note">``.
+  ``duck_blocks_to_html`` does not write a source ``role`` back.
 
 - ``filename`` (``read_html_blocks`` only): ``true`` appends a ``filename`` column **after**
   ``element_order`` -- the exact 8-field shape duck_block spec 6.4 accepts, so ``list(b)`` of
@@ -338,8 +343,15 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
      - Description
    * - ``heading``
      - H1-H6 elements. ``content`` is the heading text. ``attributes['heading_level']`` holds the
-       1-6 rank (``level`` is structural depth, not rank -- see above). ``attributes`` may also
-       contain ``id``.
+       1-6 rank (``level`` is structural depth, not rank -- see above). ``attributes['id']`` is
+       the source ``id`` when it has one. A heading with no source ``id`` gets a slug of its
+       text, by the rule ``read_markdown_blocks`` uses, so section ids and anchors agree across
+       readers: ASCII-lowercase, every other byte becomes ``-``, runs of ``-`` collapse, and the
+       ends trim (``Field guide`` → ``field-guide``, ``Café`` → ``caf``). Repeated headings
+       share one slug, as in ``read_markdown_blocks``. A heading whose slug is empty gets no
+       ``id``. A source ``id`` that ``capture_attributes`` leaves out is not replaced by a slug.
+       The slug is a vocabulary attribute, not a copied one, so a heading with no source ``id``
+       gets it under every ``capture_attributes`` mode, ``false`` included.
    * - ``paragraph``
      - P elements. Carries its text in ``content`` when it has no non-text children; otherwise
        ``content`` is ``NULL`` and inline children (``kind = 'inline'``) follow at ``level + 1``
@@ -368,7 +380,17 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
      - TABLE elements. ``encoding`` is ``'json'``; ``content`` is a JSON object with
        ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``. Headers
        come from ``<thead>``, or from a first row of only ``<th>`` cells. A table without
-       either has ``"headers":[]``, and its first row stays in ``rows``.
+       either has ``"headers":[]``, and its first row stays in ``rows``. ``<tfoot>`` rows go in
+       an extra ``"footers"`` key. This is duck_blocks' native table schema: select a page's
+       tables with ``WHERE element_type = 'table'``, and duck_block_utils'
+       ``duck_block_table_read(content)`` reads one back as typed rows.
+       A ``colspan`` or ``rowspan`` fills the positions it covers with empty cells, so every
+       value stays under its own header; an empty cell reads back as NULL, and no value is
+       repeated. The projection is lossy, as the duck_blocks spec says of ``{headers, rows}``:
+       the spans themselves, column alignment and multiple bodies are not kept.
+       ``attributes['caption']`` holds the text of the ``<caption>`` element, when it has one;
+       ``duck_blocks_to_html`` writes it back as ``<caption>``. ``attributes['pandoc_ast']`` is
+       never set: there is no Pandoc tuple to keep.
    * - ``hr``
      - HR elements. A marker: no ``content``, no children.
    * - ``image``

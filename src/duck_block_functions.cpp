@@ -18,6 +18,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include <functional>
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "yyjson.hpp"
@@ -39,10 +40,14 @@ static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 
 static std::string TableToJson(xmlNodePtr node);
+static std::string GetCellText(xmlNodePtr cell, bool skip_tables = false);
 // `sections` wraps the header row in <thead> and the rows in <tbody>. Without them a table nests one level shallower,
 // and a reader still takes a first row of <th> cells as the header row.
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true);
-static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
+// `caption` is the table's attributes['caption'] text (#274), written as <caption> first inside the table.
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true,
+                                   const std::string &caption = "");
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "",
+                                     const std::string &caption = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
                                   std::set<size_t> &consumed_indices, std::stringstream &html, int32_t parent_level);
@@ -630,9 +635,13 @@ struct CaptureSpec {
 		s.keys = {"id", "name", "href", "src"};
 		return s;
 	}
+	// #275: role and lang ride with class, so a selector or a language filter
+	// reads them the same way on every block.
 	static CaptureSpec Classes() {
 		auto s = Default();
 		s.keys.push_back("class");
+		s.keys.push_back("role");
+		s.keys.push_back("lang");
 		return s;
 	}
 	static CaptureSpec All() {
@@ -695,6 +704,16 @@ static bool IsReservedAttr(const std::string &key) {
 	       key == DuckBlockTypes::ATTR_ORDERED_LEGACY || key == "language";
 }
 
+// #275. Tags whose block the vocabulary gives a role: section (sectioning
+// elements), list_item (li, dt, dd: term/definition) and caption (figcaption,
+// summary). The writer picks the output tag from that role, so a source role
+// there is never copied: <li role="term"> would otherwise export as <dt>. On
+// every other element the source (ARIA) role passes like any attribute.
+static bool TagCarriesVocabularyRole(const std::string &tag) {
+	return tag == "li" || tag == "dt" || tag == "dd" || tag == "figcaption" || tag == "summary" ||
+	       !SectionRoleForTag(tag).empty();
+}
+
 // Replace-or-append, so a key set by the passthrough copy and again by a
 // type-specific site (href on <a>, src on <img>, start on <ol>) is stored once.
 static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::string &value) {
@@ -705,6 +724,30 @@ static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::stri
 		}
 	}
 	attrs.emplace_back(key, value);
+}
+
+// GitHub #275. The id a heading with no source id gets: the rule of duckdb_markdown's
+// GenerateSectionId, byte for byte, so section ids, links and anchors agree across
+// readers. ASCII-lowercase; any byte outside [a-z0-9_-] becomes '-'; runs of '-'
+// collapse; leading and trailing '-' trim. Non-ASCII is not transliterated ("Café" ->
+// "caf"), and there is no dedup suffix, because read_markdown_blocks adds none either.
+static std::string HeadingSlug(const std::string &text) {
+	std::string out;
+	out.reserve(text.size());
+	for (char raw : text) {
+		char c = (raw >= 'A' && raw <= 'Z') ? static_cast<char>(raw - 'A' + 'a') : raw;
+		bool keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+		if (keep && c != '-') {
+			out += c;
+		} else if (out.empty() || out.back() != '-') {
+			out += '-';
+		}
+	}
+	size_t b = out.find_first_not_of('-');
+	if (b == std::string::npos) {
+		return std::string();
+	}
+	return out.substr(b, out.find_last_not_of('-') - b + 1);
 }
 
 // Copy the source element's own attributes, in document order, per the spec.
@@ -719,7 +762,15 @@ static void CopySourceAttributes(xmlNodePtr node, OrderedAttrs &attrs, const Cap
 			continue;
 		}
 		std::string key(reinterpret_cast<const char *>(a->name));
-		if (IsReservedAttr(key) || !spec.Wants(key)) {
+		if (!spec.Wants(key)) {
+			continue;
+		}
+		// role is reserved only where the vocabulary sets it (#275).
+		if (key == DuckBlockTypes::ATTR_ROLE) {
+			if (node->name && TagCarriesVocabularyRole(reinterpret_cast<const char *>(node->name))) {
+				continue;
+			}
+		} else if (IsReservedAttr(key)) {
 			continue;
 		}
 		xmlChar *raw = xmlNodeListGetString(node->doc, a->children, 1);
@@ -992,6 +1043,15 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 
 		// --- Headings ---------------------------------------------------
 		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+			// #275: a heading the source gave no id gets the cross-reader slug. A source id
+			// that capture left out is not replaced: the block would carry an id the source
+			// never had.
+			if (GetNodeAttribute(child, "id").empty()) {
+				std::string slug = HeadingSlug(GetNodeTextContent(child));
+				if (!slug.empty()) {
+					PutAttr(attrs, "id", slug);
+				}
+			}
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),
@@ -1048,6 +1108,21 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 
 		// --- JSON-encoded leaves: NOT recursed ---------------------------
 		if (IsJsonLeafTag(tag)) {
+			// #274: the first <caption> is the table's title. A source attribute named caption
+			// (possible under '*') is dropped, so it cannot stand in for one: the writer would
+			// emit it as a <caption> element.
+			attrs.erase(std::remove_if(attrs.begin(), attrs.end(),
+			                           [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
+			            attrs.end());
+			for (xmlNodePtr c = child->children; c; c = c->next) {
+				if (c->type == XML_ELEMENT_NODE && c->name && xmlStrcmp(c->name, BAD_CAST "caption") == 0) {
+					std::string caption = GetCellText(c, true);
+					if (!caption.empty()) {
+						PutAttr(attrs, "caption", caption);
+					}
+					break;
+				}
+			}
 			std::string content = TableToJson(child);
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_TABLE, content, Value::INTEGER(level),
 			                                          DuckBlockTypes::ENCODING_JSON, attrs, order++));
@@ -1836,13 +1911,19 @@ void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, Express
 				CheckContainerLevel(cur_level);
 				open_containers.push_back({"</" + item_tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
+				// attributes['caption'] (#274) is the <caption> element, not an attribute of <table>.
+				std::string caption = attrs.count("caption") ? attrs["caption"] : "";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					// table > tbody > tr > td is three levels below the table. At the depth limit the table drops the
 					// optional sections, which a source table without them needs no room for.
-					html << TableJsonToHtml(content, PassthroughAttrs(attrs),
-					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL);
+					html << TableJsonToHtml(content, PassthroughAttrs(attrs, {"caption"}),
+					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL, caption);
 				} else {
-					html << "<table" << PassthroughAttrs(attrs) << "></table>";
+					html << "<table" << PassthroughAttrs(attrs, {"caption"}) << ">";
+					if (!caption.empty()) {
+						html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+					}
+					html << "</table>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_HR) {
 				html << "<hr" << PassthroughAttrs(attrs) << ">";
@@ -3066,9 +3147,13 @@ static std::string RenderPandocCellToHtml(yyjson_val *cell_val, int depth = 0) {
 	return RenderPandocInlinesToHtml(cell_val, depth);
 }
 
-static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs) {
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs,
+                                     const std::string &caption) {
 	std::stringstream html;
 	html << "<table" << open_attrs << ">";
+	if (!caption.empty()) {
+		html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+	}
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
 	if (!doc) {
@@ -3152,10 +3237,11 @@ static std::string PandocTableToHtml(const std::string &json, const std::string 
 	return html.str();
 }
 
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs, bool sections) {
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs, bool sections,
+                                   const std::string &caption) {
 	size_t first_char = json.find_first_not_of(" \t\n\r");
 	if (first_char != std::string::npos && json[first_char] == '[') {
-		return PandocTableToHtml(json, open_attrs);
+		return PandocTableToHtml(json, open_attrs, caption);
 	}
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
@@ -3171,6 +3257,9 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 
 	std::stringstream html;
 	html << "<table" << open_attrs << ">";
+	if (!caption.empty()) {
+		html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+	}
 
 	yyjson_val *headers_val = yyjson_obj_get(root, "headers");
 	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {
@@ -3239,7 +3328,7 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 }
 
 // Append a cell's text, with a space where a browser starts a new line: at <br> and around a block child.
-static void AccumulateCellText(xmlNodePtr node, std::string &result) {
+static void AccumulateCellText(xmlNodePtr node, std::string &result, bool skip_tables = false) {
 	for (xmlNodePtr child = node->children; child; child = child->next) {
 		if (child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) {
 			if (child->content) {
@@ -3247,14 +3336,15 @@ static void AccumulateCellText(xmlNodePtr node, std::string &result) {
 			}
 		} else if (child->type == XML_ELEMENT_NODE && child->name) {
 			std::string tag = reinterpret_cast<const char *>(child->name);
-			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg") {
+			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg" ||
+			    (skip_tables && tag == "table")) {
 				continue;
 			}
 			bool breaks_line = tag == "br" || tag == "div" || IsBlockLevelTag(tag);
 			if (breaks_line) {
 				result += ' ';
 			}
-			AccumulateCellText(child, result);
+			AccumulateCellText(child, result, skip_tables);
 			if (breaks_line) {
 				result += ' ';
 			}
@@ -3264,9 +3354,10 @@ static void AccumulateCellText(xmlNodePtr node, std::string &result) {
 
 // A cell is one line of text: a line break becomes one space, whitespace runs collapse, and the edges are
 // trimmed. GetNodeTextContent gave "xy" for "x<br>y". A "\n" separator would end the row in a markdown table.
-static std::string GetCellText(xmlNodePtr cell) {
+// `skip_tables` leaves out nested <table> text; a <caption> uses it (#274).
+static std::string GetCellText(xmlNodePtr cell, bool skip_tables) {
 	std::string raw;
-	AccumulateCellText(cell, raw);
+	AccumulateCellText(cell, raw, skip_tables);
 	std::string result;
 	bool pending_space = false;
 	for (char c : raw) {
@@ -3283,26 +3374,143 @@ static std::string GetCellText(xmlNodePtr cell) {
 	return result;
 }
 
+// colspan / rowspan as the HTML "rules for parsing non-negative integers" read them:
+// leading whitespace, an optional '+', then digits; anything else is 1. Clamped to the
+// HTML limits (colspan 1000, rowspan 65534) so a hostile span cannot ask for millions of
+// cells. A value of 0 is `zero_as`: 1 for colspan, and for rowspan the maximum, because
+// HTML's rowspan="0" spans the rest of the row group (the grid ends spans there).
+static int32_t TableSpan(xmlNodePtr cell, const char *name, int32_t max, int32_t zero_as = 1) {
+	std::string raw = GetNodeAttribute(cell, name);
+	size_t i = 0;
+	while (i < raw.size() && XMLUtils::IsHTMLWhitespace(raw[i])) {
+		i++;
+	}
+	if (i < raw.size() && raw[i] == '+') {
+		i++;
+	}
+	int64_t value = 0;
+	bool any = false;
+	for (; i < raw.size() && raw[i] >= '0' && raw[i] <= '9'; i++) {
+		any = true;
+		value = value * 10 + (raw[i] - '0');
+		if (value > max) {
+			return max;
+		}
+	}
+	if (!any) {
+		return 1;
+	}
+	return value == 0 ? zero_as : static_cast<int32_t>(value);
+}
+
+static bool IsTableCell(xmlNodePtr n) {
+	return n->type == XML_ELEMENT_NODE && n->name &&
+	       (xmlStrcmp(n->name, BAD_CAST "td") == 0 || xmlStrcmp(n->name, BAD_CAST "th") == 0);
+}
+
+// GitHub #274. Lay one <tr> out on its row group's grid. A position a colspan or a
+// rowspan covers is an empty cell, so every value stays under its own header:
+// duck_block_table_read pads a short row only at its end, and an early span used to
+// shift the rest of the row left. Empty reads back as NULL; no value is repeated.
+// `pending[c]` counts the rows below that column c is still covered for. Returns an
+// empty row for a <tr> with no cells.
+//
+// `filler_budget` bounds the empty cells one table may add: 1,000,000 plus one per real
+// cell, the bound duck_block_table_read uses for its own padding. The per-cell clamps
+// alone let 7 KB of spans become 60 MB of JSON (measured). Once the budget is spent,
+// spans stop expanding and every pending span ends; the table stays readable, and its
+// later rows may be short.
+static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_t> &pending, bool &all_th,
+                                               size_t &filler_budget) {
+	std::vector<std::string> row;
+	all_th = true;
+	size_t col = 0;
+	bool any = false;
+	auto pad = [&]() {
+		if (filler_budget == 0) {
+			std::fill(pending.begin(), pending.end(), 0);
+			return false;
+		}
+		filler_budget--;
+		row.emplace_back();
+		return true;
+	};
+	for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
+		if (!IsTableCell(cell)) {
+			continue;
+		}
+		while (col < pending.size() && pending[col] > 0 && pad()) {
+			pending[col]--;
+			col++;
+		}
+		any = true;
+		filler_budget++;
+		all_th = all_th && xmlStrcmp(cell->name, BAD_CAST "th") == 0;
+		int32_t colspan = TableSpan(cell, "colspan", 1000);
+		int32_t rowspan = TableSpan(cell, "rowspan", 65534, 65534);
+		row.push_back(GetCellText(cell));
+		size_t width = 1;
+		while (width < static_cast<size_t>(colspan) && pad()) {
+			width++;
+		}
+		if (filler_budget == 0) {
+			rowspan = 1;
+		}
+		if (pending.size() < col + width) {
+			pending.resize(col + width, 0);
+		}
+		for (size_t c = col; c < col + width; c++) {
+			pending[c] = rowspan - 1;
+		}
+		col += width;
+	}
+	if (!any) {
+		// A <tr> with no cells is a row every pending span covers: it still uses up one
+		// row of each, or the next row would shift right. It emits nothing.
+		for (auto &p : pending) {
+			if (p > 0) {
+				p--;
+			}
+		}
+		return row;
+	}
+	// Columns past the last cell that a span from above still covers.
+	size_t last = pending.size();
+	while (last > col && pending[last - 1] == 0) {
+		last--;
+	}
+	for (; col < last; col++) {
+		bool covered = pending[col] > 0;
+		if (!pad()) {
+			break;
+		}
+		if (covered) {
+			pending[col]--;
+		}
+	}
+	return row;
+}
+
 static std::string TableToJson(xmlNodePtr node) {
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
 	std::vector<std::vector<std::string>> footers;
 	bool saw_thead = false;
+	size_t filler_budget = 1000000;
 
-	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
-	auto add_body_row = [&](xmlNodePtr tr) {
-		std::vector<std::string> row;
-		bool all_th = true;
-		for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
-			if (cell->type != XML_ELEMENT_NODE || !cell->name) {
-				continue;
-			}
-			bool is_th = xmlStrcmp(cell->name, BAD_CAST "th") == 0;
-			if (is_th || xmlStrcmp(cell->name, BAD_CAST "td") == 0) {
-				row.push_back(GetCellText(cell));
-				all_th = all_th && is_th;
+	// Each row group (<thead>, each <tbody>, <tfoot>, a run of bare <tr>) has its own
+	// grid: an HTML row span ends at its group's end.
+	auto each_row = [](xmlNodePtr group, const std::function<void(xmlNodePtr)> &fn) {
+		for (xmlNodePtr tr = group->children; tr; tr = tr->next) {
+			if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
+				fn(tr);
 			}
 		}
+	};
+	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
+	auto add_body_row = [&](xmlNodePtr tr, std::vector<int32_t> &pending) {
+		bool all_th = true;
+		auto row = LayoutTableRow(tr, pending, all_th, filler_budget);
 		if (row.empty()) {
 			return;
 		}
@@ -3313,58 +3521,45 @@ static std::string TableToJson(xmlNodePtr node) {
 		}
 	};
 
-	xmlNodePtr child = node->children;
-	while (child) {
-		if (child->type == XML_ELEMENT_NODE && child->name) {
-			if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
-				saw_thead = true;
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						xmlNodePtr th = tr->children;
-						while (th) {
-							if (th->type == XML_ELEMENT_NODE && th->name &&
-							    (xmlStrcmp(th->name, BAD_CAST "th") == 0 || xmlStrcmp(th->name, BAD_CAST "td") == 0)) {
-								headers.push_back(GetCellText(th));
-							}
-							th = th->next;
-						}
-						break;
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tbody") == 0) {
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						add_body_row(tr);
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						std::vector<std::string> row;
-						xmlNodePtr td = tr->children;
-						while (td) {
-							if (td->type == XML_ELEMENT_NODE && td->name &&
-							    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
-								row.push_back(GetCellText(td));
-							}
-							td = td->next;
-						}
-						if (!row.empty()) {
-							footers.push_back(std::move(row));
-						}
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
-				add_body_row(child);
-			}
+	std::vector<int32_t> bare_pending;
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
 		}
-		child = child->next;
+		if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
+			add_body_row(child, bare_pending);
+			continue;
+		}
+		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 || xmlStrcmp(child->name, BAD_CAST "tbody") == 0 ||
+		                 xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
+		if (!row_group) {
+			continue;
+		}
+		// A row group ends the loose rows before it, and their spans.
+		bare_pending.clear();
+		std::vector<int32_t> pending;
+		if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
+			saw_thead = true;
+			// The first row of <thead> is the header row.
+			bool taken = false;
+			each_row(child, [&](xmlNodePtr tr) {
+				if (!taken) {
+					bool all_th = true;
+					headers = LayoutTableRow(tr, pending, all_th, filler_budget);
+					taken = true;
+				}
+			});
+		} else if (xmlStrcmp(child->name, BAD_CAST "tbody") == 0) {
+			each_row(child, [&](xmlNodePtr tr) { add_body_row(tr, pending); });
+		} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
+			each_row(child, [&](xmlNodePtr tr) {
+				bool all_th = true;
+				auto row = LayoutTableRow(tr, pending, all_th, filler_budget);
+				if (!row.empty()) {
+					footers.push_back(std::move(row));
+				}
+			});
+		}
 	}
 
 	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);

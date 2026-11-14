@@ -1,0 +1,95 @@
+# name: test/sql/github_issue_275_heading_slug_ids.test
+# description: every HTML heading with no id gets the same slug id read_markdown_blocks gives it
+# group: [sql]
+
+#
+# GitHub Issue #275: https://github.com/teaguesterling/duckdb_webbed/issues/275
+#
+# WHY: section ids, links and anchors must agree across readers. read_markdown_blocks
+# gives every heading a slug id ('# Field guide' -> id=field-guide), and so do panduck's
+# readers and duck_block_utils' duck_blocks_sections. An HTML heading with no id had
+# none, so a DCS '#field-guide' selector or a section lookup found the Markdown heading
+# and missed the same heading in HTML.
+#
+# The rule is markdown's GenerateSectionId exactly, with no dedup suffix, because
+# read_markdown_blocks does not dedup either (measured on markdown v1.9.8: two
+# '# Dup' headings both get id=dup). Agreement across formats is the point; a
+# private dedup rule here would break it on repeated headings.
+#
+# On by default, agreed with Teague 2026-11-13: this changes default output.
+#
+
+require webbed
+
+# Plain text heading
+query I
+SELECT (html_to_duck_blocks('<h2>Field guide</h2>'))[1].attributes['id'];
+----
+field-guide
+
+# Bytes outside [a-z0-9_-] become '-', then runs collapse and ends trim. Non-ASCII
+# bytes are not transliterated: 'Café' -> 'caf', as in read_markdown_blocks v1.9.8.
+query I
+SELECT (html_to_duck_blocks('<h2>Café</h2>'))[1].attributes['id'];
+----
+caf
+
+query I
+SELECT (html_to_duck_blocks('<h3>  Hello,   World! (v2.0) </h3>'))[1].attributes['id'];
+----
+hello-world-v2-0
+
+query I
+SELECT (html_to_duck_blocks('<h3>snake_case-and-dash</h3>'))[1].attributes['id'];
+----
+snake_case-and-dash
+
+# No dedup: repeated headings share an id, as in read_markdown_blocks.
+query II
+SELECT b[1].attributes['id'], b[2].attributes['id']
+FROM (SELECT html_to_duck_blocks('<h2>Dup</h2><h2>Dup</h2>') AS b);
+----
+dup	dup
+
+# Inline children: the slug is taken from the heading's whole text.
+query I
+SELECT (html_to_duck_blocks('<h2>Hello <em>big</em> world</h2>'))[1].attributes['id'];
+----
+hello-big-world
+
+# A given id always wins.
+query I
+SELECT (html_to_duck_blocks('<h2 id="given">Given id</h2>'))[1].attributes['id'];
+----
+given
+
+# A given id that capture leaves out is not replaced by a slug: a slug would put an
+# id on the block that the source never had.
+query I
+SELECT map_contains((html_to_duck_blocks('<h2 id="given">Given id</h2>', capture_attributes := false))[1].attributes, 'id');
+----
+false
+
+# An empty slug emits no id key, rather than id=''.
+query I
+SELECT map_contains((html_to_duck_blocks('<h2>日本</h2>'))[1].attributes, 'id');
+----
+false
+
+query I
+SELECT map_contains((html_to_duck_blocks('<h2>!!!</h2>'))[1].attributes, 'id');
+----
+false
+
+# id sits before heading_level, as a given id does today.
+query I
+SELECT (html_to_duck_blocks('<h2>No id here</h2>'))[1].attributes::VARCHAR;
+----
+{id=no-id-here, heading_level=2}
+
+# The file reader takes the same path.
+query I
+SELECT attributes['id'] FROM read_html_blocks('test/html/blocks/github_issue_275_headings.html') WHERE element_type = 'heading' ORDER BY element_order;
+----
+field-guide
+given

@@ -42,7 +42,7 @@ query I
 SELECT duck_blocks_to_html(list(r ORDER BY r.element_order))::VARCHAR
 FROM read_html_blocks('test/html/simple.html', filename := true) r;
 ----
-<h1>Welcome</h1><p>This is a test page.</p>
+<h1 id="welcome">Welcome</h1><p>This is a test page.</p>
 
 # A mix of 7- and 8-field values in one expression resolves too.
 query I
@@ -51,7 +51,7 @@ SELECT duck_blocks_to_html(list_concat(
   [{'kind':'block','element_type':'paragraph','content':'b','level':1,'encoding':'text','attributes':MAP{}::MAP(VARCHAR, VARCHAR),'element_order':1,'filename':'f'}]
 ))::VARCHAR;
 ----
-<h2>a</h2><p>b</p>
+<h2 id="a">a</h2><p>b</p>
 
 # --- Everything near the accepted shape is still refused ---------------------
 # Not tolerance for "an extra column"; acceptance of one exact type.
