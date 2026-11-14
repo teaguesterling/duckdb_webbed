@@ -80,11 +80,29 @@ SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th></tr><tr><td rowspan
 
 # --- hostile span values ----------------------------------------------------------
 
-# Non-numeric, zero and negative spans count as 1.
+# Non-numeric, zero and negative colspans, and non-numeric and negative rowspans, count as 1.
 query I
-SELECT (html_to_duck_blocks('<table><tr><td colspan="x">a</td><td colspan="-1">b</td><td colspan="0">c</td><td rowspan="0">d</td></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>'))[1].content;
+SELECT (html_to_duck_blocks('<table><tr><td colspan="x">a</td><td colspan="-1">b</td><td colspan="0">c</td><td rowspan="-1">d</td><td rowspan="y">e</td></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td></tr></table>'))[1].content;
 ----
-{"headers":[],"rows":[["a","b","c","d"],["1","2","3","4"]]}
+{"headers":[],"rows":[["a","b","c","d","e"],["1","2","3","4","5"]]}
+
+# rowspan="0" is legal HTML: the cell spans the rest of its row group, and no further.
+query I
+SELECT (html_to_duck_blocks('<table><tbody><tr><td rowspan="0">x</td><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr></tbody><tbody><tr><td>a</td><td>b</td></tr></tbody></table>'))[1].content;
+----
+{"headers":[],"rows":[["x","1"],["","2"],["","3"],["a","b"]]}
+
+# HTML's integer rules skip a leading '+' (and leading whitespace).
+query I
+SELECT (html_to_duck_blocks('<table><tr><td colspan="+2">a</td><td colspan=" 2">b</td><td>c</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["a","","b","","c"]]}
+
+# Something that is not a row between loose rows does not end a row span.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td rowspan="2">x</td><td>1</td></tr><template>t</template><tr><td>2</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["x","1"],["","2"]]}
 
 # colspan is clamped to 1000, the HTML limit: the value plus 999 empty cells.
 query I
@@ -119,6 +137,14 @@ FROM (SELECT unnest(html_to_duck_blocks('<table id="t1"><caption>Cap  <b>tion</b
 WHERE b.element_type = 'table';
 ----
 Cap tion	t1
+
+# A table nested in the caption does not add its text to the caption.
+query I
+SELECT b.attributes['caption']
+FROM (SELECT unnest(html_to_duck_blocks('<table><caption>Cap <table><tr><td>inner</td></tr></table></caption><tr><td>1</td></tr></table>')) AS b)
+WHERE b.element_type = 'table' AND b.element_order = 0;
+----
+Cap
 
 # No <caption>, or an empty one: no caption key.
 query II
@@ -157,6 +183,21 @@ SELECT contains(h, '<caption>Cap</caption>'), contains(h, 'caption="')
 FROM (SELECT duck_blocks_to_html(html_to_duck_blocks('<table><caption>Cap</caption><tr><th>a</th></tr><tr><td>1</td></tr></table>')) AS h);
 ----
 true	false
+
+# Every writer path keeps the caption: a table block with no content, and one whose
+# content is a Pandoc tuple (other producers make these; HTML input does not).
+query I
+SELECT contains(duck_blocks_to_html([{'kind': 'block', 'element_type': 'table', 'content': '', 'level': 1,
+       'encoding': 'json', 'attributes': MAP {'caption': 'C'}, 'element_order': 0}]), '<caption>C</caption>');
+----
+true
+
+query I
+SELECT contains(duck_blocks_to_html([{'kind': 'block', 'element_type': 'table',
+       'content': '[["",[],[]],[null,[]],[],[["",[],[]],[]],[],[["",[],[]],[]]]', 'level': 1,
+       'encoding': 'json', 'attributes': MAP {'caption': 'C'}, 'element_order': 0}]), '<caption>C</caption>');
+----
+true
 
 # The file reader takes the same path.
 query II

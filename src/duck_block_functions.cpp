@@ -40,13 +40,14 @@ static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 
 static std::string TableToJson(xmlNodePtr node);
-static std::string GetCellText(xmlNodePtr cell);
+static std::string GetCellText(xmlNodePtr cell, bool skip_tables = false);
 // `sections` wraps the header row in <thead> and the rows in <tbody>. Without them a table nests one level shallower,
 // and a reader still takes a first row of <th> cells as the header row.
 // `caption` is the table's attributes['caption'] text (#274), written as <caption> first inside the table.
 static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true,
                                    const std::string &caption = "");
-static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "",
+                                     const std::string &caption = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
                                   std::set<size_t> &consumed_indices, std::stringstream &html, int32_t parent_level);
@@ -1115,7 +1116,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			            attrs.end());
 			for (xmlNodePtr c = child->children; c; c = c->next) {
 				if (c->type == XML_ELEMENT_NODE && c->name && xmlStrcmp(c->name, BAD_CAST "caption") == 0) {
-					std::string caption = GetCellText(c);
+					std::string caption = GetCellText(c, true);
 					if (!caption.empty()) {
 						PutAttr(attrs, "caption", caption);
 					}
@@ -1910,15 +1911,19 @@ void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, Express
 				CheckContainerLevel(cur_level);
 				open_containers.push_back({"</" + item_tag + ">", cur_level});
 			} else if (element_type == DuckBlockTypes::TYPE_TABLE) {
+				// attributes['caption'] (#274) is the <caption> element, not an attribute of <table>.
+				std::string caption = attrs.count("caption") ? attrs["caption"] : "";
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					// table > tbody > tr > td is three levels below the table. At the depth limit the table drops the
 					// optional sections, which a source table without them needs no room for.
-					// attributes['caption'] (#274) is the <caption> element, not an attribute of <table>.
-					std::string caption = attrs.count("caption") ? attrs["caption"] : "";
 					html << TableJsonToHtml(content, PassthroughAttrs(attrs, {"caption"}),
 					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL, caption);
 				} else {
-					html << "<table" << PassthroughAttrs(attrs, {"caption"}) << "></table>";
+					html << "<table" << PassthroughAttrs(attrs, {"caption"}) << ">";
+					if (!caption.empty()) {
+						html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+					}
+					html << "</table>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_HR) {
 				html << "<hr" << PassthroughAttrs(attrs) << ">";
@@ -3142,9 +3147,13 @@ static std::string RenderPandocCellToHtml(yyjson_val *cell_val, int depth = 0) {
 	return RenderPandocInlinesToHtml(cell_val, depth);
 }
 
-static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs) {
+static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs,
+                                     const std::string &caption) {
 	std::stringstream html;
 	html << "<table" << open_attrs << ">";
+	if (!caption.empty()) {
+		html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+	}
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
 	if (!doc) {
@@ -3232,7 +3241,7 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
                                    const std::string &caption) {
 	size_t first_char = json.find_first_not_of(" \t\n\r");
 	if (first_char != std::string::npos && json[first_char] == '[') {
-		return PandocTableToHtml(json, open_attrs);
+		return PandocTableToHtml(json, open_attrs, caption);
 	}
 
 	yyjson_doc *doc = yyjson_read(json.c_str(), json.size(), 0);
@@ -3319,7 +3328,7 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 }
 
 // Append a cell's text, with a space where a browser starts a new line: at <br> and around a block child.
-static void AccumulateCellText(xmlNodePtr node, std::string &result) {
+static void AccumulateCellText(xmlNodePtr node, std::string &result, bool skip_tables = false) {
 	for (xmlNodePtr child = node->children; child; child = child->next) {
 		if (child->type == XML_TEXT_NODE || child->type == XML_CDATA_SECTION_NODE) {
 			if (child->content) {
@@ -3327,14 +3336,15 @@ static void AccumulateCellText(xmlNodePtr node, std::string &result) {
 			}
 		} else if (child->type == XML_ELEMENT_NODE && child->name) {
 			std::string tag = reinterpret_cast<const char *>(child->name);
-			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg") {
+			if (tag == "script" || tag == "style" || tag == "noscript" || tag == "template" || tag == "svg" ||
+			    (skip_tables && tag == "table")) {
 				continue;
 			}
 			bool breaks_line = tag == "br" || tag == "div" || IsBlockLevelTag(tag);
 			if (breaks_line) {
 				result += ' ';
 			}
-			AccumulateCellText(child, result);
+			AccumulateCellText(child, result, skip_tables);
 			if (breaks_line) {
 				result += ' ';
 			}
@@ -3344,9 +3354,10 @@ static void AccumulateCellText(xmlNodePtr node, std::string &result) {
 
 // A cell is one line of text: a line break becomes one space, whitespace runs collapse, and the edges are
 // trimmed. GetNodeTextContent gave "xy" for "x<br>y". A "\n" separator would end the row in a markdown table.
-static std::string GetCellText(xmlNodePtr cell) {
+// `skip_tables` leaves out nested <table> text; a <caption> uses it (#274).
+static std::string GetCellText(xmlNodePtr cell, bool skip_tables) {
 	std::string raw;
-	AccumulateCellText(cell, raw);
+	AccumulateCellText(cell, raw, skip_tables);
 	std::string result;
 	bool pending_space = false;
 	for (char c : raw) {
@@ -3364,13 +3375,17 @@ static std::string GetCellText(xmlNodePtr cell) {
 }
 
 // colspan / rowspan as the HTML "rules for parsing non-negative integers" read them:
-// leading whitespace, then digits; anything else, or a value below 1, is 1. Clamped to
-// the HTML limits (colspan 1000, rowspan 65534) so a hostile span cannot ask for
-// millions of cells.
-static int32_t TableSpan(xmlNodePtr cell, const char *name, int32_t max) {
+// leading whitespace, an optional '+', then digits; anything else is 1. Clamped to the
+// HTML limits (colspan 1000, rowspan 65534) so a hostile span cannot ask for millions of
+// cells. A value of 0 is `zero_as`: 1 for colspan, and for rowspan the maximum, because
+// HTML's rowspan="0" spans the rest of the row group (the grid ends spans there).
+static int32_t TableSpan(xmlNodePtr cell, const char *name, int32_t max, int32_t zero_as = 1) {
 	std::string raw = GetNodeAttribute(cell, name);
 	size_t i = 0;
 	while (i < raw.size() && XMLUtils::IsHTMLWhitespace(raw[i])) {
+		i++;
+	}
+	if (i < raw.size() && raw[i] == '+') {
 		i++;
 	}
 	int64_t value = 0;
@@ -3382,7 +3397,10 @@ static int32_t TableSpan(xmlNodePtr cell, const char *name, int32_t max) {
 			return max;
 		}
 	}
-	return (!any || value < 1) ? 1 : static_cast<int32_t>(value);
+	if (!any) {
+		return 1;
+	}
+	return value == 0 ? zero_as : static_cast<int32_t>(value);
 }
 
 static bool IsTableCell(xmlNodePtr n) {
@@ -3429,7 +3447,7 @@ static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_
 		filler_budget++;
 		all_th = all_th && xmlStrcmp(cell->name, BAD_CAST "th") == 0;
 		int32_t colspan = TableSpan(cell, "colspan", 1000);
-		int32_t rowspan = TableSpan(cell, "rowspan", 65534);
+		int32_t rowspan = TableSpan(cell, "rowspan", 65534, 65534);
 		row.push_back(GetCellText(cell));
 		size_t width = 1;
 		while (width < static_cast<size_t>(colspan) && pad()) {
@@ -3512,6 +3530,12 @@ static std::string TableToJson(xmlNodePtr node) {
 			add_body_row(child, bare_pending);
 			continue;
 		}
+		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 || xmlStrcmp(child->name, BAD_CAST "tbody") == 0 ||
+		                 xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
+		if (!row_group) {
+			continue;
+		}
+		// A row group ends the loose rows before it, and their spans.
 		bare_pending.clear();
 		std::vector<int32_t> pending;
 		if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {

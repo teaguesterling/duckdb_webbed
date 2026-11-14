@@ -350,6 +350,8 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
        ends trim (``Field guide`` → ``field-guide``, ``Café`` → ``caf``). Repeated headings
        share one slug, as in ``read_markdown_blocks``. A heading whose slug is empty gets no
        ``id``. A source ``id`` that ``capture_attributes`` leaves out is not replaced by a slug.
+       The slug is a vocabulary attribute, not a copied one, so a heading with no source ``id``
+       gets it under every ``capture_attributes`` mode, ``false`` included.
    * - ``paragraph``
      - P elements. Carries its text in ``content`` when it has no non-text children; otherwise
        ``content`` is ``NULL`` and inline children (``kind = 'inline'``) follow at ``level + 1``

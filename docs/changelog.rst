@@ -26,6 +26,10 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
   under three headers gave ``["x","y"]``, so ``y`` sat under the second header. It now gives
   ``["x","","y"]``. ``rowspan`` fills the rows below the same way.
 - Table blocks carry the ``<caption>`` text in ``attributes['caption']`` (#274). It was dropped.
+  A table nested in the caption is left out of that text.
+- Spans read as HTML reads them: ``rowspan="0"`` spans the rest of its row group, and a leading
+  ``+`` is allowed (``colspan="+2"``). Spans are bounded per table, so a small page cannot
+  expand into a huge one.
 
 v2.15.1 (Current)
 -----------------
