@@ -1,0 +1,86 @@
+# name: test/sql/github_issue_274_native_table_blocks.test
+# description: HTML table blocks carry the native {headers, rows} schema with aligned spans
+# group: [sql]
+
+#
+# GitHub Issue #274: https://github.com/teaguesterling/duckdb_webbed/issues/274
+#
+# read_html_blocks already emits element_type='table' with duck_blocks' native content,
+# {"headers": [...], "rows": [[...]]} (duck_blocks_spec.md, "Only table carries JSON").
+# Query a page's tables with WHERE element_type = 'table'.
+#
+# WHY spans: duck_block_utils' duck_block_table_read pads a short row with NULL at its
+# END. A <td colspan="2"> early in a row therefore moved every later cell one column to
+# the left: the value landed under the wrong header with no error. Each spanned position
+# is now an empty cell, which duck_block_table_read reads as NULL, and no value is
+# repeated (decided 2026-11-13 with Teague). The projection still loses the span itself,
+# as the spec says of {headers, rows}.
+#
+
+require webbed
+
+# --- colspan / rowspan ----------------------------------------------------------
+
+# An early colspan keeps the later cell in its own column.
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th><th>c</th></tr><tr><td colspan="2">x</td><td>y</td></tr></table>'))[1].content;
+----
+{"headers":["a","b","c"],"rows":[["x","","y"]]}
+
+# rowspan fills the covered position in the rows below.
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th></tr><tr><td rowspan="2">x</td><td>1</td></tr><tr><td>2</td></tr></table>'))[1].content;
+----
+{"headers":["a","b"],"rows":[["x","1"],["","2"]]}
+
+# A rowspan in the middle of a row.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td>1</td><td rowspan="2">m</td><td>3</td></tr><tr><td>4</td><td>6</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["1","m","3"],["4","","6"]]}
+
+# colspan and rowspan together cover a block of cells.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td colspan="2" rowspan="2">z</td><td>1</td></tr><tr><td>2</td></tr><tr><td>a</td><td>b</td><td>c</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["z","","1"],["","","2"],["a","b","c"]]}
+
+# A header span.
+query I
+SELECT (html_to_duck_blocks('<table><thead><tr><th colspan="2">ab</th><th>c</th></tr></thead><tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody></table>'))[1].content;
+----
+{"headers":["ab","","c"],"rows":[["1","2","3"]]}
+
+# A row span does not cross from <thead> into <tbody> (HTML row groups end spans).
+query I
+SELECT (html_to_duck_blocks('<table><thead><tr><th rowspan="3">a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>'))[1].content;
+----
+{"headers":["a","b"],"rows":[["1","2"]]}
+
+# A row span reaching past the last row adds no rows.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td rowspan="5">x</td><td>1</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["x","1"]]}
+
+# --- hostile span values ----------------------------------------------------------
+
+# Non-numeric, zero and negative spans count as 1.
+query I
+SELECT (html_to_duck_blocks('<table><tr><td colspan="x">a</td><td colspan="-1">b</td><td colspan="0">c</td><td rowspan="0">d</td></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>'))[1].content;
+----
+{"headers":[],"rows":[["a","b","c","d"],["1","2","3","4"]]}
+
+# colspan is clamped to 1000, the HTML limit: the value plus 999 empty cells.
+query I
+SELECT (length(c) - length(replace(c, ',""', ''))) // 3
+FROM (SELECT (html_to_duck_blocks('<table><tr><td colspan="99999">a</td></tr></table>'))[1].content AS c);
+----
+999
+
+# --- footers keep their extra key; spans align there too ---------------------------
+
+query I
+SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr><tfoot><tr><td colspan="2">t</td></tr></tfoot></table>'))[1].content;
+----
+{"headers":["a","b"],"rows":[["1","2"]],"footers":[["t",""]]}

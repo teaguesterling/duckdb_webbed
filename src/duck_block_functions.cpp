@@ -18,6 +18,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include <functional>
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "yyjson.hpp"
@@ -3338,26 +3339,103 @@ static std::string GetCellText(xmlNodePtr cell) {
 	return result;
 }
 
+// colspan / rowspan as the HTML "rules for parsing non-negative integers" read them:
+// leading whitespace, then digits; anything else, or a value below 1, is 1. Clamped to
+// the HTML limits (colspan 1000, rowspan 65534) so a hostile span cannot ask for
+// millions of cells.
+static int32_t TableSpan(xmlNodePtr cell, const char *name, int32_t max) {
+	std::string raw = GetNodeAttribute(cell, name);
+	size_t i = 0;
+	while (i < raw.size() && XMLUtils::IsHTMLWhitespace(raw[i])) {
+		i++;
+	}
+	int64_t value = 0;
+	bool any = false;
+	for (; i < raw.size() && raw[i] >= '0' && raw[i] <= '9'; i++) {
+		any = true;
+		value = value * 10 + (raw[i] - '0');
+		if (value > max) {
+			return max;
+		}
+	}
+	return (!any || value < 1) ? 1 : static_cast<int32_t>(value);
+}
+
+static bool IsTableCell(xmlNodePtr n) {
+	return n->type == XML_ELEMENT_NODE && n->name &&
+	       (xmlStrcmp(n->name, BAD_CAST "td") == 0 || xmlStrcmp(n->name, BAD_CAST "th") == 0);
+}
+
+// GitHub #274. Lay one <tr> out on its row group's grid. A position a colspan or a
+// rowspan covers is an empty cell, so every value stays under its own header:
+// duck_block_table_read pads a short row only at its end, and an early span used to
+// shift the rest of the row left. Empty reads back as NULL; no value is repeated.
+// `pending[c]` counts the rows below that column c is still covered for. Returns an
+// empty row for a <tr> with no cells.
+static std::vector<std::string> LayoutTableRow(xmlNodePtr tr, std::vector<int32_t> &pending, bool &all_th) {
+	std::vector<std::string> row;
+	all_th = true;
+	size_t col = 0;
+	bool any = false;
+	for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
+		if (!IsTableCell(cell)) {
+			continue;
+		}
+		while (col < pending.size() && pending[col] > 0) {
+			row.emplace_back();
+			pending[col]--;
+			col++;
+		}
+		any = true;
+		all_th = all_th && xmlStrcmp(cell->name, BAD_CAST "th") == 0;
+		int32_t colspan = TableSpan(cell, "colspan", 1000);
+		int32_t rowspan = TableSpan(cell, "rowspan", 65534);
+		row.push_back(GetCellText(cell));
+		row.resize(row.size() + static_cast<size_t>(colspan - 1));
+		if (pending.size() < col + colspan) {
+			pending.resize(col + colspan, 0);
+		}
+		for (size_t c = col; c < col + colspan; c++) {
+			pending[c] = rowspan - 1;
+		}
+		col += colspan;
+	}
+	if (!any) {
+		return row;
+	}
+	// Columns past the last cell that a span from above still covers.
+	size_t last = pending.size();
+	while (last > col && pending[last - 1] == 0) {
+		last--;
+	}
+	for (; col < last; col++) {
+		row.emplace_back();
+		if (pending[col] > 0) {
+			pending[col]--;
+		}
+	}
+	return row;
+}
+
 static std::string TableToJson(xmlNodePtr node) {
 	std::vector<std::string> headers;
 	std::vector<std::vector<std::string>> rows;
 	std::vector<std::vector<std::string>> footers;
 	bool saw_thead = false;
 
-	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
-	auto add_body_row = [&](xmlNodePtr tr) {
-		std::vector<std::string> row;
-		bool all_th = true;
-		for (xmlNodePtr cell = tr->children; cell; cell = cell->next) {
-			if (cell->type != XML_ELEMENT_NODE || !cell->name) {
-				continue;
-			}
-			bool is_th = xmlStrcmp(cell->name, BAD_CAST "th") == 0;
-			if (is_th || xmlStrcmp(cell->name, BAD_CAST "td") == 0) {
-				row.push_back(GetCellText(cell));
-				all_th = all_th && is_th;
+	// Each row group (<thead>, each <tbody>, <tfoot>, a run of bare <tr>) has its own
+	// grid: an HTML row span ends at its group's end.
+	auto each_row = [](xmlNodePtr group, const std::function<void(xmlNodePtr)> &fn) {
+		for (xmlNodePtr tr = group->children; tr; tr = tr->next) {
+			if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
+				fn(tr);
 			}
 		}
+	};
+	// Without <thead>, a first body row is the header row only when every cell is <th>. Any other row is data.
+	auto add_body_row = [&](xmlNodePtr tr, std::vector<int32_t> &pending) {
+		bool all_th = true;
+		auto row = LayoutTableRow(tr, pending, all_th);
 		if (row.empty()) {
 			return;
 		}
@@ -3368,58 +3446,39 @@ static std::string TableToJson(xmlNodePtr node) {
 		}
 	};
 
-	xmlNodePtr child = node->children;
-	while (child) {
-		if (child->type == XML_ELEMENT_NODE && child->name) {
-			if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
-				saw_thead = true;
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						xmlNodePtr th = tr->children;
-						while (th) {
-							if (th->type == XML_ELEMENT_NODE && th->name &&
-							    (xmlStrcmp(th->name, BAD_CAST "th") == 0 || xmlStrcmp(th->name, BAD_CAST "td") == 0)) {
-								headers.push_back(GetCellText(th));
-							}
-							th = th->next;
-						}
-						break;
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tbody") == 0) {
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						add_body_row(tr);
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
-				xmlNodePtr tr = child->children;
-				while (tr) {
-					if (tr->type == XML_ELEMENT_NODE && tr->name && xmlStrcmp(tr->name, BAD_CAST "tr") == 0) {
-						std::vector<std::string> row;
-						xmlNodePtr td = tr->children;
-						while (td) {
-							if (td->type == XML_ELEMENT_NODE && td->name &&
-							    (xmlStrcmp(td->name, BAD_CAST "td") == 0 || xmlStrcmp(td->name, BAD_CAST "th") == 0)) {
-								row.push_back(GetCellText(td));
-							}
-							td = td->next;
-						}
-						if (!row.empty()) {
-							footers.push_back(std::move(row));
-						}
-					}
-					tr = tr->next;
-				}
-			} else if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
-				add_body_row(child);
-			}
+	std::vector<int32_t> bare_pending;
+	for (xmlNodePtr child = node->children; child; child = child->next) {
+		if (child->type != XML_ELEMENT_NODE || !child->name) {
+			continue;
 		}
-		child = child->next;
+		if (xmlStrcmp(child->name, BAD_CAST "tr") == 0) {
+			add_body_row(child, bare_pending);
+			continue;
+		}
+		bare_pending.clear();
+		std::vector<int32_t> pending;
+		if (xmlStrcmp(child->name, BAD_CAST "thead") == 0) {
+			saw_thead = true;
+			// The first row of <thead> is the header row.
+			bool taken = false;
+			each_row(child, [&](xmlNodePtr tr) {
+				if (!taken) {
+					bool all_th = true;
+					headers = LayoutTableRow(tr, pending, all_th);
+					taken = true;
+				}
+			});
+		} else if (xmlStrcmp(child->name, BAD_CAST "tbody") == 0) {
+			each_row(child, [&](xmlNodePtr tr) { add_body_row(tr, pending); });
+		} else if (xmlStrcmp(child->name, BAD_CAST "tfoot") == 0) {
+			each_row(child, [&](xmlNodePtr tr) {
+				bool all_th = true;
+				auto row = LayoutTableRow(tr, pending, all_th);
+				if (!row.empty()) {
+					footers.push_back(std::move(row));
+				}
+			});
+		}
 	}
 
 	yyjson_mut_doc *doc = yyjson_mut_doc_new(nullptr);
