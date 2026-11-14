@@ -40,9 +40,12 @@ static std::string GetNodeInnerHTML(xmlNodePtr node, xmlDocPtr doc);
 static std::string GetNodeAttribute(xmlNodePtr node, const char *attr_name);
 
 static std::string TableToJson(xmlNodePtr node);
+static std::string GetCellText(xmlNodePtr cell);
 // `sections` wraps the header row in <thead> and the rows in <tbody>. Without them a table nests one level shallower,
 // and a reader still takes a first row of <th> cells as the header row.
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true);
+// `caption` is the table's attributes['caption'] text (#274), written as <caption> first inside the table.
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs = "", bool sections = true,
+                                   const std::string &caption = "");
 static std::string PandocTableToHtml(const std::string &json, const std::string &open_attrs = "");
 static bool ContentContainsTags(const std::string &content);
 static void ConsumeInlineChildren(const vector<Value> &blocks_list, size_t parent_idx,
@@ -1104,6 +1107,21 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 
 		// --- JSON-encoded leaves: NOT recursed ---------------------------
 		if (IsJsonLeafTag(tag)) {
+			// #274: the first <caption> is the table's title. A source attribute named caption
+			// (possible under '*') is dropped, so it cannot stand in for one: the writer would
+			// emit it as a <caption> element.
+			attrs.erase(std::remove_if(attrs.begin(), attrs.end(),
+			                           [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
+			            attrs.end());
+			for (xmlNodePtr c = child->children; c; c = c->next) {
+				if (c->type == XML_ELEMENT_NODE && c->name && xmlStrcmp(c->name, BAD_CAST "caption") == 0) {
+					std::string caption = GetCellText(c);
+					if (!caption.empty()) {
+						PutAttr(attrs, "caption", caption);
+					}
+					break;
+				}
+			}
 			std::string content = TableToJson(child);
 			blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_TABLE, content, Value::INTEGER(level),
 			                                          DuckBlockTypes::ENCODING_JSON, attrs, order++));
@@ -1895,10 +1913,12 @@ void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, Express
 				if (encoding == DuckBlockTypes::ENCODING_JSON && !content.empty()) {
 					// table > tbody > tr > td is three levels below the table. At the depth limit the table drops the
 					// optional sections, which a source table without them needs no room for.
-					html << TableJsonToHtml(content, PassthroughAttrs(attrs),
-					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL);
+					// attributes['caption'] (#274) is the <caption> element, not an attribute of <table>.
+					std::string caption = attrs.count("caption") ? attrs["caption"] : "";
+					html << TableJsonToHtml(content, PassthroughAttrs(attrs, {"caption"}),
+					                        cur_level + 3 <= MAX_DUCK_BLOCK_CONTAINER_LEVEL, caption);
 				} else {
-					html << "<table" << PassthroughAttrs(attrs) << "></table>";
+					html << "<table" << PassthroughAttrs(attrs, {"caption"}) << "></table>";
 				}
 			} else if (element_type == DuckBlockTypes::TYPE_HR) {
 				html << "<hr" << PassthroughAttrs(attrs) << ">";
@@ -3208,7 +3228,8 @@ static std::string PandocTableToHtml(const std::string &json, const std::string 
 	return html.str();
 }
 
-static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs, bool sections) {
+static std::string TableJsonToHtml(const std::string &json, const std::string &open_attrs, bool sections,
+                                   const std::string &caption) {
 	size_t first_char = json.find_first_not_of(" \t\n\r");
 	if (first_char != std::string::npos && json[first_char] == '[') {
 		return PandocTableToHtml(json, open_attrs);
@@ -3227,6 +3248,9 @@ static std::string TableJsonToHtml(const std::string &json, const std::string &o
 
 	std::stringstream html;
 	html << "<table" << open_attrs << ">";
+	if (!caption.empty()) {
+		html << "<caption>" << XMLUtils::HTMLEscape(caption) << "</caption>";
+	}
 
 	yyjson_val *headers_val = yyjson_obj_get(root, "headers");
 	if (headers_val && yyjson_is_arr(headers_val) && yyjson_arr_size(headers_val) > 0) {

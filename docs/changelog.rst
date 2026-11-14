@@ -22,6 +22,10 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
   was dropped on every element, even under ``'*'``. It now passes on every element except those
   whose block the vocabulary gives a role (``section``, ``list_item``, ``caption``). The default
   capture is unchanged.
+- Table blocks keep their columns aligned when a cell spans (#274). ``<td colspan="2">x</td><td>y</td>``
+  under three headers gave ``["x","y"]``, so ``y`` sat under the second header. It now gives
+  ``["x","","y"]``. ``rowspan`` fills the rows below the same way.
+- Table blocks carry the ``<caption>`` text in ``attributes['caption']`` (#274). It was dropped.
 
 v2.15.1 (Current)
 -----------------

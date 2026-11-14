@@ -378,7 +378,17 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
      - TABLE elements. ``encoding`` is ``'json'``; ``content`` is a JSON object with
        ``"headers"`` and ``"rows"`` keys, e.g. ``{"headers":["H"],"rows":[["C"]]}``. Headers
        come from ``<thead>``, or from a first row of only ``<th>`` cells. A table without
-       either has ``"headers":[]``, and its first row stays in ``rows``.
+       either has ``"headers":[]``, and its first row stays in ``rows``. ``<tfoot>`` rows go in
+       an extra ``"footers"`` key. This is duck_blocks' native table schema: select a page's
+       tables with ``WHERE element_type = 'table'``, and duck_block_utils'
+       ``duck_block_table_read(content)`` reads one back as typed rows.
+       A ``colspan`` or ``rowspan`` fills the positions it covers with empty cells, so every
+       value stays under its own header; an empty cell reads back as NULL, and no value is
+       repeated. The projection is lossy, as the duck_blocks spec says of ``{headers, rows}``:
+       the spans themselves, column alignment and multiple bodies are not kept.
+       ``attributes['caption']`` holds the text of the ``<caption>`` element, when it has one;
+       ``duck_blocks_to_html`` writes it back as ``<caption>``. ``attributes['pandoc_ast']`` is
+       never set: there is no Pandoc tuple to keep.
    * - ``hr``
      - HR elements. A marker: no ``content``, no children.
    * - ``image``

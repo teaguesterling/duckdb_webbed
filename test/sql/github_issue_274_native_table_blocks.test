@@ -1,5 +1,5 @@
 # name: test/sql/github_issue_274_native_table_blocks.test
-# description: HTML table blocks carry the native {headers, rows} schema with aligned spans
+# description: HTML table blocks carry the native {headers, rows} schema with aligned spans and the caption
 # group: [sql]
 
 #
@@ -15,6 +15,9 @@
 # is now an empty cell, which duck_block_table_read reads as NULL, and no value is
 # repeated (decided 2026-11-13 with Teague). The projection still loses the span itself,
 # as the spec says of {headers, rows}.
+#
+# WHY caption: the <caption> text was dropped. It is the table's title, and it now sits
+# in attributes['caption'], beside the table id.
 #
 
 require webbed
@@ -84,3 +87,56 @@ query I
 SELECT (html_to_duck_blocks('<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr><tfoot><tr><td colspan="2">t</td></tr></tfoot></table>'))[1].content;
 ----
 {"headers":["a","b"],"rows":[["1","2"]],"footers":[["t",""]]}
+
+# --- caption -------------------------------------------------------------------------
+
+query II
+SELECT b.attributes['caption'], b.attributes['id']
+FROM (SELECT unnest(html_to_duck_blocks('<table id="t1"><caption>Cap  <b>tion</b></caption><tr><th>a</th></tr><tr><td>1</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+Cap tion	t1
+
+# No <caption>, or an empty one: no caption key.
+query II
+SELECT map_contains((html_to_duck_blocks('<table><tr><td>1</td></tr></table>'))[1].attributes, 'caption'),
+       map_contains((html_to_duck_blocks('<table><caption>  </caption><tr><td>1</td></tr></table>'))[1].attributes, 'caption');
+----
+false	false
+
+# The caption is not in the content, and no pandoc_ast is synthesised.
+query II
+SELECT contains(b.content, 'Cap'), map_contains(b.attributes, 'pandoc_ast')
+FROM (SELECT unnest(html_to_duck_blocks('<table><caption>Cap</caption><tr><td>1</td></tr></table>')) AS b)
+WHERE b.element_type = 'table';
+----
+false	false
+
+# A source attribute named caption cannot override the <caption> element.
+query I
+SELECT b.attributes['caption']
+FROM (SELECT unnest(html_to_duck_blocks('<table caption="forged"><caption>Real</caption><tr><td>1</td></tr></table>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'table';
+----
+Real
+
+# Without a <caption> element, a source caption attribute is not a caption either.
+query I
+SELECT map_contains(b.attributes, 'caption')
+FROM (SELECT unnest(html_to_duck_blocks('<table caption="forged"><tr><td>1</td></tr></table>', capture_attributes := '*')) AS b)
+WHERE b.element_type = 'table';
+----
+false
+
+# The writer puts the caption back as an element, not as an attribute.
+query II
+SELECT contains(h, '<caption>Cap</caption>'), contains(h, 'caption="')
+FROM (SELECT duck_blocks_to_html(html_to_duck_blocks('<table><caption>Cap</caption><tr><th>a</th></tr><tr><td>1</td></tr></table>')) AS h);
+----
+true	false
+
+# The file reader takes the same path.
+query II
+SELECT content, attributes['caption'] FROM read_html_blocks('test/html/blocks/github_issue_274_table.html') WHERE element_type = 'table';
+----
+{"headers":["a","b","c"],"rows":[["x","","y"]]}	Prices
