@@ -338,8 +338,13 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
      - Description
    * - ``heading``
      - H1-H6 elements. ``content`` is the heading text. ``attributes['heading_level']`` holds the
-       1-6 rank (``level`` is structural depth, not rank -- see above). ``attributes`` may also
-       contain ``id``.
+       1-6 rank (``level`` is structural depth, not rank -- see above). ``attributes['id']`` is
+       the source ``id`` when it has one. A heading with no source ``id`` gets a slug of its
+       text, by the rule ``read_markdown_blocks`` uses, so section ids and anchors agree across
+       readers: ASCII-lowercase, every other byte becomes ``-``, runs of ``-`` collapse, and the
+       ends trim (``Field guide`` → ``field-guide``, ``Café`` → ``caf``). Repeated headings
+       share one slug, as in ``read_markdown_blocks``. A heading whose slug is empty gets no
+       ``id``. A source ``id`` that ``capture_attributes`` leaves out is not replaced by a slug.
    * - ``paragraph``
      - P elements. Carries its text in ``content`` when it has no non-text children; otherwise
        ``content`` is ``NULL`` and inline children (``kind = 'inline'``) follow at ``level + 1``

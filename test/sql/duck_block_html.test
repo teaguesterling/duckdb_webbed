@@ -165,7 +165,7 @@ intro
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Test Title</h1>'));
 ----
-<h1>Test Title</h1>
+<h1 id="test-title">Test Title</h1>
 
 # Test duck_blocks_to_html with paragraph
 query I
@@ -377,37 +377,37 @@ SELECT (html_to_duck_blocks('<img src="test.jpg">'))[1].level;
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title</h1>'));
 ----
-<h1>Title</h1>
+<h1 id="title">Title</h1>
 
 # h2 round-trip
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>Subtitle</h2>'));
 ----
-<h2>Subtitle</h2>
+<h2 id="subtitle">Subtitle</h2>
 
 # h3 round-trip
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h3>Section</h3>'));
 ----
-<h3>Section</h3>
+<h3 id="section">Section</h3>
 
 # h4 round-trip
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h4>Subsection</h4>'));
 ----
-<h4>Subsection</h4>
+<h4 id="subsection">Subsection</h4>
 
 # h5 round-trip
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h5>Minor</h5>'));
 ----
-<h5>Minor</h5>
+<h5 id="minor">Minor</h5>
 
 # h6 round-trip
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h6>Smallest</h6>'));
 ----
-<h6>Smallest</h6>
+<h6 id="smallest">Smallest</h6>
 
 # Heading with id attribute round-trip
 query I
@@ -419,7 +419,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<h2 id="intro">Introduction</h2>
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title</h1><h2>Section</h2><h3>Subsection</h3>'));
 ----
-<h1>Title</h1><h2>Section</h2><h3>Subsection</h3>
+<h1 id="title">Title</h1><h2 id="section">Section</h2><h3 id="subsection">Subsection</h3>
 
 # -----------------------------------------------------------------------------
 # element_type field tests
@@ -673,7 +673,7 @@ true
 
 # Test frontmatter round-trip contains heading
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), '<h1>Title</h1>');
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<script type="application/vnd.frontmatter+yaml">title: Test</script><h1>Title</h1>')), '<h1 id="title">Title</h1>');
 ----
 true
 
@@ -1367,7 +1367,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<p>Visit <a href="https://exampl
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h1>Title <strong>One</strong></h1>'));
 ----
-<h1>Title <strong>One</strong></h1>
+<h1 id="title-one">Title <strong>One</strong></h1>
 
 # Round-trip mixed inline types
 query I
@@ -1433,7 +1433,7 @@ true
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>'));
 ----
-<h2>Title with <em>emphasis</em></h2>
+<h2 id="title-with-emphasis">Title with <em>emphasis</em></h2>
 
 # Link preserves href and text
 query I
@@ -1687,7 +1687,7 @@ SELECT (html_to_duck_blocks('<h6>H6</h6>'))[1].attributes['heading_level'];
 
 # Heading with inline formatting
 query I
-SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>')), '<h2>');
+SELECT contains(duck_blocks_to_html(html_to_duck_blocks('<h2>Title with <em>emphasis</em></h2>')), '<h2 id="title-with-emphasis">');
 ----
 true
 

@@ -356,7 +356,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<blockquote>a<p>b</p></blockquot
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<article>Lead-in.<h2>H</h2><p>P</p></article>'));
 ----
-<article>Lead-in.<h2>H</h2><p>P</p></article>
+<article>Lead-in.<h2 id="h">H</h2><p>P</p></article>
 
 # Loose inline FORMATTING, not just text.
 query I
@@ -455,7 +455,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<div id="d">Bare text</div>'));
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<section id="s">Lead<h2>H</h2></section>'));
 ----
-<section id="s">Lead<h2>H</h2></section>
+<section id="s">Lead<h2 id="h">H</h2></section>
 
 # --- Regression guards for mechanisms plain-emission must not disturb ------
 

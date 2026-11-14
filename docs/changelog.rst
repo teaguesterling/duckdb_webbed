@@ -15,6 +15,9 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
 - ``<meta name>`` values for the browser or a crawler are no longer document metadata:
   ``viewport``, ``theme-color``, ``color-scheme``, ``format-detection``, ``referrer``,
   ``robots`` and ``generator``. A markdown writer used to put them in the front matter.
+- A heading with no ``id`` gets a slug id of its text, by ``read_markdown_blocks``' rule:
+  ``<h2>Field guide</h2>`` gives ``attributes['id'] = 'field-guide'`` (#275). ``id`` was absent.
+  ``duck_blocks_to_html`` therefore writes ``<h2 id="field-guide">`` after a round trip.
 
 v2.15.1 (Current)
 -----------------

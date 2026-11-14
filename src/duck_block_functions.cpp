@@ -707,6 +707,30 @@ static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::stri
 	attrs.emplace_back(key, value);
 }
 
+// GitHub #275. The id a heading with no source id gets: the rule of duckdb_markdown's
+// GenerateSectionId, byte for byte, so section ids, links and anchors agree across
+// readers. ASCII-lowercase; any byte outside [a-z0-9_-] becomes '-'; runs of '-'
+// collapse; leading and trailing '-' trim. Non-ASCII is not transliterated ("Café" ->
+// "caf"), and there is no dedup suffix, because read_markdown_blocks adds none either.
+static std::string HeadingSlug(const std::string &text) {
+	std::string out;
+	out.reserve(text.size());
+	for (char raw : text) {
+		char c = (raw >= 'A' && raw <= 'Z') ? static_cast<char>(raw - 'A' + 'a') : raw;
+		bool keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+		if (keep && c != '-') {
+			out += c;
+		} else if (out.empty() || out.back() != '-') {
+			out += '-';
+		}
+	}
+	size_t b = out.find_first_not_of('-');
+	if (b == std::string::npos) {
+		return std::string();
+	}
+	return out.substr(b, out.find_last_not_of('-') - b + 1);
+}
+
 // Copy the source element's own attributes, in document order, per the spec.
 // One call at each loop's single attrs declaration, for every element -- three
 // sites that each remembered independently is how #142 happened.
@@ -992,6 +1016,15 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 
 		// --- Headings ---------------------------------------------------
 		if (tag.length() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') {
+			// #275: a heading the source gave no id gets the cross-reader slug. A source id
+			// that capture left out is not replaced: the block would carry an id the source
+			// never had.
+			if (GetNodeAttribute(child, "id").empty()) {
+				std::string slug = HeadingSlug(GetNodeTextContent(child));
+				if (!slug.empty()) {
+					PutAttr(attrs, "id", slug);
+				}
+			}
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
 			if (HasElementChildren(child)) {
 				blocks.Append(DuckBlockTypes::CreateBlock(DuckBlockTypes::TYPE_HEADING, "", Value::INTEGER(level),

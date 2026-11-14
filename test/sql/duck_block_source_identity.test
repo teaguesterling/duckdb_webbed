@@ -235,7 +235,7 @@ SELECT duck_blocks_to_html(html_to_duck_blocks('<h2 id="h" class="k">t</h2>'))::
 query I
 SELECT duck_blocks_to_html(html_to_duck_blocks('<h2>t</h2><p>y</p><hr>'))::VARCHAR;
 ----
-<h2>t</h2><p>y</p><hr>
+<h2 id="t">t</h2><p>y</p><hr>
 
 # --- The table functions take the same parameter ---------------------------
 
