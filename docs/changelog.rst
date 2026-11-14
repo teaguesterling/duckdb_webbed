@@ -18,6 +18,10 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
 - A heading with no ``id`` gets a slug id of its text, by ``read_markdown_blocks``' rule:
   ``<h2>Field guide</h2>`` gives ``attributes['id'] = 'field-guide'`` (#275). ``id`` was absent.
   ``duck_blocks_to_html`` therefore writes ``<h2 id="field-guide">`` after a round trip.
+- ``capture_attributes := 'classes'`` also copies ``role`` and ``lang`` (#275). A source ``role``
+  was dropped on every element, even under ``'*'``. It now passes on every element except those
+  whose block the vocabulary gives a role (``section``, ``list_item``, ``caption``). The default
+  capture is unchanged.
 
 v2.15.1 (Current)
 -----------------

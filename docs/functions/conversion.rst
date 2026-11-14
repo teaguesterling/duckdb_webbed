@@ -200,7 +200,7 @@ Convert HTML content into a list of structured document blocks. This function pa
      * - ``'default'`` *(or omitted)*
        - ``['id', 'name', 'href', 'src']`` -- identity and references
      * - ``'classes'``
-       - the default plus ``'class'``
+       - the default plus ``'class'``, ``'role'`` and ``'lang'``
      * - ``'*'`` or ``true``
        - every source attribute
      * - ``false``
@@ -214,9 +214,14 @@ Convert HTML content into a list of structured document blocks. This function pa
   that must keep their styling hooks. The same parameter is accepted by ``read_html_blocks``
   and ``parse_html_blocks``.
 
-  Attribute keys the vocabulary gives a meaning to (``role``, ``heading_level``, ``list_type``,
-  ...) are reserved and never copied from the source in any mode, so a document cannot forge
-  them: ``<section role="banner">`` keeps the vocabulary's ``role = 'section'``.
+  Attribute keys the vocabulary gives a meaning to (``heading_level``, ``list_type``, ...) are
+  reserved and never copied from the source in any mode, so a document cannot forge them.
+  ``role`` is reserved only on the elements whose block the vocabulary gives a role: sectioning
+  elements (``section``), ``<li>``, ``<dt>`` and ``<dd>`` (``list_item``), and ``<figcaption>``
+  and ``<summary>`` (``caption``). ``<section role="banner">`` keeps the vocabulary's
+  ``role = 'section'``, and ``<li role="term">`` stays a plain item. On every other element a
+  source (ARIA) ``role`` is copied like any attribute, for example ``<p role="note">``.
+  ``duck_blocks_to_html`` does not write a source ``role`` back.
 
 - ``filename`` (``read_html_blocks`` only): ``true`` appends a ``filename`` column **after**
   ``element_order`` -- the exact 8-field shape duck_block spec 6.4 accepts, so ``list(b)`` of

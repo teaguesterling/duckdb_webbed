@@ -58,8 +58,10 @@ hr	hr1	NULL
 
 # --- The presets, on one element carrying identity, class, data-* and ARIA --
 # 'default' == omitted. '*' == true. false leaves only the semantic key.
-# role="banner" is ABSENT under '*': vocabulary keys are reserved, so a source
-# attribute of that name cannot forge the vocabulary's own role.
+# role="banner" passes under 'classes' and '*' (#275): a heading's block has no
+# vocabulary role, so an ARIA role there forges nothing. On elements whose block the
+# vocabulary gives a role (section, list_item, caption) a source role is still never
+# copied; github_issue_275_class_role_lang.test pins that.
 
 # (Named scalar parameters are bind-time constants, as with xml_to_json, so
 # each preset is its own query rather than a column fed through VALUES.)
@@ -72,12 +74,12 @@ SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2
 query I
 SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := 'classes'))[1].attributes;
 ----
-{id=h, class=c, heading_level=2}
+{id=h, class=c, role=banner, heading_level=2}
 
 query I
 SELECT (html_to_duck_blocks('<h2 id="h" class="c" data-x="1" role="banner">T</h2>', capture_attributes := '*'))[1].attributes;
 ----
-{id=h, class=c, data-x=1, heading_level=2}
+{id=h, class=c, data-x=1, role=banner, heading_level=2}
 
 statement error
 SELECT html_to_duck_blocks('<p>x</p>', capture_attributes := lower('DEFAULT') || random()::VARCHAR);

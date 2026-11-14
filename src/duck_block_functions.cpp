@@ -630,9 +630,13 @@ struct CaptureSpec {
 		s.keys = {"id", "name", "href", "src"};
 		return s;
 	}
+	// #275: role and lang ride with class, so a selector or a language filter
+	// reads them the same way on every block.
 	static CaptureSpec Classes() {
 		auto s = Default();
 		s.keys.push_back("class");
+		s.keys.push_back("role");
+		s.keys.push_back("lang");
 		return s;
 	}
 	static CaptureSpec All() {
@@ -695,6 +699,16 @@ static bool IsReservedAttr(const std::string &key) {
 	       key == DuckBlockTypes::ATTR_ORDERED_LEGACY || key == "language";
 }
 
+// #275. Tags whose block the vocabulary gives a role: section (sectioning
+// elements), list_item (li, dt, dd: term/definition) and caption (figcaption,
+// summary). The writer picks the output tag from that role, so a source role
+// there is never copied: <li role="term"> would otherwise export as <dt>. On
+// every other element the source (ARIA) role passes like any attribute.
+static bool TagCarriesVocabularyRole(const std::string &tag) {
+	return tag == "li" || tag == "dt" || tag == "dd" || tag == "figcaption" || tag == "summary" ||
+	       !SectionRoleForTag(tag).empty();
+}
+
 // Replace-or-append, so a key set by the passthrough copy and again by a
 // type-specific site (href on <a>, src on <img>, start on <ol>) is stored once.
 static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::string &value) {
@@ -743,7 +757,15 @@ static void CopySourceAttributes(xmlNodePtr node, OrderedAttrs &attrs, const Cap
 			continue;
 		}
 		std::string key(reinterpret_cast<const char *>(a->name));
-		if (IsReservedAttr(key) || !spec.Wants(key)) {
+		if (!spec.Wants(key)) {
+			continue;
+		}
+		// role is reserved only where the vocabulary sets it (#275).
+		if (key == DuckBlockTypes::ATTR_ROLE) {
+			if (node->name && TagCarriesVocabularyRole(reinterpret_cast<const char *>(node->name))) {
+				continue;
+			}
+		} else if (IsReservedAttr(key)) {
 			continue;
 		}
 		xmlChar *raw = xmlNodeListGetString(node->doc, a->children, 1);
