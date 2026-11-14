@@ -345,11 +345,14 @@ The reader currently emits sixteen distinct ``element_type`` values under ``kind
      - H1-H6 elements. ``content`` is the heading text. ``attributes['heading_level']`` holds the
        1-6 rank (``level`` is structural depth, not rank -- see above). ``attributes['id']`` is
        the source ``id`` when it has one. A heading with no source ``id`` gets a slug of its
-       text, by the rule ``read_markdown_blocks`` uses, so section ids and anchors agree across
-       readers: ASCII-lowercase, every other byte becomes ``-``, runs of ``-`` collapse, and the
-       ends trim (``Field guide`` → ``field-guide``, ``Café`` → ``caf``). Repeated headings
-       share one slug, as in ``read_markdown_blocks``. A heading whose slug is empty gets no
-       ``id``. A source ``id`` that ``capture_attributes`` leaves out is not replaced by a slug.
+       text by pandoc's ``auto_identifiers`` rule, the rule every duck_blocks reader shares, so
+       section ids and anchors agree across readers: lowercase; keep letters and numbers of any
+       script, ``_``, ``-`` and ``.``; join the words with ``-``; drop everything before the first
+       letter; an empty result is ``section`` (``Field guide`` → ``field-guide``, ``Café`` →
+       ``café``, ``3. Applications`` → ``applications``, ``a -- b`` → ``a----b``). Repeated
+       headings share one slug. The id keeps non-ASCII letters; percent-encoding or another
+       ASCII form is the job of whatever writes a URL. A source ``id`` that ``capture_attributes``
+       leaves out is not replaced by a slug.
        The slug is a vocabulary attribute, not a copied one, so a heading with no source ``id``
        gets it under every ``capture_attributes`` mode, ``false`` included.
    * - ``paragraph``
