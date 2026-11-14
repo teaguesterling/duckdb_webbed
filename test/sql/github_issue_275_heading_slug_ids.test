@@ -139,3 +139,29 @@ SELECT attributes['id'] FROM read_html_blocks('test/html/blocks/github_issue_275
 ----
 field-guide
 given
+
+# --- the shared fixture: 41 headings, ids measured with pandoc 3.1.3 -------------------
+# test/data/slug_pandoc_cases.txt is the same file duckdb_markdown checks (#111):
+# title \x01 pandoc id, from `pandoc -f markdown-smart`, one document per heading.
+# Titles from duckdb_dmb (37e85b1) and panduck (c3cd374): Greek, Cyrillic, CJK, Arabic
+# digits, emoji, U+3000, İstanbul, ẞ, Ǆ, fullwidth, Roman numerals, the empty case.
+# Each title is HTML-escaped into an <h1>, so the reader sees the same text pandoc did.
+
+statement ok
+CREATE TABLE slug_cases AS
+SELECT title, pandoc_id
+FROM read_csv('test/data/slug_pandoc_cases.txt', header := false, delim := chr(1), quote := '', escape := '',
+              columns := {'title': 'VARCHAR', 'pandoc_id': 'VARCHAR'}, strict_mode := false);
+
+# Every case is read (a gate that an empty fixture could pass is not a gate).
+query I
+SELECT count(*) FROM slug_cases;
+----
+41
+
+query I
+SELECT count(*) FROM slug_cases c
+WHERE (html_to_duck_blocks('<h1>' || replace(replace(replace(c.title, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+                           || '</h1>'))[1].attributes['id'] IS DISTINCT FROM c.pandoc_id;
+----
+0
