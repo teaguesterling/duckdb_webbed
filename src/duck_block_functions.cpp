@@ -19,6 +19,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include <functional>
+#include "utf8proc.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "yyjson.hpp"
@@ -726,28 +727,58 @@ static void PutAttr(OrderedAttrs &attrs, const std::string &key, const std::stri
 	attrs.emplace_back(key, value);
 }
 
-// GitHub #275. The id a heading with no source id gets: the rule of duckdb_markdown's
-// GenerateSectionId, byte for byte, so section ids, links and anchors agree across
-// readers. ASCII-lowercase; any byte outside [a-z0-9_-] becomes '-'; runs of '-'
-// collapse; leading and trailing '-' trim. Non-ASCII is not transliterated ("Café" ->
-// "caf"), and there is no dedup suffix, because read_markdown_blocks adds none either.
+// GitHub #275. The id a heading with no source id gets: pandoc's auto_identifiers
+// rule (non-GFM), the rule every duck_blocks reader shares (duckdb_markdown#111,
+// decided by Teague 2026-11-14), so section ids, links and anchors agree across
+// readers. In pandoc's order:
+//   1. lowercase, per code point, across Unicode (utf8proc's simple mapping);
+//   2. keep letters (L*) and numbers (N*) of any script, '_', '-' and '.', as
+//      Haskell's isAlphaNum; whitespace (Zs and \t..\r, as Haskell's isSpace)
+//      separates words; everything else, combining marks included, is dropped;
+//   3. join the words with '-' (a hyphen in the text stays: "a -- b" -> "a----b");
+//   4. drop everything before the first letter ("3. Applications" -> "applications");
+//   5. an empty result is "section".
+// Readers do not de-duplicate. Invalid UTF-8 bytes are skipped.
 static std::string HeadingSlug(const std::string &text) {
 	std::string out;
-	out.reserve(text.size());
-	for (char raw : text) {
-		char c = (raw >= 'A' && raw <= 'Z') ? static_cast<char>(raw - 'A' + 'a') : raw;
-		bool keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
-		if (keep && c != '-') {
-			out += c;
-		} else if (out.empty() || out.back() != '-') {
-			out += '-';
+	bool seen_letter = false;
+	bool pending_sep = false;
+	auto bytes = reinterpret_cast<const utf8proc_uint8_t *>(text.data());
+	utf8proc_ssize_t len = static_cast<utf8proc_ssize_t>(text.size());
+	for (utf8proc_ssize_t i = 0; i < len;) {
+		utf8proc_int32_t cp = 0;
+		utf8proc_ssize_t n = utf8proc_iterate(bytes + i, len - i, &cp);
+		if (n <= 0) {
+			i++;
+			continue;
 		}
+		i += n;
+		cp = utf8proc_tolower(cp);
+		utf8proc_category_t cat = utf8proc_category(cp);
+		if (cat == UTF8PROC_CATEGORY_ZS || (cp >= 0x09 && cp <= 0x0D)) {
+			pending_sep = seen_letter;
+			continue;
+		}
+		bool letter = cat >= UTF8PROC_CATEGORY_LU && cat <= UTF8PROC_CATEGORY_LO;
+		bool number = cat >= UTF8PROC_CATEGORY_ND && cat <= UTF8PROC_CATEGORY_NO;
+		if (!letter && !number && cp != '_' && cp != '-' && cp != '.') {
+			continue;
+		}
+		if (!seen_letter) {
+			if (!letter) {
+				continue;
+			}
+			seen_letter = true;
+		}
+		if (pending_sep) {
+			out += '-';
+			pending_sep = false;
+		}
+		utf8proc_uint8_t buf[4];
+		utf8proc_ssize_t w = utf8proc_encode_char(cp, buf);
+		out.append(reinterpret_cast<const char *>(buf), static_cast<size_t>(w));
 	}
-	size_t b = out.find_first_not_of('-');
-	if (b == std::string::npos) {
-		return std::string();
-	}
-	return out.substr(b, out.find_last_not_of('-') - b + 1);
+	return out.empty() ? std::string("section") : out;
 }
 
 // Copy the source element's own attributes, in document order, per the spec.
@@ -1047,10 +1078,7 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			// that capture left out is not replaced: the block would carry an id the source
 			// never had.
 			if (GetNodeAttribute(child, "id").empty()) {
-				std::string slug = HeadingSlug(GetNodeTextContent(child));
-				if (!slug.empty()) {
-					PutAttr(attrs, "id", slug);
-				}
+				PutAttr(attrs, "id", HeadingSlug(GetNodeTextContent(child)));
 			}
 			attrs.emplace_back(std::string(DuckBlockTypes::ATTR_HEADING_LEVEL), std::string(1, tag[1]));
 			if (HasElementChildren(child)) {
@@ -1111,9 +1139,10 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			// #274: the first <caption> is the table's title. A source attribute named caption
 			// (possible under '*') is dropped, so it cannot stand in for one: the writer would
 			// emit it as a <caption> element.
-			attrs.erase(std::remove_if(attrs.begin(), attrs.end(),
-			                           [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
-			            attrs.end());
+			attrs.erase(
+			    std::remove_if(attrs.begin(), attrs.end(),
+			                   [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
+			    attrs.end());
 			for (xmlNodePtr c = child->children; c; c = c->next) {
 				if (c->type == XML_ELEMENT_NODE && c->name && xmlStrcmp(c->name, BAD_CAST "caption") == 0) {
 					std::string caption = GetCellText(c, true);
@@ -3530,8 +3559,8 @@ static std::string TableToJson(xmlNodePtr node) {
 			add_body_row(child, bare_pending);
 			continue;
 		}
-		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 || xmlStrcmp(child->name, BAD_CAST "tbody") == 0 ||
-		                 xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
+		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 ||
+		                 xmlStrcmp(child->name, BAD_CAST "tbody") == 0 || xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
 		if (!row_group) {
 			continue;
 		}

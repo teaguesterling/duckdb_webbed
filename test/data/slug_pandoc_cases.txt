@@ -1,0 +1,41 @@
+Zoë's noteszoës-notes
+Cafécafé
+  Hello,  World -- 2026! hello-world----2026
+snake_case Field guidesnake_case-field-guide
+1. Introductionintroduction
+ÉCOLE Ündécole-ünd
+a -- ba----b
+!!!section
+日本語の見出し日本語の見出し
+v1.2 releasev1.2-release
+Field guidefield-guide
+Ünïcödé — dashünïcödé-dash
+tab	separatedtab-separated
+x²x²
+İstanbulistanbul
+naïve cafénaïve-café
+1. Café, naïve!café-naïve
+Notesnotes
+Ελληνικά κείμεναελληνικά-κείμενα
+Русский заголовокрусский-заголовок
+emoji 🦆 duckemoji-duck
+under_score.and.dotsunder_score.and.dots
+-- leading dashesleading-dashes
+CamelCase_Wordcamelcase_word
+3.14 is piis-pi
+Ⅻ roman twelveroman-twelve
+A — Ba-b
+Emoji 🦆 duckemoji-duck
+ΑΘΗΝΑ Πόληαθηνα-πόλη
+МОСКВА Городмосква-город
+Straße ẞIGstraße-ßig
+Ǆemalǆemal
+Ⅻ Romanroman
+Ｆｕｌｌｆｕｌｌ
+日本語　テキスト日本語-テキスト
+١٢٣ Arabicarabic
+« Quoted »quoted
+日本日本
+Version 1.2 notesversion-1.2-notes
+a.b.ca.b.c
+end.end.

@@ -1,20 +1,20 @@
 # name: test/sql/github_issue_275_heading_slug_ids.test
-# description: every HTML heading with no id gets the same slug id read_markdown_blocks gives it
+# description: every HTML heading with no id gets pandoc's auto_identifiers slug, as every duck_blocks reader does
 # group: [sql]
 
 #
 # GitHub Issue #275: https://github.com/teaguesterling/duckdb_webbed/issues/275
+# Rule: duckdb_markdown#111, decided by Teague 2026-11-14.
 #
-# WHY: section ids, links and anchors must agree across readers. read_markdown_blocks
-# gives every heading a slug id ('# Field guide' -> id=field-guide), and so do panduck's
-# readers and duck_block_utils' duck_blocks_sections. An HTML heading with no id had
-# none, so a DCS '#field-guide' selector or a section lookup found the Markdown heading
-# and missed the same heading in HTML.
-#
-# The rule is markdown's GenerateSectionId exactly, with no dedup suffix, because
-# read_markdown_blocks does not dedup either (measured on markdown v1.9.8: two
-# '# Dup' headings both get id=dup). Agreement across formats is the point; a
-# private dedup rule here would break it on repeated headings.
+# WHY: section ids, links and anchors must agree across readers (markdown, webbed,
+# panduck, dmb). The shared rule is pandoc's auto_identifiers (non-GFM):
+#   1. lowercase, across all of Unicode;
+#   2. keep letters and numbers of any script, whitespace, '_', '-' and '.';
+#   3. split on whitespace and join the words with '-' (other hyphens stay as written);
+#   4. drop everything before the first letter;
+#   5. an empty result is 'section'.
+# Readers do not de-duplicate: repeated headings share an id. ASCII forms
+# (percent-encoding, Punycode) belong at output boundaries, not in the stored id.
 #
 # On by default, agreed with Teague 2026-11-13: this changes default output.
 #
@@ -27,24 +27,75 @@ SELECT (html_to_duck_blocks('<h2>Field guide</h2>'))[1].attributes['id'];
 ----
 field-guide
 
-# Bytes outside [a-z0-9_-] become '-', then runs collapse and ends trim. Non-ASCII
-# bytes are not transliterated: 'Café' -> 'caf', as in read_markdown_blocks v1.9.8.
+# Letters of any script are kept and lowercased (#111's examples).
 query I
 SELECT (html_to_duck_blocks('<h2>Café</h2>'))[1].attributes['id'];
 ----
-caf
+café
+
+query I
+SELECT (html_to_duck_blocks('<h2>日本</h2>'))[1].attributes['id'];
+----
+日本
+
+query I
+SELECT (html_to_duck_blocks('<h2>Zoë''s notes</h2>'))[1].attributes['id'];
+----
+zoës-notes
+
+query I
+SELECT (html_to_duck_blocks('<h2>ÉCOLE Ωμέγα</h2>'))[1].attributes['id'];
+----
+école-ωμέγα
+
+# pandoc's manual examples.
+query I
+SELECT (html_to_duck_blocks('<h2>Heading identifiers in HTML</h2>'))[1].attributes['id'];
+----
+heading-identifiers-in-html
+
+query I
+SELECT (html_to_duck_blocks('<h2>Maître d''hôtel</h2>'))[1].attributes['id'];
+----
+maître-dhôtel
+
+query I
+SELECT (html_to_duck_blocks('<h2><em>Dogs</em>?--in <em>my</em> house?</h2>'))[1].attributes['id'];
+----
+dogs--in-my-house
+
+query I
+SELECT (html_to_duck_blocks('<h2><a href="x">HTML</a>, <a href="y">S5</a>, or <a href="z">RTF</a>?</h2>'))[1].attributes['id'];
+----
+html-s5-or-rtf
+
+query I
+SELECT (html_to_duck_blocks('<h2>3. Applications</h2>'))[1].attributes['id'];
+----
+applications
+
+query I
+SELECT (html_to_duck_blocks('<h2>33</h2>'))[1].attributes['id'];
+----
+section
+
+# Hyphens stay as written; whitespace runs become one '-'; '.' and '_' stay.
+query I
+SELECT (html_to_duck_blocks('<h2>a -- b</h2>'))[1].attributes['id'];
+----
+a----b
 
 query I
 SELECT (html_to_duck_blocks('<h3>  Hello,   World! (v2.0) </h3>'))[1].attributes['id'];
 ----
-hello-world-v2-0
+hello-world-v2.0
 
 query I
 SELECT (html_to_duck_blocks('<h3>snake_case-and-dash</h3>'))[1].attributes['id'];
 ----
 snake_case-and-dash
 
-# No dedup: repeated headings share an id, as in read_markdown_blocks.
+# No dedup: repeated headings share an id.
 query II
 SELECT b[1].attributes['id'], b[2].attributes['id']
 FROM (SELECT html_to_duck_blocks('<h2>Dup</h2><h2>Dup</h2>') AS b);
@@ -70,16 +121,11 @@ SELECT map_contains((html_to_duck_blocks('<h2 id="given">Given id</h2>', capture
 ----
 false
 
-# An empty slug emits no id key, rather than id=''.
+# Nothing left after the rule: 'section', as pandoc does.
 query I
-SELECT map_contains((html_to_duck_blocks('<h2>日本</h2>'))[1].attributes, 'id');
+SELECT (html_to_duck_blocks('<h2>!!!</h2>'))[1].attributes['id'];
 ----
-false
-
-query I
-SELECT map_contains((html_to_duck_blocks('<h2>!!!</h2>'))[1].attributes, 'id');
-----
-false
+section
 
 # id sits before heading_level, as a given id does today.
 query I
@@ -93,3 +139,29 @@ SELECT attributes['id'] FROM read_html_blocks('test/html/blocks/github_issue_275
 ----
 field-guide
 given
+
+# --- the shared fixture: 41 headings, ids measured with pandoc 3.1.3 -------------------
+# test/data/slug_pandoc_cases.txt is the same file duckdb_markdown checks (#111):
+# title \x01 pandoc id, from `pandoc -f markdown-smart`, one document per heading.
+# Titles from duckdb_dmb (37e85b1) and panduck (c3cd374): Greek, Cyrillic, CJK, Arabic
+# digits, emoji, U+3000, İstanbul, ẞ, Ǆ, fullwidth, Roman numerals, the empty case.
+# Each title is HTML-escaped into an <h1>, so the reader sees the same text pandoc did.
+
+statement ok
+CREATE TABLE slug_cases AS
+SELECT title, pandoc_id
+FROM read_csv('test/data/slug_pandoc_cases.txt', header := false, delim := chr(1), quote := '', escape := '',
+              columns := {'title': 'VARCHAR', 'pandoc_id': 'VARCHAR'}, strict_mode := false);
+
+# Every case is read (a gate that an empty fixture could pass is not a gate).
+query I
+SELECT count(*) FROM slug_cases;
+----
+41
+
+query I
+SELECT count(*) FROM slug_cases c
+WHERE (html_to_duck_blocks('<h1>' || replace(replace(replace(c.title, '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
+                           || '</h1>'))[1].attributes['id'] IS DISTINCT FROM c.pandoc_id;
+----
+0
