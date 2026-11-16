@@ -1139,9 +1139,10 @@ static void WalkBlockNode(xmlNodePtr node, int32_t level, int32_t &order, DuckBl
 			// #274: the first <caption> is the table's title. A source attribute named caption
 			// (possible under '*') is dropped, so it cannot stand in for one: the writer would
 			// emit it as a <caption> element.
-			attrs.erase(std::remove_if(attrs.begin(), attrs.end(),
-			                           [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
-			            attrs.end());
+			attrs.erase(
+			    std::remove_if(attrs.begin(), attrs.end(),
+			                   [](const std::pair<std::string, std::string> &kv) { return kv.first == "caption"; }),
+			    attrs.end());
 			for (xmlNodePtr c = child->children; c; c = c->next) {
 				if (c->type == XML_ELEMENT_NODE && c->name && xmlStrcmp(c->name, BAD_CAST "caption") == 0) {
 					std::string caption = GetCellText(c, true);
@@ -3558,8 +3559,8 @@ static std::string TableToJson(xmlNodePtr node) {
 			add_body_row(child, bare_pending);
 			continue;
 		}
-		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 || xmlStrcmp(child->name, BAD_CAST "tbody") == 0 ||
-		                 xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
+		bool row_group = xmlStrcmp(child->name, BAD_CAST "thead") == 0 ||
+		                 xmlStrcmp(child->name, BAD_CAST "tbody") == 0 || xmlStrcmp(child->name, BAD_CAST "tfoot") == 0;
 		if (!row_group) {
 			continue;
 		}
