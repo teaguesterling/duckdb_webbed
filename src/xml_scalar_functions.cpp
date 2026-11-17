@@ -2239,46 +2239,6 @@ static bool SerializeMinifiedHTML(xmlDocPtr doc, std::string &minified_html) {
 	return true;
 }
 
-void XMLScalarFunctions::ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-	auto &file_path_vector = args.data[0];
-
-	UnaryExecutor::Execute<string_t, string_t>(file_path_vector, result, args.size(), [&](string_t file_path_str) {
-		std::string file_path = file_path_str.GetString();
-
-		try {
-			// Read the HTML file using DuckDB's file system
-			auto &fs = FileSystem::GetFileSystem(state.GetContext());
-			auto file_handle = fs.OpenFile(file_path, FileFlags::FILE_FLAGS_READ);
-			auto file_size = fs.GetFileSize(*file_handle);
-
-			// Handle empty HTML files gracefully (HTML is more permissive than XML)
-			if (file_size == 0) {
-				return string_t("<html></html>");
-			}
-
-			// Read file content
-			string content;
-			content.resize(file_size);
-			file_handle->Read((void *)content.data(), file_size);
-
-			// Parse the HTML using the HTML parser to normalize it (removes DOCTYPE)
-			XMLDocRAII html_doc(content, true, HTMLInputEncoding::FILE_BYTES);
-			if (html_doc.IsValid()) {
-				std::string minified_html;
-				if (SerializeMinifiedHTML(html_doc.doc, minified_html)) {
-					return StringVector::AddString(result, minified_html);
-				}
-			}
-
-			// Fallback to original content if parsing fails
-			return StringVector::AddString(result, content);
-
-		} catch (const std::exception &e) {
-			throw IOException("Failed to read HTML file '%s': %s", file_path, e.what());
-		}
-	});
-}
-
 void XMLScalarFunctions::ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &html_content_vector = args.data[0];
 
