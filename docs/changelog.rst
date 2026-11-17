@@ -1,8 +1,8 @@
 Changelog
 =========
 
-Unreleased
-----------
+v2.16.0 (Current)
+-----------------
 
 Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck_blocks``.
 
@@ -39,8 +39,11 @@ Output change in ``duck_blocks_to_html``.
   with its children. That div used to print the body a second time. Citation bodies, and footnote
   bodies that no note references, still print. This is the shape panduck emits for RST footnotes.
 
-v2.15.1 (Current)
------------------
+- CI: webbed builds and passes its tests against DuckDB main again (#278, #279). An unregistered
+  internal function that no longer compiled there is removed.
+
+v2.15.1
+-------
 
 No query results change. One internal C++ class is renamed, so webbed and markdown link into one
 static binary.
