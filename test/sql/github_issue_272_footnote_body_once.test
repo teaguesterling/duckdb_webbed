@@ -1,0 +1,113 @@
+# name: test/sql/github_issue_272_footnote_body_once.test
+# description: duck_blocks_to_html prints a footnote body once, in its note, not also as a div (#272)
+# group: [sql]
+
+# THE RULE (ruled by Teague on duckdb_panduck#85, 2026-11-11, quoted in #272).
+#
+# A footnote reference is an inline `note` whose `content` is the body text and
+# whose attributes['id'] is the label. The body is ALSO emitted as a block `div`
+# with attributes['source_type'] = 'footnote' and the same attributes['id'],
+# with the body paragraphs as its children one level down.
+#
+# A renderer prints the body once. So a footnote div whose id equals the id of
+# an inline note in the same document is skipped, with every block in its level
+# scope. These stay visible:
+#   - a citation body (source_type = 'citation'): pandoc keeps it at the end;
+#   - a footnote body that no note references: nothing else carries its words;
+#   - a footnote div with no id, or an empty id: it cannot match a note.
+#
+# Inputs are hand-built block literals, as in duck_block_writer_contract.test,
+# so no reader behaviour is under test. The shape is panduck's, from
+# read_rst_blocks_string (duckdb_panduck#176, 66700cb).
+
+require webbed
+
+# A referenced footnote body is skipped with its child paragraph. The citation
+# body stays.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'text','content':'A note ','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'inline','element_type':'note','content':'The footnote body.','level':2,'encoding':'text','attributes':MAP{'id':'1'},'element_order':2},
+  {'kind':'inline','element_type':'text','content':' and a citation ','level':2,'encoding':'text','attributes':MAP{},'element_order':3},
+  {'kind':'inline','element_type':'cite','content':'CIT2002','level':2,'encoding':'text','attributes':MAP{'id':'CIT2002'},'element_order':4},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':'1'},'element_order':5},
+  {'kind':'block','element_type':'paragraph','content':'The footnote body.','level':2,'encoding':'text','attributes':MAP{},'element_order':6},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'citation','id':'CIT2002'},'element_order':7},
+  {'kind':'block','element_type':'paragraph','content':'The citation body.','level':2,'encoding':'text','attributes':MAP{},'element_order':8}
+]);
+----
+<p>A note <span data-duck-block-type="note">The footnote body.</span> and a citation <span data-duck-block-type="cite">CIT2002</span></p><div id="CIT2002"><p>The citation body.</p></div>
+
+# The skip ends at the first block back at the div's level. The paragraph after
+# the body renders. Deeper descendants (a blockquote and its paragraph) are
+# skipped with the body.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'note','content':'Body.','level':2,'encoding':'text','attributes':MAP{'id':'n'},'element_order':1},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':'n'},'element_order':2},
+  {'kind':'block','element_type':'blockquote','content':NULL,'level':2,'encoding':'text','attributes':MAP{},'element_order':3},
+  {'kind':'block','element_type':'paragraph','content':'Body.','level':3,'encoding':'text','attributes':MAP{},'element_order':4},
+  {'kind':'block','element_type':'paragraph','content':'After.','level':1,'encoding':'text','attributes':MAP{},'element_order':5}
+]);
+----
+<p><span data-duck-block-type="note">Body.</span></p><p>After.</p>
+
+# A footnote body that no note references stays. Its words are nowhere else.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':'No reference here.','level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':'2'},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':'Orphan body.','level':2,'encoding':'text','attributes':MAP{},'element_order':2}
+]);
+----
+<p>No reference here.</p><div id="2"><p>Orphan body.</p></div>
+
+# The match is on the id, not on position. A note that comes after its body
+# still removes the body.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':'late'},'element_order':0},
+  {'kind':'block','element_type':'paragraph','content':'Body.','level':2,'encoding':'text','attributes':MAP{},'element_order':1},
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':2},
+  {'kind':'inline','element_type':'note','content':'Body.','level':2,'encoding':'text','attributes':MAP{'id':'late'},'element_order':3}
+]);
+----
+<p><span data-duck-block-type="note">Body.</span></p>
+
+# An empty id matches nothing, even when a note also has an empty id. The body
+# stays. (The writer drops an empty id attribute, so the div prints bare.)
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'note','content':'Body.','level':2,'encoding':'text','attributes':MAP{'id':''},'element_order':1},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':''},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Kept.','level':2,'encoding':'text','attributes':MAP{},'element_order':3}
+]);
+----
+<p><span data-duck-block-type="note">Body.</span></p><div><p>Kept.</p></div>
+
+# Only source_type = 'footnote' is skipped. A plain div that shares a note's id
+# stays.
+query I
+SELECT duck_blocks_to_html([
+  {'kind':'block','element_type':'paragraph','content':NULL,'level':1,'encoding':'text','attributes':MAP{},'element_order':0},
+  {'kind':'inline','element_type':'note','content':'Body.','level':2,'encoding':'text','attributes':MAP{'id':'x'},'element_order':1},
+  {'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'id':'x'},'element_order':2},
+  {'kind':'block','element_type':'paragraph','content':'Kept.','level':2,'encoding':'text','attributes':MAP{},'element_order':3}
+]);
+----
+<p><span data-duck-block-type="note">Body.</span></p><div id="x"><p>Kept.</p></div>
+
+# Each row is its own document. A note in one row does not remove a body in
+# another row.
+query I
+SELECT duck_blocks_to_html(b) FROM (VALUES
+  (0, [{'kind':'inline','element_type':'note','content':'Body.','level':1,'encoding':'text','attributes':MAP{'id':'1'},'element_order':0}]),
+  (1, [{'kind':'block','element_type':'div','content':NULL,'level':1,'encoding':'text','attributes':MAP{'source_type':'footnote','id':'1'},'element_order':0},
+       {'kind':'block','element_type':'paragraph','content':'Kept.','level':2,'encoding':'text','attributes':MAP{'id':'p'},'element_order':1}])
+) t(i, b) ORDER BY i;
+----
+<span data-duck-block-type="note">Body.</span>
+<div id="1"><p id="p">Kept.</p></div>
