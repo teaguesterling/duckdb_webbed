@@ -74,7 +74,6 @@ private:
 	static void HTMLExtractTablesJSONFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// HTML parsing functions
-	static void ParseHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 	static void ReadHTMLFunction(DataChunk &args, ExpressionState &state, Vector &result);
 
 	// HTML entity escaping/unescaping functions
