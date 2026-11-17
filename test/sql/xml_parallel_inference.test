@@ -188,8 +188,11 @@ SELECT current_setting('xml_inference_threads');
 statement ok
 RESET xml_inference_threads;
 
+# RESET returns the option to unset. Read it through duckdb_settings(): on DuckDB main
+# (ceb0f6cfbb1) current_setting() raises "unrecognized configuration parameter" for an
+# unset option with a NULL default, as v2.0 already does before the first SET.
 query I
-SELECT current_setting('xml_inference_threads') IS NULL;
+SELECT value IS NULL FROM duckdb_settings() WHERE name = 'xml_inference_threads';
 ----
 true
 
