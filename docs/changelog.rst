@@ -32,6 +32,13 @@ Output changes in ``read_html_blocks``, ``parse_html_blocks`` and ``html_to_duck
   ``+`` is allowed (``colspan="+2"``). Spans are bounded per table, so a small page cannot
   expand into a huge one.
 
+Output change in ``duck_blocks_to_html``.
+
+- A footnote body prints once, inside its ``note`` span (#272). A ``div`` block with
+  ``attributes['source_type'] = 'footnote'`` whose ``id`` matches an inline ``note`` is skipped,
+  with its children. That div used to print the body a second time. Citation bodies, and footnote
+  bodies that no note references, still print. This is the shape panduck emits for RST footnotes.
+
 v2.15.1 (Current)
 -----------------
 

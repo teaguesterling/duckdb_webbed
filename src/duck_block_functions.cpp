@@ -1684,6 +1684,50 @@ static std::string ListItemTagForRole(const std::string &role) {
 	return "li";
 }
 
+// Mark every block after start_idx whose level is deeper than start_level as consumed, up to the first block back at
+// or above start_level.
+static void SkipLevelScope(const vector<Value> &blocks_list, size_t start_idx, int32_t start_level,
+                           std::set<size_t> &consumed_indices) {
+	for (size_t scope_idx = start_idx + 1; scope_idx < blocks_list.size(); scope_idx++) {
+		auto &scope_block = blocks_list[scope_idx];
+		if (scope_block.IsNull()) {
+			consumed_indices.insert(scope_idx);
+			continue;
+		}
+		auto &scope_struct = StructValue::GetChildren(scope_block);
+		int32_t scope_level = EffectiveLevel(scope_struct[DuckBlockTypes::LEVEL_IDX]);
+		if (scope_level <= start_level) {
+			break;
+		}
+		consumed_indices.insert(scope_idx);
+	}
+}
+
+// panduck's attributes['source_type'] for a footnote body div (duckdb_panduck#176).
+static constexpr const char *SOURCE_TYPE_FOOTNOTE = "footnote";
+
+// The non-empty ids of the inline notes in one document. A footnote body div with one of these ids is not printed
+// (#272).
+static std::set<std::string> InlineNoteIds(const vector<Value> &blocks_list) {
+	std::set<std::string> ids;
+	for (auto &block : blocks_list) {
+		if (block.IsNull()) {
+			continue;
+		}
+		auto &fields = StructValue::GetChildren(block);
+		if (GetVarcharField(fields[DuckBlockTypes::KIND_IDX]) != DuckBlockTypes::KIND_INLINE ||
+		    GetVarcharField(fields[DuckBlockTypes::ELEMENT_TYPE_IDX]) != DuckBlockTypes::INLINE_NOTE) {
+			continue;
+		}
+		auto attrs = ExtractAttributes(fields[DuckBlockTypes::ATTRIBUTES_IDX]);
+		auto it = attrs.find(DuckBlockTypes::ATTR_ID);
+		if (it != attrs.end() && !it->second.empty()) {
+			ids.insert(it->second);
+		}
+	}
+	return ids;
+}
+
 void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &blocks_vector = args.data[0];
 	auto count = args.size();
@@ -1700,6 +1744,7 @@ void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, Express
 		auto &blocks_list = ListValue::GetChildren(blocks_value);
 		std::set<size_t> consumed_indices; // Track consumed inline children
 		vector<OpenContainer> open_containers;
+		std::set<std::string> note_ids = InlineNoteIds(blocks_list);
 
 		// Use index-based iteration for consuming look-ahead
 		for (size_t block_idx = 0; block_idx < blocks_list.size(); block_idx++) {
@@ -1761,19 +1806,17 @@ void WebbedDuckBlockFunctions::DuckBlocksToHtmlFunction(DataChunk &args, Express
 			// container closes that container, same as an ordinary block would --
 			// see the two discriminating tests below.
 			if (!kind.empty() && kind != DuckBlockTypes::KIND_BLOCK) {
-				for (size_t scope_idx = block_idx + 1; scope_idx < blocks_list.size(); scope_idx++) {
-					auto &scope_block = blocks_list[scope_idx];
-					if (scope_block.IsNull()) {
-						consumed_indices.insert(scope_idx);
-						continue;
-					}
-					auto &scope_struct = StructValue::GetChildren(scope_block);
-					int32_t scope_level = EffectiveLevel(scope_struct[DuckBlockTypes::LEVEL_IDX]);
-					if (scope_level <= cur_level) {
-						break;
-					}
-					consumed_indices.insert(scope_idx);
-				}
+				SkipLevelScope(blocks_list, block_idx, cur_level, consumed_indices);
+				continue;
+			}
+
+			// A footnote body that an inline note in this document references is already printed inside that note
+			// (#272, ruled on duckdb_panduck#85). Skip the div and its level scope. Citation bodies, unreferenced
+			// footnote bodies and an empty id stay visible.
+			if (element_type == DuckBlockTypes::TYPE_DIV && attrs.count(DuckBlockTypes::ATTR_SOURCE_TYPE) &&
+			    attrs[DuckBlockTypes::ATTR_SOURCE_TYPE] == SOURCE_TYPE_FOOTNOTE &&
+			    attrs.count(DuckBlockTypes::ATTR_ID) && note_ids.count(attrs[DuckBlockTypes::ATTR_ID])) {
+				SkipLevelScope(blocks_list, block_idx, cur_level, consumed_indices);
 				continue;
 			}
 
