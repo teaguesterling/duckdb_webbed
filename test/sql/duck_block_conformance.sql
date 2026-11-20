@@ -2,7 +2,7 @@
 -- VENDORED COPY -- do not edit by hand without re-syncing from upstream.
 --
 -- Source: teaguesterling/duckdb_duck_block_utils, vendor/duck_block_conformance.sql
--- Vendored at upstream commit: 65f03cb (last change to this file: 332353b)
+-- Vendored at upstream commit: c978e07 (last change to this file: 332353b)
 --
 -- This is an intentional COPY, not a load of the real thing. webbed builds its
 -- own DuckDB from a pinned submodule reporting a dev version string (e.g.
