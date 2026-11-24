@@ -10,7 +10,7 @@
                         "name": "libxml2",
                         "platform": "mingw",
                         "default-features": false,
-                        "features": []
+                        "features": ["iconv"]
                 }
         ],
         "vcpkg-configuration": {
