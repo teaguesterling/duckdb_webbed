@@ -184,8 +184,15 @@ jobs:
             registry="${reg_commit}/${reg_version}/${reg_tools}"
             repo="${DUCKDB_COMMIT}/${DUCKDB_VERSION}/${DUCKDB_CI_TOOLS}"
             if [ "$registry" != "$repo" ]; then
-              echo "::error::the community registry builds commit/version/ci-tools ${registry} (at ${sha:-main}) but this repo ships ${repo}; update the pin, the constants and the build jobs to the registry's lines"
-              echo "duckdb-pin: FAILED, registry ${registry} vs repo ${repo}" >> "$summary"; exit 1
+              # On a pull_request the registry moving is not this PR's fault, so it warns;
+              # a push to main still fails. The pin-equals-tag checks above stay hard. (Teague, 2026-11-24)
+              if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+                echo "::warning::the community registry builds commit/version/ci-tools ${registry} (at ${sha:-main}) but this repo ships ${repo}; update the pin, the constants and the build jobs to the registry's lines (pull_request: a warning only, because the registry moves outside this PR; a push to main still fails)"
+                echo "duckdb-pin: WARNING (pull_request), registry ${registry} vs repo ${repo}" >> "$summary"; exit 0
+              else
+                echo "::error::the community registry builds commit/version/ci-tools ${registry} (at ${sha:-main}) but this repo ships ${repo}; update the pin, the constants and the build jobs to the registry's lines"
+                echo "duckdb-pin: FAILED, registry ${registry} vs repo ${repo}" >> "$summary"; exit 1
+              fi
             fi
             mode="checked against the registry (default ${reg_commit:0:10} ${reg_version} on ${reg_tools}, at ${sha:-main})"
           fi
