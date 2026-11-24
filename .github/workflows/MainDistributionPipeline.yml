@@ -369,10 +369,10 @@ jobs:
   #      input to v2.0.0 without weakening the check.
   #   2. live load+query in duckdb-wasm (hard gate since 2026-11-10).
   #      THE ENGINE MATCHES THE BUILD EXACTLY, which it never did before:
-  #      @duckdb/duckdb-wasm@1.33.1-dev113.0 is built from duckdb commit
-  #      d54cbbe3df17e8e5ce68312f483b4155836112aa — the same v2.0.0 tag commit
-  #      this repo pins. Measured 2026-11-02 by grepping that package's
-  #      duckdb-base.wasm / duckdb-threads.wasm for `d54cbbe3df`; the `latest`
+  #      @duckdb/duckdb-wasm@1.33.1-dev121.0 is built from duckdb commit
+  #      8d78114e90a53823803660bf821f6073ac87da8c — the same v2.0.1 tag commit
+  #      this repo pins. Measured 2026-11-23 by grepping that package's
+  #      duckdb-base.wasm / duckdb-threads.wasm for `8d78114e90`; the `latest`
   #      tag (dev57.0) carries a v1.5.4-era engine and does NOT contain it.
   #
   #      It was informational for as long as it had never passed. It first passed
