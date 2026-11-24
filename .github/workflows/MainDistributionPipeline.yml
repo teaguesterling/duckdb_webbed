@@ -307,6 +307,32 @@ jobs:
       # Needs a ci_tools_version that HAS `T` (main / v2.0-cyanoptera); on
       # v1.5-variegata the variable is silently ignored -- hence `make test-require`.
       test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\""}}'
+
+  # ADVISORY: windows_amd64_mingw alone, on the shipped line, on pull requests only.
+  # The stable leg above excludes mingw; the community registry builds it, and its
+  # mingw leg failed a KOI8-R decode (github_issue_220_review_findings.test:284).
+  # This leg shows that result on a PR. It ships nothing and gates nothing: no
+  # status check is required on main. A caller job cannot take continue-on-error,
+  # and ci-tools' allow_failure_archs applies to its linux job only, not windows.
+  #   - reduced_ci_mode disabled: on pull_request, `auto` becomes `enabled`, and
+  #     mingw has run_in_reduced_ci_mode false, so it would be dropped silently.
+  #     opt_in_archs does not help; it only affects entries marked opt_in.
+  #   - Every other arch is excluded, so only mingw builds.
+  #   - PYTHONIOENCODING / PYTHONUTF8 reach run_tests.py through test_env_variables
+  #     (ci_phase.py merges them into `make test_release`), so the U+274C line
+  #     cannot crash cp1252 stdout and hide the result.
+  duckdb-stable-mingw:
+    name: Build extension binaries (mingw, advisory)
+    if: github.event_name == 'pull_request'
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
+    with:
+      duckdb_version: v2.0.1
+      duckdb_commit: 8d78114e90a53823803660bf821f6073ac87da8c
+      ci_tools_version: v2.0-cyanoptera
+      extension_name: webbed
+      reduced_ci_mode: 'disabled'
+      exclude_archs: 'linux_amd64;linux_amd64_musl;linux_arm64;linux_arm64_musl;osx_amd64;osx_arm64;wasm_eh;wasm_mvp;wasm_threads;windows_amd64;windows_arm64'
+      test_config: '{"test_env_variables": {"T": "--test-flags \"--require webbed\" \"test/*\"", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}}'
   # THE NEXT LINE: a pinned commit on v2.0-cyanoptera, where the next 2.0.x patch is
   # made, one step past the tag the job above ships. It ships nothing; Linux only.
   # Fleet shape (duck_tails #73, measured there: "version v2.0.1-alpha50125",
