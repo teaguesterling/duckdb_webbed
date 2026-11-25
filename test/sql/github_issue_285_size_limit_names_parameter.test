@@ -1,0 +1,40 @@
+# name: test/sql/github_issue_285_size_limit_names_parameter.test
+# description: The "exceeds maximum size limit" error names the maximum_file_size parameter (#285)
+# group: [sql]
+
+require webbed
+
+# A reader that rejects a file over the limit says how to raise it: the person who
+# hits the error sees the cause, not the parameter that fixes it, unless the message names it.
+
+# read_xml, rejected at bind (schema inference)
+statement error
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false, maximum_file_size:=1);
+----
+maximum_file_size
+
+# read_xml, rejected at scan (explicit columns skip inference at bind)
+statement error
+SELECT count(*) FROM read_xml('test/xml/sax_test_large.xml', streaming:=false, maximum_file_size:=1, columns:={'x': 'VARCHAR'});
+----
+maximum_file_size
+
+statement error
+SELECT count(*) FROM read_xml_objects('test/xml/sax_test_large.xml', maximum_file_size:=1);
+----
+maximum_file_size
+
+statement error
+SELECT * FROM read_html('test/html/complex_types_test.html', maximum_file_size:=100);
+----
+maximum_file_size
+
+statement error
+SELECT * FROM read_html_objects('test/html/complex_types_test.html', maximum_file_size:=100);
+----
+maximum_file_size
+
+statement error
+SELECT * FROM read_html_blocks('test/html/complex_types_test.html', maximum_file_size:=100);
+----
+maximum_file_size
