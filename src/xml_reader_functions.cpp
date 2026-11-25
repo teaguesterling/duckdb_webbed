@@ -360,8 +360,9 @@ static bool InferFileColumns(FileSystem &fs, const std::string &file_path, const
 			return true;
 		}
 		if (!bind_data.ignore_errors) {
-			throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", file_path,
-			                            bind_data.max_file_size);
+			throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes); "
+			                            "raise it with the maximum_file_size parameter",
+			                            file_path, bind_data.max_file_size);
 		}
 		return false;
 	}
@@ -994,8 +995,9 @@ void XMLReaderFunctions::ReadDocumentObjectsFunction(ClientContext &context, Tab
 			string content;
 			if (!ReadXMLFile(*OpenXMLFile(fs, filename, bind_data.compression), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-					                            bind_data.max_file_size);
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes); "
+					                            "raise it with the maximum_file_size parameter",
+					                            filename, bind_data.max_file_size);
 				}
 				// Skip this file (fall through to claim the next one)
 			} else {
@@ -1103,8 +1105,9 @@ void XMLReaderFunctions::ReadDocumentFunction(ClientContext &context, TableFunct
 
 				if (!fits && !use_sax) {
 					if (!bind_data.ignore_errors) {
-						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-						                            bind_data.max_file_size);
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes); "
+						                            "raise it with the maximum_file_size parameter",
+						                            filename, bind_data.max_file_size);
 					}
 					// Skip this file: release and claim the next one without emitting a chunk.
 					lstate.ResetFileResources();
@@ -1447,8 +1450,9 @@ void XMLReaderFunctions::ReadXMLObjectsFunction(ClientContext &context, TableFun
 			string content;
 			if (!ReadXMLFile(*OpenXMLFile(fs, filename, bind_data.compression), bind_data.max_file_size, content)) {
 				if (!bind_data.ignore_errors) {
-					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)", filename,
-					                            bind_data.max_file_size);
+					throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes); "
+					                            "raise it with the maximum_file_size parameter",
+					                            filename, bind_data.max_file_size);
 				}
 				// Skip this file (fall through to claim the next)
 			} else {

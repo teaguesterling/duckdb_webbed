@@ -2663,7 +2663,8 @@ void WebbedDuckBlockFunctions::ReadHTMLBlocksFunction(ClientContext &context, Ta
 				auto file_size = fs.GetFileSize(*file_handle);
 				if (file_size > bind_data.max_file_size) {
 					if (!bind_data.ignore_errors) {
-						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes)",
+						throw InvalidInputException("File %s exceeds maximum size limit (%llu bytes); "
+						                            "raise it with the maximum_file_size parameter",
 						                            lstate.current_filename, bind_data.max_file_size);
 					}
 					lstate.have_file = false;
